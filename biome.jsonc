@@ -1,0 +1,77 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.json"],
+    "experimentalScannerIgnores": [
+      "**/convex/_generated/**",
+      "**/.expo/**",
+      "**/node_modules/**"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 80
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "off"
+      },
+      "complexity": {
+        "noBannedTypes": "off"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "trailingCommas": "es5"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": {
+          "level": "on"
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["convex/_generated/**"],
+      "linter": {
+        "enabled": false
+      },
+      "formatter": {
+        "enabled": false
+      },
+      "assist": {
+        "enabled": false
+      }
+    },
+    {
+      "includes": [".expo/**"],
+      "linter": {
+        "enabled": false
+      },
+      "formatter": {
+        "enabled": false
+      },
+      "assist": {
+        "enabled": false
+      }
+    }
+  ]
+}

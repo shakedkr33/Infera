@@ -1,0 +1,13 @@
+/* 
+  קובץ העיצוב הגלובלי (Global CSS)
+  זהו קובץ הכניסה עבור NativeWind (Tailwind CSS ל-React Native).
+  
+  הפקודות הבאות מייבאות את רכיבי הבסיס של Tailwind:
+  - base: איפוסים בסיסיים (פחות רלוונטי ב-Native אבל נדרש)
+  - components: רכיבים ומחלקות מותאמות אישית
+  - utilities: מחלקות העזר (Utility Classes) שבהן נשתמש ברוב הזמן
+*/
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

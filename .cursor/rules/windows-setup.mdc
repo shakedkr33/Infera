@@ -1,0 +1,166 @@
+---
+alwaysApply: true
+---
+# Windows Setup & Troubleshooting Guide
+
+כשתלמיד עובד על Windows, יש כמה בעיות נפוצות שצריך לדעת עליהן.
+
+## כלל 1: המלץ על Git Bash
+
+**תמיד המלץ לתלמידי Windows להשתמש ב-Git Bash ולא ב-PowerShell או CMD.**
+
+Git Bash:
+- מגיע עם Git for Windows (https://git-scm.com/download/win)
+- משתמש ב-Unix-style paths (/) במקום Windows paths (\)
+- תואם יותר לפקודות שנכתבו עבור Mac/Linux
+- פותר הרבה בעיות path
+
+כש-Cursor פותח טרמינל ב-Windows, הוא עשוי לפתוח PowerShell כברירת מחדל.
+הנחה את התלמיד לשנות את ברירת המחדל ל-Git Bash:
+1. פתח את ה-Command Palette (Ctrl+Shift+P)
+2. חפש "Terminal: Select Default Profile"
+3. בחר "Git Bash"
+
+## כלל 2: בעיות Node.js אחרי התקנה
+
+אם התלמיד מקבל שגיאה כמו:
+- `'node' is not recognized as an internal or external command`
+- `node: command not found`
+- `bun: command not found`
+
+**פתרון מיידי:**
+1. סגור את כל חלונות הטרמינל
+2. סגור את Cursor לחלוטין
+3. פתח מחדש את Cursor
+4. נסה שוב: `node -v`
+
+**אם עדיין לא עובד:**
+הסבר לתלמיד שההתקנה לא הוסיפה את Node ל-PATH כמו שצריך.
+בקש ממנו להריץ את ההתקנה של Node.js שוב ולוודא שהאפשרות "Add to PATH" מסומנת.
+
+## כלל 3: בעיות Babel Config ו-Path
+
+שגיאות נפוצות עם babel.config.js ב-Windows:
+- `Cannot find module 'babel-preset-expo'`
+- `Error: ENOENT: no such file or directory`
+- Path-related errors עם backslashes
+
+**פתרונות:**
+
+### פתרון 1: התקנה מחדש של חבילות
+```bash
+rm -rf node_modules
+rm bun.lock
+bun install
+```
+
+### פתרון 2: ניקוי Cache
+```bash
+bun expo start --clear
+```
+
+### פתרון 3: בדיקת line endings
+אם יש בעיות מוזרות עם קבצי config, ייתכן שזה בגלל CRLF vs LF.
+ב-Git Bash הרץ:
+```bash
+git config --global core.autocrlf input
+```
+
+## כלל 4: התקנת Bun ב-Windows
+
+הדרך המומלצת להתקין Bun ב-Windows:
+
+**אפשרות 1 - PowerShell (כמנהל):**
+```powershell
+powershell -c "irm bun.sh/install.ps1 | iex"
+```
+
+**אפשרות 2 - npm (אחרי התקנת Node):**
+```bash
+npm install -g bun
+```
+
+אחרי ההתקנה, סגור ופתח מחדש את הטרמינל ובדוק:
+```bash
+bun -v
+```
+
+## כלל 5: סדר התקנה מומלץ ל-Windows
+
+כשתלמיד חדש מתחיל על Windows, וודא שהוא עוקב אחרי הסדר הזה:
+
+1. **התקן Git for Windows** (כולל Git Bash)
+   - https://git-scm.com/download/win
+   - בזמן ההתקנה: בחר "Use Git from Git Bash only" או "Git from the command line and also from 3rd-party software"
+
+2. **התקן Node.js LTS**
+   - https://nodejs.org
+   - בזמן ההתקנה: וודא ש-"Add to PATH" מסומן
+   - **אחרי ההתקנה: סגור ופתח טרמינל חדש**
+
+3. **בדוק שהתקנות עובדות:**
+   ```bash
+   node -v
+   git --version
+   ```
+   אם לא עובד - סגור את Cursor לחלוטין ופתח מחדש.
+
+4. **התקן Bun:**
+   ```bash
+   npm install -g bun
+   bun -v
+   ```
+
+5. **התקן חבילות הפרויקט:**
+   ```bash
+   bun install
+   ```
+
+## כלל 6: שגיאות נפוצות וטיפול
+
+### "EPERM: operation not permitted"
+Windows לא מאפשר למחוק קבצים שנעולים.
+- סגור את אפליקציית Expo Go בטלפון
+- סגור את כל תהליכי Node (Task Manager → End node.exe processes)
+- נסה שוב
+
+### "EACCES" או "Permission denied"
+- הרץ את Git Bash כ-Administrator
+- או שנה הרשאות לתיקייה
+
+### Metro bundler לא מוצא קבצים
+נקה את ה-cache:
+```bash
+bun expo start --clear
+```
+
+### "Cannot find module" אחרי git clone
+תמיד הרץ `bun install` אחרי clone של פרויקט.
+
+## כלל 7: iOS Simulator ב-Windows
+
+**חשוב להסביר לתלמידי Windows:**
+- iOS Simulator **לא זמין** ב-Windows (רק ב-Mac)
+- הם **כן יכולים** לבדוק על iPhone אמיתי עם Expo Go
+- הם **כן יכולים** לבנות לחנות עם EAS Build (בענן)
+
+**למידה ב-Windows:**
+- השתמשו ב-Android Emulator (דרך Android Studio)
+- או בדקו על טלפון פיזי עם Expo Go
+
+## כלל 8: בדיקת Ready-to-Code
+
+לפני שמתחילים לעבוד על הפרויקט, בקש מהתלמיד להריץ:
+
+```bash
+# בדיקת התקנות
+node -v
+bun -v
+git --version
+
+# בדיקת פרויקט
+bun install
+bun lint
+```
+
+אם כל הפקודות עוברות בלי שגיאות - מוכנים להתחיל!

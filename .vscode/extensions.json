@@ -1,0 +1,7 @@
+{
+  "recommendations": [
+    "expo.vscode-expo-tools",
+    "biomejs.biome",
+    "bradlc.vscode-tailwindcss"
+  ]
+}

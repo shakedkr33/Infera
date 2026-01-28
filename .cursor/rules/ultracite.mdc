@@ -1,0 +1,222 @@
+---
+description: Ultracite Rules - AI-Ready Formatter for React Native/Expo
+globs: "**/*.{ts,tsx,js,jsx}"
+alwaysApply: true
+---
+
+# Ultracite for React Native & Expo
+
+This project uses **Ultracite v6.5.0**, a zero-config Biome preset optimized for React development. For React Native/Expo apps, we extend `ultracite/core` and `ultracite/react`.
+
+Learn more at [ultracite.ai](https://www.ultracite.ai/preset/core)
+
+## Quick Commands
+
+- `bun ultracite fix` - Auto-fix all issues
+- `bun ultracite check` - Check for issues without fixing
+- `bun run check:fix` - Run via npm script
+
+---
+
+# Core Principles for React Native/Expo Development
+
+## Type Safety (Ultracite Enforces)
+
+- No `any` type - use `unknown` instead
+- Explicit parameter and return types required
+- TypeScript strict mode enabled
+- Type narrowing preferred over assertions
+- `as const` for immutable values
+
+## React Patterns (Ultracite + Custom)
+
+- Function components only (no classes)
+- Hooks at top level only
+- All hook dependencies must be specified
+- Don't define components inside other components
+- Use `React.memo` for memoization
+- No `forwardRef` - pass ref as prop
+
+## React Native / Expo Specific
+
+### Accessibility (Critical for Mobile)
+
+Every interactive element MUST have:
+- `accessible={true}` prop
+- `accessibilityLabel` - descriptive label
+- `accessibilityRole` - "button", "link", etc.
+- `accessibilityHint` - additional context if needed
+- Minimum touch size: 44x44 (iOS) or 48x48 (Android)
+- Use `hitSlop` to expand small touch targets
+
+### Components & Navigation
+
+- Use `Pressable` or `TouchableOpacity` for interactions (NOT `View`)
+- Use `expo-router` for file-based routing (files in `app/`)
+- Use semantic component names matching iOS/Android patterns
+
+### Styling with NativeWind
+
+- Use NativeWind (Tailwind for React Native) via `className` prop
+- No inline styles - use Tailwind utilities
+- No hardcoded colors - use Tailwind color utilities
+- Use responsive modifiers (`sm:`, `md:`, `lg:`)
+- RTL support enabled in `app.json`
+
+### Storage & Security
+
+- `expo-secure-store` for sensitive data (auth tokens, keys)
+- `AsyncStorage` ONLY for non-sensitive preferences
+- Never hardcode secrets or API keys
+- Use environment variables for config
+
+### Images & Media
+
+- Use `expo-image` (better than React Native `Image`)
+- Provide `accessibilityLabel` for all images
+- Lazy load when possible
+- Optimize image sizes
+
+### Async & Error Handling
+
+- Always `await` promises in async functions
+- Use try-catch for error handling
+- Provide user-friendly error messages
+- Don't swallow errors silently
+
+### Performance
+
+- Memoize expensive components with `React.memo`
+- Use `useCallback` for functions passed as dependencies
+- Use `useMemo` for expensive computations
+- Avoid creating objects/arrays in render
+- Use `FlatList` with `keyExtractor` for lists
+- Add `getItemLayout` for fixed-height items
+
+### Platform-Specific Code
+
+- Use `Platform.select()` for platform differences
+- Or use `Platform.OS === 'ios'` / `Platform.OS === 'android'`
+- Test on both iOS and Android
+- Use platform-specific fonts when needed
+
+### RTL Support (Hebrew/Arabic)
+
+- App is configured for RTL in `app.json`
+- Use `text-right` for RTL text
+- Use `flex-row-reverse` for reversed layouts
+- Test layouts in both directions
+
+### Code Organization
+
+- Keep functions focused and under cognitive complexity limits
+- Extract complex conditions into named variables
+- Use early returns to reduce nesting
+- Group related code together
+
+### Testing
+
+- Write assertions inside `it()` or `test()` blocks
+- Use async/await instead of done callbacks
+- Don't use `.only` or `.skip` in committed code
+- Keep test suites reasonably flat
+
+---
+
+## Common Patterns
+
+### ✅ Accessible Button Component
+
+```typescript
+import { Pressable, Text } from 'react-native';
+
+interface ButtonProps {
+  onPress: () => void;
+  label: string;
+  hint?: string;
+}
+
+export const Button = ({ onPress, label, hint }: ButtonProps) => {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessible={true}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint={hint}
+      className="px-4 py-3 bg-blue-600 rounded-lg active:bg-blue-700"
+    >
+      <Text className="text-white font-semibold text-center">{label}</Text>
+    </Pressable>
+  );
+};
+```
+
+### ✅ Optimized List with FlatList
+
+```typescript
+import React, { useCallback } from 'react';
+import { FlatList, Pressable, Text, View } from 'react-native';
+
+interface Item {
+  id: string;
+  title: string;
+}
+
+const renderItem = ({ item }: { item: Item }) => (
+  <Pressable
+    accessible={true}
+    accessibilityLabel={item.title}
+    className="px-4 py-3 border-b border-gray-200"
+  >
+    <Text className="text-base text-gray-900">{item.title}</Text>
+  </Pressable>
+);
+
+export const ItemList = ({ items }: { items: Item[] }) => (
+  <FlatList
+    data={items}
+    keyExtractor={(item) => item.id}
+    renderItem={renderItem}
+    getItemLayout={(data, index) => ({
+      length: 56,
+      offset: 56 * index,
+      index,
+    })}
+  />
+);
+```
+
+### ✅ Async Data Loading
+
+```typescript
+import { useEffect, useState } from 'react';
+
+export const useData = () => {
+  const [data, setData] = useState<DataType | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const result = await fetch('/api/data');
+        const json = await result.json();
+        setData(json);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  return { data, error, loading };
+};
+```
+
+---
+
+Most formatting and common issues are automatically fixed by Biome. Run `bun ultracite fix` before committing.
