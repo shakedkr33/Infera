@@ -10,20 +10,11 @@ import '../global.css';
 import { RevenueCatProvider } from '@/contexts/RevenueCatContext';
 import { bootstrapRTL } from '@/lib/rtlBootstrap';
 import { getConvexUrl } from '@/utils/convexConfig';
+import { OnboardingProvider } from './contexts/OnboardingContext';
 
-// אסטרטגיית RTL (ראה docs/rtl-knowhow.md):
-// 1. תוסף expo-localization (app.json) - מגדיר RTL ברמת ה-Native (עובד ב-Dev Builds ו-Production)
-// 2. עיצוב RTL מפורש (lib/rtl.ts) - עובד בכל מקום כולל Expo Go
-// 3. סידור ידני של טאבים - מטפל ב-Tab Bar בכל הסביבות
-//
-// הגישה ההיברידית מבטיחה תמיכה עקבית בעברית/RTL בכל הסביבות.
-
-// שימוש בפונקציית הקונפיגורציה לבחירת כתובת Convex לפי הסביבה
 const convexUrl = getConvexUrl();
 const convex = new ConvexReactClient(convexUrl);
 
-// אחסון מאובטח של הטוקן (Token) באמצעות expo-secure-store
-// זה קריטי לשמירה על אבטחת המידע של המשתמש
 const secureStorage = {
   getItem: async (key: string) => {
     try {
@@ -35,40 +26,29 @@ const secureStorage = {
   setItem: async (key: string, value: string) => {
     try {
       await SecureStore.setItemAsync(key, value);
-    } catch {
-      // טיפול שקט בשגיאות שמירה
-    }
+    } catch {}
   },
   removeItem: async (key: string) => {
     try {
       await SecureStore.deleteItemAsync(key);
-    } catch {
-      // טיפול שקט בשגיאות מחיקה
-    }
+    } catch {}
   },
 };
 
 export default function RootLayout() {
-  // Bootstrap RTL for Expo Go on first mount
   useEffect(() => {
-    bootstrapRTL().catch(() => {
-      // Silently handle errors - bootstrap will reload app if needed
-    });
+    bootstrapRTL().catch(() => {});
   }, []);
 
   return (
     <SafeAreaProvider>
-      {/* StatusBar: translucent={false} מונע מהתוכן להיכנס מתחת לבר הסטטוס באנדרואיד */}
-      {/* זה עובד ב-Expo Go, בניגוד להגדרות ב-app.json */}
       <StatusBar style="light" translucent={false} backgroundColor="#0a0a0a" />
-
-      {/* ספק האימות של Convex עוטף את כל האפליקציה ומנהל את מצב ההתחברות */}
       <ConvexAuthProvider client={convex} storage={secureStorage}>
-        {/* ספק RevenueCat לניהול מנויים ורכישות */}
-        <RevenueCatProvider>
-          {/* Slot מעבד את הראוטים (Routes) הילדים - ה-Layouts הפנימיים מנהלים את הניווט שלהם */}
-          <Slot />
-        </RevenueCatProvider>
+        <OnboardingProvider>
+          <RevenueCatProvider>
+            <Slot />
+          </RevenueCatProvider>
+        </OnboardingProvider>
       </ConvexAuthProvider>
     </SafeAreaProvider>
   );
