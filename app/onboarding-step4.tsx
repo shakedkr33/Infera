@@ -36,12 +36,15 @@ export default function OnboardingStep4() {
   );
   const [relatives, setRelatives] = useState<any[]>(data.relatives || []);
 
+  // ניהול עריכה והוספה
   const [pendingContact, setPendingContact] = useState<{
+    id?: string;
     name: string;
     phone?: string;
+    color?: string;
   } | null>(null);
   const [editedName, setEditedName] = useState('');
-  const [isNameEdited, setIsNameEdited] = useState(false);
+  const [tempColor, setTempColor] = useState('#36a9e2'); // הצבע שנבחר כרגע בחלונית
 
   const pickContact = async () => {
     if (relatives.length >= 6) {
@@ -54,45 +57,75 @@ export default function OnboardingStep4() {
       if (contact) {
         const phone = contact.phoneNumbers?.[0]?.number;
         if (relatives.some((r) => r.phone === phone)) {
-          Alert.alert('איש קשר כבר קיים', 'כבר הוספת את הקרוב הזה.');
+          Alert.alert('איש קשר כבר קיים', 'הקרוב הזה כבר נמצא ברשימה.');
           return;
         }
         setPendingContact({ name: contact.name, phone });
         setEditedName(contact.name);
-        setIsNameEdited(false);
+        setTempColor('#36a9e2'); // צבע ברירת מחדל להוספה חדשה
       }
     }
   };
 
-  const confirmRelative = (color: string) => {
+  const startEdit = (rel: any) => {
+    setPendingContact(rel);
+    setEditedName(rel.name);
+    setTempColor(rel.color); // טעינת הצבע הקיים לעריכה
+  };
+
+  const saveEdit = () => {
     if (pendingContact && editedName.trim()) {
-      const newRel = {
-        id: Date.now().toString(),
-        name: editedName.trim(),
-        phone: pendingContact.phone,
-        initials: editedName.trim().substring(0, 2),
-        color: color,
-      };
-
-      setRelatives([...relatives, newRel]);
-      setPendingContact(null);
-      setEditedName('');
-      setIsNameEdited(false);
-
-      setTimeout(() => {
-        Alert.alert(
-          'להזמין את ' + newRel.name + '?',
-          'האם לשלוח הזמנה להצטרפות ל-Infera במייל?',
-          [
-            { text: 'לא עכשיו', style: 'cancel' },
-            {
-              text: 'שלח הזמנה',
-              onPress: () => console.log('Invite sent to: ' + newRel.phone),
-            },
-          ]
+      if (pendingContact.id) {
+        // עדכון קיים
+        setRelatives((prev) =>
+          prev.map((r) =>
+            r.id === pendingContact.id
+              ? {
+                  ...r,
+                  name: editedName.trim(),
+                  color: tempColor,
+                  initials: editedName.trim().substring(0, 2),
+                }
+              : r
+          )
         );
-      }, 500);
+      } else {
+        // הוספת חדש
+        const newRel = {
+          id: Date.now().toString(),
+          name: editedName.trim(),
+          phone: pendingContact.phone,
+          initials: editedName.trim().substring(0, 2),
+          color: tempColor,
+        };
+        setRelatives([...relatives, newRel]);
+        showInviteAlert(newRel.name, newRel.phone || '');
+      }
+      cancelEdit();
     }
+  };
+
+  const cancelEdit = () => {
+    setPendingContact(null);
+    setEditedName('');
+    setTempColor('#36a9e2');
+    Keyboard.dismiss();
+  };
+
+  const showInviteAlert = (name: string, phone: string) => {
+    setTimeout(() => {
+      Alert.alert(
+        'להזמין את ' + name + '?',
+        'שלחי הזמנה במייל כדי להתחיל לשתף משימות.',
+        [
+          { text: 'לא עכשיו', style: 'cancel' },
+          {
+            text: 'שלח הזמנה',
+            onPress: () => console.log(`Invite sent to: ${phone}`), // תיקון החזרה לטרמינל
+          },
+        ]
+      );
+    }, 500);
   };
 
   const handleFinish = () => {
@@ -103,13 +136,14 @@ export default function OnboardingStep4() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: 'white' }}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 40}
         style={{ flex: 1 }}
       >
         <ScrollView
           className="flex-1 px-8"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingTop: 40, paddingBottom: 160 }}
+          contentContainerStyle={{ paddingTop: 40, paddingBottom: 200 }}
           keyboardShouldPersistTaps="always"
         >
           {/* Header */}
@@ -133,11 +167,11 @@ export default function OnboardingStep4() {
             </View>
           </View>
 
-          <Text className="text-[28px] font-bold text-center mb-8 text-gray-900">
+          <Text className="text-[28px] font-bold text-center mb-8 text-gray-900 leading-tight">
             המרחב האישי שלך ב-Infera
           </Text>
 
-          {/* שם פרטי */}
+          {/* שם וצבע אישי */}
           <View className="mb-8">
             <Text className="text-sm font-bold mb-2 text-gray-800 text-right">
               שם פרטי (חובה)
@@ -151,10 +185,9 @@ export default function OnboardingStep4() {
             />
           </View>
 
-          {/* צבע אישי */}
           <View className="mb-8">
             <Text className="text-sm font-bold mb-5 text-gray-800 text-right">
-              בחירת צבע אישי (אופציונלי)
+              בחירת צבע אישי
             </Text>
             <View className="flex-row justify-between">
               {colors.map((color) => (
@@ -178,126 +211,173 @@ export default function OnboardingStep4() {
           <View className="mb-10">
             <View className="flex-row-reverse items-center gap-1.5 mb-2">
               <MaterialIcons name="crown" size={18} color="#0ea5e9" />
-              <Text className="text-sm font-bold text-gray-800">
+              <Text className="text-sm font-bold text-gray-800 text-right">
                 קרובים (עד 6)
               </Text>
             </View>
+            <Text className="text-[13px] text-gray-400 text-right mb-4">
+              בחרי אנשים לשיתוף משימות ותזכורות אישיים בלבד.
+            </Text>
 
-            {/* רשימת קרובים קיימת */}
-            {relatives.map((rel) => (
-              <View
-                key={rel.id}
-                className="bg-[#f6f7f8] p-4 rounded-2xl flex-row items-center justify-between mb-4"
-                style={styles.iosShadow}
-              >
-                <Pressable
-                  onPress={() =>
-                    setRelatives(relatives.filter((r) => r.id !== rel.id))
-                  }
-                  className="p-2"
-                >
-                  <MaterialIcons name="close" size={20} color="#9ca3af" />
-                </Pressable>
-                <View className="flex-row items-center gap-3">
-                  <Text className="font-bold text-[15px] text-gray-900">
-                    {rel.name}
-                  </Text>
+            {relatives.map((rel) => {
+              const isEditing = pendingContact?.id === rel.id;
+              if (isEditing)
+                return (
                   <View
-                    style={{ backgroundColor: rel.color }}
-                    className="w-10 h-10 rounded-full items-center justify-center"
+                    key={rel.id}
+                    className="bg-white border-2 border-[#36a9e2] p-4 rounded-2xl mb-4"
+                    style={styles.iosShadow}
                   >
-                    <Text className="text-xs font-bold opacity-70">
-                      {rel.initials}
-                    </Text>
+                    <View className="flex-row items-center justify-between mb-3">
+                      <Pressable onPress={cancelEdit} className="p-1">
+                        <MaterialIcons name="close" size={20} color="#9ca3af" />
+                      </Pressable>
+                      <Text className="text-xs text-gray-400 text-right">
+                        עריכת קרוב:
+                      </Text>
+                    </View>
+                    <View className="flex-row-reverse items-center bg-[#f6f7f8] rounded-xl px-2 mb-4">
+                      {/* ה-V עכשיו שומר את הכל */}
+                      <Pressable onPress={saveEdit} className="p-1">
+                        <MaterialIcons
+                          name="check-circle"
+                          size={30}
+                          color="#10b981"
+                        />
+                      </Pressable>
+                      <TextInput
+                        value={editedName}
+                        onChangeText={setEditedName}
+                        className="flex-1 h-12 text-right text-lg font-bold text-[#111517] pr-2"
+                      />
+                    </View>
+                    <View className="flex-row justify-between">
+                      {colors.map((c) => (
+                        <Pressable
+                          key={c}
+                          onPress={() => setTempColor(c)}
+                          style={[
+                            {
+                              width: 34,
+                              height: 34,
+                              borderRadius: 17,
+                              backgroundColor: c,
+                            },
+                            tempColor === c && {
+                              borderColor: '#111517',
+                              borderWidth: 2,
+                            }, // סימון הצבע הנבחר
+                          ]}
+                        />
+                      ))}
+                    </View>
                   </View>
-                </View>
-              </View>
-            ))}
+                );
 
-            {/* תיבת עריכה והוספה */}
-            {pendingContact ? (
-              <View
-                className="bg-white border-2 border-[#36a9e2] p-5 rounded-2xl mb-4"
-                style={styles.iosShadow}
-              >
-                <View className="flex-row items-center justify-between mb-2">
-                  <Pressable onPress={() => setPendingContact(null)}>
+              return (
+                <Pressable
+                  key={rel.id}
+                  onPress={() => startEdit(rel)}
+                  className="bg-[#f6f7f8] p-4 rounded-2xl flex-row items-center justify-between mb-4"
+                  style={styles.iosShadow}
+                >
+                  <Pressable
+                    onPress={() =>
+                      setRelatives(relatives.filter((r) => r.id !== rel.id))
+                    }
+                    className="p-2"
+                  >
                     <MaterialIcons name="close" size={20} color="#9ca3af" />
                   </Pressable>
-                  <Text className="text-right text-xs text-gray-400">
-                    עריכת שם ובחירת צבע:
+                  <View className="flex-row items-center gap-3">
+                    <Text className="font-bold text-[15px] text-gray-900">
+                      {rel.name}
+                    </Text>
+                    <View
+                      style={{ backgroundColor: rel.color }}
+                      className="w-10 h-10 rounded-full items-center justify-center"
+                    >
+                      <Text className="text-xs font-bold opacity-70">
+                        {rel.initials}
+                      </Text>
+                    </View>
+                  </View>
+                </Pressable>
+              );
+            })}
+
+            {/* הוספת איש קשר חדש */}
+            {pendingContact && !pendingContact.id && (
+              <View
+                className="bg-white border-2 border-[#36a9e2] p-4 rounded-2xl mb-4"
+                style={styles.iosShadow}
+              >
+                <View className="flex-row items-center justify-between mb-3">
+                  <Pressable onPress={cancelEdit} className="p-1">
+                    <MaterialIcons name="close" size={20} color="#9ca3af" />
+                  </Pressable>
+                  <Text className="text-xs text-gray-400 text-right">
+                    הוספת קרוב:
                   </Text>
                 </View>
-
-                <View className="flex-row-reverse items-center bg-[#f6f7f8] rounded-xl px-3 mb-4">
-                  {isNameEdited && (
-                    <Pressable
-                      onPress={() => {
-                        Keyboard.dismiss();
-                        setIsNameEdited(false);
-                      }}
-                      className="p-1"
-                    >
-                      <MaterialIcons
-                        name="check-circle"
-                        size={28}
-                        color="#10b981"
-                      />
-                    </Pressable>
-                  )}
+                <View className="flex-row-reverse items-center bg-[#f6f7f8] rounded-xl px-2 mb-4">
+                  <Pressable onPress={saveEdit} className="p-1">
+                    <MaterialIcons
+                      name="check-circle"
+                      size={30}
+                      color="#10b981"
+                    />
+                  </Pressable>
                   <TextInput
                     value={editedName}
-                    onChangeText={(t) => {
-                      setEditedName(t);
-                      setIsNameEdited(true);
-                    }}
+                    onChangeText={setEditedName}
                     className="flex-1 h-12 text-right text-lg font-bold text-[#111517] pr-2"
                   />
                 </View>
-
                 <View className="flex-row justify-between">
-                  {colors.map((color) => (
+                  {colors.map((c) => (
                     <Pressable
-                      key={color}
-                      onPress={() => confirmRelative(color)}
-                      style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 18,
-                        backgroundColor: color,
-                      }}
+                      key={c}
+                      onPress={() => setTempColor(c)}
+                      style={[
+                        {
+                          width: 34,
+                          height: 34,
+                          borderRadius: 17,
+                          backgroundColor: c,
+                        },
+                        tempColor === c && {
+                          borderColor: '#111517',
+                          borderWidth: 2,
+                        },
+                      ]}
                     />
                   ))}
                 </View>
               </View>
-            ) : (
-              relatives.length < 6 && (
-                <Pressable
-                  onPress={pickContact}
-                  className="w-full py-5 border-2 border-dashed border-gray-200 rounded-2xl flex-row items-center justify-center gap-2"
-                >
-                  <MaterialIcons
-                    name="contact-page"
-                    size={20}
-                    color="#36a9e2"
-                  />
-                  <Text className="text-[#36a9e2] font-bold text-lg">
-                    {relatives.length === 0
-                      ? 'הוספת קרוב מאנשי הקשר'
-                      : 'הוספת קרוב נוסף'}
-                  </Text>
-                </Pressable>
-              )
+            )}
+
+            {!pendingContact && relatives.length < 6 && (
+              <Pressable
+                onPress={pickContact}
+                className="w-full py-5 border-2 border-dashed border-gray-200 rounded-2xl flex-row items-center justify-center gap-2"
+              >
+                <MaterialIcons name="contact-page" size={20} color="#36a9e2" />
+                <Text className="text-[#36a9e2] font-bold text-lg">
+                  {relatives.length === 0
+                    ? 'הוספת קרוב מאנשי הקשר'
+                    : 'הוספת קרוב נוסף'}
+                </Text>
+              </Pressable>
             )}
           </View>
         </ScrollView>
 
-        {/* Footer קבוע בתחתית - מחוץ ל-ScrollView כדי שלא יוכפל */}
-        <View className="absolute bottom-0 left-0 right-0 px-8 pb-10 pt-4 bg-white/95 border-t border-gray-100">
+        <View className="px-8 pb-10 pt-4 bg-white/95 border-t border-gray-100">
           <Pressable
             onPress={handleFinish}
             disabled={!firstName}
-            className={`w-full h-16 rounded-2xl items-center justify-center ${firstName ? 'bg-[#36a9e2]' : 'bg-gray-200'}`}
+            className={`w-full h-16 rounded-2xl items-center justify-center shadow-md ${firstName ? 'bg-[#36a9e2]' : 'bg-gray-200'}`}
           >
             <Text className="text-white font-bold text-lg">
               סיימנו, בואו נתחיל!
@@ -317,9 +397,5 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 2,
   },
-  colorCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-  },
+  colorCircle: { width: 44, height: 44, borderRadius: 22 },
 });
