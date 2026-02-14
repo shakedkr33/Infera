@@ -37,14 +37,15 @@ export default function PaywallScreen() {
   const { packages, isLoading, purchasePackage, restorePurchases, isExpoGo } =
     useRevenueCat();
 
-  // מציאת החבילות החודשית והשנתית
+  // מציאת החבילות - חודשי, שנתי, לצמיתות
   const monthlyPackage = packages.find((p) => p.packageType === 'monthly');
   const annualPackage = packages.find((p) => p.packageType === 'annual');
+  const lifetimePackage = packages.find((p) => p.packageType === 'lifetime');
 
   // בחירת תוכנית - ברירת מחדל: שנתית
-  const [selectedPlan, setSelectedPlan] = useState<'monthly' | 'annual'>(
-    'annual'
-  );
+  const [selectedPlan, setSelectedPlan] = useState<
+    'monthly' | 'annual' | 'lifetime'
+  >('annual');
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
@@ -67,7 +68,9 @@ export default function PaywallScreen() {
     const packageId =
       selectedPlan === 'monthly'
         ? monthlyPackage?.identifier
-        : annualPackage?.identifier;
+        : selectedPlan === 'lifetime'
+          ? lifetimePackage?.identifier
+          : annualPackage?.identifier;
 
     if (!packageId) {
       return;
@@ -267,6 +270,40 @@ export default function PaywallScreen() {
                     }`}
                   >
                     {selectedPlan === 'annual' && (
+                      <Check size={14} color="#0a0a0a" strokeWidth={3} />
+                    )}
+                  </View>
+                </View>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* תוכנית לצמיתות */}
+          {lifetimePackage && (
+            <TouchableOpacity
+              onPress={() => setSelectedPlan('lifetime')}
+              className={`rounded-xl p-4 border-2 ${
+                selectedPlan === 'lifetime'
+                  ? 'border-[#4fc3f7] bg-zinc-900'
+                  : 'border-zinc-700 bg-zinc-900'
+              }`}
+            >
+              <View className={`${tw.flexRow} items-center justify-between`}>
+                <Text className="text-zinc-400 text-lg font-semibold">
+                  {lifetimePackage.priceString}
+                </Text>
+                <View className={`${tw.flexRow} items-center gap-3`}>
+                  <Text className="text-white text-lg font-semibold">
+                    לצמיתות
+                  </Text>
+                  <View
+                    className={`w-6 h-6 rounded-full border-2 items-center justify-center ${
+                      selectedPlan === 'lifetime'
+                        ? 'border-[#4fc3f7] bg-[#4fc3f7]'
+                        : 'border-zinc-600'
+                    }`}
+                  >
+                    {selectedPlan === 'lifetime' && (
                       <Check size={14} color="#0a0a0a" strokeWidth={3} />
                     )}
                   </View>

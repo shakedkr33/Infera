@@ -10,7 +10,7 @@ import '../global.css';
 import { RevenueCatProvider } from '@/contexts/RevenueCatContext';
 import { bootstrapRTL } from '@/lib/rtlBootstrap';
 import { getConvexUrl } from '@/utils/convexConfig';
-import { OnboardingProvider } from './contexts/OnboardingContext';
+import { OnboardingProvider } from '../contexts/OnboardingContext';
 
 const convexUrl = getConvexUrl();
 const convex = new ConvexReactClient(convexUrl);

@@ -57,7 +57,7 @@ export default function AuthenticatedLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#308ce8', // הכחול של Infera
+        tabBarActiveTintColor: '#308ce8', // הכחול של InYomi
         tabBarInactiveTintColor: '#6b7280',
         tabBarStyle: {
           backgroundColor: '#ffffff', // רקע לבן נקי

@@ -1,15 +1,9 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { useOnboarding } from './contexts/OnboardingContext';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'; // SafeAreaView הוסר מכאן
+import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+import { useOnboarding } from '../contexts/OnboardingContext';
 
 // רשימת מקורות מעודכנת
 const sources = [
@@ -37,7 +31,7 @@ export default function OnboardingStep3() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView style={{ flex: 1, backgroundColor: 'white' }}>
       {/* Header & Progress */}
       <View className="pt-4 px-6">
         <View className="flex-row-reverse items-center justify-between mb-4">
@@ -103,6 +97,7 @@ export default function OnboardingStep3() {
         </View>
       </ScrollView>
 
+      {/* Floating Bottom Button */}
       <View className="absolute bottom-0 left-0 right-0 bg-white/90 px-6 py-8">
         <View className="flex-row items-center justify-center gap-2 mb-6">
           <View className="h-1.5 w-1.5 rounded-full bg-gray-200" />

@@ -8,14 +8,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
-} from 'react-native';
-import { useOnboarding } from './contexts/OnboardingContext';
+} from 'react-native'; // SafeAreaView הוסר מכאן
+import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+import { useOnboarding } from '../contexts/OnboardingContext';
 
 const colors = [
   '#FFD1DC',
@@ -129,8 +129,11 @@ export default function OnboardingStep4() {
   };
 
   const handleFinish = () => {
+    // שמירת הנתונים ב-Context כדי שיהיו זמינים בכל האפליקציה
     updateData({ firstName, personalColor: selectedColor, relatives });
-    router.replace('/home-preview');
+
+    // ניווט למסך הפרימיום שהגדרנו כשלב סופי
+    router.push('/onboarding-premium');
   };
 
   return (
@@ -146,7 +149,7 @@ export default function OnboardingStep4() {
           contentContainerStyle={{ paddingTop: 40, paddingBottom: 200 }}
           keyboardShouldPersistTaps="always"
         >
-          {/* Header */}
+          {/* Header & Progress */}
           <View className="mb-6">
             <View className="flex-row-reverse items-center justify-between mb-4">
               <Pressable onPress={() => router.back()} className="p-2">
@@ -167,8 +170,8 @@ export default function OnboardingStep4() {
             </View>
           </View>
 
-          <Text className="text-[28px] font-bold text-center mb-8 text-gray-900 leading-tight">
-            המרחב האישי שלך ב-Infera
+          <Text className="text-[28px] font-bold text-center mb-8 text-gray-900 leading-tight text-right">
+            המרחב האישי שלך ב-InYomi
           </Text>
 
           {/* שם וצבע אישי */}
@@ -210,7 +213,11 @@ export default function OnboardingStep4() {
           {/* קרובים */}
           <View className="mb-10">
             <View className="flex-row-reverse items-center gap-1.5 mb-2">
-              <MaterialIcons name="crown" size={18} color="#0ea5e9" />
+              <MaterialIcons
+                name="workspace-premium"
+                size={18}
+                color="#0ea5e9"
+              />
               <Text className="text-sm font-bold text-gray-800 text-right">
                 קרובים (עד 6)
               </Text>
@@ -237,7 +244,6 @@ export default function OnboardingStep4() {
                       </Text>
                     </View>
                     <View className="flex-row-reverse items-center bg-[#f6f7f8] rounded-xl px-2 mb-4">
-                      {/* ה-V עכשיו שומר את הכל */}
                       <Pressable onPress={saveEdit} className="p-1">
                         <MaterialIcons
                           name="check-circle"
@@ -266,7 +272,7 @@ export default function OnboardingStep4() {
                             tempColor === c && {
                               borderColor: '#111517',
                               borderWidth: 2,
-                            }, // סימון הצבע הנבחר
+                            },
                           ]}
                         />
                       ))}

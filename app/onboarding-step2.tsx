@@ -1,15 +1,9 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { useOnboarding } from './contexts/OnboardingContext';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'; // SafeAreaView הוסר מכאן
+import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+import { useOnboarding } from '../contexts/OnboardingContext';
 
 const challenges = [
   {
@@ -49,7 +43,7 @@ export default function OnboardingStep2() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-[#f6f7f8]">
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
       {/* Header עם כפתור חזור ופס התקדמות */}
       <View className="pt-4 px-6">
         <View className="flex-row-reverse items-center justify-between mb-4">

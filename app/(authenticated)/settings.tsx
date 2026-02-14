@@ -5,6 +5,8 @@ import {
   Bug,
   ChevronLeft,
   CreditCard,
+  Crown,
+  Headset,
   LogIn,
   LogOut,
   Trash2,
@@ -31,7 +33,14 @@ import { tw } from '@/lib/rtl';
 export default function SettingsScreen() {
   const router = useRouter();
   const { signOut } = useAuthActions();
-  const { isPremium, isConfigured, isExpoGo } = useRevenueCat();
+  const {
+    isPremium,
+    isConfigured,
+    isExpoGo,
+    presentPaywall,
+    presentCustomerCenter,
+    customerData,
+  } = useRevenueCat();
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   const deleteMyAccount = useMutation(api.users.deleteMyAccount);
 
@@ -168,6 +177,34 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* ניהול מנוי - שדרוג או Customer Center */}
+        <View className="mx-4 mb-4 gap-3">
+          {!isPremium && (
+            <TouchableOpacity
+              onPress={() => presentPaywall()}
+              className={`${tw.flexRow} items-center gap-3 p-4 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/30`}
+            >
+              <ChevronLeft size={20} color="#4fc3f7" />
+              <Text
+                className={`flex-1 text-[#4fc3f7] text-base font-bold ${tw.textStart}`}
+              >
+                שדרוג ל-InYomi Pro
+              </Text>
+              <Crown size={20} color="#4fc3f7" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            onPress={() => presentCustomerCenter()}
+            className={`${tw.flexRow} items-center gap-3 p-4 rounded-xl bg-zinc-900 border border-zinc-800`}
+          >
+            <ChevronLeft size={20} color="#71717a" />
+            <Text className={`flex-1 text-white text-base ${tw.textStart}`}>
+              ניהול מנוי ותמיכה
+            </Text>
+            <Headset size={20} color="#a1a1aa" />
+          </TouchableOpacity>
+        </View>
+
         {/* כפתור התנתקות */}
         <View className="mx-4 mb-4">
           <TouchableOpacity
@@ -252,6 +289,16 @@ export default function SettingsScreen() {
                       label="סטטוס פרימיום"
                       value={isPremium ? 'פרימיום' : 'חינמי'}
                     />
+                    <DebugRow
+                      label="Entitlement"
+                      value="InYomi Pro"
+                    />
+                    {customerData && (
+                      <DebugRow
+                        label="App User ID"
+                        value={customerData.appUserID.substring(0, 20)}
+                      />
+                    )}
                   </View>
                 </View>
 

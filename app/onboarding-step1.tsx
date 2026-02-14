@@ -1,8 +1,9 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, SafeAreaView, Text, View } from 'react-native';
-import { useOnboarding } from './contexts/OnboardingContext';
+import { Pressable, Text, View } from 'react-native'; // ה-SafeAreaView הוסר מכאן
+import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+import { useOnboarding } from '../contexts/OnboardingContext';
 
 export default function OnboardingStep1() {
   const router = useRouter();
@@ -23,7 +24,7 @@ export default function OnboardingStep1() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-[#f6f7f8]">
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
       {/* Header & Progress */}
       <View className="pt-4 px-4">
         <View className="flex-row-reverse items-center justify-between mb-4">
@@ -40,7 +41,7 @@ export default function OnboardingStep1() {
         </View>
       </View>
 
-      {/* Title - Updated Copy */}
+      {/* Title */}
       <View className="pt-10 pb-10 px-6">
         <Text className="text-[#111517] text-[28px] font-extrabold text-center leading-tight">
           עבור מי אנחנו בונים את הלו"ז?
@@ -96,7 +97,7 @@ export default function OnboardingStep1() {
         </View>
       </View>
 
-      {/* AI Tip Box - Updated Copy */}
+      {/* AI Tip Box */}
       <View className="px-6 py-6">
         <View className="bg-[#36a9e210] rounded-2xl p-4 flex-row-reverse items-start border border-[#36a9e215]">
           <MaterialIcons

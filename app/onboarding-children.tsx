@@ -1,8 +1,9 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, SafeAreaView, Text, View } from 'react-native';
-import { useOnboarding } from './contexts/OnboardingContext';
+import { Pressable, Text, View } from 'react-native'; // SafeAreaView הוסר מכאן
+import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+import { useOnboarding } from '../contexts/OnboardingContext';
 
 const counts = [1, 2, 3, 4, '5+'];
 
@@ -17,7 +18,8 @@ export default function OnboardingChildren() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-white">
+    <SafeAreaView style={{ flex: 1, backgroundColor: 'white' }}>
+      {/* Header */}
       <View className="pt-4 px-4">
         <View className="flex-row-reverse items-center justify-between">
           <Pressable onPress={() => router.back()} className="p-2">
@@ -34,6 +36,7 @@ export default function OnboardingChildren() {
           </Text>
         </View>
 
+        {/* Selection Grid */}
         <View className="px-4">
           <View className="flex-row-reverse flex-wrap justify-center gap-4">
             {counts.map((num) => (
@@ -56,6 +59,7 @@ export default function OnboardingChildren() {
           </View>
         </View>
 
+        {/* Illustration */}
         <View className="items-center justify-center">
           <View className="w-52 h-52 rounded-full bg-sky-50 items-center justify-center border-4 border-dashed border-sky-100">
             <MaterialIcons
@@ -66,6 +70,7 @@ export default function OnboardingChildren() {
           </View>
         </View>
 
+        {/* Footer Button */}
         <View className="px-6">
           <Pressable
             onPress={handleContinue}

@@ -1,5 +1,5 @@
 {
-  "name": "hebrew-mobile-app",
+  "name": "inyomi",
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
@@ -19,6 +19,7 @@
     "@convex-dev/auth": "^0.0.90",
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-community/datetimepicker": "8.4.4",
     "@react-navigation/native": "^7.1.8",
     "@rn-primitives/slot": "^1.2.0",
     "@rn-primitives/types": "^1.2.0",
@@ -41,7 +42,8 @@
     "nativewind": "^4.2.1",
     "react": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-purchases": "^9.6.10",
+    "react-native-purchases": "^9.7.6",
+    "react-native-purchases-ui": "^9.7.6",
     "react-native-reanimated": "~4.1.6",
     "react-native-safe-area-context": "^5.6.2",
     "react-native-screens": "~4.16.0",

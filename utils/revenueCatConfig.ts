@@ -1,5 +1,5 @@
 // ============================================================================
-// קונפיגורציית REVENUECAT
+// קונפיגורציית REVENUECAT - InYomi
 // ============================================================================
 // ניהול מפתחות RevenueCat API לפי פלטפורמה וסביבה
 //
@@ -14,6 +14,24 @@
 import { Platform } from 'react-native';
 
 type RevenueCatPlatform = 'ios' | 'android';
+
+// ============================================================================
+// Entitlement & Product IDs
+// ============================================================================
+
+// Entitlement ID ב-RevenueCat Dashboard - כל המוצרים מקושרים לזה
+export const ENTITLEMENT_ID = 'InYomi Pro';
+
+// Product identifiers - תואמים ל-Offerings ב-RevenueCat Dashboard
+export const PRODUCT_IDS = {
+  monthly: 'monthly',
+  yearly: 'yearly',
+  lifetime: 'lifetime',
+} as const;
+
+// ============================================================================
+// API Key Management
+// ============================================================================
 
 /**
  * קבלת מפתח RevenueCat API המתאים לפי פלטפורמה וסביבה
