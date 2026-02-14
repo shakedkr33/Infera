@@ -1,8 +1,9 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'; // SafeAreaView הוסר מכאן
-import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
 
 // רשימת מקורות מעודכנת
@@ -36,7 +37,7 @@ export default function OnboardingStep3() {
       <View className="pt-4 px-6">
         <View className="flex-row-reverse items-center justify-between mb-4">
           <Pressable onPress={() => router.back()} className="p-2">
-            <MaterialIcons name="arrow-forward" size={24} color="#111517" />
+            <MaterialIcons name="arrow-forward" size={24} color={colors.slate} />
           </Pressable>
           <Text className="text-gray-400 font-medium text-sm">
             שלב 3 מתוך 4
@@ -44,16 +45,22 @@ export default function OnboardingStep3() {
           <View className="w-10" />
         </View>
         <View className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden">
-          <View className="bg-[#36a9e2] h-full w-3/4 rounded-full" />
+          <View
+            className="h-full w-3/4 rounded-full"
+            style={{ backgroundColor: colors.sage }}
+          />
         </View>
       </View>
 
       <ScrollView className="flex-1 px-6" showsVerticalScrollIndicator={false}>
         <View className="py-8">
-          <Text className="text-[#111517] text-[28px] font-bold text-right leading-tight">
+          <Text
+            style={{ color: colors.slate }}
+            className="text-[28px] font-bold text-right leading-tight"
+          >
             מאיפה מגיע רוב המידע שלך?
           </Text>
-          <Text className="text-[#36a9e2] text-sm font-medium mt-1 text-right">
+          <Text style={{ color: colors.sage }} className="text-sm font-medium mt-1 text-right">
             ניתן לבחור יותר מאפשרות אחת
           </Text>
           <Text className="text-gray-500 text-[15px] leading-relaxed mt-3 text-right">
@@ -85,10 +92,13 @@ export default function OnboardingStep3() {
                 </Text>
 
                 <View
-                  className={`h-6 w-6 rounded-full border-2 items-center justify-center ${isSelected ? 'border-[#36a9e2]' : 'border-[#dce2e5]'}`}
+                  className="h-6 w-6 rounded-full border-2 items-center justify-center"
+                  style={{
+                    borderColor: isSelected ? colors.sage : '#dce2e5',
+                  }}
                 >
                   {isSelected && (
-                    <MaterialIcons name="check" size={16} color="#36a9e2" />
+                    <MaterialIcons name="check" size={16} color={colors.sage} />
                   )}
                 </View>
               </Pressable>
@@ -101,7 +111,10 @@ export default function OnboardingStep3() {
       <View className="absolute bottom-0 left-0 right-0 bg-white/90 px-6 py-8">
         <View className="flex-row items-center justify-center gap-2 mb-6">
           <View className="h-1.5 w-1.5 rounded-full bg-gray-200" />
-          <View className="h-1.5 w-4 rounded-full bg-[#36a9e2]" />
+          <View
+            className="h-1.5 w-4 rounded-full"
+            style={{ backgroundColor: colors.sage }}
+          />
           <View className="h-1.5 w-1.5 rounded-full bg-gray-200" />
           <View className="h-1.5 w-1.5 rounded-full bg-gray-200" />
         </View>
@@ -109,7 +122,10 @@ export default function OnboardingStep3() {
         <Pressable
           onPress={handleContinue}
           disabled={selected.length === 0}
-          className={`w-full h-14 rounded-xl flex-row items-center justify-center gap-2 shadow-lg ${selected.length > 0 ? 'bg-[#36a9e2]' : 'bg-gray-300'}`}
+          className="w-full h-14 rounded-xl flex-row items-center justify-center gap-2 shadow-lg"
+          style={{
+            backgroundColor: selected.length > 0 ? colors.sage : '#d1d5db',
+          }}
         >
           <MaterialIcons
             name="arrow-back"
@@ -127,7 +143,7 @@ export default function OnboardingStep3() {
 const styles = StyleSheet.create({
   card: { backgroundColor: 'white' },
   selectedCard: {
-    borderColor: '#36a9e2',
-    backgroundColor: 'rgba(54, 169, 226, 0.05)',
+    borderColor: '#8B9F87',
+    backgroundColor: 'rgba(139, 159, 135, 0.05)',
   },
 });

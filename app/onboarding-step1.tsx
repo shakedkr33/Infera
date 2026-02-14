@@ -1,8 +1,10 @@
 import { MaterialIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, Text, View } from 'react-native'; // ה-SafeAreaView הוסר מכאן
-import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+import { Pressable, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
 
 export default function OnboardingStep1() {
@@ -10,12 +12,17 @@ export default function OnboardingStep1() {
   const { data, updateData } = useOnboarding();
   const [selected, setSelected] = useState(data.spaceType || '');
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (selected) {
       updateData({ spaceType: selected });
+      await AsyncStorage.setItem('userType', selected);
 
-      // תמיד ממשיכים לשלב 2 (הרצף: step1 → step2 → step3 → step4 → children → sign-up)
-      router.push('/onboarding-step2');
+      // משפחה → מסך בחירת מספר ילדים, אחרת → ישר לשלב 2
+      if (selected === 'family') {
+        router.push('/onboarding-children-select');
+      } else {
+        router.push('/onboarding-step2');
+      }
     }
   };
 
@@ -25,21 +32,27 @@ export default function OnboardingStep1() {
       <View className="pt-4 px-4">
         <View className="flex-row-reverse items-center justify-between mb-4">
           <Pressable onPress={() => router.back()} className="p-2">
-            <MaterialIcons name="arrow-forward" size={24} color="#111517" />
+            <MaterialIcons name="arrow-forward" size={24} color={colors.slate} />
           </Pressable>
-          <Text className="text-[#111517] text-sm font-medium">
+          <Text style={{ color: colors.slate }} className="text-sm font-medium">
             שלב 1 מתוך 4
           </Text>
           <View className="w-10" />
         </View>
         <View className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
-          <View className="bg-[#36a9e2] h-full w-1/4 rounded-full" />
+          <View
+            className="h-full w-1/4 rounded-full"
+            style={{ backgroundColor: colors.sage }}
+          />
         </View>
       </View>
 
       {/* Title */}
       <View className="pt-10 pb-10 px-6">
-        <Text className="text-[#111517] text-[28px] font-extrabold text-center leading-tight">
+        <Text
+          style={{ color: colors.slate }}
+          className="text-[28px] font-extrabold text-center leading-tight"
+        >
           עבור מי אנחנו בונים את הלו"ז?
         </Text>
       </View>
@@ -52,11 +65,14 @@ export default function OnboardingStep1() {
           className="items-center mb-8"
         >
           <View
-            className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border ${selected === 'personal' ? 'border-[#36a9e2] border-2' : 'border-gray-100'}`}
+            className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'personal' ? 'border-[#8B9F87]' : 'border-gray-100'}`}
           >
-            <MaterialIcons name="person" size={48} color="#36a9e2" />
+            <MaterialIcons name="person" size={48} color={colors.sage} />
           </View>
-          <Text className="text-[#111517] text-lg font-bold mt-2">
+          <Text
+            style={{ color: colors.slate }}
+            className="text-lg font-bold mt-2"
+          >
             רק עבורי
           </Text>
         </Pressable>
@@ -68,11 +84,14 @@ export default function OnboardingStep1() {
             className="items-center"
           >
             <View
-              className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border ${selected === 'couple' ? 'border-[#36a9e2] border-2' : 'border-gray-100'}`}
+              className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'couple' ? 'border-[#8B9F87]' : 'border-gray-100'}`}
             >
-              <MaterialIcons name="group" size={48} color="#36a9e2" />
+              <MaterialIcons name="group" size={48} color={colors.sage} />
             </View>
-            <Text className="text-[#111517] text-lg font-bold mt-2 text-center">
+            <Text
+              style={{ color: colors.slate }}
+              className="text-lg font-bold mt-2 text-center"
+            >
               עבורי ועבור{'\n'}בן/בת הזוג
             </Text>
           </Pressable>
@@ -82,11 +101,18 @@ export default function OnboardingStep1() {
             className="items-center"
           >
             <View
-              className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border ${selected === 'family' ? 'border-[#36a9e2] border-2' : 'border-gray-100'}`}
+              className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'family' ? 'border-[#8B9F87]' : 'border-gray-100'}`}
             >
-              <MaterialIcons name="family-restroom" size={48} color="#36a9e2" />
+              <MaterialIcons
+                name="family-restroom"
+                size={48}
+                color={colors.sage}
+              />
             </View>
-            <Text className="text-[#111517] text-lg font-bold mt-2 text-center">
+            <Text
+              style={{ color: colors.slate }}
+              className="text-lg font-bold mt-2 text-center"
+            >
               עבור כל{'\n'}המשפחה
             </Text>
           </Pressable>
@@ -95,14 +121,23 @@ export default function OnboardingStep1() {
 
       {/* AI Tip Box */}
       <View className="px-6 py-6">
-        <View className="bg-[#36a9e210] rounded-2xl p-4 flex-row-reverse items-start border border-[#36a9e215]">
+        <View
+          className="rounded-2xl p-4 flex-row-reverse items-start border"
+          style={{
+            backgroundColor: 'rgba(139, 159, 135, 0.06)',
+            borderColor: 'rgba(139, 159, 135, 0.12)',
+          }}
+        >
           <MaterialIcons
             name="auto-awesome"
             size={20}
-            color="#36a9e2"
+            color={colors.sage}
             style={{ marginLeft: 12 }}
           />
-          <Text className="text-[#111517] text-sm font-medium flex-1 leading-relaxed text-right">
+          <Text
+            style={{ color: colors.slate }}
+            className="text-sm font-medium flex-1 leading-relaxed text-right"
+          >
             זה עוזר לבינה המלאכותית להבין אילו אירועים ומשימות הכי חשובים לך.
           </Text>
         </View>
@@ -113,7 +148,10 @@ export default function OnboardingStep1() {
         <Pressable
           onPress={handleContinue}
           disabled={!selected}
-          className={`w-full h-16 rounded-full flex-row items-center justify-center gap-3 shadow-lg ${selected ? 'bg-[#36a9e2] shadow-sky-200' : 'bg-gray-300'}`}
+          className="w-full h-16 rounded-full flex-row items-center justify-center gap-3 shadow-lg"
+          style={{
+            backgroundColor: selected ? colors.sage : '#d1d5db',
+          }}
         >
           <Text className="text-white text-xl font-bold">המשך</Text>
           <MaterialIcons name="chevron-left" size={24} color="white" />

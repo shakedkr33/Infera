@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { Image, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors } from '../constants/theme';
 
 export default function OnboardingHero() {
   const router = useRouter();
@@ -28,8 +29,9 @@ export default function OnboardingHero() {
 
       <View className="gap-4">
         <Pressable
-          onPress={() => router.push('/onboarding-children')}
-          className="w-full h-16 bg-[#308ce8] rounded-2xl items-center justify-center shadow-lg shadow-blue-100"
+          onPress={() => router.push('/onboarding-step1')}
+          className="w-full h-16 rounded-2xl items-center justify-center shadow-lg"
+          style={{ backgroundColor: colors.sage }}
         >
           <Text className="text-white text-lg font-bold">
             נשמע מעולה, קדימה

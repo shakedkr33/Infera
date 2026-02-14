@@ -1,8 +1,9 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'; // SafeAreaView הוסר מכאן
-import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
 
 const challenges = [
@@ -44,14 +45,16 @@ export default function OnboardingStep2() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
-      {/* Header עם כפתור חזור ופס התקדמות */}
+      {/* Header */}
       <View className="pt-4 px-6">
         <View className="flex-row-reverse items-center justify-between mb-4">
           <Pressable onPress={() => router.back()} className="p-2">
-            <MaterialIcons name="arrow-forward" size={24} color="#111517" />
+            <MaterialIcons name="arrow-forward" size={24} color={colors.slate} />
           </Pressable>
           <View className="flex-row items-center">
-            <Text className="text-[#36a9e2] font-bold">שלב 2 מתוך 4</Text>
+            <Text style={{ color: colors.sage }} className="font-bold">
+              שלב 2 מתוך 4
+            </Text>
             <Text className="text-gray-400 font-medium ml-2">
               {' '}
               • התאמה אישית
@@ -60,17 +63,23 @@ export default function OnboardingStep2() {
           <View className="w-10" />
         </View>
         <View className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
-          <View className="bg-[#36a9e2] h-full w-2/4 rounded-full" />
+          <View
+            className="h-full w-2/4 rounded-full"
+            style={{ backgroundColor: colors.sage }}
+          />
         </View>
       </View>
 
       <ScrollView className="flex-1 px-6" showsVerticalScrollIndicator={false}>
         {/* Title & Description */}
         <View className="py-10">
-          <Text className="text-[#111517] text-3xl font-extrabold text-center leading-tight">
+          <Text
+            style={{ color: colors.slate }}
+            className="text-3xl font-extrabold text-center leading-tight"
+          >
             מה האתגר היומי הגדול ביותר שלך?
           </Text>
-          <Text className="text-[#36a9e2] text-center font-bold mt-2">
+          <Text style={{ color: colors.sage }} className="text-center font-bold mt-2">
             ניתן לבחור יותר מאתגר אחד
           </Text>
         </View>
@@ -93,17 +102,25 @@ export default function OnboardingStep2() {
 
                 <View className="flex-row-reverse items-center p-5">
                   <View
-                    className={`w-14 h-14 rounded-full items-center justify-center ${isSelected ? 'bg-[#36a9e2]' : 'bg-[#eef7ff]'}`}
+                    className="w-14 h-14 rounded-full items-center justify-center"
+                    style={{
+                      backgroundColor: isSelected
+                        ? colors.sage
+                        : 'rgba(139, 159, 135, 0.1)',
+                    }}
                   >
                     <MaterialIcons
                       name={item.icon as any}
                       size={28}
-                      color={isSelected ? 'white' : '#36a9e2'}
+                      color={isSelected ? 'white' : colors.sage}
                     />
                   </View>
 
                   <View className="flex-1 mr-4">
-                    <Text className="text-right text-xl font-bold text-[#111517]">
+                    <Text
+                      style={{ color: colors.slate }}
+                      className="text-right text-xl font-bold"
+                    >
                       {item.title}
                     </Text>
                     <Text className="text-right text-gray-500 text-sm mt-1">
@@ -122,13 +139,15 @@ export default function OnboardingStep2() {
         <Pressable
           onPress={handleContinue}
           disabled={selected.length === 0}
-          className={`w-full h-16 rounded-3xl flex-row items-center justify-center shadow-lg ${selected.length > 0 ? 'bg-[#36a9e2]' : 'bg-gray-300'}`}
+          className="w-full h-16 rounded-3xl flex-row items-center justify-center shadow-lg"
+          style={{
+            backgroundColor: selected.length > 0 ? colors.sage : '#d1d5db',
+          }}
         >
           <MaterialIcons
             name="arrow-back"
             size={24}
             color="white"
-            className="mr-2"
             style={{ transform: [{ scaleX: -1 }] }}
           />
           <Text className="text-white text-xl font-bold">המשך</Text>
@@ -146,14 +165,14 @@ const styles = StyleSheet.create({
     borderColor: '#f0f0f0',
   },
   selectedCard: {
-    borderColor: '#36a9e2',
+    borderColor: '#8B9F87',
     borderWidth: 2,
   },
   checkBadge: {
     position: 'absolute',
     top: -10,
     left: -10,
-    backgroundColor: '#36a9e2',
+    backgroundColor: '#8B9F87',
     width: 24,
     height: 24,
     borderRadius: 12,

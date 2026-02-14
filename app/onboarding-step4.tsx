@@ -1,7 +1,8 @@
 import { MaterialIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Contacts from 'expo-contacts';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   Keyboard,
@@ -13,17 +14,18 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native'; // SafeAreaView הוסר מכאן
-import { SafeAreaView } from 'react-native-safe-area-context'; // התיקון המודרני
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
 
-const colors = [
+const profileColors = [
   '#FFD1DC',
   '#E0F2F1',
   '#FFF9C4',
   '#E1BEE7',
   '#F5F5F5',
-  '#36a9e2',
+  '#8B9F87',
 ];
 
 export default function OnboardingStep4() {
@@ -32,9 +34,10 @@ export default function OnboardingStep4() {
 
   const [firstName, setFirstName] = useState(data.firstName || '');
   const [selectedColor, setSelectedColor] = useState(
-    data.personalColor || '#36a9e2'
+    data.personalColor || '#8B9F87'
   );
   const [relatives, setRelatives] = useState<any[]>(data.relatives || []);
+  const [expectedChildren, setExpectedChildren] = useState<number>(0);
 
   // ניהול עריכה והוספה
   const [pendingContact, setPendingContact] = useState<{
@@ -44,7 +47,16 @@ export default function OnboardingStep4() {
     color?: string;
   } | null>(null);
   const [editedName, setEditedName] = useState('');
-  const [tempColor, setTempColor] = useState('#36a9e2'); // הצבע שנבחר כרגע בחלונית
+  const [tempColor, setTempColor] = useState('#8B9F87');
+
+  // טעינת מספר ילדים צפוי מ-AsyncStorage
+  useEffect(() => {
+    AsyncStorage.getItem('childrenCount').then((count) => {
+      if (count) {
+        setExpectedChildren(Number.parseInt(count, 10));
+      }
+    });
+  }, []);
 
   const pickContact = async () => {
     if (relatives.length >= 6) {
@@ -62,7 +74,7 @@ export default function OnboardingStep4() {
         }
         setPendingContact({ name: contact.name, phone });
         setEditedName(contact.name);
-        setTempColor('#36a9e2'); // צבע ברירת מחדל להוספה חדשה
+        setTempColor('#8B9F87');
       }
     }
   };
@@ -70,13 +82,12 @@ export default function OnboardingStep4() {
   const startEdit = (rel: any) => {
     setPendingContact(rel);
     setEditedName(rel.name);
-    setTempColor(rel.color); // טעינת הצבע הקיים לעריכה
+    setTempColor(rel.color);
   };
 
   const saveEdit = () => {
     if (pendingContact && editedName.trim()) {
       if (pendingContact.id) {
-        // עדכון קיים
         setRelatives((prev) =>
           prev.map((r) =>
             r.id === pendingContact.id
@@ -90,7 +101,6 @@ export default function OnboardingStep4() {
           )
         );
       } else {
-        // הוספת חדש
         const newRel = {
           id: Date.now().toString(),
           name: editedName.trim(),
@@ -108,32 +118,27 @@ export default function OnboardingStep4() {
   const cancelEdit = () => {
     setPendingContact(null);
     setEditedName('');
-    setTempColor('#36a9e2');
+    setTempColor('#8B9F87');
     Keyboard.dismiss();
   };
 
-  const showInviteAlert = (name: string, phone: string) => {
+  const showInviteAlert = (name: string, _phone: string) => {
     setTimeout(() => {
       Alert.alert(
-        'להזמין את ' + name + '?',
+        `להזמין את ${name}?`,
         'שלחי הזמנה במייל כדי להתחיל לשתף משימות.',
         [
           { text: 'לא עכשיו', style: 'cancel' },
-          {
-            text: 'שלח הזמנה',
-            onPress: () => console.log(`Invite sent to: ${phone}`), // תיקון החזרה לטרמינל
-          },
+          { text: 'שלח הזמנה' },
         ]
       );
     }, 500);
   };
 
   const handleFinish = () => {
-    // שמירת הנתונים ב-Context כדי שיהיו זמינים בכל האפליקציה
     updateData({ firstName, personalColor: selectedColor, relatives });
-
-    // ניווט למסך הגדרת הילדים (לפני ההרשמה)
-    router.push('/onboarding-children');
+    // ישר להרשמה — כל נתוני ה-onboarding נאספו
+    router.push('/(auth)/sign-up');
   };
 
   return (
@@ -153,7 +158,11 @@ export default function OnboardingStep4() {
           <View className="mb-6">
             <View className="flex-row-reverse items-center justify-between mb-4">
               <Pressable onPress={() => router.back()} className="p-2">
-                <MaterialIcons name="arrow-forward" size={24} color="#36a9e2" />
+                <MaterialIcons
+                  name="arrow-forward"
+                  size={24}
+                  color={colors.sage}
+                />
               </Pressable>
               <Text className="text-gray-400 font-medium text-xs">
                 שלב 4 מתוך 4
@@ -164,15 +173,39 @@ export default function OnboardingStep4() {
               {[1, 2, 3, 4].map((s) => (
                 <View
                   key={s}
-                  className="h-1.5 flex-1 rounded-full bg-[#36a9e2]"
+                  className="h-1.5 flex-1 rounded-full"
+                  style={{ backgroundColor: colors.sage }}
                 />
               ))}
             </View>
           </View>
 
-          <Text className="text-[28px] font-bold text-center mb-8 text-gray-900 leading-tight text-right">
+          <Text
+            style={{ color: colors.slate }}
+            className="text-[28px] font-bold mb-8 leading-tight text-right"
+          >
             המרחב האישי שלך ב-InYomi
           </Text>
+
+          {/* הודעת ילדים */}
+          {expectedChildren > 0 && (
+            <View
+              className="rounded-2xl p-4 flex-row-reverse items-center gap-3 mb-6"
+              style={{
+                backgroundColor: 'rgba(139, 159, 135, 0.08)',
+                borderWidth: 1,
+                borderColor: 'rgba(139, 159, 135, 0.15)',
+              }}
+            >
+              <MaterialIcons name="child-care" size={22} color={colors.sage} />
+              <Text
+                style={{ color: colors.sage }}
+                className="text-sm font-bold text-right flex-1"
+              >
+                הוספת {expectedChildren} ילדים
+              </Text>
+            </View>
+          )}
 
           {/* שם וצבע אישי */}
           <View className="mb-8">
@@ -193,7 +226,7 @@ export default function OnboardingStep4() {
               בחירת צבע אישי
             </Text>
             <View className="flex-row justify-between">
-              {colors.map((color) => (
+              {profileColors.map((color) => (
                 <Pressable
                   key={color}
                   onPress={() => setSelectedColor(color)}
@@ -201,7 +234,7 @@ export default function OnboardingStep4() {
                     styles.colorCircle,
                     { backgroundColor: color },
                     selectedColor === color && {
-                      borderColor: '#111517',
+                      borderColor: colors.slate,
                       borderWidth: 2,
                     },
                   ]}
@@ -216,7 +249,7 @@ export default function OnboardingStep4() {
               <MaterialIcons
                 name="workspace-premium"
                 size={18}
-                color="#0ea5e9"
+                color={colors.sage}
               />
               <Text className="text-sm font-bold text-gray-800 text-right">
                 קרובים (עד 6)
@@ -232,12 +265,16 @@ export default function OnboardingStep4() {
                 return (
                   <View
                     key={rel.id}
-                    className="bg-white border-2 border-[#36a9e2] p-4 rounded-2xl mb-4"
-                    style={styles.iosShadow}
+                    className="bg-white border-2 p-4 rounded-2xl mb-4"
+                    style={[styles.iosShadow, { borderColor: colors.sage }]}
                   >
                     <View className="flex-row items-center justify-between mb-3">
                       <Pressable onPress={cancelEdit} className="p-1">
-                        <MaterialIcons name="close" size={20} color="#9ca3af" />
+                        <MaterialIcons
+                          name="close"
+                          size={20}
+                          color="#9ca3af"
+                        />
                       </Pressable>
                       <Text className="text-xs text-gray-400 text-right">
                         עריכת קרוב:
@@ -258,7 +295,7 @@ export default function OnboardingStep4() {
                       />
                     </View>
                     <View className="flex-row justify-between">
-                      {colors.map((c) => (
+                      {profileColors.map((c) => (
                         <Pressable
                           key={c}
                           onPress={() => setTempColor(c)}
@@ -270,7 +307,7 @@ export default function OnboardingStep4() {
                               backgroundColor: c,
                             },
                             tempColor === c && {
-                              borderColor: '#111517',
+                              borderColor: colors.slate,
                               borderWidth: 2,
                             },
                           ]}
@@ -315,8 +352,8 @@ export default function OnboardingStep4() {
             {/* הוספת איש קשר חדש */}
             {pendingContact && !pendingContact.id && (
               <View
-                className="bg-white border-2 border-[#36a9e2] p-4 rounded-2xl mb-4"
-                style={styles.iosShadow}
+                className="bg-white border-2 p-4 rounded-2xl mb-4"
+                style={[styles.iosShadow, { borderColor: colors.sage }]}
               >
                 <View className="flex-row items-center justify-between mb-3">
                   <Pressable onPress={cancelEdit} className="p-1">
@@ -341,7 +378,7 @@ export default function OnboardingStep4() {
                   />
                 </View>
                 <View className="flex-row justify-between">
-                  {colors.map((c) => (
+                  {profileColors.map((c) => (
                     <Pressable
                       key={c}
                       onPress={() => setTempColor(c)}
@@ -353,7 +390,7 @@ export default function OnboardingStep4() {
                           backgroundColor: c,
                         },
                         tempColor === c && {
-                          borderColor: '#111517',
+                          borderColor: colors.slate,
                           borderWidth: 2,
                         },
                       ]}
@@ -368,8 +405,12 @@ export default function OnboardingStep4() {
                 onPress={pickContact}
                 className="w-full py-5 border-2 border-dashed border-gray-200 rounded-2xl flex-row items-center justify-center gap-2"
               >
-                <MaterialIcons name="contact-page" size={20} color="#36a9e2" />
-                <Text className="text-[#36a9e2] font-bold text-lg">
+                <MaterialIcons
+                  name="contact-page"
+                  size={20}
+                  color={colors.sage}
+                />
+                <Text style={{ color: colors.sage }} className="font-bold text-lg">
                   {relatives.length === 0
                     ? 'הוספת קרוב מאנשי הקשר'
                     : 'הוספת קרוב נוסף'}
@@ -383,7 +424,10 @@ export default function OnboardingStep4() {
           <Pressable
             onPress={handleFinish}
             disabled={!firstName}
-            className={`w-full h-16 rounded-2xl items-center justify-center shadow-md ${firstName ? 'bg-[#36a9e2]' : 'bg-gray-200'}`}
+            className="w-full h-16 rounded-2xl items-center justify-center shadow-md"
+            style={{
+              backgroundColor: firstName ? colors.sage : '#e5e7eb',
+            }}
           >
             <Text className="text-white font-bold text-lg">
               סיימנו, בואו נתחיל!
