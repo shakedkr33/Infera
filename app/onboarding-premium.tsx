@@ -47,7 +47,7 @@ export default function OnboardingPremium() {
             <MaterialIcons name="close" size={28} color="#94a3b8" />
           </Pressable>
           <Image
-            source={require('@/assets/images/logo-icon.png')}
+            source={require('@/assets/images/icon.png')}
             style={{ width: 36, height: 36 }}
             resizeMode="contain"
             accessibilityLabel="InYomi"
@@ -59,7 +59,7 @@ export default function OnboardingPremium() {
           <View className="w-full h-40 bg-[#f0f9ff] rounded-3xl border border-[#36a9e2]/10 items-center justify-center overflow-hidden">
             <View className="items-center">
               <Image
-                source={require('@/assets/images/logo-icon.png')}
+                source={require('@/assets/images/icon.png')}
                 style={{ width: 80, height: 80 }}
                 resizeMode="contain"
                 accessibilityLabel="InYomi Pro"

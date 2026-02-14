@@ -14,7 +14,7 @@ export default function OnboardingChildren() {
 
   const handleContinue = () => {
     updateData({ childCount: typeof selected === 'number' ? selected : 5 });
-    router.push('/onboarding-step2');
+    router.push('/(auth)/sign-up');
   };
 
   return (

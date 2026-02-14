@@ -14,12 +14,8 @@ export default function OnboardingStep1() {
     if (selected) {
       updateData({ spaceType: selected });
 
-      // לוגיקת ניווט חכמה
-      if (selected === 'family') {
-        router.push('/onboarding-children');
-      } else {
-        router.push('/onboarding-step2');
-      }
+      // תמיד ממשיכים לשלב 2 (הרצף: step1 → step2 → step3 → step4 → children → sign-up)
+      router.push('/onboarding-step2');
     }
   };
 

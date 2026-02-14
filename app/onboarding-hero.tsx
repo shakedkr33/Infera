@@ -10,7 +10,7 @@ export default function OnboardingHero() {
       <View className="flex-1 justify-center items-center">
         {/* לוגו InYomi */}
         <Image
-          source={require('@/assets/images/logo-icon.png')}
+          source={require('@/assets/images/icon.png')}
           style={{ width: 140, height: 140, marginBottom: 32 }}
           resizeMode="contain"
           accessibilityLabel="InYomi Logo"

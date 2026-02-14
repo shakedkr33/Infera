@@ -95,8 +95,8 @@ export default function SignUpScreen() {
         await AsyncStorage.removeItem(REMEMBERED_EMAIL_KEY);
       }
 
-      // מעבר לאזור המאומת
-      router.replace('/(authenticated)');
+      // מעבר למסך הפרימיום (הפיוול מוצג אחרי ההרשמה)
+      router.replace('/onboarding-premium');
     } catch (err: unknown) {
       const error = err as { message?: string };
       const errorMessage = error.message || '';

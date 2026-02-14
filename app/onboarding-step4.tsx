@@ -132,8 +132,8 @@ export default function OnboardingStep4() {
     // שמירת הנתונים ב-Context כדי שיהיו זמינים בכל האפליקציה
     updateData({ firstName, personalColor: selectedColor, relatives });
 
-    // ניווט למסך הפרימיום שהגדרנו כשלב סופי
-    router.push('/onboarding-premium');
+    // ניווט למסך הגדרת הילדים (לפני ההרשמה)
+    router.push('/onboarding-children');
   };
 
   return (

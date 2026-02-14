@@ -22,7 +22,7 @@ export default function WelcomeScreen() {
       {/* איור מרכזי */}
       <View className="w-full aspect-square bg-blue-50/50 rounded-[40px] items-center justify-center border border-blue-100/50">
         <Image
-          source={require('@/assets/images/logo-icon.png')}
+          source={require('@/assets/images/icon.png')}
           style={{ width: 180, height: 180 }}
           resizeMode="contain"
           accessibilityLabel="InYomi"

@@ -83,7 +83,7 @@ export default function HomeScreen() {
       <View className="flex-row-reverse items-center justify-between px-6 py-4 bg-white border-b border-gray-100">
         <View className="flex-row-reverse items-center gap-3">
           <Image
-            source={require('@/assets/images/logo-icon.png')}
+            source={require('@/assets/images/icon.png')}
             style={{ width: 36, height: 36 }}
             resizeMode="contain"
             accessibilityLabel="InYomi"

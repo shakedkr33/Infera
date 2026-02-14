@@ -33,7 +33,7 @@ export default function SignUpScreen() {
     try {
       // הרשמה ב-Convex Auth מתבצעת בדרך כלל עם flow: 'signUp'
       await signIn('password', { email, password, flow: 'signUp' });
-      router.replace('/home'); // כניסה ישירה לבית
+      router.replace('/onboarding-premium'); // מעבר לפיוול אחרי התחברות
     } catch (err: unknown) {
       Alert.alert('שגיאה', 'ההרשמה נכשלה. ייתכן שהמשתמש כבר קיים');
     } finally {
