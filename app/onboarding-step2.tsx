@@ -106,7 +106,7 @@ export default function OnboardingStep2() {
                     style={{
                       backgroundColor: isSelected
                         ? colors.sage
-                        : 'rgba(139, 159, 135, 0.1)',
+                        : 'rgba(74, 159, 226, 0.1)',
                     }}
                   >
                     <MaterialIcons
@@ -165,14 +165,14 @@ const styles = StyleSheet.create({
     borderColor: '#f0f0f0',
   },
   selectedCard: {
-    borderColor: '#8B9F87',
+    borderColor: '#4A9FE2',
     borderWidth: 2,
   },
   checkBadge: {
     position: 'absolute',
     top: -10,
     left: -10,
-    backgroundColor: '#8B9F87',
+    backgroundColor: '#4A9FE2',
     width: 24,
     height: 24,
     borderRadius: 12,

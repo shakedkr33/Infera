@@ -14,7 +14,7 @@ export default function AuthenticatedLayout() {
   if (!navigationState?.key || isLoading || isRevenueCatLoading) {
     return (
       <View className="flex-1 bg-white items-center justify-center">
-        <ActivityIndicator size="large" color="#308ce8" />
+        <ActivityIndicator size="large" color="#4A9FE2" />
       </View>
     );
   }
@@ -57,7 +57,7 @@ export default function AuthenticatedLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#308ce8', // הכחול של InYomi
+        tabBarActiveTintColor: '#4A9FE2', // הכחול של InYomi
         tabBarInactiveTintColor: '#6b7280',
         tabBarStyle: {
           backgroundColor: '#ffffff', // רקע לבן נקי

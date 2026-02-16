@@ -143,7 +143,7 @@ export default function OnboardingStep3() {
 const styles = StyleSheet.create({
   card: { backgroundColor: 'white' },
   selectedCard: {
-    borderColor: '#8B9F87',
-    backgroundColor: 'rgba(139, 159, 135, 0.05)',
+    borderColor: '#4A9FE2',
+    backgroundColor: 'rgba(74, 159, 226, 0.05)',
   },
 });

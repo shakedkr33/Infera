@@ -65,7 +65,7 @@ export default function OnboardingStep1() {
           className="items-center mb-8"
         >
           <View
-            className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'personal' ? 'border-[#8B9F87]' : 'border-gray-100'}`}
+            className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'personal' ? 'border-[#4A9FE2]' : 'border-gray-100'}`}
           >
             <MaterialIcons name="person" size={48} color={colors.sage} />
           </View>
@@ -84,7 +84,7 @@ export default function OnboardingStep1() {
             className="items-center"
           >
             <View
-              className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'couple' ? 'border-[#8B9F87]' : 'border-gray-100'}`}
+              className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'couple' ? 'border-[#4A9FE2]' : 'border-gray-100'}`}
             >
               <MaterialIcons name="group" size={48} color={colors.sage} />
             </View>
@@ -101,7 +101,7 @@ export default function OnboardingStep1() {
             className="items-center"
           >
             <View
-              className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'family' ? 'border-[#8B9F87]' : 'border-gray-100'}`}
+              className={`w-28 h-28 rounded-full bg-white items-center justify-center shadow-sm border-2 ${selected === 'family' ? 'border-[#4A9FE2]' : 'border-gray-100'}`}
             >
               <MaterialIcons
                 name="family-restroom"
@@ -124,8 +124,8 @@ export default function OnboardingStep1() {
         <View
           className="rounded-2xl p-4 flex-row-reverse items-start border"
           style={{
-            backgroundColor: 'rgba(139, 159, 135, 0.06)',
-            borderColor: 'rgba(139, 159, 135, 0.12)',
+            backgroundColor: 'rgba(74, 159, 226, 0.06)',
+            borderColor: 'rgba(74, 159, 226, 0.12)',
           }}
         >
           <MaterialIcons

@@ -278,7 +278,7 @@ export default function HomeScreen() {
       <Pressable
         onPress={() => setIsActionSheetVisible(true)}
         style={styles.fab}
-        className="absolute bottom-28 left-5 bg-[#308ce8] size-14 rounded-2xl items-center justify-center"
+        className="absolute bottom-28 left-5 bg-[#4A9FE2] size-14 rounded-2xl items-center justify-center"
       >
         <MaterialIcons name="add" size={32} color="white" />
       </Pressable>
@@ -376,7 +376,7 @@ const styles = StyleSheet.create({
   },
   fab: {
     elevation: 8,
-    shadowColor: '#308ce8',
+    shadowColor: '#4A9FE2',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 16,

@@ -25,7 +25,7 @@ const profileColors = [
   '#FFF9C4',
   '#E1BEE7',
   '#F5F5F5',
-  '#8B9F87',
+  '#4A9FE2',
 ];
 
 export default function OnboardingStep4() {
@@ -34,7 +34,7 @@ export default function OnboardingStep4() {
 
   const [firstName, setFirstName] = useState(data.firstName || '');
   const [selectedColor, setSelectedColor] = useState(
-    data.personalColor || '#8B9F87'
+    data.personalColor || '#4A9FE2'
   );
   const [relatives, setRelatives] = useState<any[]>(data.relatives || []);
   const [expectedChildren, setExpectedChildren] = useState<number>(0);
@@ -47,7 +47,7 @@ export default function OnboardingStep4() {
     color?: string;
   } | null>(null);
   const [editedName, setEditedName] = useState('');
-  const [tempColor, setTempColor] = useState('#8B9F87');
+  const [tempColor, setTempColor] = useState('#4A9FE2');
 
   // טעינת מספר ילדים צפוי מ-AsyncStorage
   useEffect(() => {
@@ -74,7 +74,7 @@ export default function OnboardingStep4() {
         }
         setPendingContact({ name: contact.name, phone });
         setEditedName(contact.name);
-        setTempColor('#8B9F87');
+        setTempColor('#4A9FE2');
       }
     }
   };
@@ -118,7 +118,7 @@ export default function OnboardingStep4() {
   const cancelEdit = () => {
     setPendingContact(null);
     setEditedName('');
-    setTempColor('#8B9F87');
+    setTempColor('#4A9FE2');
     Keyboard.dismiss();
   };
 
@@ -127,18 +127,15 @@ export default function OnboardingStep4() {
       Alert.alert(
         `להזמין את ${name}?`,
         'שלחי הזמנה במייל כדי להתחיל לשתף משימות.',
-        [
-          { text: 'לא עכשיו', style: 'cancel' },
-          { text: 'שלח הזמנה' },
-        ]
+        [{ text: 'לא עכשיו', style: 'cancel' }, { text: 'שלח הזמנה' }]
       );
     }, 500);
   };
 
   const handleFinish = () => {
     updateData({ firstName, personalColor: selectedColor, relatives });
-    // ישר להרשמה — כל נתוני ה-onboarding נאספו
-    router.push('/(auth)/sign-up');
+    // ניווט למסך Sign-In
+    router.push('/(auth)/sign-in');
   };
 
   return (
@@ -192,9 +189,9 @@ export default function OnboardingStep4() {
             <View
               className="rounded-2xl p-4 flex-row-reverse items-center gap-3 mb-6"
               style={{
-                backgroundColor: 'rgba(139, 159, 135, 0.08)',
+                backgroundColor: 'rgba(74, 159, 226, 0.08)',
                 borderWidth: 1,
-                borderColor: 'rgba(139, 159, 135, 0.15)',
+                borderColor: 'rgba(74, 159, 226, 0.15)',
               }}
             >
               <MaterialIcons name="child-care" size={22} color={colors.sage} />
@@ -270,11 +267,7 @@ export default function OnboardingStep4() {
                   >
                     <View className="flex-row items-center justify-between mb-3">
                       <Pressable onPress={cancelEdit} className="p-1">
-                        <MaterialIcons
-                          name="close"
-                          size={20}
-                          color="#9ca3af"
-                        />
+                        <MaterialIcons name="close" size={20} color="#9ca3af" />
                       </Pressable>
                       <Text className="text-xs text-gray-400 text-right">
                         עריכת קרוב:
@@ -410,7 +403,10 @@ export default function OnboardingStep4() {
                   size={20}
                   color={colors.sage}
                 />
-                <Text style={{ color: colors.sage }} className="font-bold text-lg">
+                <Text
+                  style={{ color: colors.sage }}
+                  className="font-bold text-lg"
+                >
                   {relatives.length === 0
                     ? 'הוספת קרוב מאנשי הקשר'
                     : 'הוספת קרוב נוסף'}

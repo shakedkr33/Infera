@@ -1,5 +1,5 @@
 /**
- * InYomi Design System — Boho Aesthetic Theme
+ * InYomi Design System — Brand Theme
  *
  * Single source of truth for the InYomi visual language.
  * Import from here instead of hard-coding hex values in components.
@@ -8,8 +8,8 @@
  * ```ts
  * import { colors, spacing, borderRadius, shadows } from '@/constants/theme';
  *
- * <View style={{ backgroundColor: colors.beige, padding: spacing.md, borderRadius: borderRadius.lg }}>
- *   <Text style={{ color: colors.slate }}>שלום</Text>
+ * <View style={{ backgroundColor: colors.background, padding: spacing.md, borderRadius: borderRadius.lg }}>
+ *   <Text style={{ color: colors.text }}>שלום</Text>
  * </View>
  * ```
  */
@@ -18,57 +18,59 @@
 // Colors
 // ---------------------------------------------------------------------------
 
-/** InYomi Boho color palette */
+/** InYomi color palette */
 export const colors = {
-  // ── Primary ───────────────────────────────────────────────────────────
-  /** Sage Green — primary brand color: calm, organizing, trustworthy */
-  sage: '#8B9F87',
-  /** Dusty Rose — accent color: warmth, family, affection */
-  rose: '#D4A5A5',
-  /** Beige — neutral background: soft, inviting canvas */
-  beige: '#F5F0E8',
-  /** Soft Slate — primary text color: readable without harsh black */
-  slate: '#4A4A4A',
+  // ── Primary Brand Color ─────────────────────────────────────────────
+  /** Blue — primary brand color: buttons, FAB, active tab */
+  primary: '#4A9FE2',
+  /** Lighter blue — hover states, muted surfaces */
+  primaryLight: '#7AB8F5',
+  /** Darker blue — pressed states, emphasis */
+  primaryDark: '#2E7FC4',
 
-  // ── Sage Variations ───────────────────────────────────────────────────
-  /** Lighter sage for backgrounds, hover states, and muted surfaces */
-  sageLight: '#A8BFA2',
-  /** Darker sage for pressed states and emphasis */
-  sageDark: '#6D7F68',
-  /** Very light sage tint for subtle backgrounds */
-  sageMuted: 'rgba(139, 159, 135, 0.12)',
-
-  // ── Rose Variations ───────────────────────────────────────────────────
-  /** Lighter rose for backgrounds, tags, and soft highlights */
-  roseLight: '#E6C5C5',
-  /** Muted rose tint for subtle backgrounds and badges */
-  roseMuted: 'rgba(212, 165, 165, 0.15)',
-
-  // ── Beige Variations ──────────────────────────────────────────────────
-  /** Brighter off-white — for cards on beige backgrounds */
-  cream: '#FDFBF7',
-  /** Slightly deeper warm beige — for section dividers */
-  beigeDeep: '#EDE5D8',
-
-  // ── Slate Variations ──────────────────────────────────────────────────
+  // ── Neutrals ────────────────────────────────────────────────────────
+  /** Default screen background */
+  background: '#F5F5F5',
+  /** Card / surface background */
+  cardBg: '#FFFFFF',
+  /** Primary text color */
+  text: '#333333',
   /** Secondary text — subtitles, captions */
-  slateLight: '#6B6B6B',
-  /** Tertiary text — placeholders, disabled labels */
-  slateMuted: '#9B9B9B',
+  textSecondary: '#666666',
+  /** Borders & dividers */
+  border: '#E0E0E0',
 
-  // ── UI / Semantic ─────────────────────────────────────────────────────
-  /** Pure white for cards, modals, and inputs */
-  white: '#FFFFFF',
-  /** Pure black — use sparingly, prefer slate for text */
-  black: '#000000',
+  // ── Accents (minimal use only) ──────────────────────────────────────
+  /** Soft green — keep but don't use for CTAs */
+  accentGreen: '#8B9F87',
+  /** Soft pink accent */
+  accentPink: '#FFE5E5',
+
+  // ── Functional ──────────────────────────────────────────────────────
   /** Error / destructive actions */
-  error: '#D32F2F',
+  error: '#E53935',
   /** Success / confirmation */
-  success: '#388E3C',
+  success: '#4CAF50',
   /** Warning / caution */
-  warning: '#F57C00',
-  /** InYomi brand blue — used in legacy screens and highlights */
-  brandBlue: '#36a9e2',
+  warning: '#FF9800',
+
+  // ── Legacy aliases (for backward compat, prefer primary/text/etc) ──
+  /** @deprecated use `primary` instead */
+  sage: '#4A9FE2',
+  /** @deprecated use `textSecondary` instead */
+  slateLight: '#666666',
+  /** @deprecated use `text` instead */
+  slate: '#333333',
+  /** @deprecated use `background` instead */
+  beige: '#F5F5F5',
+  /** @deprecated */
+  slateMuted: '#9B9B9B',
+  /** @deprecated */
+  white: '#FFFFFF',
+  /** @deprecated */
+  black: '#000000',
+  /** @deprecated use `primary` instead */
+  brandBlue: '#4A9FE2',
 } as const;
 
 /** TypeScript type representing any key from the color palette */
@@ -156,10 +158,7 @@ export interface ShadowPreset {
 }
 
 /**
- * Soft shadow presets matching the Boho aesthetic.
- *
- * All shadows use low opacity and generous radius for a gentle,
- * organic feel — never harsh drop-shadows.
+ * Shadow presets.
  *
  * @example
  * ```ts
@@ -199,17 +198,9 @@ export const shadows: Record<string, ShadowPreset> = {
     shadowRadius: 24,
     elevation: 8,
   },
-  /** Sage-tinted glow for primary action buttons */
-  sageCta: {
-    shadowColor: '#8B9F87',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 14,
-    elevation: 6,
-  },
-  /** Rose-tinted glow for secondary action buttons */
-  roseCta: {
-    shadowColor: '#D4A5A5',
+  /** Blue-tinted glow for primary action buttons */
+  primaryCta: {
+    shadowColor: '#4A9FE2',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.3,
     shadowRadius: 14,

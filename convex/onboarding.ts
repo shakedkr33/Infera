@@ -1,5 +1,5 @@
-import { mutation } from './_generated/server';
 import { v } from 'convex/values';
+import { mutation } from './_generated/server';
 
 /**
  * פונקציה זו נקראת בסוף תהליך האונבורדינג.
@@ -44,6 +44,7 @@ export const finishOnboarding = mutation({
       ownerId: user._id,
       onboardingChallenges: args.challenges,
       primarySources: args.sources,
+      createdAt: Date.now(), // 🆕 תוקן! הוספנו createdAt
     });
 
     // 4. הוספת המשתמש כ"מנהל" (Admin) בתוך המרחב החדש
@@ -51,6 +52,7 @@ export const finishOnboarding = mutation({
       userId: user._id,
       spaceId: spaceId,
       role: 'admin',
+      joinedAt: Date.now(), // 🆕 תוקן! הוספנו joinedAt
     });
 
     return { spaceId };

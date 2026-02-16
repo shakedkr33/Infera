@@ -39,7 +39,7 @@ export default function WelcomeScreen() {
         </Text>
         <Pressable
           onPress={() => router.push('/onboarding-step1')} // מחזיר אותנו למסך מבנה הלו"ז
-          className="w-full h-16 bg-[#308ce8] rounded-2xl flex-row items-center justify-center gap-3 shadow-lg shadow-blue-200"
+          className="w-full h-16 bg-[#4A9FE2] rounded-2xl flex-row items-center justify-center gap-3 shadow-lg shadow-blue-200"
         >
           <MaterialIcons name="arrow-back" size={24} color="white" />
           <Text className="text-white text-lg font-bold">בואו נתחיל</Text>
@@ -50,7 +50,7 @@ export default function WelcomeScreen() {
           className="mt-6"
         >
           <Text className="text-gray-400 font-medium">
-            כבר יש לי חשבון? <Text className="text-[#308ce8]">התחברות</Text>
+            כבר יש לי חשבון? <Text className="text-[#4A9FE2]">התחברות</Text>
           </Text>
         </Pressable>
       </View>
