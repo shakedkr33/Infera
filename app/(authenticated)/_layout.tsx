@@ -27,7 +27,9 @@ export default function AuthenticatedLayout() {
   }
 
   const tabIcon = (iconName: string, color: string, focused: boolean) => (
-    <View style={focused ? styles.activeTabHighlight : styles.inactiveTabWrapper}>
+    <View
+      style={focused ? styles.activeTabHighlight : styles.inactiveTabWrapper}
+    >
       <MaterialIcons name={iconName as never} size={24} color={color} />
     </View>
   );
@@ -64,14 +66,16 @@ export default function AuthenticatedLayout() {
         name="calendar"
         options={{
           title: 'יומן',
-          tabBarIcon: ({ color, focused }) => tabIcon('calendar-today', color, focused),
+          tabBarIcon: ({ color, focused }) =>
+            tabIcon('calendar-today', color, focused),
         }}
       />
       <Tabs.Screen
         name="tasks"
         options={{
           title: 'משימות',
-          tabBarIcon: ({ color, focused }) => tabIcon('check-circle-outline', color, focused),
+          tabBarIcon: ({ color, focused }) =>
+            tabIcon('check-circle-outline', color, focused),
         }}
       />
 
@@ -80,6 +84,8 @@ export default function AuthenticatedLayout() {
       <Tabs.Screen name="birthdays" options={{ href: null }} />
       <Tabs.Screen name="event/new" options={{ href: null }} />
       <Tabs.Screen name="event/[id]" options={{ href: null }} />
+      <Tabs.Screen name="task/new" options={{ href: null }} />
+      <Tabs.Screen name="task/[id]" options={{ href: null }} />
     </Tabs>
   );
 }
