@@ -1,4 +1,5 @@
 import { MaterialIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
   Pressable,
@@ -63,6 +64,7 @@ const MOCK_TASKS: Task[] = [
 ];
 
 export default function TasksScreen() {
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('הכל');
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
@@ -133,6 +135,7 @@ export default function TasksScreen() {
           <Text style={styles.headerTitle}>המשימות שלי</Text>
           <Pressable
             style={styles.addButton}
+            onPress={() => router.push('/(authenticated)/task/new' as never)}
             accessible={true}
             accessibilityRole="button"
             accessibilityLabel="הוסף משימה חדשה"
@@ -207,6 +210,7 @@ export default function TasksScreen() {
                     toggleSubtask(task.id, subtaskId)
                   }
                   onToggleCompletion={() => toggleTaskCompletion(task.id)}
+                  onPress={() => router.push(`/(authenticated)/task/${task.id}` as never)}
                 />
               ))}
             </View>
@@ -224,6 +228,7 @@ export default function TasksScreen() {
                   onToggleExpansion={() => {}}
                   onToggleSubtask={() => {}}
                   onToggleCompletion={() => toggleTaskCompletion(task.id)}
+                  onPress={() => router.push(`/(authenticated)/task/${task.id}` as never)}
                 />
               ))}
             </View>
@@ -243,12 +248,14 @@ function TaskCard({
   onToggleExpansion,
   onToggleSubtask,
   onToggleCompletion,
+  onPress,
 }: {
   task: Task;
   isExpanded: boolean;
   onToggleExpansion: () => void;
   onToggleSubtask: (subtaskId: string) => void;
   onToggleCompletion: () => void;
+  onPress: () => void;
 }) {
   const hasSubtasks = task.subtasks && task.subtasks.length > 0;
   const completedSubtasks =
@@ -256,12 +263,16 @@ function TaskCard({
   const totalSubtasks = task.subtasks?.length || 0;
 
   return (
-    <View
+    <Pressable
+      onPress={onPress}
       style={[
         styles.taskCard,
         task.isUrgent && styles.taskCardUrgent,
         task.completed && styles.taskCardCompleted,
       ]}
+      accessible={true}
+      accessibilityRole="button"
+      accessibilityLabel={`משימה: ${task.title}`}
     >
       <View style={styles.taskCardHeader}>
         {/* Checkbox */}
@@ -380,7 +391,7 @@ function TaskCard({
           ))}
         </View>
       )}
-    </View>
+    </Pressable>
   );
 }
 

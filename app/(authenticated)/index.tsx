@@ -1,6 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
@@ -316,12 +316,18 @@ export default function HomeScreen() {
               <ActionButton
                 icon="calendar-today"
                 label="אירוע"
-                onPress={() => setIsActionSheetVisible(false)}
+                onPress={() => {
+                  setIsActionSheetVisible(false);
+                  router.push('/(authenticated)/event/new');
+                }}
               />
               <ActionButton
                 icon="check"
                 label="משימה"
-                onPress={() => setIsActionSheetVisible(false)}
+                onPress={() => {
+                  setIsActionSheetVisible(false);
+                  router.push('/(authenticated)/task/new');
+                }}
               />
               <ActionButton
                 icon="cake"
