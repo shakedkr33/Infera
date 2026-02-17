@@ -1,4 +1,3 @@
-import { rtl } from '@/lib/rtl';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
@@ -6,26 +5,34 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Image,
-  LayoutAnimation,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  UIManager,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import ReAnimated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-
-if (Platform.OS === 'android') {
-  UIManager.setLayoutAnimationEnabledExperimental?.(true);
-}
+import { rtl } from '@/lib/rtl';
 
 // ===== Constants =====
 const PRIMARY_BLUE = '#36a9e2';
 const BG_COLOR = '#f6f7f8';
 const COMPACT_CELL_HEIGHT = 60;
 const EXPANDED_CELL_HEIGHT = 92;
+
+// Dynamic panel height building blocks
+const PANEL_FIXED_HEIGHT = 86; // paddingTop(16) + dayHeaders(34) + gap(4) + paddingBottom(8) + dragHandle(24)
+const COMPACT_ROW_HEIGHT = COMPACT_CELL_HEIGHT + 4; // cell + weekRow marginBottom
+const EXPANDED_ROW_HEIGHT = EXPANDED_CELL_HEIGHT + 4; // cell + weekRow marginBottom
+
+type SnapState = 'compact' | 'expanded';
 
 const HEBREW_MONTHS = [
   'ינואר',
@@ -402,6 +409,7 @@ function generateCalendarGrid(year: number, month: number): CalendarDay[][] {
 
 // ===== Main Component =====
 export default function CalendarScreen(): React.JSX.Element {
+  const router = useRouter();
   const [viewMode, setViewMode] = useState<'timeline' | 'monthly'>('timeline');
   const [slideAnim] = useState(new Animated.Value(0));
 
@@ -409,26 +417,135 @@ export default function CalendarScreen(): React.JSX.Element {
   const [displayYear, setDisplayYear] = useState(today.getFullYear());
   const [displayMonth, setDisplayMonth] = useState(today.getMonth());
   const [selectedDay, setSelectedDay] = useState<number | null>(
-    today.getDate(),
+    today.getDate()
   );
-  const [isExpanded, setIsExpanded] = useState(false);
 
-  const toggleExpanded = useCallback((): void => {
-    LayoutAnimation.configureNext({
-      duration: 300,
-      update: { type: LayoutAnimation.Types.easeInEaseOut },
-      create: {
-        type: LayoutAnimation.Types.easeInEaseOut,
-        property: LayoutAnimation.Properties.opacity,
-      },
-      delete: {
-        type: LayoutAnimation.Types.easeInEaseOut,
-        property: LayoutAnimation.Properties.opacity,
-      },
+  // === Calendar grid data ===
+  const grid = useMemo(
+    () => generateCalendarGrid(displayYear, displayMonth),
+    [displayYear, displayMonth]
+  );
+
+  // === Dynamic panel heights based on number of weeks ===
+  const compactPanelHeight =
+    PANEL_FIXED_HEIGHT + grid.length * COMPACT_ROW_HEIGHT;
+  const expandedPanelHeight =
+    PANEL_FIXED_HEIGHT + grid.length * EXPANDED_ROW_HEIGHT;
+
+  const calendarHeight = useSharedValue(compactPanelHeight);
+  const savedHeight = useSharedValue(compactPanelHeight);
+  const compactHeightSV = useSharedValue(compactPanelHeight);
+  const expandedHeightSV = useSharedValue(expandedPanelHeight);
+  const [snapState, setSnapState] = useState<SnapState>('compact');
+  const isExpanded = snapState === 'expanded';
+
+  // Sync shared values when month changes (grid.length may differ)
+  useEffect(() => {
+    compactHeightSV.value = compactPanelHeight;
+    expandedHeightSV.value = expandedPanelHeight;
+    calendarHeight.value = withSpring(compactPanelHeight, {
+      damping: 20,
+      stiffness: 90,
     });
-    setIsExpanded((prev) => !prev);
-  }, []);
+    setSnapState('compact');
+  }, [
+    compactPanelHeight,
+    expandedPanelHeight,
+    calendarHeight,
+    compactHeightSV,
+    expandedHeightSV,
+  ]);
 
+  // === Day events list animation (lifted from MonthlyGrid) ===
+  const isShowingListRef = useRef(selectedDay != null);
+  const [visibleDay, setVisibleDay] = useState<number | null>(selectedDay);
+  const listAnim = useRef(
+    new Animated.Value(selectedDay != null ? 1 : 0)
+  ).current;
+
+  useEffect(() => {
+    if (selectedDay != null) {
+      setVisibleDay(selectedDay);
+      if (!isShowingListRef.current) {
+        listAnim.setValue(0);
+        Animated.timing(listAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }).start();
+      }
+      isShowingListRef.current = true;
+    } else {
+      Animated.timing(listAnim, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: true,
+      }).start(() => {
+        setVisibleDay(null);
+      });
+      isShowingListRef.current = false;
+    }
+  }, [selectedDay, listAnim]);
+
+  const visibleDayData = useMemo((): CalendarDay | null => {
+    if (visibleDay == null) return null;
+    for (const week of grid) {
+      for (const d of week) {
+        if (d.day === visibleDay && d.isCurrentMonth) return d;
+      }
+    }
+    return null;
+  }, [grid, visibleDay]);
+
+  // === Pan gesture for entire calendar panel ===
+  // drag DOWN (positive translationY) = expand, drag UP = collapse
+  const panGesture = Gesture.Pan()
+    .activeOffsetY([-10, 10])
+    .onBegin(() => {
+      'worklet';
+      savedHeight.value = calendarHeight.value;
+    })
+    .onUpdate((event) => {
+      'worklet';
+      const newHeight = savedHeight.value + event.translationY;
+      calendarHeight.value = Math.max(
+        compactHeightSV.value,
+        Math.min(expandedHeightSV.value, newHeight)
+      );
+    })
+    .onEnd((event) => {
+      'worklet';
+      const currentHeight = calendarHeight.value;
+      const compact = compactHeightSV.value;
+      const expanded = expandedHeightSV.value;
+
+      let targetHeight = compact;
+
+      if (event.velocityY > 500) {
+        targetHeight = expanded;
+      } else if (event.velocityY < -500) {
+        targetHeight = compact;
+      } else {
+        const dCompact = Math.abs(currentHeight - compact);
+        const dExpanded = Math.abs(currentHeight - expanded);
+        targetHeight = dExpanded < dCompact ? expanded : compact;
+      }
+
+      calendarHeight.value = withSpring(targetHeight, {
+        damping: 20,
+        stiffness: 90,
+      });
+
+      const newState: SnapState =
+        targetHeight === compact ? 'compact' : 'expanded';
+      runOnJS(setSnapState)(newState);
+    });
+
+  const animatedCalendarStyle = useAnimatedStyle(() => ({
+    height: calendarHeight.value,
+  }));
+
+  // === View mode persistence ===
   const loadViewMode = useCallback(async () => {
     try {
       const saved = await AsyncStorage.getItem('@calendar_view_mode');
@@ -627,24 +744,56 @@ export default function CalendarScreen(): React.JSX.Element {
         </View>
 
         {/* Content */}
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {viewMode === 'timeline' ? (
+        {viewMode === 'timeline' ? (
+          <ScrollView
+            style={styles.content}
+            showsVerticalScrollIndicator={false}
+          >
             <TimelineView data={MOCK_TIMELINE_DATA} />
-          ) : (
-            <MonthlyGrid
-              year={displayYear}
-              month={displayMonth}
-              selectedDay={selectedDay}
-              isExpanded={isExpanded}
-              onSelectDay={setSelectedDay}
-              onToggleExpand={toggleExpanded}
-            />
-          )}
-        </ScrollView>
+          </ScrollView>
+        ) : (
+          <View style={styles.content}>
+            {/* Animated Calendar Panel - GestureDetector wraps entire area */}
+            <GestureDetector gesture={panGesture}>
+              <ReAnimated.View
+                style={[styles.calendarPanel, animatedCalendarStyle]}
+              >
+                <MonthlyGrid
+                  year={displayYear}
+                  month={displayMonth}
+                  selectedDay={selectedDay}
+                  isExpanded={isExpanded}
+                  onSelectDay={setSelectedDay}
+                />
+                {/* Drag Handle (visual indicator) */}
+                <View style={styles.dragHandleContainer}>
+                  <View style={styles.dragHandleBar} />
+                </View>
+              </ReAnimated.View>
+            </GestureDetector>
+
+            {/* Daily Events List */}
+            <ScrollView
+              style={styles.dailyEventsScroll}
+              showsVerticalScrollIndicator={false}
+            >
+              {!isExpanded && visibleDay != null && visibleDayData != null && (
+                <DayEventsList
+                  dayData={visibleDayData}
+                  year={displayYear}
+                  month={displayMonth}
+                  anim={listAnim}
+                  onClose={() => setSelectedDay(null)}
+                />
+              )}
+            </ScrollView>
+          </View>
+        )}
 
         {/* FAB */}
         <Pressable
           style={styles.fab}
+          onPress={() => router.push('/(authenticated)/event/new' as never)}
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel="הוספת אירוע חדש"
@@ -663,7 +812,6 @@ interface MonthlyGridProps {
   selectedDay: number | null;
   isExpanded: boolean;
   onSelectDay: (day: number | null) => void;
-  onToggleExpand: () => void;
 }
 
 function MonthlyGrid({
@@ -672,53 +820,8 @@ function MonthlyGrid({
   selectedDay,
   isExpanded,
   onSelectDay,
-  onToggleExpand,
 }: MonthlyGridProps): React.JSX.Element {
   const grid = useMemo(() => generateCalendarGrid(year, month), [year, month]);
-
-  // Drag handle gesture
-  const dragStartYRef = useRef(0);
-
-  // Day events list animation
-  const isShowingListRef = useRef(selectedDay != null);
-  const [visibleDay, setVisibleDay] = useState<number | null>(selectedDay);
-  const listAnim = useRef(
-    new Animated.Value(selectedDay != null ? 1 : 0),
-  ).current;
-
-  useEffect(() => {
-    if (selectedDay != null) {
-      setVisibleDay(selectedDay);
-      if (!isShowingListRef.current) {
-        listAnim.setValue(0);
-        Animated.timing(listAnim, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }).start();
-      }
-      isShowingListRef.current = true;
-    } else {
-      Animated.timing(listAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: true,
-      }).start(() => {
-        setVisibleDay(null);
-      });
-      isShowingListRef.current = false;
-    }
-  }, [selectedDay, listAnim]);
-
-  const visibleDayData = useMemo((): CalendarDay | null => {
-    if (visibleDay == null) return null;
-    for (const week of grid) {
-      for (const d of week) {
-        if (d.day === visibleDay && d.isCurrentMonth) return d;
-      }
-    }
-    return null;
-  }, [grid, visibleDay]);
 
   return (
     <View style={mStyles.gridContainer}>
@@ -759,7 +862,7 @@ function MonthlyGrid({
                 onPress={() => {
                   if (dayData.isCurrentMonth) {
                     onSelectDay(
-                      selectedDay === dayData.day ? null : dayData.day,
+                      selectedDay === dayData.day ? null : dayData.day
                     );
                   }
                 }}
@@ -768,47 +871,6 @@ function MonthlyGrid({
           </View>
         );
       })}
-
-      {/* Drag Handle */}
-      <View
-        style={mStyles.dragHandle}
-        onStartShouldSetResponder={() => true}
-        onResponderGrant={(e) => {
-          dragStartYRef.current = e.nativeEvent.pageY;
-        }}
-        onResponderRelease={(e) => {
-          const deltaY = e.nativeEvent.pageY - dragStartYRef.current;
-          if (Math.abs(deltaY) < 10) {
-            onToggleExpand();
-          } else if (deltaY > 30 && !isExpanded) {
-            onToggleExpand();
-          } else if (deltaY < -30 && isExpanded) {
-            onToggleExpand();
-          }
-        }}
-        accessible={true}
-        accessibilityRole="button"
-        accessibilityLabel={isExpanded ? 'כווץ תצוגה' : 'הרחב תצוגה'}
-        accessibilityHint="לחץ או משוך למעלה/למטה לשינוי תצוגה"
-      >
-        <View style={mStyles.dragIndicatorBar} />
-        <MaterialIcons
-          name={isExpanded ? 'expand-less' : 'expand-more'}
-          size={18}
-          color="#c9cdd1"
-        />
-      </View>
-
-      {/* Day Events List (hidden in expanded mode) */}
-      {!isExpanded && visibleDay != null && visibleDayData != null && (
-        <DayEventsList
-          dayData={visibleDayData}
-          year={year}
-          month={month}
-          anim={listAnim}
-          onClose={() => onSelectDay(null)}
-        />
-      )}
     </View>
   );
 }
@@ -981,7 +1043,7 @@ function DayEventsList({
   return (
     <Animated.View
       style={[
-        dStyles.container,
+        dStyles.wrapper,
         {
           opacity: anim,
           transform: [
@@ -998,23 +1060,24 @@ function DayEventsList({
       {/* Header */}
       <View style={dStyles.header}>
         <Pressable
-          onPress={onClose}
-          hitSlop={12}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="סגור רשימת אירועים"
-        >
-          <MaterialIcons name="close" size={22} color="#647b87" />
-        </Pressable>
-        <Text style={dStyles.headerTitle}>{dayLabel}</Text>
-        <Pressable
-          style={dStyles.addEventButton}
+          style={dStyles.addBtn}
+          onPress={() => router.push('/(authenticated)/event/new' as never)}
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel="הוסף אירוע חדש"
         >
-          <MaterialIcons name="add" size={16} color={PRIMARY_BLUE} />
-          <Text style={dStyles.addEventText}>הוסף אירוע</Text>
+          <Text style={dStyles.addBtnText}>+ הוסף אירוע</Text>
+        </Pressable>
+        <Text style={dStyles.headerTitle}>{dayLabel}</Text>
+        <Pressable
+          onPress={onClose}
+          hitSlop={12}
+          style={dStyles.closeBtn}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="סגור רשימת אירועים"
+        >
+          <MaterialIcons name="close" size={20} color="#647b87" />
         </Pressable>
       </View>
 
@@ -1026,7 +1089,6 @@ function DayEventsList({
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel={`יום הולדת ${dayData.birthday.name}`}
-          accessibilityHint="לחץ לצפייה בימי הולדת"
         >
           <Text style={dStyles.birthdayEmoji}>🎂</Text>
           <View style={dStyles.birthdayContent}>
@@ -1044,92 +1106,80 @@ function DayEventsList({
       )}
 
       {/* Event Cards */}
-      {dayData.events.map((event) => (
-        <DayEventCard key={event.id} event={event} />
-      ))}
+      {dayData.events.map((event) => {
+        const duration = calculateDuration(event);
+        const iconName = getCategoryIcon(event.category);
+        return (
+          <Pressable
+            key={event.id}
+            style={dStyles.card}
+            onPress={() =>
+              router.push(`/(authenticated)/event/${event.id}` as never)
+            }
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel={`${event.title}, ${event.time}, ${duration} דקות`}
+          >
+            {/* Time */}
+            <View style={dStyles.timeCol}>
+              <Text style={dStyles.timeText}>{event.time}</Text>
+              <Text style={dStyles.durationText}>{duration} דק׳</Text>
+            </View>
+
+            {/* Divider */}
+            <View
+              style={[
+                dStyles.divider,
+                { backgroundColor: `${event.categoryColor}50` },
+              ]}
+            />
+
+            {/* Content */}
+            <View style={dStyles.content}>
+              <Text style={dStyles.eventTitle}>{event.title}</Text>
+              {event.location != null && event.location !== '' && (
+                <View style={dStyles.locationRow}>
+                  <View style={dStyles.locationDot} />
+                  <Text style={dStyles.locationText}>{event.location}</Text>
+                </View>
+              )}
+              {event.assigneeColors.length > 0 && (
+                <View style={dStyles.assigneeDots}>
+                  {event.assigneeColors.slice(0, 4).map((color) => (
+                    <View
+                      key={color}
+                      style={[dStyles.assigneeDot, { backgroundColor: color }]}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* Icon */}
+            <View
+              style={[
+                dStyles.iconBox,
+                { backgroundColor: `${event.categoryColor}20` },
+              ]}
+            >
+              <MaterialIcons
+                name={iconName as 'event'}
+                size={20}
+                color={event.categoryColor}
+              />
+            </View>
+          </Pressable>
+        );
+      })}
 
       {/* Empty State */}
       {!hasContent && (
         <View style={dStyles.emptyState}>
           <MaterialIcons name="calendar-today" size={40} color="#d1d5db" />
-          <Text style={dStyles.emptyText}>
-            אין אירועים מתוכננים ליום זה
-          </Text>
+          <Text style={dStyles.emptyText}>אין אירועים מתוכננים ליום זה</Text>
         </View>
       )}
     </Animated.View>
-  );
-}
-
-// ===== Day Event Card =====
-function DayEventCard({
-  event,
-}: {
-  event: CalendarEvent;
-}): React.JSX.Element {
-  const duration = calculateDuration(event);
-  const iconName = getCategoryIcon(event.category);
-
-  return (
-    <Pressable
-      style={({ pressed }) => [
-        dStyles.eventCard,
-        pressed && dStyles.eventCardPressed,
-      ]}
-      accessible={true}
-      accessibilityRole="button"
-      accessibilityLabel={`${event.title}, ${event.time}, ${duration} דקות, ${event.category}${event.location ? `, ${event.location}` : ''}`}
-    >
-      {/* Category Icon - right side in RTL */}
-      <View
-        style={[
-          dStyles.iconContainer,
-          { backgroundColor: `${event.categoryColor}20` },
-        ]}
-      >
-        <MaterialIcons
-          name={iconName as 'event'}
-          size={20}
-          color={event.categoryColor}
-        />
-      </View>
-
-      {/* Divider Bar */}
-      <View
-        style={[
-          dStyles.dividerLine,
-          { backgroundColor: `${event.categoryColor}40` },
-        ]}
-      />
-
-      {/* Content */}
-      <View style={dStyles.contentSection}>
-        <Text style={dStyles.eventTitleText}>{event.title}</Text>
-        {event.location != null && event.location !== '' && (
-          <View style={dStyles.locationRow}>
-            <View style={dStyles.locationDot} />
-            <Text style={dStyles.locationText}>{event.location}</Text>
-          </View>
-        )}
-        {/* Assignee Dots */}
-        {event.assigneeColors.length > 0 && (
-          <View style={dStyles.assigneeDots}>
-            {event.assigneeColors.slice(0, 4).map((color) => (
-              <View
-                key={color}
-                style={[dStyles.assigneeDot, { backgroundColor: color }]}
-              />
-            ))}
-          </View>
-        )}
-      </View>
-
-      {/* Time Section - left side in RTL */}
-      <View style={dStyles.timeSection}>
-        <Text style={dStyles.eventTimeText}>{event.time}</Text>
-        <Text style={dStyles.eventDurationText}>{duration} דק׳</Text>
-      </View>
-    </Pressable>
   );
 }
 
@@ -1546,6 +1596,25 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
+  /* Calendar Panel (monthly view) */
+  calendarPanel: {
+    backgroundColor: BG_COLOR,
+    overflow: 'hidden',
+  },
+  dragHandleContainer: {
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  dragHandleBar: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#d1d5db',
+    borderRadius: 2,
+  },
+  dailyEventsScroll: {
+    flex: 1,
+  },
+
   /* FAB */
   fab: {
     position: 'absolute',
@@ -1570,7 +1639,7 @@ const mStyles = StyleSheet.create({
   gridContainer: {
     paddingHorizontal: 12,
     paddingTop: 16,
-    paddingBottom: 32,
+    paddingBottom: 8,
   },
   weekRow: {
     gap: 4,
@@ -1683,20 +1752,6 @@ const mStyles = StyleSheet.create({
     borderRadius: 2.5,
   },
 
-  /* Drag Handle */
-  dragHandle: {
-    alignItems: 'center',
-    paddingVertical: 8,
-    marginTop: 4,
-    gap: 4,
-  },
-  dragIndicatorBar: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#e5e7eb',
-  },
-
   /* Expanded Cell Content */
   expandedEvents: {
     flex: 1,
@@ -1734,41 +1789,40 @@ const mStyles = StyleSheet.create({
 
 // ===== Day Events List Styles =====
 const dStyles = StyleSheet.create({
-  container: {
-    paddingTop: 20,
-    paddingHorizontal: 4,
-    paddingBottom: 120,
-    gap: 12,
+  wrapper: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 100,
   },
 
   /* Header */
   header: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 4,
-    marginBottom: 4,
+    marginBottom: 16,
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#1f2937',
+    color: '#111517',
     flex: 1,
     textAlign: 'right',
+    marginHorizontal: 12,
   },
-  addEventButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: `${PRIMARY_BLUE}10`,
+  addBtn: {
+    backgroundColor: `${PRIMARY_BLUE}15`,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
   },
-  addEventText: {
+  addBtnText: {
     fontSize: 13,
     fontWeight: '600',
     color: PRIMARY_BLUE,
+  },
+  closeBtn: {
+    padding: 4,
   },
 
   /* Birthday Card */
@@ -1781,6 +1835,7 @@ const dStyles = StyleSheet.create({
     gap: 12,
     borderWidth: 1,
     borderColor: '#fce7f3',
+    marginBottom: 12,
   },
   birthdayEmoji: {
     fontSize: 28,
@@ -1801,29 +1856,80 @@ const dStyles = StyleSheet.create({
     textAlign: 'right',
   },
 
-  /* Event Card - New Design */
-  eventCard: {
+  /* Event Card - Stitch Design */
+  card: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
     backgroundColor: '#ffffff',
     borderRadius: 16,
     padding: 16,
+    gap: 12,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#f0f0f0',
     shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  eventCardPressed: {
-    transform: [{ scale: 0.99 }],
-    opacity: 0.9,
+  timeCol: {
+    alignItems: 'center',
+    minWidth: 52,
   },
-
-  /* Icon Container */
-  iconContainer: {
+  timeText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111517',
+  },
+  durationText: {
+    fontSize: 11,
+    color: '#647b87',
+    marginTop: 3,
+  },
+  divider: {
+    width: 4,
+    height: 40,
+    borderRadius: 2,
+  },
+  content: {
+    flex: 1,
+  },
+  eventTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111517',
+    textAlign: 'right',
+    marginBottom: 4,
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    justifyContent: 'flex-end',
+  },
+  locationDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#647b87',
+  },
+  locationText: {
+    fontSize: 13,
+    color: '#647b87',
+  },
+  assigneeDots: {
+    flexDirection: 'row',
+    gap: 4,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  assigneeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  iconBox: {
     width: 40,
     height: 40,
     borderRadius: 12,
@@ -1831,78 +1937,14 @@ const dStyles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  /* Divider */
-  dividerLine: {
-    width: 4,
-    height: 40,
-    borderRadius: 2,
-  },
-
-  /* Content Section */
-  contentSection: {
-    flex: 1,
-    gap: 4,
-  },
-  eventTitleText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111517',
-    textAlign: 'right',
-  },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  locationDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: '#9ca3af',
-  },
-  locationText: {
-    fontSize: 13,
-    color: '#647b87',
-    flex: 1,
-    textAlign: 'right',
-  },
-  assigneeDots: {
-    flexDirection: 'row',
-    gap: 4,
-    alignItems: 'center',
-    marginTop: 2,
-  },
-  assigneeDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-
-  /* Time Section */
-  timeSection: {
-    alignItems: 'center',
-    minWidth: 50,
-  },
-  eventTimeText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111517',
-  },
-  eventDurationText: {
-    fontSize: 11,
-    color: '#647b87',
-    marginTop: 3,
-  },
-
   /* Empty State */
   emptyState: {
-    alignItems: 'center',
     paddingVertical: 32,
-    gap: 12,
+    alignItems: 'center',
+    gap: 8,
   },
   emptyText: {
-    fontSize: 15,
+    fontSize: 14,
     color: '#9ca3af',
-    fontWeight: '500',
   },
 });

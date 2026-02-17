@@ -49,7 +49,11 @@ export default function OnboardingStep2() {
       <View className="pt-4 px-6">
         <View className="flex-row-reverse items-center justify-between mb-4">
           <Pressable onPress={() => router.back()} className="p-2">
-            <MaterialIcons name="arrow-forward" size={24} color={colors.slate} />
+            <MaterialIcons
+              name="arrow-forward"
+              size={24}
+              color={colors.slate}
+            />
           </Pressable>
           <View className="flex-row items-center">
             <Text style={{ color: colors.sage }} className="font-bold">
@@ -79,7 +83,10 @@ export default function OnboardingStep2() {
           >
             מה האתגר היומי הגדול ביותר שלך?
           </Text>
-          <Text style={{ color: colors.sage }} className="text-center font-bold mt-2">
+          <Text
+            style={{ color: colors.sage }}
+            className="text-center font-bold mt-2"
+          >
             ניתן לבחור יותר מאתגר אחד
           </Text>
         </View>

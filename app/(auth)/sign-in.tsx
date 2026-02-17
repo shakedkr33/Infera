@@ -1,4 +1,5 @@
 import { useAuthActions } from '@convex-dev/auth/react';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -15,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function SignInScreen() {
   const { signIn } = useAuthActions();
+  const router = useRouter();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -174,12 +176,29 @@ export default function SignInScreen() {
             💡 Google/Apple/Magic Link יהיו זמינים בקרוב
           </Text>
         </View>
-
-        {/* סרגל תחתון iOS */}
-        <View className="items-center pb-2">
-          <View className="w-32 h-1.5 bg-gray-300 rounded-full" />
-        </View>
       </KeyboardAvoidingView>
+
+      {/* כפתור Dev - רק בפיתוח! */}
+      {__DEV__ && (
+        <View className="px-6 pb-4 bg-[#f6f7f8]">
+          <TouchableOpacity
+            onPress={() => {
+              console.log('🚧 Dev button clicked!');
+              router.replace('/(authenticated)');
+            }}
+            className="w-full py-3 px-6 bg-red-500/10 border-2 border-red-500 border-dashed rounded-2xl"
+          >
+            <Text className="text-red-500 text-center text-sm font-bold">
+              🚧 DEV ONLY: דלג למסך הבית
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* סרגל תחתון iOS */}
+      <View className="items-center pb-2 bg-[#f6f7f8]">
+        <View className="w-32 h-1.5 bg-gray-300 rounded-full" />
+      </View>
     </SafeAreaView>
   );
 }

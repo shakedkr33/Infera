@@ -46,7 +46,11 @@ export default function OnboardingChildrenSelect() {
             accessibilityRole="button"
             accessibilityLabel="חזור"
           >
-            <MaterialIcons name="arrow-forward" size={24} color={colors.slate} />
+            <MaterialIcons
+              name="arrow-forward"
+              size={24}
+              color={colors.slate}
+            />
           </Pressable>
           <Text style={{ color: colors.slate }} className="text-sm font-medium">
             מיקוד משפחתי
@@ -125,7 +129,7 @@ export default function OnboardingChildrenSelect() {
                 value={customCount}
                 onChangeText={(text) => {
                   const num = text.replace(/[^0-9]/g, '');
-                  if (num === '' || (Number.parseInt(num, 10) <= 10)) {
+                  if (num === '' || Number.parseInt(num, 10) <= 10) {
                     setCustomCount(num);
                   }
                 }}

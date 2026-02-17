@@ -32,7 +32,11 @@ export default function OnboardingStep1() {
       <View className="pt-4 px-4">
         <View className="flex-row-reverse items-center justify-between mb-4">
           <Pressable onPress={() => router.back()} className="p-2">
-            <MaterialIcons name="arrow-forward" size={24} color={colors.slate} />
+            <MaterialIcons
+              name="arrow-forward"
+              size={24}
+              color={colors.slate}
+            />
           </Pressable>
           <Text style={{ color: colors.slate }} className="text-sm font-medium">
             שלב 1 מתוך 4

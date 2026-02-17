@@ -1,10 +1,9 @@
-import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
-import { useRevenueCat } from '@/contexts/RevenueCatContext';
-import { IS_RTL } from '@/lib/rtl';
 import { MaterialIcons } from '@expo/vector-icons'; // שימוש באייקונים מהעיצוב
 import { useConvexAuth } from 'convex/react';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
-import { ActivityIndicator, I18nManager, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
+import { useRevenueCat } from '@/contexts/RevenueCatContext';
 
 export default function AuthenticatedLayout() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -19,7 +18,7 @@ export default function AuthenticatedLayout() {
     );
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && !__DEV__) {
     return <Redirect href="/(auth)/sign-in" />;
   }
 
@@ -27,40 +26,20 @@ export default function AuthenticatedLayout() {
     return <Redirect href="/(auth)/paywall" />;
   }
 
-  // הגדרת הטאבים המעודכנת (ללא הגדרות)
-  const tabs = [
-    {
-      name: 'index',
-      title: 'בית',
-      icon: 'home',
-    },
-    {
-      name: 'calendar',
-      title: 'יומן',
-      icon: 'calendar-today',
-    },
-    {
-      name: 'tasks',
-      title: 'משימות',
-      icon: 'check-circle-outline',
-    },
-  ];
-
-  const isNativeRTLEnabled = I18nManager.isRTL === true;
-  const orderedTabs = isNativeRTLEnabled
-    ? tabs
-    : IS_RTL
-      ? [...tabs].reverse()
-      : tabs;
+  const tabIcon = (iconName: string, color: string, focused: boolean) => (
+    <View style={focused ? styles.activeTabHighlight : styles.inactiveTabWrapper}>
+      <MaterialIcons name={iconName as never} size={24} color={color} />
+    </View>
+  );
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#4A9FE2', // הכחול של InYomi
+        tabBarActiveTintColor: '#4A9FE2',
         tabBarInactiveTintColor: '#6b7280',
         tabBarStyle: {
-          backgroundColor: '#ffffff', // רקע לבן נקי
+          backgroundColor: '#ffffff',
           borderTopColor: '#f0f0f0',
           height: 90,
           paddingBottom: 25,
@@ -73,34 +52,34 @@ export default function AuthenticatedLayout() {
         },
       }}
     >
-      {orderedTabs.map((tab) => (
-        <Tabs.Screen
-          key={tab.name}
-          name={tab.name}
-          options={{
-            title: tab.title,
-            tabBarIcon: ({ color, focused }) => (
-              <View
-                style={
-                  focused
-                    ? styles.activeTabHighlight
-                    : styles.inactiveTabWrapper
-                }
-              >
-                <MaterialIcons name={tab.icon as any} size={24} color={color} />
-              </View>
-            ),
-          }}
-        />
-      ))}
-
-      {/* הסתרת דף ההגדרות מהתפריט התחתון אך שמירה על הניתוב */}
+      {/* === 3 טאבים בלבד === */}
       <Tabs.Screen
-        name="settings"
+        name="index"
         options={{
-          href: null,
+          title: 'בית',
+          tabBarIcon: ({ color, focused }) => tabIcon('home', color, focused),
         }}
       />
+      <Tabs.Screen
+        name="calendar"
+        options={{
+          title: 'יומן',
+          tabBarIcon: ({ color, focused }) => tabIcon('calendar-today', color, focused),
+        }}
+      />
+      <Tabs.Screen
+        name="tasks"
+        options={{
+          title: 'משימות',
+          tabBarIcon: ({ color, focused }) => tabIcon('check-circle-outline', color, focused),
+        }}
+      />
+
+      {/* === מסכים מוסתרים מהטאב בר === */}
+      <Tabs.Screen name="settings" options={{ href: null }} />
+      <Tabs.Screen name="birthdays" options={{ href: null }} />
+      <Tabs.Screen name="event/new" options={{ href: null }} />
+      <Tabs.Screen name="event/[id]" options={{ href: null }} />
     </Tabs>
   );
 }

@@ -289,10 +289,7 @@ export default function SettingsScreen() {
                       label="סטטוס פרימיום"
                       value={isPremium ? 'פרימיום' : 'חינמי'}
                     />
-                    <DebugRow
-                      label="Entitlement"
-                      value="InYomi Pro"
-                    />
+                    <DebugRow label="Entitlement" value="InYomi Pro" />
                     {customerData && (
                       <DebugRow
                         label="App User ID"

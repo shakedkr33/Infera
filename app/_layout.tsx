@@ -1,9 +1,12 @@
+import 'react-native-gesture-handler';
+
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
 import { ConvexReactClient } from 'convex/react';
 import { Slot } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import '../global.css';
 
@@ -41,15 +44,21 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="light" translucent={false} backgroundColor="#0a0a0a" />
-      <ConvexAuthProvider client={convex} storage={secureStorage}>
-        <OnboardingProvider>
-          <RevenueCatProvider>
-            <Slot />
-          </RevenueCatProvider>
-        </OnboardingProvider>
-      </ConvexAuthProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <StatusBar
+          style="light"
+          translucent={false}
+          backgroundColor="#0a0a0a"
+        />
+        <ConvexAuthProvider client={convex} storage={secureStorage}>
+          <OnboardingProvider>
+            <RevenueCatProvider>
+              <Slot />
+            </RevenueCatProvider>
+          </OnboardingProvider>
+        </ConvexAuthProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

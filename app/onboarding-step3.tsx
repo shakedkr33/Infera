@@ -37,7 +37,11 @@ export default function OnboardingStep3() {
       <View className="pt-4 px-6">
         <View className="flex-row-reverse items-center justify-between mb-4">
           <Pressable onPress={() => router.back()} className="p-2">
-            <MaterialIcons name="arrow-forward" size={24} color={colors.slate} />
+            <MaterialIcons
+              name="arrow-forward"
+              size={24}
+              color={colors.slate}
+            />
           </Pressable>
           <Text className="text-gray-400 font-medium text-sm">
             שלב 3 מתוך 4
@@ -60,7 +64,10 @@ export default function OnboardingStep3() {
           >
             מאיפה מגיע רוב המידע שלך?
           </Text>
-          <Text style={{ color: colors.sage }} className="text-sm font-medium mt-1 text-right">
+          <Text
+            style={{ color: colors.sage }}
+            className="text-sm font-medium mt-1 text-right"
+          >
             ניתן לבחור יותר מאפשרות אחת
           </Text>
           <Text className="text-gray-500 text-[15px] leading-relaxed mt-3 text-right">

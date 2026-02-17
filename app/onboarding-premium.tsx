@@ -1,4 +1,3 @@
-import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
@@ -11,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRevenueCat } from '@/contexts/RevenueCatContext';
 
 export default function OnboardingPremium() {
   const router = useRouter();
