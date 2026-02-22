@@ -210,7 +210,9 @@ export default function TasksScreen() {
                     toggleSubtask(task.id, subtaskId)
                   }
                   onToggleCompletion={() => toggleTaskCompletion(task.id)}
-                  onPress={() => router.push(`/(authenticated)/task/${task.id}` as never)}
+                  onPress={() =>
+                    router.push(`/(authenticated)/task/${task.id}` as never)
+                  }
                 />
               ))}
             </View>
@@ -228,7 +230,9 @@ export default function TasksScreen() {
                   onToggleExpansion={() => {}}
                   onToggleSubtask={() => {}}
                   onToggleCompletion={() => toggleTaskCompletion(task.id)}
-                  onPress={() => router.push(`/(authenticated)/task/${task.id}` as never)}
+                  onPress={() =>
+                    router.push(`/(authenticated)/task/${task.id}` as never)
+                  }
                 />
               ))}
             </View>

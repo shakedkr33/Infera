@@ -86,6 +86,8 @@ export default function AuthenticatedLayout() {
       <Tabs.Screen name="event/[id]" options={{ href: null }} />
       <Tabs.Screen name="task/new" options={{ href: null }} />
       <Tabs.Screen name="task/[id]" options={{ href: null }} />
+      <Tabs.Screen name="import-calendar" options={{ href: null }} />
+      <Tabs.Screen name="import-holidays" options={{ href: null }} />
     </Tabs>
   );
 }

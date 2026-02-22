@@ -14,11 +14,16 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
+import { SettingsDrawer } from '@/lib/components/settings/SettingsDrawer';
+import { getCountdownLabel } from '@/lib/utils/birthday';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { openBirthdayCard, birthdays: contextBirthdays } = useBirthdaySheets();
   const [showToast, setShowToast] = useState(true);
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // לוגיקת המשימות
   const [items, setItems] = useState([
@@ -71,23 +76,26 @@ export default function HomeScreen() {
     return () => clearTimeout(timer);
   }, []);
 
-  const birthdays = [
-    { id: '1', name: 'אמא', time: 'מחר', color: '#FFD1DC' },
-    { id: '2', name: 'דנה', time: 'בעוד 5 ימים', color: '#E0F2F1' },
-    { id: '3', name: 'מיכל', time: 'בעוד 8 ימים', color: '#FFF9C4' },
-  ];
+  const AVATAR_COLORS = ['#FFD1DC', '#E0F2F1', '#FFF9C4', '#E8EAF6', '#FCE4EC'];
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
       {/* Header */}
       <View className="flex-row-reverse items-center justify-between px-6 py-4 bg-white border-b border-gray-100">
         <View className="flex-row-reverse items-center gap-3">
-          <Image
-            source={require('@/assets/images/icon.png')}
-            style={{ width: 36, height: 36 }}
-            resizeMode="contain"
-            accessibilityLabel="InYomi"
-          />
+          <Pressable
+            onPress={() => setIsDrawerOpen(true)}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="פתח תפריט הגדרות"
+          >
+            <Image
+              source={require('@/assets/images/icon.png')}
+              style={{ width: 36, height: 36, borderRadius: 18 }}
+              resizeMode="contain"
+              accessibilityLabel="InYomi"
+            />
+          </Pressable>
           <View>
             <Text className="text-gray-400 text-[10px] text-right">
               צהריים טובים
@@ -167,24 +175,25 @@ export default function HomeScreen() {
             className="pr-6"
           >
             <View className="flex-row-reverse gap-3 pl-6">
-              {birthdays.map((b) => (
-                <View
+              {contextBirthdays.map((b, idx) => (
+                <Pressable
                   key={b.id}
+                  onPress={() => openBirthdayCard(b)}
                   className="bg-white border border-gray-100 rounded-xl px-3 py-2 flex-row-reverse items-center gap-2 w-36 shadow-sm"
                 >
                   <View
-                    style={{ backgroundColor: b.color }}
+                    style={{ backgroundColor: AVATAR_COLORS[idx % AVATAR_COLORS.length] }}
                     className="size-9 rounded-full border border-gray-100"
                   />
                   <View className="flex-1">
                     <Text className="text-[#36a9e2] font-bold text-[9px] text-right leading-tight">
-                      {b.time}:
+                      {getCountdownLabel(b)}:
                     </Text>
                     <Text className="text-[#111517] text-[13px] font-bold text-right truncate">
                       {b.name}
                     </Text>
                   </View>
-                </View>
+                </Pressable>
               ))}
             </View>
           </ScrollView>
@@ -282,6 +291,12 @@ export default function HomeScreen() {
       >
         <MaterialIcons name="add" size={32} color="white" />
       </Pressable>
+
+      {/* Settings Drawer */}
+      <SettingsDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+      />
 
       {/* חלונית פעולות (Action Sheet) */}
       <Modal

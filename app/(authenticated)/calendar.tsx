@@ -19,6 +19,7 @@ import ReAnimated, {
   withSpring,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { rtl } from '@/lib/rtl';
 
 // ===== Constants =====
@@ -889,7 +890,7 @@ function DayCell({
   isExpanded,
   onPress,
 }: DayCellProps): React.JSX.Element {
-  const router = useRouter();
+  const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
 
   const uniqueColors = useMemo(() => {
     const all = dayData.events.flatMap((e) => e.assigneeColors);
@@ -897,8 +898,10 @@ function DayCell({
   }, [dayData.events]);
 
   const handleBirthdayPress = useCallback((): void => {
-    router.push('/birthdays' as never);
-  }, [router]);
+    if (dayData.birthday == null) return;
+    const found = findBirthdayByName(dayData.birthday.name);
+    if (found) openBirthdayCard(found);
+  }, [dayData.birthday, findBirthdayByName, openBirthdayCard]);
 
   return (
     <Pressable
@@ -1027,6 +1030,7 @@ function DayEventsList({
   onClose,
 }: DayEventsListProps): React.JSX.Element {
   const router = useRouter();
+  const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
 
   const dayLabel = useMemo((): string => {
     const date = new Date(year, month, dayData.day);
@@ -1085,7 +1089,10 @@ function DayEventsList({
       {dayData.birthday != null && (
         <Pressable
           style={dStyles.birthdayCard}
-          onPress={() => router.push('/birthdays' as never)}
+          onPress={() => {
+            const found = findBirthdayByName(dayData.birthday?.name ?? '');
+            if (found) openBirthdayCard(found);
+          }}
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel={`יום הולדת ${dayData.birthday.name}`}

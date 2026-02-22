@@ -10,6 +10,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import '../global.css';
 
+import { BirthdaySheetsProvider } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { RevenueCatProvider } from '@/contexts/RevenueCatContext';
 import { bootstrapRTL } from '@/lib/rtlBootstrap';
 import { getConvexUrl } from '@/utils/convexConfig';
@@ -54,7 +55,9 @@ export default function RootLayout() {
         <ConvexAuthProvider client={convex} storage={secureStorage}>
           <OnboardingProvider>
             <RevenueCatProvider>
-              <Slot />
+              <BirthdaySheetsProvider>
+                <Slot />
+              </BirthdaySheetsProvider>
             </RevenueCatProvider>
           </OnboardingProvider>
         </ConvexAuthProvider>
