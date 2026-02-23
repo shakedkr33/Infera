@@ -19,7 +19,9 @@ import ReAnimated, {
   withSpring,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNotifications } from '@/contexts/NotificationsContext';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
+import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { rtl } from '@/lib/rtl';
 
 // ===== Constants =====
@@ -413,6 +415,21 @@ export default function CalendarScreen(): React.JSX.Element {
   const router = useRouter();
   const [viewMode, setViewMode] = useState<'timeline' | 'monthly'>('timeline');
   const [slideAnim] = useState(new Animated.Value(0));
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const {
+    unseenCount,
+    markAllSeen,
+    isLoading: notifLoading,
+  } = useNotifications();
+
+  const handleBellPress = (): void => {
+    if (!isNotificationsOpen) {
+      setIsNotificationsOpen(true);
+    }
+    if (!notifLoading) {
+      markAllSeen();
+    }
+  };
 
   const today = useMemo(() => new Date(), []);
   const [displayYear, setDisplayYear] = useState(today.getFullYear());
@@ -684,11 +701,25 @@ export default function CalendarScreen(): React.JSX.Element {
             {/* Bell Button */}
             <Pressable
               style={styles.bellButton}
+              onPress={handleBellPress}
               accessible={true}
               accessibilityRole="button"
-              accessibilityLabel="התראות"
+              accessibilityLabel={
+                unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
+              }
             >
-              <MaterialIcons name="notifications" size={24} color="#111517" />
+              <MaterialIcons
+                name={unseenCount > 0 ? 'notifications' : 'notifications-none'}
+                size={24}
+                color="#111517"
+              />
+              {unseenCount > 0 && (
+                <View style={styles.bellBadge}>
+                  <Text style={styles.bellBadgeText}>
+                    {unseenCount > 9 ? '9+' : unseenCount}
+                  </Text>
+                </View>
+              )}
             </Pressable>
           </View>
 
@@ -801,6 +832,11 @@ export default function CalendarScreen(): React.JSX.Element {
         >
           <MaterialIcons name="add" size={32} color="white" />
         </Pressable>
+        {/* Notifications Drawer */}
+        <NotificationsDrawer
+          isOpen={isNotificationsOpen}
+          onClose={() => setIsNotificationsOpen(false)}
+        />
       </View>
     </SafeAreaView>
   );
@@ -1394,6 +1430,24 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 1,
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#36a9e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  bellBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#fff',
+    textAlign: 'center',
   },
 
   /* Segmented Control */

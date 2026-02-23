@@ -14,7 +14,9 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNotifications } from '@/contexts/NotificationsContext';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
+import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { SettingsDrawer } from '@/lib/components/settings/SettingsDrawer';
 import { getCountdownLabel } from '@/lib/utils/birthday';
 
@@ -24,6 +26,21 @@ export default function HomeScreen() {
   const [showToast, setShowToast] = useState(true);
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const {
+    unseenCount,
+    markAllSeen,
+    isLoading: notifLoading,
+  } = useNotifications();
+
+  const handleBellPress = (): void => {
+    if (!isNotificationsOpen) {
+      setIsNotificationsOpen(true);
+    }
+    if (!notifLoading) {
+      markAllSeen();
+    }
+  };
 
   // לוגיקת המשימות
   const [items, setItems] = useState([
@@ -105,8 +122,27 @@ export default function HomeScreen() {
             </Text>
           </View>
         </View>
-        <Pressable className="size-10 rounded-full items-center justify-center bg-gray-50">
-          <MaterialIcons name="notifications-none" size={24} color="#111517" />
+        <Pressable
+          onPress={handleBellPress}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel={
+            unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
+          }
+          className="size-10 rounded-full items-center justify-center bg-gray-50"
+        >
+          <MaterialIcons
+            name={unseenCount > 0 ? 'notifications' : 'notifications-none'}
+            size={24}
+            color="#111517"
+          />
+          {unseenCount > 0 && (
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeText}>
+                {unseenCount > 9 ? '9+' : unseenCount}
+              </Text>
+            </View>
+          )}
         </Pressable>
       </View>
 
@@ -182,7 +218,10 @@ export default function HomeScreen() {
                   className="bg-white border border-gray-100 rounded-xl px-3 py-2 flex-row-reverse items-center gap-2 w-36 shadow-sm"
                 >
                   <View
-                    style={{ backgroundColor: AVATAR_COLORS[idx % AVATAR_COLORS.length] }}
+                    style={{
+                      backgroundColor:
+                        AVATAR_COLORS[idx % AVATAR_COLORS.length],
+                    }}
                     className="size-9 rounded-full border border-gray-100"
                   />
                   <View className="flex-1">
@@ -298,6 +337,12 @@ export default function HomeScreen() {
         onClose={() => setIsDrawerOpen(false)}
       />
 
+      {/* Notifications Drawer */}
+      <NotificationsDrawer
+        isOpen={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+      />
+
       {/* חלונית פעולות (Action Sheet) */}
       <Modal
         animationType="slide"
@@ -411,4 +456,22 @@ const styles = StyleSheet.create({
   },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
   bottomSheetContainer: { position: 'absolute', bottom: 0, left: 0, right: 0 },
+  bellBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#36a9e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  bellBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#fff',
+    textAlign: 'center',
+  },
 });
