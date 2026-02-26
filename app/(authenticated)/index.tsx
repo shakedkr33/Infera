@@ -1,4 +1,5 @@
 import { MaterialIcons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -6,6 +7,7 @@ import {
   Alert,
   Dimensions,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -70,6 +72,10 @@ export default function HomeScreen() {
   const dateScrollRef = useRef<ScrollView>(null);
   const moodScrollRef = useRef<ScrollView>(null);
   const moodPopupRef = useRef<ScrollView>(null);
+
+  // Guards that prevent the first programmatic scrollTo from triggering selection
+  const moodWheelInitialized = useRef(false);
+  const moodPopupInitialized = useRef(false);
 
   const {
     unseenCount,
@@ -220,21 +226,24 @@ export default function HomeScreen() {
     return () => clearInterval(interval);
   }, [shouldShowMoodPrompt, selectedMood, hasSeenMoodPopupToday]);
 
-  // Scroll main mood wheel to initial position after mount
+  // Scroll main mood wheel to initial position after mount (Change 2)
   useEffect(() => {
+    moodWheelInitialized.current = false;
     setTimeout(() => {
       moodScrollRef.current?.scrollTo({ x: MOOD_INITIAL_X, animated: false });
     }, 150);
   }, []);
 
-  // Scroll popup mood wheel when modal opens
+  // Scroll popup mood wheel when modal opens; reset guard so first event is skipped (Change 2)
   useEffect(() => {
     if (isMoodModalVisible) {
+      moodPopupInitialized.current = false;
       setTimeout(() => {
         moodPopupRef.current?.scrollTo({ x: MOOD_INITIAL_X, animated: false });
       }, 150);
     }
   }, [isMoodModalVisible]);
+
 
   // Scroll date carousel to today on mount
   useEffect(() => {
@@ -251,35 +260,76 @@ export default function HomeScreen() {
     return () => clearTimeout(timer);
   }, []);
 
-  // ── Mood selection handler (shared between bottom section & popup) ──────────
+  const playMoodSound = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  // ── Mood selection handler (shared: tap in bottom wheel or modal) ──────────
   const handleMoodSelect = (value: number) => {
+    // Play sound only when the value actually changes (Change 7)
+    if (value !== selectedMood) {
+      playMoodSound();
+    }
     setSelectedMood(value);
     setHasSeenMoodPopupToday(true);
     setLastMoodDate(new Date().toISOString().split('T')[0]);
     setIsMoodModalVisible(false);
+
+    // Change 6: sync bottom wheel to the newly selected mood
+    const idx = MOODS.findIndex((m) => m.value === value);
+    const targetX = (MOODS.length + idx) * MOOD_ITEM_WIDTH;
+    setTimeout(() => {
+      moodWheelInitialized.current = false;
+      moodScrollRef.current?.scrollTo({ x: targetX, animated: false });
+    }, 50);
   };
 
-  // ── Mood scroll-end handler (reusable for both wheels) ────────────────────
-  const handleMoodScrollEnd = (
-    e: { nativeEvent: { contentOffset: { x: number } } },
-    ref: React.RefObject<ScrollView | null>
-  ) => {
+  // ── Popup scroll-end: loop-snap only, NO selection (Change 3) ────────────
+  const handlePopupScrollEnd = (e: { nativeEvent: { contentOffset: { x: number } } }) => {
+    if (!moodPopupInitialized.current) {
+      moodPopupInitialized.current = true;
+      return;
+    }
     const offsetX = e.nativeEvent.contentOffset.x;
     const rawIndex = Math.round(offsetX / MOOD_ITEM_WIDTH);
-    const normalizedIndex = rawIndex % MOODS.length;
-    handleMoodSelect(MOODS[normalizedIndex].value);
-    // Snap back to middle block to maintain pseudo-infinite illusion
+    // Loop-snap to middle block (no mood selection)
     if (rawIndex < MOODS.length) {
-      ref.current?.scrollTo({
+      moodPopupRef.current?.scrollTo({
         x: (rawIndex + MOODS.length) * MOOD_ITEM_WIDTH,
         animated: false,
       });
     } else if (rawIndex >= MOODS.length * 2) {
-      ref.current?.scrollTo({
+      moodPopupRef.current?.scrollTo({
         x: (rawIndex - MOODS.length) * MOOD_ITEM_WIDTH,
         animated: false,
       });
     }
+  };
+
+  // ── Bottom wheel scroll-end: selection + loop-snap (Change 3 & 8) ─────────
+  const handleBottomScrollEnd = (e: { nativeEvent: { contentOffset: { x: number } } }) => {
+    if (!moodWheelInitialized.current) {
+      moodWheelInitialized.current = true;
+      return;
+    }
+    const offsetX = e.nativeEvent.contentOffset.x;
+    const rawIndex = Math.round(offsetX / MOOD_ITEM_WIDTH);
+    const normalizedIndex = rawIndex % MOODS.length;
+    handleMoodSelect(MOODS[normalizedIndex].value);
+    // Change 8: defer snap-back to avoid blocking the same frame as state update
+    setTimeout(() => {
+      if (rawIndex < MOODS.length) {
+        moodScrollRef.current?.scrollTo({
+          x: (rawIndex + MOODS.length) * MOOD_ITEM_WIDTH,
+          animated: false,
+        });
+      } else if (rawIndex >= MOODS.length * 2) {
+        moodScrollRef.current?.scrollTo({
+          x: (rawIndex - MOODS.length) * MOOD_ITEM_WIDTH,
+          animated: false,
+        });
+      }
+    }, 0);
   };
 
   const AVATAR_COLORS = ['#FFD1DC', '#E0F2F1', '#FFF9C4', '#E8EAF6', '#FCE4EC'];
@@ -595,14 +645,10 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
-        {/* ── Mood carousel (Patch 5d: pseudo-infinite wheel) ─────────────── */}
+        {/* ── Mood carousel (pseudo-infinite wheel) ──────────────────────── */}
         <View style={{ paddingHorizontal: 24, marginTop: 8, marginBottom: 32 }}>
           <Text style={styles.moodTitle}>איך הרגיש היום שלך?</Text>
-          {renderMoodWheel(
-            moodScrollRef,
-            moodWheelPad,
-            (e) => handleMoodScrollEnd(e, moodScrollRef)
-          )}
+          {renderMoodWheel(moodScrollRef, moodWheelPad, handleBottomScrollEnd)}
         </View>
       </ScrollView>
 
@@ -637,11 +683,7 @@ export default function HomeScreen() {
         <View style={styles.moodModalOverlay}>
           <View style={styles.moodModalCard}>
             <Text style={styles.moodModalTitle}>איך הרגיש היום שלך?</Text>
-            {renderMoodWheel(
-              moodPopupRef,
-              moodPopupHPad,
-              (e) => handleMoodScrollEnd(e, moodPopupRef)
-            )}
+            {renderMoodWheel(moodPopupRef, moodPopupHPad, handlePopupScrollEnd)}
             <Pressable
               style={styles.moodModalClose}
               onPress={() => setIsMoodModalVisible(false)}

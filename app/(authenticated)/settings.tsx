@@ -1,3 +1,4 @@
+import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useAuthActions } from '@convex-dev/auth/react';
 import { useMutation } from 'convex/react';
 import { useRouter } from 'expo-router';
@@ -16,7 +17,6 @@ import {
 import { useState } from 'react';
 import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useOnboarding } from '@/contexts/OnboardingContext';
 
 import {
   APP_ENV,
