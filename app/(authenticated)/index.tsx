@@ -2,7 +2,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
-  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -17,16 +16,36 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
-import { SettingsDrawer } from '@/lib/components/settings/SettingsDrawer';
 import { getCountdownLabel } from '@/lib/utils/birthday';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getGreetingByHour(hour: number): string {
+  if (hour >= 5 && hour < 12) return 'בוקר טוב';
+  if (hour >= 12 && hour < 17) return 'צהריים טובים';
+  if (hour >= 17 && hour < 22) return 'ערב טוב';
+  return 'לילה טוב';
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
   const router = useRouter();
   const { openBirthdayCard, birthdays: contextBirthdays } = useBirthdaySheets();
   const [showToast, setShowToast] = useState(true);
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [selectedMood, setSelectedMood] = useState<number | null>(null);
+
   const {
     unseenCount,
     markAllSeen,
@@ -42,7 +61,22 @@ export default function HomeScreen() {
     }
   };
 
-  // לוגיקת המשימות
+  // ── Computed values ────────────────────────────────────────────────────────
+  const greeting = getGreetingByHour(new Date().getHours());
+  const todayLabel = new Date().toLocaleDateString('he-IL', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  const today = new Date();
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - 3 + i);
+    return d;
+  });
+
+  // ── Items ──────────────────────────────────────────────────────────────────
   const [items, setItems] = useState([
     {
       id: '1',
@@ -97,31 +131,20 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
-      {/* Header */}
-      <View className="flex-row-reverse items-center justify-between px-6 py-4 bg-white border-b border-gray-100">
-        <View className="flex-row-reverse items-center gap-3">
-          <Pressable
-            onPress={() => setIsDrawerOpen(true)}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="פתח תפריט הגדרות"
-          >
-            <Image
-              source={require('@/assets/images/icon.png')}
-              style={{ width: 36, height: 36, borderRadius: 18 }}
-              resizeMode="contain"
-              accessibilityLabel="InYomi"
-            />
-          </Pressable>
-          <View>
-            <Text className="text-gray-400 text-[10px] text-right">
-              צהריים טובים
-            </Text>
-            <Text className="text-[#111517] text-lg font-bold text-right">
-              ברוכה הבאה, שקד
-            </Text>
-          </View>
-        </View>
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <View
+        style={{
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          paddingHorizontal: 24,
+          paddingTop: 8,
+          paddingBottom: 4,
+          backgroundColor: '#f6f7f8',
+        }}
+      >
+        {/* Bell — left side */}
         <Pressable
           onPress={handleBellPress}
           accessible={true}
@@ -129,11 +152,11 @@ export default function HomeScreen() {
           accessibilityLabel={
             unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
           }
-          className="size-10 rounded-full items-center justify-center bg-gray-50"
+          style={{ position: 'relative' }}
         >
           <MaterialIcons
             name={unseenCount > 0 ? 'notifications' : 'notifications-none'}
-            size={24}
+            size={26}
             color="#111517"
           />
           {unseenCount > 0 && (
@@ -144,32 +167,131 @@ export default function HomeScreen() {
             </View>
           )}
         </Pressable>
-      </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} className="flex-1">
-        <View className="px-6 pt-6 mb-6">
-          <Text className="text-[#111517] text-2xl font-black text-right leading-tight">
-            יום שלישי, 10 בפברואר
+        {/* Date + greeting — right side */}
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={{ fontSize: 12, color: '#94a3b8', textAlign: 'right' }}>
+            {todayLabel}
           </Text>
-          <Text className="text-gray-400 text-sm text-right mt-1">
-            יש לך {items.length + 1} פעילויות היום
+          <Text
+            style={{
+              fontSize: 22,
+              fontWeight: '900',
+              color: '#111517',
+              textAlign: 'right',
+            }}
+          >
+            {greeting}, שקד
           </Text>
         </View>
+      </View>
 
-        {/* כרטיס ראשי */}
-        <View className="px-6 mb-8">
+      <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
+
+        {/* ── Week date carousel ─────────────────────────────────────────── */}
+        <View
+          style={{
+            paddingHorizontal: 24,
+            paddingVertical: 12,
+            marginBottom: 4,
+          }}
+        >
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ flexDirection: 'row-reverse', gap: 6 }}
+          >
+            {weekDays.map((day, i) => {
+              const isSelected = isSameDay(day, selectedDate);
+              const isToday = isSameDay(day, today);
+              const shortName = day.toLocaleDateString('he-IL', {
+                weekday: 'short',
+              });
+              return (
+                <Pressable
+                  key={i}
+                  onPress={() => setSelectedDate(day)}
+                  style={{
+                    width: 44,
+                    height: 60,
+                    borderRadius: 22,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: isSelected ? '#36a9e2' : 'transparent',
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      color: isSelected ? '#fff' : '#94a3b8',
+                      fontWeight: isSelected ? '900' : '400',
+                    }}
+                  >
+                    {shortName}
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 15,
+                      color: isSelected ? '#fff' : '#94a3b8',
+                      fontWeight: isSelected ? '900' : '400',
+                      marginTop: 2,
+                    }}
+                  >
+                    {day.getDate()}
+                  </Text>
+                  {isToday && !isSelected && (
+                    <View
+                      style={{
+                        width: 4,
+                        height: 4,
+                        borderRadius: 2,
+                        backgroundColor: '#36a9e2',
+                        marginTop: 3,
+                      }}
+                    />
+                  )}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+        <Text
+          style={{
+            color: '#94a3b8',
+            fontSize: 14,
+            textAlign: 'right',
+            paddingHorizontal: 24,
+            marginBottom: 16,
+          }}
+        >
+          יש לך {items.length + 1} פעילויות היום
+        </Text>
+
+        {/* ── Upcoming event card ────────────────────────────────────────── */}
+        <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
           <View
             style={styles.cardShadow}
             className="bg-white rounded-3xl overflow-hidden border border-gray-50"
           >
             <View className="absolute right-0 top-0 bottom-0 w-1.5 bg-[#36a9e2]" />
             <View className="p-6 pr-8">
+              {/* "האירוע הבא" pill */}
+              <View
+                style={{
+                  backgroundColor: '#f0f7ff',
+                  borderRadius: 6,
+                  paddingHorizontal: 8,
+                  paddingVertical: 2,
+                  alignSelf: 'flex-end',
+                  marginBottom: 4,
+                }}
+              >
+                <Text style={{ color: '#36a9e2', fontSize: 11, fontWeight: '700' }}>
+                  האירוע הבא
+                </Text>
+              </View>
               <View className="flex-row-reverse justify-between items-start mb-2">
-                <View className="bg-blue-50 px-2 py-0.5 rounded">
-                  <Text className="text-[#36a9e2] text-[11px] font-bold">
-                    האירוע הקרוב
-                  </Text>
-                </View>
+                <View />
                 <Text className="text-[#36a9e2] text-2xl font-bold">09:00</Text>
               </View>
               <Text className="text-xl font-bold text-[#111517] text-right">
@@ -195,7 +317,7 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* ימי הולדת */}
+        {/* ── Birthdays ──────────────────────────────────────────────────── */}
         <View className="mb-8">
           <View className="flex-row-reverse justify-between px-6 mb-3 items-center">
             <Text className="text-xs font-bold text-gray-500 uppercase tracking-wider">
@@ -219,8 +341,7 @@ export default function HomeScreen() {
                 >
                   <View
                     style={{
-                      backgroundColor:
-                        AVATAR_COLORS[idx % AVATAR_COLORS.length],
+                      backgroundColor: AVATAR_COLORS[idx % AVATAR_COLORS.length],
                     }}
                     className="size-9 rounded-full border border-gray-100"
                   />
@@ -238,73 +359,187 @@ export default function HomeScreen() {
           </ScrollView>
         </View>
 
-        {/* ציר זמן */}
+        {/* ── Timeline ───────────────────────────────────────────────────── */}
         <View className="px-6 mb-4 flex-row-reverse justify-between items-center">
           <Text className="text-[#111517] text-lg font-bold">המשך היום</Text>
         </View>
-        <View className="px-6 pb-48">
-          {items.map((item, idx) => (
-            <View key={item.id} className="flex-row-reverse gap-4">
-              <View className="items-center w-12 pt-2">
-                <Text className="text-base font-bold text-gray-400">
+        <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
+          {items.map((item) => (
+            <View
+              key={item.id}
+              style={{ flexDirection: 'row-reverse', gap: 16, marginBottom: 4 }}
+            >
+              {/* Time column */}
+              <View style={{ width: 48, alignItems: 'center', paddingTop: 14 }}>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#94a3b8' }}>
                   {item.time}
                 </Text>
-                {idx !== items.length - 1 && (
-                  <View className="w-[2px] bg-gray-200 grow my-1 rounded-full" />
-                )}
               </View>
-              <View className="flex-1 pb-8">
-                <View className="flex-row-reverse justify-between items-start mb-1">
-                  <View className="flex-row-reverse items-start gap-3 flex-1">
-                    {item.type === 'task' && (
-                      <Pressable
-                        onPress={() => toggleTask(item.id)}
-                        className={`size-5 border-2 rounded mt-1 items-center justify-center ${item.completed ? 'bg-[#36a9e2] border-[#36a9e2]' : 'border-gray-300'}`}
-                      >
-                        {item.completed && (
-                          <MaterialIcons name="check" size={14} color="white" />
-                        )}
-                      </Pressable>
-                    )}
-                    <View className="flex-1">
-                      <View className="flex-row-reverse items-center gap-2">
-                        <Text
-                          style={[
-                            styles.taskTitle,
-                            item.completed && styles.completedText,
-                          ]}
-                          className="text-[#111517] text-base font-bold text-right"
-                        >
-                          {item.title}
-                        </Text>
-                        <View
-                          style={{ backgroundColor: item.assigneeColor }}
-                          className="size-6 rounded-full border border-white shadow-sm"
-                        />
-                      </View>
-                      <Text className="text-gray-400 text-sm text-right mt-0.5">
-                        {item.location}
-                      </Text>
-                    </View>
-                  </View>
+
+              {/* Card */}
+              <View style={{ flex: 1, marginBottom: 12 }}>
+                <View
+                  style={{
+                    backgroundColor: '#fff',
+                    borderRadius: 16,
+                    padding: 12,
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 1 },
+                    shadowOpacity: 0.04,
+                    shadowRadius: 6,
+                    elevation: 1,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Right accent bar */}
                   <View
-                    style={{ backgroundColor: item.iconBg }}
-                    className="size-8 rounded-full items-center justify-center shadow-sm"
-                  >
-                    <MaterialIcons
-                      name={item.icon as any}
-                      size={18}
-                      color={item.iconColor}
-                    />
+                    style={{
+                      position: 'absolute',
+                      right: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: 4,
+                      borderRadius: 2,
+                      backgroundColor: item.iconColor,
+                    }}
+                  />
+
+                  <View style={{ flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <View style={{ flexDirection: 'row-reverse', alignItems: 'flex-start', gap: 10, flex: 1 }}>
+                      {item.type === 'task' && (
+                        <Pressable
+                          onPress={() => toggleTask(item.id)}
+                          style={[
+                            {
+                              width: 20,
+                              height: 20,
+                              borderRadius: 4,
+                              borderWidth: 2,
+                              marginTop: 2,
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            },
+                            item.completed
+                              ? { backgroundColor: '#36a9e2', borderColor: '#36a9e2' }
+                              : { borderColor: '#d1d5db' },
+                          ]}
+                        >
+                          {item.completed && (
+                            <MaterialIcons name="check" size={14} color="white" />
+                          )}
+                        </Pressable>
+                      )}
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 8 }}>
+                          <Text
+                            style={[
+                              styles.taskTitle,
+                              item.completed && styles.completedText,
+                              { color: '#111517', fontSize: 15, fontWeight: '700', textAlign: 'right' },
+                            ]}
+                          >
+                            {item.title}
+                          </Text>
+                          <View
+                            style={{
+                              width: 22,
+                              height: 22,
+                              borderRadius: 11,
+                              backgroundColor: item.assigneeColor,
+                              borderWidth: 1,
+                              borderColor: '#fff',
+                            }}
+                          />
+                        </View>
+                        <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'right', marginTop: 2 }}>
+                          {item.location}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Icon */}
+                    <View
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 16,
+                        backgroundColor: item.iconBg,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <MaterialIcons
+                        name={item.icon as any}
+                        size={18}
+                        color={item.iconColor}
+                      />
+                    </View>
                   </View>
                 </View>
               </View>
             </View>
           ))}
         </View>
+
+        {/* ── Mood check-in ──────────────────────────────────────────────── */}
+        <View style={{ paddingHorizontal: 24, marginTop: 8, marginBottom: 32 }}>
+          <Text
+            style={{
+              fontSize: 16,
+              fontWeight: '700',
+              color: '#111517',
+              textAlign: 'right',
+              marginBottom: 16,
+            }}
+          >
+            איך הרגיש היום שלך?
+          </Text>
+          <View style={{ flexDirection: 'row-reverse', justifyContent: 'space-around' }}>
+            {[
+              { emoji: '😒', label: 'קצת קשה', value: 1 },
+              { emoji: '😐', label: 'סתם', value: 2 },
+              { emoji: '🙂', label: 'טוב', value: 3 },
+              { emoji: '😍', label: 'מדהים', value: 4 },
+            ].map((mood) => (
+              <Pressable
+                key={mood.value}
+                onPress={() => setSelectedMood(mood.value)}
+                style={{ alignItems: 'center', gap: 6 }}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel={mood.label}
+              >
+                <View
+                  style={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 28,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderWidth: selectedMood === mood.value ? 2 : 0,
+                    borderColor: '#36a9e2',
+                    backgroundColor:
+                      selectedMood === mood.value ? '#e8f5fd' : 'transparent',
+                  }}
+                >
+                  <Text style={{ fontSize: 28 }}>{mood.emoji}</Text>
+                </View>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: selectedMood === mood.value ? '#36a9e2' : '#94a3b8',
+                    fontWeight: selectedMood === mood.value ? '700' : '400',
+                  }}
+                >
+                  {mood.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
       </ScrollView>
 
-      {/* הודעת ברוכים הבאים - מיקום מתוקן */}
+      {/* ── Welcome toast ──────────────────────────────────────────────────── */}
       {showToast && (
         <View className="absolute bottom-10 left-4 right-4 z-40 flex items-center pointer-events-none">
           <View
@@ -322,7 +557,7 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* לחצן פלוס שפותח חלונית */}
+      {/* ── FAB ────────────────────────────────────────────────────────────── */}
       <Pressable
         onPress={() => setIsActionSheetVisible(true)}
         style={styles.fab}
@@ -331,19 +566,13 @@ export default function HomeScreen() {
         <MaterialIcons name="add" size={32} color="white" />
       </Pressable>
 
-      {/* Settings Drawer */}
-      <SettingsDrawer
-        isOpen={isDrawerOpen}
-        onClose={() => setIsDrawerOpen(false)}
-      />
-
-      {/* Notifications Drawer */}
+      {/* ── Notifications Drawer ───────────────────────────────────────────── */}
       <NotificationsDrawer
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
       />
 
-      {/* חלונית פעולות (Action Sheet) */}
+      {/* ── Action Sheet ───────────────────────────────────────────────────── */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -405,7 +634,8 @@ export default function HomeScreen() {
   );
 }
 
-// קומפוננטת עזר
+// ─── Action Button ────────────────────────────────────────────────────────────
+
 function ActionButton({
   icon,
   label,
@@ -424,6 +654,8 @@ function ActionButton({
     </Pressable>
   );
 }
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   cardShadow: {
