@@ -3,6 +3,11 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { MoodIcon } from '@/components/mood/MoodIcon';
 import type { MoodValue } from '@/components/mood/MoodIcon';
+import { TaskCheckbox } from '@/components/TaskCheckbox';
+import {
+  EventDetailsBottomSheet,
+} from '@/components/EventDetailsBottomSheet';
+import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -59,6 +64,7 @@ const MOOD_INITIAL_X = MOODS.length * MOOD_ITEM_WIDTH;
 type Item = {
   id: string;
   time: string;
+  endTime?: string;
   title: string;
   location: string;
   type: 'event' | 'task';
@@ -69,6 +75,8 @@ type Item = {
   completed: boolean;
   allDay?: boolean;
   pending?: boolean;
+  // TODO: לחבר לנתוני קבוצה אמיתיים מ-Convex כשהסכמה מוכנה
+  groupName?: string;
 };
 
 type UndatedTask = {
@@ -97,6 +105,23 @@ export default function HomeScreen() {
 
   // ── Insight card ───────────────────────────────────────────────────────────
   const [dismissedInsightDate, setDismissedInsightDate] = useState<string | null>(null);
+
+  // ── Event detail sheet ─────────────────────────────────────────────────────
+  const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
+  const [isEventSheetVisible, setIsEventSheetVisible] = useState(false);
+
+  // ── Pending responses ──────────────────────────────────────────────────────
+  const [pendingResponses, setPendingResponses] = useState<Record<string, 'yes' | 'no' | 'maybe' | null>>({});
+  const [expandedPendingId, setExpandedPendingId] = useState<string | null>(null);
+
+  const openEventSheet = (item: Item) => {
+    setSelectedEvent(item as EventItem);
+    setIsEventSheetVisible(true);
+  };
+  const closeEventSheet = () => {
+    setIsEventSheetVisible(false);
+    setSelectedEvent(null);
+  };
 
   const dateScrollRef = useRef<ScrollView>(null);
   const moodScrollRef = useRef<ScrollView>(null);
@@ -145,6 +170,7 @@ export default function HomeScreen() {
       iconColor: '#FF922B',
       assigneeColor: '#36a9e2',
       completed: false,
+      groupName: 'ילדים',
     },
     {
       id: '2',
@@ -170,12 +196,14 @@ export default function HomeScreen() {
       assigneeColor: '#FFD1DC',
       completed: false,
       pending: true,
+      groupName: 'ספורט',
     },
   ]);
 
   // ── All-day events (mock) ──────────────────────────────────────────────────
-  const allDayEvents = [
-    { id: 'ad1', title: 'חג ראש חודש', iconColor: '#36a9e2' },
+  // TODO: לחבר לנתוני קבוצה אמיתיים מ-Convex כשהסכמה מוכנה
+  const allDayEvents: Array<{ id: string; title: string; iconColor: string; groupName?: string }> = [
+    { id: 'ad1', title: 'חג ראש חודש', iconColor: '#36a9e2', groupName: 'משפחה' },
   ];
 
   // ── Undated tasks ──────────────────────────────────────────────────────────
@@ -240,10 +268,8 @@ export default function HomeScreen() {
         params: { id: item.id },
       });
     } else {
-      router.push({
-        pathname: '/(authenticated)/event/[id]',
-        params: { id: item.id },
-      });
+      // Events → open detail sheet
+      openEventSheet(item);
     }
   };
 
@@ -712,41 +738,61 @@ export default function HomeScreen() {
         {/* ── Upcoming event card (only if next event exists) ───────────────── */}
         {hasAnyData && nextEvent && (
           <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
-            <View style={[styles.cardShadow, styles.eventCard]}>
-              <View style={styles.eventAccentBar} />
-              <View style={{ padding: 24, paddingRight: 32 }}>
-                <View style={styles.eventTopRow}>
-                  <View style={styles.eventNextPill}>
-                    <Text style={styles.eventNextPillText}>האירוע הבא</Text>
+            {/* Tapping anywhere on the card opens the detail sheet */}
+            <Pressable
+              onPress={() => openEventSheet(nextEvent)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={`פרטי אירוע: ${nextEvent.title}`}
+            >
+              <View style={[styles.cardShadow, styles.eventCard]}>
+                <View style={styles.eventAccentBar} />
+                <View style={{ padding: 24, paddingRight: 32 }}>
+                  <View style={styles.eventTopRow}>
+                    <View style={styles.eventNextPill}>
+                      <Text style={styles.eventNextPillText}>האירוע הבא</Text>
+                    </View>
+                    <Text style={styles.eventTime}>{nextEvent.time}</Text>
                   </View>
-                  <Text style={styles.eventTime}>{nextEvent.time}</Text>
-                </View>
-                <Text style={styles.eventTitle}>{nextEvent.title}</Text>
-                <View style={styles.eventAddressRow}>
-                  <View style={styles.eventAddressGroup}>
-                    <MaterialIcons name="location-on" size={16} color="#94a3b8" />
-                    <Text style={styles.eventAddress} numberOfLines={1}>
-                      {nextEvent.location}
+                  {nextEvent.endTime && (
+                    <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'left', marginTop: -4, marginBottom: 6 }}>
+                      עד {nextEvent.endTime}
+                    </Text>
+                  )}
+                  <Text style={styles.eventTitle}>{nextEvent.title}</Text>
+
+                  {/* Address row: icon+address group on right, nav button on left */}
+                  <View style={styles.eventAddressRow}>
+                    <View style={styles.eventAddressGroup}>
+                      <MaterialIcons name="location-on" size={16} color="#94a3b8" />
+                      <Text style={styles.eventAddress} numberOfLines={1}>
+                        {nextEvent.location}
+                      </Text>
+                    </View>
+                    <Pressable
+                      style={styles.navBtn}
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        // TODO: open maps navigation
+                      }}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel="נווט"
+                    >
+                      <MaterialIcons name="near-me" size={16} color="#8d6e63" />
+                      <Text style={styles.navBtnText}>נווט</Text>
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.trafficAlert}>
+                    <MaterialIcons name="traffic" size={20} color="#ff6b6b" />
+                    <Text style={styles.trafficText}>
+                      עומס כבד באיילון: מומלץ לצאת ב-08:15
                     </Text>
                   </View>
-                  <Pressable
-                    style={styles.navBtn}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="נווט"
-                  >
-                    <MaterialIcons name="near-me" size={16} color="#8d6e63" />
-                    <Text style={styles.navBtnText}>נווט</Text>
-                  </Pressable>
-                </View>
-                <View style={styles.trafficAlert}>
-                  <MaterialIcons name="traffic" size={20} color="#ff6b6b" />
-                  <Text style={styles.trafficText}>
-                    עומס כבד באיילון: מומלץ לצאת ב-08:15
-                  </Text>
                 </View>
               </View>
-            </View>
+            </Pressable>
           </View>
         )}
 
@@ -812,10 +858,41 @@ export default function HomeScreen() {
               <View style={{ paddingHorizontal: 24, marginBottom: 8 }}>
                 <Text style={styles.allDayLabel}>אירועים לכל היום</Text>
                 {allDayEvents.map((ev) => (
-                  <View key={ev.id} style={styles.allDayCard}>
+                  <Pressable
+                    key={ev.id}
+                    style={styles.allDayCard}
+                    onPress={() =>
+                      openEventSheet({
+                        id: ev.id,
+                        time: '00:00',
+                        title: ev.title,
+                        location: '',
+                        type: 'event',
+                        icon: 'event',
+                        iconBg: '#E8F5FD',
+                        iconColor: ev.iconColor,
+                        assigneeColor: ev.iconColor,
+                        completed: false,
+                        allDay: true,
+                        groupName: ev.groupName,
+                      })
+                    }
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel={ev.title}
+                  >
                     <View style={[styles.allDayAccent, { backgroundColor: ev.iconColor }]} />
-                    <Text style={styles.allDayTitle}>{ev.title}</Text>
-                  </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.allDayTitle}>{ev.title}</Text>
+                      {/* TODO: לחבר לנתוני קבוצה אמיתיים מ-Convex כשהסכמה מוכנה */}
+                      {ev.groupName ? (
+                        <View style={styles.groupRow}>
+                          <MaterialIcons name="group" size={12} color="#64748b" />
+                          <Text style={styles.groupText}>{ev.groupName}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </Pressable>
                 ))}
               </View>
             )}
@@ -843,6 +920,11 @@ export default function HomeScreen() {
                       {/* Time column */}
                       <View style={styles.timeColumn}>
                         <Text style={styles.timeText}>{item.time}</Text>
+                        {item.endTime && (
+                          <Text style={{ fontSize: 10, color: '#cbd5e1', textAlign: 'center', marginTop: 1 }}>
+                            {item.endTime}
+                          </Text>
+                        )}
                       </View>
 
                       {/* Card */}
@@ -864,22 +946,10 @@ export default function HomeScreen() {
                               }}
                             >
                               {item.type === 'task' && (
-                                <Pressable
-                                  onPress={(e) => {
-                                    e.stopPropagation?.();
-                                    toggleTask(item.id);
-                                  }}
-                                  style={[
-                                    styles.taskCheckbox,
-                                    item.completed
-                                      ? styles.taskCheckboxDone
-                                      : styles.taskCheckboxEmpty,
-                                  ]}
-                                >
-                                  {item.completed && (
-                                    <MaterialIcons name="check" size={14} color="white" />
-                                  )}
-                                </Pressable>
+                                <TaskCheckbox
+                                  checked={item.completed}
+                                  onToggle={() => toggleTask(item.id)}
+                                />
                               )}
                               <View style={{ flex: 1 }}>
                                 <View
@@ -898,11 +968,27 @@ export default function HomeScreen() {
                                   >
                                     {item.title}
                                   </Text>
-                                  {item.pending && (
-                                    <View style={styles.pendingBadge}>
-                                      <Text style={styles.pendingBadgeText}>
-                                        ממתין לאישור
-                                      </Text>
+                                  {item.pending && !pendingResponses[item.id] && (
+                                    <Pressable
+                                      onPress={(e) => {
+                                        e.stopPropagation?.();
+                                        setExpandedPendingId(prev => prev === item.id ? null : item.id);
+                                      }}
+                                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                                    >
+                                      <View style={styles.pendingBadge}>
+                                        <Text style={styles.pendingBadgeText}>ממתין לאישור</Text>
+                                      </View>
+                                    </Pressable>
+                                  )}
+                                  {item.pending && pendingResponses[item.id] === 'yes' && (
+                                    <View style={[styles.pendingBadge, { backgroundColor: '#dcfce7' }]}>
+                                      <Text style={[styles.pendingBadgeText, { color: '#166534' }]}>אישרת השתתפות</Text>
+                                    </View>
+                                  )}
+                                  {item.pending && pendingResponses[item.id] === 'maybe' && (
+                                    <View style={[styles.pendingBadge, { backgroundColor: '#fef9c3' }]}>
+                                      <Text style={[styles.pendingBadgeText, { color: '#854d0e' }]}>אולי</Text>
                                     </View>
                                   )}
                                   <View
@@ -913,9 +999,52 @@ export default function HomeScreen() {
                                   />
                                 </View>
                                 <Text style={styles.itemLocation}>{item.location}</Text>
+                                {/* TODO: לחבר לנתוני קבוצה אמיתיים מ-Convex כשהסכמה מוכנה */}
+                                {item.groupName ? (
+                                  <View style={styles.groupRow}>
+                                    <MaterialIcons name="group" size={12} color="#64748b" />
+                                    <Text style={styles.groupText}>{item.groupName}</Text>
+                                  </View>
+                                ) : null}
                               </View>
                             </View>
                           </View>
+                          {/* Inline pending response menu */}
+                          {expandedPendingId === item.id && (
+                            <View style={{ flexDirection: 'row-reverse', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                              {[
+                                { key: 'yes', label: 'כן', bg: '#dcfce7', color: '#166534' },
+                                { key: 'maybe', label: 'אולי', bg: '#fef9c3', color: '#854d0e' },
+                                { key: 'no', label: 'לא', bg: '#fee2e2', color: '#991b1b' },
+                              ].map(opt => (
+                                <Pressable
+                                  key={opt.key}
+                                  onPress={() => {
+                                    // TODO: לסנכרן אישור/דחייה ל-backend (Convex)
+                                    if (opt.key === 'no') {
+                                      setItems(prev => prev.filter(i => i.id !== item.id));
+                                    } else {
+                                      setPendingResponses(prev => ({ ...prev, [item.id]: opt.key as 'yes' | 'maybe' }));
+                                    }
+                                    setExpandedPendingId(null);
+                                  }}
+                                  style={{
+                                    backgroundColor: opt.bg,
+                                    borderRadius: 20,
+                                    paddingHorizontal: 16,
+                                    paddingVertical: 6,
+                                    borderWidth: 1,
+                                    borderColor: 'rgba(0,0,0,0.06)',
+                                  }}
+                                  accessible={true}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={opt.label}
+                                >
+                                  <Text style={{ color: opt.color, fontWeight: '700', fontSize: 14 }}>{opt.label}</Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                          )}
                         </Pressable>
                       </View>
                     </View>
@@ -931,48 +1060,43 @@ export default function HomeScreen() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>משימות ללא תאריך</Text>
             </View>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingRight: 24, paddingLeft: 8 }}
-            >
-              <View style={{ flexDirection: 'row-reverse', gap: 10 }}>
-                {undatedTasks.map((task) => (
-                  <Pressable
-                    key={task.id}
-                    style={styles.undatedCard}
-                    onPress={() => console.log('TODO: navigate to task edit', task.id)}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel={task.title}
+            <View style={{ paddingHorizontal: 24, gap: 8 }}>
+              {undatedTasks.slice(0, 3).map((task) => (
+                <Pressable
+                  key={task.id}
+                  style={styles.undatedRow}
+                  onPress={() => console.log('TODO: navigate to task edit', task.id)}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={task.title}
+                >
+                  <TaskCheckbox
+                    checked={task.completed}
+                    onToggle={() => toggleUndatedTask(task.id)}
+                  />
+                  <Text
+                    style={[styles.undatedTitle, task.completed && styles.completedText]}
+                    numberOfLines={1}
                   >
-                    <Pressable
-                      onPress={(e) => {
-                        e.stopPropagation?.();
-                        toggleUndatedTask(task.id);
-                      }}
-                      style={[
-                        styles.undatedCheckbox,
-                        task.completed && styles.undatedCheckboxDone,
-                      ]}
-                      accessible={true}
-                      accessibilityRole="checkbox"
-                      accessibilityLabel="סמן כהושלמה"
-                    >
-                      {task.completed && (
-                        <MaterialIcons name="check" size={12} color="white" />
-                      )}
-                    </Pressable>
-                    <Text
-                      style={[styles.undatedTitle, task.completed && styles.completedText]}
-                      numberOfLines={2}
-                    >
-                      {task.title}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </ScrollView>
+                    {task.title}
+                  </Text>
+                </Pressable>
+              ))}
+              {undatedTasks.length > 3 && (
+                <Pressable
+                  // TODO: לשפר מיון/סינון משימות ללא תאריך בעתיד
+                  onPress={() => router.push('/(authenticated)/tasks')}
+                  style={{ alignSelf: 'flex-end', marginTop: 4 }}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={`ראה הכל, ${undatedTasks.length} משימות`}
+                >
+                  <Text style={{ color: '#36a9e2', fontSize: 14, fontWeight: '700' }}>
+                    ראה הכל ({undatedTasks.length})
+                  </Text>
+                </Pressable>
+              )}
+            </View>
           </View>
         )}
 
@@ -1069,6 +1193,13 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* ── Event Detail Sheet ──────────────────────────────────────────────── */}
+      <EventDetailsBottomSheet
+        event={selectedEvent}
+        visible={isEventSheetVisible}
+        onClose={closeEventSheet}
+      />
     </SafeAreaView>
   );
 }
@@ -1536,17 +1667,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     marginBottom: 12,
   },
-  taskCheckbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
-    borderWidth: 2,
-    marginTop: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  taskCheckboxDone: { backgroundColor: '#36a9e2', borderColor: '#36a9e2' },
-  taskCheckboxEmpty: { borderColor: '#d1d5db' },
+  // taskCheckbox moved to components/TaskCheckbox.tsx
   taskTitle: {
     textDecorationLine: 'none',
     color: '#111517',
@@ -1569,6 +1690,18 @@ const styles = StyleSheet.create({
   },
   itemLocation: { color: '#94a3b8', fontSize: 13, textAlign: 'right', marginTop: 2 },
 
+  // ── Group name label ─────────────────────────────────────────────────────────
+  groupRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  groupText: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+
   // ── Pending badge ────────────────────────────────────────────────────────────
   pendingBadge: {
     backgroundColor: '#fff3cd',
@@ -1583,34 +1716,18 @@ const styles = StyleSheet.create({
   },
 
   // ── Undated tasks ────────────────────────────────────────────────────────────
-  undatedCard: {
+  undatedRow: {
     backgroundColor: '#fff',
     borderRadius: 14,
-    padding: 12,
-    width: 120,
-    gap: 8,
+    padding: 14,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 1,
-    flexDirection: 'row-reverse',
-    alignItems: 'flex-start',
-  },
-  undatedCheckbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
-    flexShrink: 0,
-  },
-  undatedCheckboxDone: {
-    backgroundColor: '#36a9e2',
-    borderColor: '#36a9e2',
   },
   undatedTitle: {
     fontSize: 13,

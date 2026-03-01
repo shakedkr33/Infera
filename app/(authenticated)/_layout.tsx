@@ -198,13 +198,33 @@ export default function AuthenticatedLayout() {
             tabBarLabelStyle: { display: 'none' }, // labels rendered inside our custom buttons
           }}
         >
-          {/* ── Visible tabs (left → right) ── */}
+          {/* ── Visible tabs (left → right): בית | יומן | + | משימות | קבוצות ── */}
           <Tabs.Screen
             name="index"
             options={{
               tabBarButton: (props) => (
                 <RegularTabButton {...(props as unknown as TabBtnProps)} iconName="home" label="בית" />
               ),
+            }}
+          />
+          <Tabs.Screen
+            name="calendar"
+            options={{
+              tabBarButton: (props) => (
+                <RegularTabButton
+                  {...(props as unknown as TabBtnProps)}
+                  iconName="calendar-month"
+                  label="יומן"
+                />
+              ),
+            }}
+          />
+          {/* Central Plus */}
+          <Tabs.Screen
+            name="plus"
+            options={{
+              title: '',
+              tabBarButton: () => <PlusCenterButton />,
             }}
           />
           <Tabs.Screen
@@ -217,14 +237,6 @@ export default function AuthenticatedLayout() {
                   label="משימות"
                 />
               ),
-            }}
-          />
-          {/* Central Plus */}
-          <Tabs.Screen
-            name="plus"
-            options={{
-              title: '',
-              tabBarButton: () => <PlusCenterButton />,
             }}
           />
           <Tabs.Screen
@@ -240,7 +252,6 @@ export default function AuthenticatedLayout() {
 
           {/* ── Hidden screens ── */}
           <Tabs.Screen name="settings" options={{ href: null }} />
-          <Tabs.Screen name="calendar" options={{ href: null }} />
           <Tabs.Screen name="birthdays" options={{ href: null }} />
           <Tabs.Screen name="event/new" options={{ href: null }} />
           <Tabs.Screen name="event/[id]" options={{ href: null }} />
@@ -272,24 +283,24 @@ const styles = StyleSheet.create({
   activeTabPill: {
     backgroundColor: 'rgba(54,169,226,0.12)',
     borderRadius: 20,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 6,
+    flexDirection: 'row',
     alignItems: 'center',
-    minWidth: 56,
+    gap: 4,
   },
   inactiveTabItem: {
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
-    minWidth: 56,
+    gap: 2,
   },
   tabLabel: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
     color: '#94a3b8',
-    marginTop: 2,
   },
-  tabLabelActive: { color: '#36a9e2' },
+  tabLabelActive: { color: '#36a9e2', fontWeight: '700' },
 
   // Central plus button — raised circle
   plusBtn: {
