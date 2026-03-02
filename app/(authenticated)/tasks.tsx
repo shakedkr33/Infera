@@ -1,6 +1,8 @@
+import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -10,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useMutation, useQuery } from 'convex/react';
 
 const PRIMARY_BLUE = '#36a9e2';
 
@@ -27,48 +30,56 @@ type Task = {
   }[];
 };
 
+/* MOCK_TASKS – הוסר, נתונים מגיעים מ-Convex:
 const MOCK_TASKS: Task[] = [
-  {
-    id: '1',
-    title: 'לקבוע תור לרופא ילדים',
-    category: 'אישי',
-    isUrgent: true,
-    isOverdue: true,
-    completed: false,
-  },
-  {
-    id: '2',
-    title: 'קניית מצרכים לשבת',
-    category: 'אישי',
-    completed: false,
-    subtasks: [
-      { id: '2-1', title: 'לחם', completed: true },
-      { id: '2-2', title: 'חלב', completed: true },
-      { id: '2-3', title: 'ביצים', completed: false },
-      { id: '2-4', title: 'פירות', completed: false },
-      { id: '2-5', title: 'ירקות', completed: false },
-    ],
-  },
-  {
-    id: '3',
-    title: 'סידור הבית לאורחים',
-    category: 'אישי',
-    completed: true,
-  },
-  {
-    id: '4',
-    title: 'שליחת דוח חודשי',
-    category: 'עבודה',
-    completed: true,
-  },
+  { id: '1', title: 'לקבוע תור לרופא ילדים', category: 'אישי', isUrgent: true, isOverdue: true, completed: false },
+  { id: '2', title: 'קניית מצרכים לשבת', category: 'אישי', completed: false, subtasks: [...] },
+  { id: '3', title: 'סידור הבית לאורחים', category: 'אישי', completed: true },
+  { id: '4', title: 'שליחת דוח חודשי', category: 'עבודה', completed: true },
 ];
+*/
 
 export default function TasksScreen() {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('הכל');
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
-  const [tasks, setTasks] = useState(MOCK_TASKS);
+
+  // ── Convex: spaceId ──────────────────────────────────────────────────────
+  // TODO: כאשר defaultSpaceId ייאכלס ב-onboarding, לעבור לשליפה ישירה מ-user.defaultSpaceId
+  const mySpace = useQuery(api.users.getMySpace);
+  const spaceId = mySpace?._id;
+
+  // ── Convex: tasks queries ────────────────────────────────────────────────
+  const convexTasks = useQuery(
+    api.tasks.listBySpace,
+    spaceId ? { spaceId } : 'skip'
+  );
+  const convexUndated = useQuery(
+    api.tasks.listUndated,
+    spaceId ? { spaceId } : 'skip'
+  );
+
+  // ממיר נתוני Convex לפורמט Task המקומי
+  const allConvexTasks: Task[] = useMemo(() => {
+    const dated = (convexTasks ?? []).map((t) => ({
+      id: t._id,
+      title: t.title,
+      category: t.category ?? 'אישי', // TODO: להוסיף category לסכמה
+      completed: t.completed,
+    }));
+    const undated = (convexUndated ?? []).map((t) => ({
+      id: t._id,
+      title: t.title,
+      category: t.category ?? 'אישי',
+      completed: t.completed,
+    }));
+    return [...dated, ...undated];
+  }, [convexTasks, convexUndated]);
+
+  // ── Convex: mutations ────────────────────────────────────────────────────
+  const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
+  const removeTaskMutation = useMutation(api.tasks.remove);
 
   const filters = ['הכל', 'אישי', 'אירועים'];
 
@@ -84,42 +95,38 @@ export default function TasksScreen() {
     });
   };
 
-  const toggleSubtask = (taskId: string, subtaskId: string) => {
-    setTasks((prevTasks) =>
-      prevTasks.map((task) => {
-        if (task.id === taskId && task.subtasks) {
-          return {
-            ...task,
-            subtasks: task.subtasks.map((subtask) =>
-              subtask.id === subtaskId
-                ? { ...subtask, completed: !subtask.completed }
-                : subtask
-            ),
-          };
-        }
-        return task;
-      })
-    );
+  // subtasks הם local-only עד שנוסיף subtasks לסכמת Convex
+  // TODO: לחבר subtask toggle ל-Convex כשנוסיף שדה subtasks לטבלת tasks
+  const toggleSubtask = (_taskId: string, _subtaskId: string) => {
+    // TODO: לממש עם mutation כשיהיו subtasks ב-Convex
+    console.log('toggleSubtask: not yet connected to Convex');
   };
 
-  const toggleTaskCompletion = (taskId: string) => {
-    setTasks((prevTasks) =>
-      prevTasks.map((task) =>
-        task.id === taskId ? { ...task, completed: !task.completed } : task
-      )
-    );
+  const toggleTaskCompletion = async (taskId: string) => {
+    try {
+      await toggleCompletedMutation({ id: taskId as Id<'tasks'> });
+    } catch (e) {
+      console.error('toggleTaskCompletion error:', e);
+      // TODO: להוסיף optimistic UI בעתיד
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      await removeTaskMutation({ id: taskId as Id<'tasks'> });
+    } catch (e) {
+      console.error('handleDeleteTask error:', e);
+    }
   };
 
   // ===== לוגיקת סינון משולבת (פילטר + חיפוש) =====
-  const filteredTasks = tasks.filter((task) => {
-    // בודק אם הקטגוריה מתאימה לפילטר הנבחר
+  const filteredTasks = allConvexTasks.filter((task) => {
+    // TODO: לסנן גם לפי category אמיתי מ-Convex
     const matchesFilter =
       activeFilter === 'הכל' || task.category === activeFilter;
-    // בודק אם הטקסט בחיפוש מופיע בשם המשימה
     const matchesSearch = task.title
       .toLowerCase()
       .includes(searchQuery.toLowerCase());
-
     return matchesFilter && matchesSearch;
   });
 

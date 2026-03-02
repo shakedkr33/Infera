@@ -1,6 +1,9 @@
+import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
+import type { TaskDraft } from '@/lib/types/task';
 import { MaterialIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -11,7 +14,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { TaskDraft } from '@/lib/types/task';
+import { useMutation, useQuery } from 'convex/react';
 import { AssigneesChips } from './AssigneesChips';
 import { ReminderChips } from './ReminderChips';
 import { RepeatSection } from './RepeatSection';
@@ -53,11 +56,43 @@ export default function TaskEditorScreen({
   taskId: _taskId,
 }: TaskEditorProps): React.JSX.Element {
   const isCreate = mode === 'create';
-  // TODO: replace EMPTY_DRAFT with Convex query using _taskId for edit mode
+
   const [draft, setDraft] = useState<TaskDraft>(EMPTY_DRAFT);
   const [titleError, setTitleError] = useState(false);
   const [linkedEvent, setLinkedEvent] = useState('none');
   const [eventPickerOpen, setEventPickerOpen] = useState(false);
+
+  // ── Convex: spaceId ─────────────────────────────────────────────────────
+  // TODO: כאשר defaultSpaceId ייאכלס ב-onboarding, לעבור לשליפה ישירה
+  const mySpace = useQuery(api.users.getMySpace);
+  const spaceId = mySpace?._id;
+
+  // ── Convex: edit mode – load existing task ───────────────────────────────
+  const existingTask = useQuery(
+    api.tasks.getById,
+    !isCreate && _taskId ? { id: _taskId as Id<'tasks'> } : 'skip'
+  );
+
+  useEffect(() => {
+    if (existingTask) {
+      // ממלא את הטופס בנתוני המשימה הקיימת
+      const hasDueDate = existingTask.dueDate != null;
+      const dueDate = existingTask.dueDate ? new Date(existingTask.dueDate) : null;
+      setDraft((prev) => ({
+        ...prev,
+        title: existingTask.title,
+        notes: existingTask.description ?? '',
+        dateOption: hasDueDate ? 'today' : 'none', // TODO: להבחין בין היום לתאריך אחר
+        selectedTime: dueDate
+          ? dueDate.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
+          : '09:00',
+      }));
+    }
+  }, [existingTask]);
+
+  // ── Convex: mutations ────────────────────────────────────────────────────
+  const createTaskMutation = useMutation(api.tasks.create);
+  const updateTaskMutation = useMutation(api.tasks.update);
 
   const update = (updates: Partial<TaskDraft>): void => {
     setDraft((prev) => {
@@ -67,13 +102,56 @@ export default function TaskEditorScreen({
     });
   };
 
-  const handleSave = (): void => {
+  // ממיר dateOption + selectedTime ל-Unix timestamp (ms)
+  const resolveDueDate = (): number | undefined => {
+    if (draft.dateOption === 'none') return undefined;
+    const base = new Date(); // TODO: לתמוך ב-dateOption === 'other' עם date picker
+    const timeParts = (draft.selectedTime ?? '09:00').split(':');
+    const hours = Number(timeParts[0] ?? '9');
+    const minutes = Number(timeParts[1] ?? '0');
+    base.setHours(hours, minutes, 0, 0);
+    return base.getTime();
+  };
+
+  const handleSave = async (): Promise<void> => {
     if (!draft.title.trim()) {
       setTitleError(true);
       return;
     }
-    // TODO: Convex mutation
-    router.back();
+
+    if (isCreate) {
+      if (!spaceId) {
+        Alert.alert('שגיאה', 'לא ניתן לאתר את המרחב שלך. נסה שוב מאוחר יותר.');
+        return;
+      }
+      try {
+        await createTaskMutation({
+          title: draft.title.trim(),
+          description: draft.notes || undefined,
+          dueDate: resolveDueDate(),
+          spaceId,
+          // TODO: להוסיף assignedTo מ-AssigneesChips כשיחובר ל-Convex
+        });
+        router.back();
+      } catch (e) {
+        console.error('createTask error:', e);
+        Alert.alert('שגיאה', 'לא ניתן היה לשמור את המשימה.');
+      }
+    } else {
+      if (!_taskId) return;
+      try {
+        await updateTaskMutation({
+          id: _taskId as Id<'tasks'>,
+          title: draft.title.trim(),
+          description: draft.notes || undefined,
+          dueDate: resolveDueDate(),
+        });
+        router.back();
+      } catch (e) {
+        console.error('updateTask error:', e);
+        Alert.alert('שגיאה', 'לא ניתן היה לעדכן את המשימה.');
+      }
+    }
   };
 
   const handleBack = (): void => {

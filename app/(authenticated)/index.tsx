@@ -9,11 +9,14 @@ import { useNotifications } from '@/contexts/NotificationsContext';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { getCountdownLabel } from '@/lib/utils/birthday';
+import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery } from 'convex/react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
@@ -96,6 +99,14 @@ type UndatedTask = {
 export default function HomeScreen() {
   const router = useRouter();
   const { openBirthdayCard, birthdays: contextBirthdays } = useBirthdaySheets();
+
+  // ── Convex: spaceId ────────────────────────────────────────────────────────
+  // TODO: כאשר defaultSpaceId ייאכלס ב-onboarding, לעבור לשליפה ישירה מ-user.defaultSpaceId
+  const mySpace = useQuery(api.users.getMySpace);
+  const spaceId = mySpace?._id;
+
+  // ── Convex: tasks mutations ────────────────────────────────────────────────
+  const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
   const [showToast, setShowToast] = useState(true);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -224,23 +235,73 @@ const [devClearBirthdays, setDevClearBirthdays] = useState(false);
     { id: 'ad1', title: 'חג ראש חודש', iconColor: '#36a9e2', groupName: 'משפחה' },
   ];
 
-  // ── Undated tasks ──────────────────────────────────────────────────────────
+  // ── Convex: dated tasks ────────────────────────────────────────────────────
+  // TODO: לאחד עם events מ-Convex כשיחובר (api.events.listByDateRange)
+  const convexTasks = useQuery(
+    api.tasks.listBySpace,
+    spaceId ? { spaceId } : 'skip'
+  );
+
+  const todayTasks: Item[] = useMemo(() => (convexTasks ?? [])
+    .filter((t) => t.dueDate != null && isSameDay(new Date(t.dueDate), selectedDate))
+    .map((t) => ({
+      id: t._id,
+      time: t.dueDate
+        ? new Date(t.dueDate).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
+        : '',
+      title: t.title,
+      location: '',
+      type: 'task' as const,
+      icon: 'check-box',
+      iconBg: '#E7F5FF',
+      iconColor: '#228BE6',
+      assigneeColor: '#E7F5FF',
+      completed: t.completed,
+      // TODO: להוסיף category, assignedTo, notes כשהסכמה תורחב
+    })), [convexTasks, selectedDate]);
+
+  // allItems = Convex tasks (today) + mock event items
+  // TODO: להחליף את items לחלוטין ב-events מ-Convex כשיחובר
+  const allItems = useMemo(
+    () => [...todayTasks, ...items],
+    [todayTasks, items]
+  );
+
+  // ── Convex: undated tasks ──────────────────────────────────────────────────
+  const convexUndatedTasks = useQuery(
+    api.tasks.listUndated,
+    spaceId ? { spaceId } : 'skip'
+  );
+  // mock fallback כל עוד אין נתונים בדאטהבייס
+  /* MOCK (הוסר):
   const [undatedTasks, setUndatedTasks] = useState<UndatedTask[]>([
     { id: 'u1', title: 'לקרוא ספר', completed: false },
     { id: 'u2', title: 'לצלם תמונות', completed: false },
     { id: 'u3', title: 'לסדר ארון הבגדים', completed: false },
   ]);
+  */
+  const undatedTasks: UndatedTask[] = useMemo(
+    () => (convexUndatedTasks ?? []).map((t) => ({
+      id: t._id,
+      title: t.title,
+      completed: t.completed,
+    })),
+    [convexUndatedTasks]
+  );
 
-  const toggleUndatedTask = (id: string) => {
-    setUndatedTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t))
-    );
+  const toggleUndatedTask = async (id: string) => {
+    try {
+      await toggleCompletedMutation({ id: id as Id<'tasks'> });
+    } catch (e) {
+      console.error('toggleUndatedTask error:', e);
+      // TODO: להוסיף optimistic UI בעתיד
+    }
   };
 
   // ── Empty states ───────────────────────────────────────────────────────────
-  const hasEventsOrTasks = items.length > 0 || undatedTasks.length > 0;
+  const hasEventsOrTasks = allItems.length > 0 || undatedTasks.length > 0;
   const hasBirthdays = devClearBirthdays ? false : contextBirthdays.length > 0;
-  const hasDayData = items.filter((i) => !i.allDay).length > 0;
+  const hasDayData = allItems.filter((i) => !i.allDay).length > 0;
 
   const shouldShowEventsEmptyState = !hasEventsOrTasks;
   const shouldShowBirthdaysEmptyState = !hasBirthdays;
@@ -248,25 +309,36 @@ const [devClearBirthdays, setDevClearBirthdays] = useState(false);
   // TODO: בעתיד לחבר לסטטוס אמיתי של משתמש חדש מ-Convex
 
   // TODO: להוסיף בעתיד מסך/התראות לאירועים שנדחו כדי לאפשר חרטה
-  const visibleItems = items.filter(i => i.rsvpStatus !== 'no');
+  const visibleItems = allItems.filter((i) => i.rsvpStatus !== 'no');
 
   // ── Insight card ───────────────────────────────────────────────────────────
   const showInsightCard = hasEventsOrTasks && dismissedInsightDate !== todayISO;
   // TODO: להחליף ללוגיקת AI בעתיד
   const insightText =
-    items.length > 3
+    allItems.length > 3
       ? 'יש לך יום עמוס היום, שווה לשקול להזיז משימה אחת למחר.'
       : 'היום שלך נראה רגוע, אולי זה זמן טוב להשלים משהו קטן מהמשימות הפתוחות.';
 
   const dismissInsight = () => setDismissedInsightDate(todayISO);
 
   // ── Task handlers ──────────────────────────────────────────────────────────
-  const toggleTask = (id: string) => {
-    setItems((prev) =>
-      prev.map((item) =>
-        item.id === id ? { ...item, completed: !item.completed } : item
-      )
-    );
+  const toggleTask = async (id: string) => {
+    const isConvexTask = todayTasks.some((t) => t.id === id);
+    if (isConvexTask) {
+      try {
+        await toggleCompletedMutation({ id: id as Id<'tasks'> });
+      } catch (e) {
+        console.error('toggleTask error:', e);
+        // TODO: להוסיף optimistic UI בעתיד
+      }
+    } else {
+      // mock event – local state בלבד (עד שאירועים יחוברו ל-Convex)
+      setItems((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, completed: !item.completed } : item
+        )
+      );
+    }
   };
 
   const handleDeleteFromSources = (item: Item) => {
@@ -303,13 +375,13 @@ const [devClearBirthdays, setDevClearBirthdays] = useState(false);
   // ── Mood helpers ───────────────────────────────────────────────────────────
   // TODO: להחליף ללוגיקת AI בעתיד (לחבר רגש + תובנה)
   const shouldShowMoodPrompt = useCallback((): boolean => {
-    const lastHour = items.reduce((max, item) => {
+    const lastHour = allItems.reduce((max, item) => {
       const h = parseInt(item.time.split(':')[0], 10);
-      return h > max ? h : max;
+      return Number.isNaN(h) ? max : h > max ? h : max;
     }, 0);
     const moodStartHour = Math.max(19, lastHour);
     return new Date().getHours() >= moodStartHour;
-  }, [items]);
+  }, [allItems]);
 
   // Load last-used navigation app from storage
   useEffect(() => {
@@ -600,7 +672,7 @@ const [devClearBirthdays, setDevClearBirthdays] = useState(false);
   );
 
   // ── Derived ────────────────────────────────────────────────────────────────
-  const nextEvent = items.find((i) => !i.allDay && !i.completed);
+  const nextEvent = allItems.find((i) => !i.allDay && !i.completed);
   const selectedMoodData = MOODS.find((m) => m.value === selectedMood);
 
   const handleMoodCardPress = () => {
@@ -775,7 +847,7 @@ const [devClearBirthdays, setDevClearBirthdays] = useState(false);
 
         {hasEventsOrTasks && (
           <Text style={styles.subtitleCount}>
-            יש לך {items.filter((i) => !i.allDay).length + 1} פעילויות היום
+            יש לך {allItems.filter((i) => !i.allDay).length + 1} פעילויות היום
           </Text>
         )}
 
@@ -1560,12 +1632,13 @@ const [devClearBirthdays, setDevClearBirthdays] = useState(false);
   <Pressable
     onPress={() => {
       if (devClearBirthdays) {
+        // TODO: כשאירועים יחוברו ל-Convex – לשחזר נתוני mock כאן
         setItems([/* הנתונים המקוריים שלך */]);
-        setUndatedTasks([/* הנתונים המקוריים שלך */]);
         setDevClearBirthdays(false);
       } else {
+        // undatedTasks מגיע מ-Convex – לא ניתן לנקות locally
+        // TODO: להוסיף dev toggle לנקות נתוני Convex
         setItems([]);
-        setUndatedTasks([]);
         setDevClearBirthdays(true);
       }
     }}

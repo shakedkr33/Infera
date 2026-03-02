@@ -146,6 +146,31 @@ export const remove = mutation({
   },
 });
 
+// שליפת ה-Space הראשי של המשתמש הנוכחי (דרך טבלת members)
+// מחזיר null אם אין space או אם המשתמש לא מחובר
+export const getMySpace = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+
+    const user = await ctx.db
+      .query('users')
+      .withIndex('by_email', (q) => q.eq('email', identity.email ?? ''))
+      .unique();
+    if (!user) return null;
+
+    // TODO: כאשר יהיה defaultSpaceId – להחזיר אותו ישירות מ-user.defaultSpaceId
+    const membership = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', user._id))
+      .first();
+    if (!membership) return null;
+
+    return await ctx.db.get(membership.spaceId);
+  },
+});
+
 // מחיקת חשבון המשתמש הנוכחי וכל הנתונים המשויכים אליו
 // ⚠️ אזהרה: פעולה זו בלתי הפיכה ותמחק את כל הנתונים לצמיתות!
 export const deleteMyAccount = mutation({

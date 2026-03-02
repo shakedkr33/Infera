@@ -9,8 +9,13 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as birthdays from "../birthdays.js";
+import type * as dailyMoods from "../dailyMoods.js";
+import type * as eventRsvps from "../eventRsvps.js";
+import type * as events from "../events.js";
 import type * as http from "../http.js";
 import type * as onboarding from "../onboarding.js";
+import type * as tasks from "../tasks.js";
 import type * as users from "../users.js";
 
 import type {
@@ -21,8 +26,13 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  birthdays: typeof birthdays;
+  dailyMoods: typeof dailyMoods;
+  eventRsvps: typeof eventRsvps;
+  events: typeof events;
   http: typeof http;
   onboarding: typeof onboarding;
+  tasks: typeof tasks;
   users: typeof users;
 }>;
 
@@ -38,18 +48,7 @@ export declare const api: FilterApi<
   typeof fullApi,
   FunctionReference<any, "public">
 >;
-
-/**
- * A utility for referencing Convex functions in your app's internal API.
- *
- * Usage:
- * ```js
- * const myFunctionReference = internal.myModule.myFunction;
- * ```
- */
 export declare const internal: FilterApi<
   typeof fullApi,
   FunctionReference<any, "internal">
 >;
-
-export declare const components: {};
