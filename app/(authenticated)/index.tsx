@@ -101,6 +101,7 @@ export default function HomeScreen() {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedMood, setSelectedMood] = useState<number | null>(null);
   const [calendarMode, setCalendarMode] = useState<'carousel' | 'month'>('carousel');
+const [devClearBirthdays, setDevClearBirthdays] = useState(false);
 
   // ── Mood popup state ───────────────────────────────────────────────────────
   const [hasSeenMoodPopupToday, setHasSeenMoodPopupToday] = useState(false);
@@ -237,14 +238,20 @@ export default function HomeScreen() {
   };
 
   // ── Empty states ───────────────────────────────────────────────────────────
-  const hasAnyData = items.length > 0 || undatedTasks.length > 0;
+  const hasEventsOrTasks = items.length > 0 || undatedTasks.length > 0;
+  const hasBirthdays = devClearBirthdays ? false : contextBirthdays.length > 0;
   const hasDayData = items.filter((i) => !i.allDay).length > 0;
+
+  const shouldShowEventsEmptyState = !hasEventsOrTasks;
+  const shouldShowBirthdaysEmptyState = !hasBirthdays;
+  const canShowMoodFeatures = hasEventsOrTasks;
+  // TODO: בעתיד לחבר לסטטוס אמיתי של משתמש חדש מ-Convex
 
   // TODO: להוסיף בעתיד מסך/התראות לאירועים שנדחו כדי לאפשר חרטה
   const visibleItems = items.filter(i => i.rsvpStatus !== 'no');
 
   // ── Insight card ───────────────────────────────────────────────────────────
-  const showInsightCard = hasAnyData && dismissedInsightDate !== todayISO;
+  const showInsightCard = hasEventsOrTasks && dismissedInsightDate !== todayISO;
   // TODO: להחליף ללוגיקת AI בעתיד
   const insightText =
     items.length > 3
@@ -321,6 +328,7 @@ export default function HomeScreen() {
 
   // Check every minute whether to show the mood popup
   useEffect(() => {
+    if (!canShowMoodFeatures) return; // לא להציג למשתמש ללא אירועים
     const check = () => {
       if (shouldShowMoodPrompt() && selectedMood === null && !hasSeenMoodPopupToday) {
         setTempMoodSelection(null);
@@ -330,7 +338,7 @@ export default function HomeScreen() {
     check();
     const interval = setInterval(check, 60_000);
     return () => clearInterval(interval);
-  }, [shouldShowMoodPrompt, selectedMood, hasSeenMoodPopupToday]);
+  }, [canShowMoodFeatures, shouldShowMoodPrompt, selectedMood, hasSeenMoodPopupToday]);
 
   // Scroll main mood wheel to initial position after mount
   useEffect(() => {
@@ -765,14 +773,14 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {hasAnyData && (
+        {hasEventsOrTasks && (
           <Text style={styles.subtitleCount}>
             יש לך {items.filter((i) => !i.allDay).length + 1} פעילויות היום
           </Text>
         )}
 
-        {/* ── Empty state — new user (no data at all) ──────────────────────── */}
-        {!hasAnyData && (
+        {/* ── Empty state — no events or tasks ─────────────────────────────── */}
+        {shouldShowEventsEmptyState && (
           <View style={styles.emptyStateContainer}>
             <View style={styles.emptyStateIconWrap}>
               <MaterialIcons name="calendar-today" size={36} color="#36a9e2" />
@@ -795,6 +803,7 @@ export default function HomeScreen() {
               </Text>
             </Pressable>
             <Pressable
+              onPress={() => { /* TODO: פתח flow יצירת אירוע */ }}
               accessible={true}
               accessibilityRole="button"
               accessibilityLabel="הוספת אירוע ראשון"
@@ -809,7 +818,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Upcoming event card (only if next event exists) ───────────────── */}
-        {hasAnyData && nextEvent && (
+        {hasEventsOrTasks && nextEvent && (
           <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
             {/* Tapping anywhere on the card opens the detail sheet */}
             <Pressable
@@ -870,7 +879,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Empty day state (data exists but not today) ──────────────────── */}
-        {hasAnyData && !hasDayData && (
+        {hasEventsOrTasks && !hasDayData && (
           <View style={styles.emptyDayContainer}>
             <MaterialIcons name="calendar-today" size={28} color="#d1d5db" />
             <Text style={styles.emptyDayTitle}>היום פנוי 🎉</Text>
@@ -887,36 +896,69 @@ export default function HomeScreen() {
         <View style={{ marginBottom: 32 }}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>🎂 ימי הולדת קרובים</Text>
-            <Pressable onPress={() => router.push('/birthdays')}>
-              <Text style={styles.seeAll}>ראה הכל</Text>
-            </Pressable>
+            {!shouldShowBirthdaysEmptyState && (
+              <Pressable onPress={() => router.push('/birthdays')}>
+                <Text style={styles.seeAll}>ראה הכל</Text>
+              </Pressable>
+            )}
           </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingRight: 24, paddingLeft: 8 }}
-          >
-            <View style={{ flexDirection: 'row-reverse', gap: 12 }}>
-              {contextBirthdays.map((b, idx) => (
-                <Pressable
-                  key={b.id}
-                  onPress={() => openBirthdayCard(b)}
-                  style={styles.birthdayCard}
-                >
-                  <View
-                    style={[
-                      styles.birthdayAvatar,
-                      { backgroundColor: AVATAR_COLORS[idx % AVATAR_COLORS.length] },
-                    ]}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.birthdayCountdown}>{getCountdownLabel(b)}:</Text>
-                    <Text style={styles.birthdayName}>{b.name}</Text>
-                  </View>
-                </Pressable>
-              ))}
+
+          {shouldShowBirthdaysEmptyState ? (
+            <View style={{
+              marginHorizontal: 24,
+              backgroundColor: '#fff',
+              borderRadius: 16,
+              padding: 20,
+              alignItems: 'center',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.04,
+              shadowRadius: 4,
+              elevation: 1,
+            }}>
+              <MaterialIcons name="cake" size={28} color="#d1d5db" style={{ marginBottom: 8 }} />
+              <Text style={{ fontSize: 14, color: '#6b7280', textAlign: 'center', marginBottom: 12 }}>
+                עוד לא הוספת ימי הולדת.
+              </Text>
+              <Pressable
+                onPress={() => { /* TODO: פתח flow הוספת יום הולדת */ }}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="הוספת יום הולדת ראשון"
+              >
+                <Text style={{ color: '#36a9e2', fontSize: 14, fontWeight: '700' }}>
+                  + הוספת יום הולדת ראשון
+                </Text>
+              </Pressable>
             </View>
-          </ScrollView>
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingRight: 24, paddingLeft: 8 }}
+            >
+              <View style={{ flexDirection: 'row-reverse', gap: 12 }}>
+                {contextBirthdays.map((b, idx) => (
+                  <Pressable
+                    key={b.id}
+                    onPress={() => openBirthdayCard(b)}
+                    style={styles.birthdayCard}
+                  >
+                    <View
+                      style={[
+                        styles.birthdayAvatar,
+                        { backgroundColor: AVATAR_COLORS[idx % AVATAR_COLORS.length] },
+                      ]}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.birthdayCountdown}>{getCountdownLabel(b)}:</Text>
+                      <Text style={styles.birthdayName}>{b.name}</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            </ScrollView>
+          )}
         </View>
 
         {/* ── Timeline ───────────────────────────────────────────────────────── */}
@@ -1309,33 +1351,35 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* ── Mood section ───────────────────────────────────────────────────── */}
-        <View style={{ paddingHorizontal: 24, marginTop: 8, marginBottom: 32 }}>
-          <Text style={styles.moodTitle}>איך הרגיש היום שלך?</Text>
+        {/* ── Mood section — shown only when user has events/tasks ──────────── */}
+        {canShowMoodFeatures && (
+          <View style={{ paddingHorizontal: 24, marginTop: 8, marginBottom: 32 }}>
+            <Text style={styles.moodTitle}>איך הרגיש היום שלך?</Text>
 
-          {selectedMood !== null && selectedMoodData ? (
-            // Compact card after mood is selected
-            // TODO: להחליף ללוגיקת AI בעתיד (לחבר רגש + תובנה יומית)
-            <Pressable
-              onPress={handleMoodCardPress}
-              style={styles.moodCompactCard}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel={`הרגש שנבחר: ${selectedMoodData.label}`}
-            >
-              <MoodIcon value={selectedMoodData.value} size={40} active={true} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.moodCompactLabel}>{selectedMoodData.label}</Text>
-                <Text style={styles.moodCompactPhrase}>{selectedMoodData.shortText}</Text>
-              </View>
-              {lastMoodDate === todayISO && (
-                <MaterialIcons name="edit" size={16} color="#94a3b8" />
-              )}
-            </Pressable>
-          ) : (
-            renderMoodWheel(moodScrollRef, moodWheelPad, handleBottomScrollEnd)
-          )}
-        </View>
+            {selectedMood !== null && selectedMoodData ? (
+              // Compact card after mood is selected
+              // TODO: להחליף ללוגיקת AI בעתיד (לחבר רגש + תובנה יומית)
+              <Pressable
+                onPress={handleMoodCardPress}
+                style={styles.moodCompactCard}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel={`הרגש שנבחר: ${selectedMoodData.label}`}
+              >
+                <MoodIcon value={selectedMoodData.value} size={40} active={true} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.moodCompactLabel}>{selectedMoodData.label}</Text>
+                  <Text style={styles.moodCompactPhrase}>{selectedMoodData.shortText}</Text>
+                </View>
+                {lastMoodDate === todayISO && (
+                  <MaterialIcons name="edit" size={16} color="#94a3b8" />
+                )}
+              </Pressable>
+            ) : (
+              renderMoodWheel(moodScrollRef, moodWheelPad, handleBottomScrollEnd)
+            )}
+          </View>
+        )}
       </ScrollView>
 
       {/* ── Welcome toast ──────────────────────────────────────────────────── */}
@@ -1514,10 +1558,20 @@ export default function HomeScreen() {
       </Modal>
       {__DEV__ && (
   <Pressable
-    onPress={() => { setItems([]); setUndatedTasks([]); }}
+    onPress={() => {
+      if (devClearBirthdays) {
+        setItems([/* הנתונים המקוריים שלך */]);
+        setUndatedTasks([/* הנתונים המקוריים שלך */]);
+        setDevClearBirthdays(false);
+      } else {
+        setItems([]);
+        setUndatedTasks([]);
+        setDevClearBirthdays(true);
+      }
+    }}
     style={{ position: 'absolute', top: 60, left: 10, backgroundColor: '#ff000033', padding: 6, borderRadius: 8 }}
   >
-    <Text style={{ fontSize: 10 }}>🧪 ריק</Text>
+    <Text style={{ fontSize: 10 }}>{devClearBirthdays ? '↩️ שחזר' : '🧪 ריק'}</Text>
   </Pressable>
 )}
     </SafeAreaView>
