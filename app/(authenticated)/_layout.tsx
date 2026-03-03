@@ -169,7 +169,7 @@ export default function AuthenticatedLayout() {
     );
   }
 
-  if (!isAuthenticated && !__DEV__) {
+  if (!isAuthenticated) {
     return <Redirect href="/(auth)/sign-in" />;
   }
 
@@ -198,7 +198,7 @@ export default function AuthenticatedLayout() {
             tabBarLabelStyle: { display: 'none' }, // labels rendered inside our custom buttons
           }}
         >
-          {/* ── Visible tabs (left → right): בית | יומן | + | משימות | קבוצות ── */}
+          {/* ── Visible tabs (left → right): בית | יומן | + | משימות | קהילות ── */}
           <Tabs.Screen
             name="index"
             options={{
@@ -239,15 +239,20 @@ export default function AuthenticatedLayout() {
               ),
             }}
           />
-          {/* TODO: לוודא שגם backend/סכמות משתמשות באותו מונח אם יתאים בעתיד */}
           <Tabs.Screen
-            name="groups"
+            name="communities"
             options={{
               tabBarButton: (props) => (
-                <RegularTabButton {...(props as unknown as TabBtnProps)} iconName="group" label="קהילות" />
+                <RegularTabButton
+                  {...(props as unknown as TabBtnProps)}
+                  iconName="people"
+                  label="קהילות"
+                />
               ),
             }}
           />
+          {/* groups מחליף ל-communities – מוסתר */}
+          <Tabs.Screen name="groups" options={{ href: null }} />
           {/* Profile is accessible via avatar press / navigation, not from tab bar */}
           <Tabs.Screen name="profile" options={{ href: null }} />
 
@@ -261,6 +266,8 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="import-calendar" options={{ href: null }} />
           <Tabs.Screen name="import-holidays" options={{ href: null }} />
           <Tabs.Screen name="family-profile" options={{ href: null }} />
+          <Tabs.Screen name="community-create" options={{ href: null }} />
+          <Tabs.Screen name="community-join/[code]" options={{ href: null }} />
         </Tabs>
 
         <ActionSheetModal

@@ -1,34 +1,29 @@
+import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
-import type { MutationCtx, QueryCtx } from './_generated/server';
+import type { MutationCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 
 // ─────────────────────────────────────────────────────────────
-// Helper: מחזיר את המשתמש המחובר (query ו-mutation)
+// Helpers
 // ─────────────────────────────────────────────────────────────
-async function requireUser(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity();
-  if (!identity) throw new Error('לא מחובר למערכת');
 
-  const user = await ctx.db
-    .query('users')
-    .withIndex('by_email', (q) => q.eq('email', identity.email ?? ''))
-    .unique();
-  if (!user) throw new Error('משתמש לא נמצא');
-
-  return user;
-}
-
-// Helper: מחזיר משתמש + spaceId ראשי (mutations בלבד)
-async function requireUserWithSpace(ctx: MutationCtx) {
-  const user = await requireUser(ctx);
-
-  const membership = await ctx.db
-    .query('members')
-    .withIndex('by_user', (q) => q.eq('userId', user._id))
-    .first();
-  if (!membership) throw new Error('לא נמצא מרחב למשתמש');
-
-  return { user, spaceId: membership.spaceId };
+/** מייצר קוד הזמנה ייחודי בן 8 תווים (A-Z, 0-9), עם בדיקת ייחודיות */
+async function generateUniqueInviteCode(ctx: MutationCtx): Promise<string> {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const code = Array.from(
+      { length: 8 },
+      () => chars[Math.floor(Math.random() * chars.length)]
+    ).join('');
+    const existing = await ctx.db
+      .query('communities')
+      .withIndex('by_invite_code', (q) => q.eq('inviteCode', code))
+      .unique();
+    if (!existing) return code;
+  }
+  // Fallback: timestamp suffix
+  return Math.random().toString(36).slice(2, 6).toUpperCase() +
+    Date.now().toString(36).toUpperCase().slice(-4);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -38,51 +33,51 @@ export const createCommunity = mutation({
   args: {
     name: v.string(),
     description: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, { name, description }) => {
-    const { user, spaceId } = await requireUserWithSpace(ctx);
+  handler: async (ctx, { name, description, tags }) => {
+    // TODO: auth – validate that user has an active space
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error('משתמש לא נמצא');
 
-    // קוד הזמנה: base36 אקראי + timestamp (ייחודי ומהיר לאימות)
-    const inviteCode =
-      Math.random().toString(36).slice(2, 8).toUpperCase() +
-      Date.now().toString(36).toUpperCase();
+    const inviteCode = await generateUniqueInviteCode(ctx);
 
     const communityId = await ctx.db.insert('communities', {
-      ownerId: user._id,
-      spaceId,
       name: name.trim(),
-      description: description?.trim() ?? '',
-      avatarColor: '#36a9e2', // TODO: לאפשר בחירת צבע ב-UI
+      description: description?.trim(),
+      ownerId: user._id,
+      tags: tags ?? [],
       inviteCode,
       createdAt: Date.now(),
+      archived: false,
+      pinnedByUserIds: [], // deprecated, kept for schema compat
     });
 
-    // מוסיף את היוצר כ-owner
     await ctx.db.insert('communityMembers', {
       communityId,
       userId: user._id,
-      spaceId,
       role: 'owner',
-      createdAt: Date.now(),
+      pinned: true,
+      notificationsEnabled: true,
+      joinedAt: Date.now(),
     });
 
-    return communityId;
+    const community = await ctx.db.get(communityId);
+    return community;
   },
 });
 
 // ─────────────────────────────────────────────────────────────
-// שליפת כל הקהילות של המשתמש הנוכחי
+// שליפת הקהילות של המשתמש הנוכחי
 // ─────────────────────────────────────────────────────────────
 export const listMyCommunities = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-
-    const user = await ctx.db
-      .query('users')
-      .withIndex('by_email', (q) => q.eq('email', identity.email ?? ''))
-      .unique();
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const user = await ctx.db.get(userId);
     if (!user) return [];
 
     const memberships = await ctx.db
@@ -90,84 +85,222 @@ export const listMyCommunities = query({
       .withIndex('by_user', (q) => q.eq('userId', user._id))
       .collect();
 
-    const results = await Promise.all(
+    const rows = await Promise.all(
       memberships.map(async (m) => {
         const community = await ctx.db.get(m.communityId);
-        if (!community) return null;
-        return { community, role: m.role };
-      })
-    );
-
-    // מסנן רשומות שהקהילה נמחקה
-    return results.filter((r): r is NonNullable<typeof r> => r !== null);
-  },
-});
-
-// ─────────────────────────────────────────────────────────────
-// פרטי קהילה + רשימת חברים
-// ─────────────────────────────────────────────────────────────
-export const getCommunityById = query({
-  args: { communityId: v.id('communities') },
-  handler: async (ctx, { communityId }) => {
-    // TODO: הרשאות – רק חברי קהילה יכולים לראות
-    const community = await ctx.db.get(communityId);
-    if (!community) return null;
-
-    const memberships = await ctx.db
-      .query('communityMembers')
-      .withIndex('by_community', (q) => q.eq('communityId', communityId))
-      .collect();
-
-    const members = await Promise.all(
-      memberships.map(async (m) => {
-        const user = await ctx.db.get(m.userId);
+        if (!community || community.archived) return null;
         return {
-          userId: m.userId,
-          name: user?.fullName ?? 'משתמש לא ידוע',
+          community,
           role: m.role,
+          pinned: m.pinned,
         };
       })
     );
 
-    return { community, members };
+    const filtered = rows.filter((r): r is NonNullable<typeof r> => r !== null);
+
+    // מיון: pinned ראשון, אחר כך createdAt יורד
+    return filtered.sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      return b.community.createdAt - a.community.createdAt;
+    });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// חיפוש קהילה לפי קוד הזמנה (למסך ה-join)
+// ─────────────────────────────────────────────────────────────
+export const getCommunityByInviteCode = query({
+  args: { inviteCode: v.string() },
+  handler: async (ctx, { inviteCode }) => {
+    const community = await ctx.db
+      .query('communities')
+      .withIndex('by_invite_code', (q) =>
+        q.eq('inviteCode', inviteCode.toUpperCase().trim())
+      )
+      .unique();
+
+    if (!community || community.archived) return null;
+
+    const memberCount = (
+      await ctx.db
+        .query('communityMembers')
+        .withIndex('by_community', (q) => q.eq('communityId', community._id))
+        .collect()
+    ).length;
+
+    return {
+      name: community.name,
+      description: community.description,
+      tags: community.tags,
+      memberCount,
+      _id: community._id,
+    };
   },
 });
 
 // ─────────────────────────────────────────────────────────────
 // הצטרפות לקהילה לפי קוד הזמנה
 // ─────────────────────────────────────────────────────────────
-export const joinByInviteCode = mutation({
+export const joinCommunityByCode = mutation({
   args: { inviteCode: v.string() },
   handler: async (ctx, { inviteCode }) => {
-    const { user, spaceId } = await requireUserWithSpace(ctx);
+    // TODO: auth – rate limit join attempts
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error('משתמש לא נמצא');
 
-    // מציאת הקהילה לפי קוד
     const community = await ctx.db
       .query('communities')
-      .withIndex('by_inviteCode', (q) => q.eq('inviteCode', inviteCode.toUpperCase()))
+      .withIndex('by_invite_code', (q) =>
+        q.eq('inviteCode', inviteCode.toUpperCase().trim())
+      )
       .unique();
-    if (!community) throw new Error('קוד הזמנה לא תקין');
 
-    // בדיקת חברות קיימת
+    if (!community || community.archived) {
+      throw new Error('קהילה לא קיימת');
+    }
+
+    // בדיקה אם כבר חבר
     const existing = await ctx.db
       .query('communityMembers')
-      .withIndex('by_community', (q) => q.eq('communityId', community._id))
-      .filter((q) => q.eq(q.field('userId'), user._id))
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', community._id).eq('userId', user._id)
+      )
       .unique();
 
     if (existing) {
-      return { success: true, communityId: community._id, alreadyMember: true };
+      return { status: 'already_member' as const, communityId: community._id };
     }
 
     await ctx.db.insert('communityMembers', {
       communityId: community._id,
       userId: user._id,
-      spaceId,
       role: 'member',
-      createdAt: Date.now(),
+      pinned: false,
+      notificationsEnabled: true,
+      joinedAt: Date.now(),
     });
 
-    return { success: true, communityId: community._id, alreadyMember: false };
+    return { status: 'joined' as const, communityId: community._id };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// הצמדה / ביטול הצמדה (לפי communityMembers.pinned)
+// ─────────────────────────────────────────────────────────────
+export const togglePinned = mutation({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error('משתמש לא נמצא');
+
+    const membership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', user._id)
+      )
+      .unique();
+
+    if (!membership) throw new Error('המשתמש אינו חבר בקהילה');
+
+    const newPinned = !membership.pinned;
+    await ctx.db.patch(membership._id, { pinned: newPinned });
+    return newPinned;
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// עדכון פרטי קהילה (owner / admin בלבד)
+// ─────────────────────────────────────────────────────────────
+export const updateCommunity = mutation({
+  args: {
+    communityId: v.id('communities'),
+    name: v.optional(v.string()),
+    description: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
+    color: v.optional(v.string()),
+  },
+  handler: async (ctx, { communityId, ...fields }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error('משתמש לא נמצא');
+
+    // TODO: add full permissions check via spaceId
+    const membership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', user._id)
+      )
+      .unique();
+
+    if (!membership || (membership.role !== 'owner' && membership.role !== 'admin')) {
+      throw new Error('אין הרשאה לעדכן את הקהילה');
+    }
+
+    const patch = Object.fromEntries(
+      Object.entries(fields).filter(([, val]) => val !== undefined)
+    );
+    await ctx.db.patch(communityId, patch);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// ארכוב קהילה (owner בלבד)
+// ─────────────────────────────────────────────────────────────
+export const archiveCommunity = mutation({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error('משתמש לא נמצא');
+
+    const membership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', user._id)
+      )
+      .unique();
+
+    if (!membership || membership.role !== 'owner') {
+      throw new Error('רק הבעלים יכול לארכב את הקהילה');
+    }
+
+    await ctx.db.patch(communityId, { archived: true });
+    // TODO: notify members on archive
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// מחיקה (ארכוב) של קהילה – owner בלבד
+// ─────────────────────────────────────────────────────────────
+export const deleteCommunity = mutation({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error('משתמש לא נמצא');
+
+    const membership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', user._id)
+      )
+      .unique();
+
+    if (!membership || membership.role !== 'owner') {
+      throw new Error('רק הבעלים יכול למחוק את הקהילה');
+    }
+
+    // ארכוב רך – לא מחיקה פיזית
+    await ctx.db.patch(communityId, { archived: true });
+    // TODO: notify members on deletion
   },
 });
 
@@ -178,12 +311,16 @@ export const leaveCommunity = mutation({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
     // TODO: הרשאות – owner לא יכול לעזוב לפני העברת בעלות
-    const user = await requireUser(ctx);
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error('משתמש לא נמצא');
 
     const membership = await ctx.db
       .query('communityMembers')
-      .withIndex('by_community', (q) => q.eq('communityId', communityId))
-      .filter((q) => q.eq(q.field('userId'), user._id))
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', user._id)
+      )
       .unique();
 
     if (!membership) throw new Error('המשתמש אינו חבר בקהילה זו');

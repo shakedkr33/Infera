@@ -79,15 +79,14 @@ export default defineSchema({
     allDay: v.optional(v.boolean()),
     locationUrl: v.optional(v.string()),   // Google Maps / Waze link
     onlineUrl: v.optional(v.string()),     // Zoom / Meet link
-    groupId: v.optional(v.id('spaces')),  // קהילה ששיתפה את האירוע
+    // TODO: migrate groupId → communityId (groupId was v.optional(v.id('spaces')))
     sharedWithUserIds: v.optional(v.array(v.id('users'))), // משתמשים מוזמנים
-    // אופציונלי: אם האירוע שייך לקהילה
-    // TODO: לסנן/לקבץ לפי קהילה במסכים מאוחר יותר
     communityId: v.optional(v.id('communities')),
   })
     .index('by_space_and_time', ['spaceId', 'startTime'])
     .index('by_creator', ['createdBy'])
-    .index('by_space', ['spaceId']),
+    .index('by_space', ['spaceId'])
+    .index('by_community_date', ['communityId', 'startTime']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת משימות
@@ -207,19 +206,32 @@ export default defineSchema({
   }).index('by_user', ['userId']),
 
   // ═══════════════════════════════════════════════════════
-  // מייצגת קהילה חיצונית – גן / כיתה / שכונה
+  // קהילות (גן, בית-ספר, חוג, משפחה, עבודה, אישי, אחר)
   // ═══════════════════════════════════════════════════════
   communities: defineTable({
-    ownerId: v.id('users'),
-    spaceId: v.id('spaces'),
     name: v.string(),
-    description: v.string(),
-    avatarColor: v.string(),
+    description: v.optional(v.string()),   // תיאור קצר (חדש)
+    ownerId: v.id('users'),
+    spaceId: v.optional(v.id('spaces')),   // optional – לא תמיד משויך ל-space
+    category: v.optional(v.union(
+      v.literal('school'),
+      v.literal('kindergarten'),
+      v.literal('club'),
+      v.literal('family'),
+      v.literal('work'),
+      v.literal('personal'),
+      v.literal('other')
+    )),
+    tags: v.optional(v.array(v.string())),
+    color: v.optional(v.string()),
     inviteCode: v.string(),
     createdAt: v.number(),
+    archived: v.optional(v.boolean()),
+    pinnedByUserIds: v.optional(v.array(v.id('users'))), // deprecated – use communityMembers.pinned
   })
     .index('by_owner', ['ownerId'])
-    .index('by_inviteCode', ['inviteCode']),
+    .index('by_space', ['spaceId'])
+    .index('by_invite_code', ['inviteCode']),
 
   // ═══════════════════════════════════════════════════════
   // חברות של משתמשים בקהילות
@@ -227,10 +239,16 @@ export default defineSchema({
   communityMembers: defineTable({
     communityId: v.id('communities'),
     userId: v.id('users'),
-    spaceId: v.id('spaces'),
-    role: v.string(),
-    createdAt: v.number(),
+    role: v.union(
+      v.literal('owner'),
+      v.literal('admin'),
+      v.literal('member')
+    ),
+    pinned: v.boolean(),
+    notificationsEnabled: v.boolean(),
+    joinedAt: v.number(),
   })
     .index('by_community', ['communityId'])
-    .index('by_user', ['userId']),
+    .index('by_user', ['userId'])
+    .index('by_community_user', ['communityId', 'userId']),
 });

@@ -21,19 +21,53 @@ export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [flow, setFlow] = useState<'signIn' | 'signUp'>('signIn');
 
-  // התחברות עם Email + Password
-  const onSignInPress = async () => {
+  const isSignUp = flow === 'signUp';
+
+  const onSubmitPress = async () => {
     if (!email || !password) {
-      Alert.alert('שגיאה', 'אנא הזיני אימייל וסיסמה');
+      Alert.alert('שגיאה', 'אנא הזן אימייל וסיסמה');
+      return;
+    }
+    if (isSignUp && password.length < 6) {
+      Alert.alert('שגיאה', 'הסיסמה חייבת להכיל לפחות 6 תווים');
       return;
     }
 
     setLoading(true);
     try {
-      await signIn('password', { email, password, flow: 'signIn' });
+      await signIn('password', { email, password, flow });
     } catch (err: unknown) {
-      Alert.alert('שגיאה', 'ההתחברות נכשלה. ודאי שהאימייל והסיסמה נכונים');
+      const msg = isSignUp
+        ? 'ההרשמה נכשלה. ייתכן שהאימייל כבר קיים'
+        : 'ההתחברות נכשלה. ודא שהאימייל והסיסמה נכונים';
+      Alert.alert('שגיאה', msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // DEV: יצירת חשבון טסט מהיר
+  const onDevTestPress = async () => {
+    setLoading(true);
+    try {
+      await signIn('password', {
+        email: 'test@test.com',
+        password: 'test1234',
+        flow: 'signUp',
+      });
+    } catch {
+      // חשבון קיים — ננסה התחברות
+      try {
+        await signIn('password', {
+          email: 'test@test.com',
+          password: 'test1234',
+          flow: 'signIn',
+        });
+      } catch (err2: unknown) {
+        Alert.alert('שגיאה', 'לא ניתן ליצור/לחבר חשבון טסט');
+      }
     } finally {
       setLoading(false);
     }
@@ -150,9 +184,9 @@ export default function SignInScreen() {
             />
           </View>
 
-          {/* כפתור התחברות */}
+          {/* כפתור ראשי */}
           <TouchableOpacity
-            className="w-full bg-[#36a9e2] rounded-3xl h-14 px-5 items-center justify-center mb-6"
+            className="w-full bg-[#36a9e2] rounded-3xl h-14 px-5 items-center justify-center mb-4"
             style={{
               shadowColor: '#36a9e2',
               shadowOffset: { width: 0, height: 4 },
@@ -160,20 +194,34 @@ export default function SignInScreen() {
               shadowRadius: 8,
               elevation: 3,
             }}
-            onPress={onSignInPress}
+            onPress={onSubmitPress}
             disabled={loading}
             activeOpacity={0.8}
           >
             {loading ? (
               <ActivityIndicator color="#ffffff" />
             ) : (
-              <Text className="text-white text-lg font-bold">התחברות</Text>
+              <Text className="text-white text-lg font-bold">
+                {isSignUp ? 'הרשמה' : 'התחברות'}
+              </Text>
             )}
           </TouchableOpacity>
 
+          {/* toggle sign-in / sign-up */}
+          <TouchableOpacity
+            onPress={() => setFlow(isSignUp ? 'signIn' : 'signUp')}
+            className="py-2"
+          >
+            <Text className="text-[#36a9e2] text-sm text-center font-semibold">
+              {isSignUp
+                ? 'יש לך חשבון? התחבר'
+                : 'אין לך חשבון? הרשמה'}
+            </Text>
+          </TouchableOpacity>
+
           {/* טיפ */}
-          <Text className="text-[#8e8e93] text-xs text-center mt-2">
-            💡 Google/Apple/Magic Link יהיו זמינים בקרוב
+          <Text className="text-[#8e8e93] text-xs text-center mt-3">
+            💡 Google/Apple יהיו זמינים בקרוב
           </Text>
         </View>
       </KeyboardAvoidingView>
@@ -182,14 +230,12 @@ export default function SignInScreen() {
       {__DEV__ && (
         <View className="px-6 pb-4 bg-[#f6f7f8]">
           <TouchableOpacity
-            onPress={() => {
-              console.log('🚧 Dev button clicked!');
-              router.replace('/(authenticated)');
-            }}
-            className="w-full py-3 px-6 bg-red-500/10 border-2 border-red-500 border-dashed rounded-2xl"
+            onPress={onDevTestPress}
+            disabled={loading}
+            className="w-full py-3 px-6 bg-orange-500/10 border-2 border-orange-400 border-dashed rounded-2xl"
           >
-            <Text className="text-red-500 text-center text-sm font-bold">
-              🚧 DEV ONLY: דלג למסך הבית
+            <Text className="text-orange-500 text-center text-sm font-bold">
+              🚧 DEV: כניסה עם test@test.com
             </Text>
           </TouchableOpacity>
         </View>
