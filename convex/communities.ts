@@ -92,6 +92,7 @@ export const getCommunity = query({
       ...community,
       memberCount: memberships.length,
       myRole: membership?.role ?? null,
+      myNotificationsEnabled: membership?.notificationsEnabled ?? true,
     };
   },
 });
@@ -353,6 +354,30 @@ export const leaveCommunity = mutation({
     if (!membership) throw new Error('המשתמש אינו חבר בקהילה זו');
 
     await ctx.db.delete(membership._id);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// הפעלה/ביטול התראות לקהילה עבור המשתמש הנוכחי
+// ─────────────────────────────────────────────────────────────
+export const toggleNotifications = mutation({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const membership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', userId)
+      )
+      .unique();
+
+    if (!membership) throw new Error('לא חבר בקהילה זו');
+
+    const newValue = !membership.notificationsEnabled;
+    await ctx.db.patch(membership._id, { notificationsEnabled: newValue });
+    return { notificationsEnabled: newValue };
   },
 });
 

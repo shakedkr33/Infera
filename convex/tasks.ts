@@ -2,6 +2,24 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 
 // ─────────────────────────────────────────────────────────────
+// שליפת תזכורות קהילה עם cursor pagination (לביצועים)
+// ─────────────────────────────────────────────────────────────
+export const listCommunityRemindersPaged = query({
+  args: {
+    communityId: v.id('communities'),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { communityId, cursor, numItems }) => {
+    return await ctx.db
+      .query('tasks')
+      .withIndex('by_community', (q) => q.eq('communityId', communityId))
+      .filter((q) => q.eq(q.field('completed'), false))
+      .paginate({ cursor, numItems: numItems ?? 20 });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // שליפת משימות פתוחות לפי קהילה
 // ─────────────────────────────────────────────────────────────
 export const listByCommunity = query({

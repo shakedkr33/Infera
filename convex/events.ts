@@ -2,6 +2,29 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 
 // ─────────────────────────────────────────────────────────────
+// שליפת אירועי קהילה עם cursor pagination (לביצועים)
+// ─────────────────────────────────────────────────────────────
+export const listByCommunityPaged = query({
+  args: {
+    communityId: v.id('communities'),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+    fromTime: v.optional(v.number()),
+    toTime: v.optional(v.number()),
+  },
+  handler: async (ctx, { communityId, cursor, numItems, fromTime, toTime }) => {
+    const from = fromTime ?? 0;
+    const to = toTime ?? 9_999_999_999_999; // far future
+    return await ctx.db
+      .query('events')
+      .withIndex('by_community_date', (q) =>
+        q.eq('communityId', communityId).gte('startTime', from).lte('startTime', to)
+      )
+      .paginate({ cursor, numItems: numItems ?? 20 });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // שליפת כל אירועי קהילה לפי communityId
 // ─────────────────────────────────────────────────────────────
 export const listByCommunity = query({

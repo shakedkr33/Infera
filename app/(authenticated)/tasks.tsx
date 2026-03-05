@@ -47,8 +47,8 @@ export default function TasksScreen() {
 
   // ── Convex: spaceId ──────────────────────────────────────────────────────
   // TODO: כאשר defaultSpaceId ייאכלס ב-onboarding, לעבור לשליפה ישירה מ-user.defaultSpaceId
-  const mySpace = useQuery(api.users.getMySpace);
-  const spaceId = mySpace?._id;
+  // getMySpace מחזיר את ה-spaceId ישירות (Id<'spaces'> | null)
+  const spaceId = useQuery(api.users.getMySpace);
 
   // ── Convex: tasks queries ────────────────────────────────────────────────
   const convexTasks = useQuery(

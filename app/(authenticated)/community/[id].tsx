@@ -3,10 +3,11 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   Modal,
   Pressable,
@@ -23,8 +24,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRIMARY = '#36a9e2';
+const NOW_PLUS_60_DAYS = () => Date.now() + 60 * 24 * 60 * 60 * 1000;
 
-const TABS = ['הכל', 'אירועים', 'משימות', 'פעילות'] as const;
+const TABS = ['הכל', 'אירועים', 'תזכורות', 'פעילות'] as const;
 type Tab = (typeof TABS)[number];
 
 const EVENT_COLORS = [
@@ -45,6 +47,7 @@ interface EventDoc {
   location?: string;
   description?: string;
   communityId?: Id<'communities'>;
+  requiresRsvp?: boolean;
 }
 
 interface TaskDoc {
@@ -52,13 +55,6 @@ interface TaskDoc {
   title: string;
   dueDate?: number;
   completed: boolean;
-}
-
-interface RsvpDoc {
-  _id: Id<'eventRsvps'>;
-  eventId: Id<'events'>;
-  userId: Id<'users'>;
-  status: RsvpStatus;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -104,46 +100,182 @@ function formatDueDate(ts: number): string {
   return new Date(ts).toLocaleDateString('he-IL', { day: 'numeric', month: 'short' });
 }
 
-// ─── EventCard ────────────────────────────────────────────────────────────────
+// ─── RSVP Bottom Sheet ────────────────────────────────────────────────────────
 
-const RSVP_BADGE: Record<'yes' | 'maybe', { label: string; color: string }> = {
-  yes: { label: 'נוסף ליומן', color: '#22c55e' },
-  maybe: { label: 'ממתין לאישור', color: '#eab308' },
-};
+interface RsvpSheetProps {
+  eventId: Id<'events'> | null;
+  currentStatus: RsvpStatus;
+  onSelect: (status: RsvpStatus) => void;
+  onClose: () => void;
+}
+
+const RSVP_OPTIONS: { status: RsvpStatus; label: string; icon: React.ComponentProps<typeof Ionicons>['name']; color: string }[] = [
+  { status: 'yes',   label: 'כן',   icon: 'checkmark-circle', color: '#22c55e' },
+  { status: 'maybe', label: 'אולי', icon: 'help-circle',       color: '#eab308' },
+  { status: 'no',    label: 'לא',   icon: 'close-circle',      color: '#ef4444' },
+];
+
+function RsvpBottomSheet({ eventId, currentStatus, onSelect, onClose }: RsvpSheetProps) {
+  const slideAnim = useRef(new Animated.Value(300)).current;
+
+  useEffect(() => {
+    if (eventId) {
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 80,
+        friction: 12,
+      }).start();
+    } else {
+      slideAnim.setValue(300);
+    }
+  }, [eventId, slideAnim]);
+
+  if (!eventId) return null;
+
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose} />
+      <Animated.View
+        style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}
+      >
+        <View style={styles.sheetHandle} />
+        <Text style={styles.sheetTitle}>האם תשתתף?</Text>
+        {RSVP_OPTIONS.map((opt) => (
+          <TouchableOpacity
+            key={opt.status}
+            style={[
+              styles.sheetOption,
+              currentStatus === opt.status && styles.sheetOptionActive,
+            ]}
+            onPress={() => {
+              onSelect(opt.status);
+              onClose();
+            }}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={opt.label}
+          >
+            <Ionicons
+              name={opt.icon}
+              size={22}
+              color={currentStatus === opt.status ? opt.color : '#9ca3af'}
+            />
+            <Text
+              style={[
+                styles.sheetOptionText,
+                currentStatus === opt.status && { color: opt.color, fontWeight: '700' },
+              ]}
+            >
+              {opt.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </Animated.View>
+    </Modal>
+  );
+}
+
+// ─── Action Sheet (+ button) ──────────────────────────────────────────────────
+
+interface AddActionSheetProps {
+  visible: boolean;
+  communityId: string;
+  onClose: () => void;
+}
+
+function AddActionSheet({ visible, communityId, onClose }: AddActionSheetProps) {
+  const router = useRouter();
+
+  if (!visible) return null;
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose} />
+      <View style={styles.addSheet}>
+        <View style={styles.sheetHandle} />
+        <TouchableOpacity
+          style={styles.addSheetOption}
+          onPress={() => {
+            onClose();
+            router.push(
+              `/(authenticated)/event/new?communityId=${communityId}` as Parameters<typeof router.push>[0]
+            );
+          }}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="יצירת אירוע חדש"
+        >
+          <View style={[styles.addSheetIcon, { backgroundColor: '#f59e0b' }]}>
+            <Ionicons name="calendar-outline" size={22} color="#fff" />
+          </View>
+          <Text style={styles.addSheetLabel}>אירוע חדש</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.addSheetOption}
+          onPress={() => {
+            onClose();
+            router.push(
+              `/(authenticated)/task/new?communityId=${communityId}` as Parameters<typeof router.push>[0]
+            );
+          }}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="יצירת תזכורת חדשה"
+        >
+          <View style={[styles.addSheetIcon, { backgroundColor: '#10b981' }]}>
+            <Ionicons name="checkmark-circle-outline" size={22} color="#fff" />
+          </View>
+          <Text style={styles.addSheetLabel}>תזכורת חדשה</Text>
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── EventCard ────────────────────────────────────────────────────────────────
 
 interface EventCardProps {
   event: EventDoc;
-  rsvpStatus?: RsvpStatus;
-  showRsvpButtons?: boolean;
-  onRsvp?: (eventId: Id<'events'>, status: RsvpStatus) => void;
+  rsvpStatus: RsvpStatus;
+  onRsvpPress: (eventId: Id<'events'>) => void;
   past?: boolean;
 }
 
-function EventCard({ event, rsvpStatus, showRsvpButtons, onRsvp, past }: EventCardProps) {
+function EventCard({ event, rsvpStatus, onRsvpPress, past }: EventCardProps) {
   const color = getEventColor(event._id);
-  const badge = rsvpStatus && rsvpStatus !== 'no' && rsvpStatus !== 'none'
-    ? RSVP_BADGE[rsvpStatus]
-    : null;
+  const showRsvpBadge = event.requiresRsvp || rsvpStatus !== 'none';
+
+  let badgeLabel = '';
+  let badgeColor = '';
+  if (rsvpStatus === 'yes') { badgeLabel = 'אצור ביומן ✓'; badgeColor = '#22c55e'; }
+  else if (rsvpStatus === 'maybe') { badgeLabel = 'אולי ▾'; badgeColor = '#eab308'; }
+  else if (event.requiresRsvp) { badgeLabel = 'ממתין לאישור ▾'; badgeColor = '#eab308'; }
 
   return (
-    <View style={[styles.eventCard, past && styles.eventCardPast]}>
-      {/* Colored header */}
+    <Pressable
+      style={[styles.eventCard, past && styles.eventCardPast]}
+      onPress={() => !past && onRsvpPress(event._id)}
+      accessible
+      accessibilityRole="button"
+      accessibilityLabel={event.title}
+    >
       <View style={[styles.eventCardHeader, { backgroundColor: color }]}>
-        {/* Gradient overlay */}
         <View style={styles.eventCardOverlay} />
-        {badge && (
-          <View style={[styles.rsvpBadge, { backgroundColor: badge.color }]}>
-            <Text style={styles.rsvpBadgeText}>{badge.label}</Text>
+        {past && (
+          <View style={[styles.eventBadge, { backgroundColor: '#94a3b8' }]}>
+            <Text style={styles.eventBadgeText}>עבר</Text>
           </View>
         )}
-        {past && (
-          <View style={[styles.rsvpBadge, { backgroundColor: '#94a3b8' }]}>
-            <Text style={styles.rsvpBadgeText}>עבר</Text>
-          </View>
+        {!past && showRsvpBadge && badgeLabel !== '' && (
+          <TouchableOpacity
+            style={[styles.eventBadge, { backgroundColor: badgeColor }]}
+            onPress={() => onRsvpPress(event._id)}
+          >
+            <Text style={styles.eventBadgeText}>{badgeLabel}</Text>
+          </TouchableOpacity>
         )}
       </View>
-
-      {/* Card body */}
       <View style={styles.eventCardBody}>
         <Text style={styles.eventCardTitle} numberOfLines={2}>
           {event.title}
@@ -156,28 +288,63 @@ function EventCard({ event, rsvpStatus, showRsvpButtons, onRsvp, past }: EventCa
             📍 {event.location}
           </Text>
         ) : null}
+      </View>
+    </Pressable>
+  );
+}
 
-        {/* RSVP buttons */}
-        {showRsvpButtons && onRsvp && (
-          <View style={styles.rsvpButtons}>
-            {(['yes', 'maybe', 'no'] as const).map((s) => (
-              <TouchableOpacity
-                key={s}
-                style={[
-                  styles.rsvpBtn,
-                  rsvpStatus === s && { backgroundColor: PRIMARY },
-                ]}
-                onPress={() => onRsvp(event._id, s)}
-                accessible
-                accessibilityRole="button"
-                accessibilityLabel={s === 'yes' ? 'כן' : s === 'maybe' ? 'אולי' : 'לא'}
-              >
-                <Text style={[styles.rsvpBtnText, rsvpStatus === s && { color: '#fff' }]}>
-                  {s === 'yes' ? 'כן' : s === 'maybe' ? 'אולי' : 'לא'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+// ─── EventRow (events tab list view) ─────────────────────────────────────────
+
+interface EventRowProps {
+  event: EventDoc;
+  rsvpStatus: RsvpStatus;
+  onRsvpPress: (eventId: Id<'events'>) => void;
+}
+
+function EventRow({ event, rsvpStatus, onRsvpPress }: EventRowProps) {
+  const past = isEventPast(event);
+
+  let badgeLabel = '';
+  let badgeColor = '#eab308';
+  if (rsvpStatus === 'yes') { badgeLabel = 'כן'; badgeColor = '#22c55e'; }
+  else if (rsvpStatus === 'maybe') { badgeLabel = 'אולי'; badgeColor = '#eab308'; }
+  else if (rsvpStatus === 'no') { badgeLabel = 'לא'; badgeColor = '#ef4444'; }
+
+  return (
+    <View style={[styles.eventRow, past && { opacity: 0.45 }]}>
+      <View style={styles.eventRowLeft}>
+        <Text style={styles.eventRowDate}>
+          {new Date(event.startTime).toLocaleDateString('he-IL', {
+            day: 'numeric', month: 'short',
+          })}
+        </Text>
+        <View style={[styles.eventDot, { backgroundColor: getEventColor(event._id) }]} />
+      </View>
+      <View style={styles.eventRowContent}>
+        <View style={styles.eventRowTop}>
+          {past && (
+            <View style={[styles.eventBadge, { backgroundColor: '#94a3b8', marginLeft: 0, marginRight: 6 }]}>
+              <Text style={styles.eventBadgeText}>עבר</Text>
+            </View>
+          )}
+          <Text style={[styles.eventRowTitle, past && { color: '#9ca3af' }]} numberOfLines={2}>
+            {event.title}
+          </Text>
+        </View>
+        {event.location ? (
+          <Text style={[styles.eventRowLocation, past && { color: '#c4c9d4' }]} numberOfLines={1}>
+            📍 {event.location}
+          </Text>
+        ) : null}
+        {!past && (event.requiresRsvp || rsvpStatus !== 'none') && (
+          <TouchableOpacity
+            style={[styles.rsvpStatusBadge, { backgroundColor: badgeColor }]}
+            onPress={() => onRsvpPress(event._id)}
+          >
+            <Text style={styles.rsvpStatusText}>
+              {badgeLabel !== '' ? `${badgeLabel} ▾` : 'ממתין לאישור ▾'}
+            </Text>
+          </TouchableOpacity>
         )}
       </View>
     </View>
@@ -201,20 +368,12 @@ function TaskRow({ task, onToggle }: TaskRowProps) {
       accessibilityLabel={task.title}
       accessibilityState={{ checked: task.completed }}
     >
-      {/* Checkbox */}
       <View style={[styles.checkbox, task.completed && styles.checkboxChecked]}>
-        {task.completed && <Ionicons name="checkmark" size={14} color="#fff" />}
+        {task.completed && <Ionicons name="checkmark" size={13} color="#fff" />}
       </View>
-
-      {/* Title */}
-      <Text
-        style={[styles.taskTitle, task.completed && styles.taskTitleDone]}
-        numberOfLines={2}
-      >
+      <Text style={[styles.taskTitle, task.completed && styles.taskTitleDone]} numberOfLines={2}>
         {task.title}
       </Text>
-
-      {/* Due date */}
       {task.dueDate !== undefined ? (
         <Text style={styles.taskDue}>{formatDueDate(task.dueDate)}</Text>
       ) : null}
@@ -234,345 +393,24 @@ interface SectionHeaderProps {
 function SectionHeader({ title, subtitle, actionLabel, onAction }: SectionHeaderProps) {
   return (
     <View style={styles.sectionHeader}>
-      <View style={styles.sectionHeaderLeft}>
+      <View style={styles.sectionLeft}>
         {actionLabel && onAction && (
           <TouchableOpacity onPress={onAction} accessible accessibilityRole="button">
             <Text style={styles.sectionAction}>{actionLabel}</Text>
           </TouchableOpacity>
         )}
       </View>
-      <View style={styles.sectionHeaderRight}>
+      <View style={styles.sectionRight}>
         <Text style={styles.sectionTitle}>{title}</Text>
-        {subtitle ? (
-          <Text style={styles.sectionSubtitle}>{subtitle}</Text>
-        ) : null}
+        {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
       </View>
     </View>
   );
 }
 
-// ─── Tab: הכל ────────────────────────────────────────────────────────────────
+// ─── Overflow Menu ────────────────────────────────────────────────────────────
 
-interface TabAllProps {
-  myEvents: EventDoc[];
-  unansweredEvents: EventDoc[];
-  tasks: TaskDoc[];
-  rsvpMap: Record<string, RsvpStatus>;
-  onRsvp: (eventId: Id<'events'>, status: RsvpStatus) => void;
-  onToggleTask: (id: Id<'tasks'>) => void;
-  onSeeMoreEvents: () => void;
-}
-
-function TabAll({
-  myEvents,
-  unansweredEvents,
-  tasks,
-  rsvpMap,
-  onRsvp,
-  onToggleTask,
-  onSeeMoreEvents,
-}: TabAllProps) {
-  const visibleMyEvents = myEvents.slice(0, 4);
-  const extraCount = Math.max(0, myEvents.length - 4);
-
-  return (
-    <ScrollView
-      style={styles.tabScroll}
-      contentContainerStyle={styles.tabContent}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* ── האירועים שלי */}
-      {myEvents.length > 0 && (
-        <View>
-          <SectionHeader
-            title="האירועים שלי"
-            subtitle="אירועים שכבר הצטרפת אליהם או הגבת אליהם"
-          />
-          <View style={styles.eventsGrid}>
-            {visibleMyEvents.map((ev) => (
-              <EventCard
-                key={ev._id}
-                event={ev}
-                rsvpStatus={rsvpMap[ev._id]}
-              />
-            ))}
-          </View>
-          {extraCount > 0 && (
-            <TouchableOpacity
-              style={styles.seeMoreBtn}
-              onPress={onSeeMoreEvents}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel={`ראה עוד ${extraCount} אירועים`}
-            >
-              <Text style={styles.seeMoreText}>+ ראה עוד ({extraCount})</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-
-      {/* ── כדאי לזכור (משימות) */}
-      <View>
-        <SectionHeader
-          title="כדאי לזכור"
-          actionLabel="ראה עוד"
-          onAction={() => {
-            // handled by parent tab switch
-          }}
-        />
-        {tasks.length === 0 ? (
-          <View style={styles.emptySmall}>
-            <Text style={styles.emptySmallText}>אין משימות פתוחות לקהילה זו</Text>
-          </View>
-        ) : (
-          <View style={styles.taskList}>
-            {tasks.slice(0, 5).map((t) => (
-              <TaskRow key={t._id} task={t} onToggle={onToggleTask} />
-            ))}
-          </View>
-        )}
-      </View>
-
-      {/* ── אירועים נוספים */}
-      {unansweredEvents.length > 0 && (
-        <View>
-          <SectionHeader
-            title="אירועים נוספים"
-            subtitle="אירועים בקהילה שעדיין לא הגבת אליהם"
-          />
-          <View style={styles.eventsGrid}>
-            {unansweredEvents.map((ev) => (
-              <EventCard
-                key={ev._id}
-                event={ev}
-                rsvpStatus={rsvpMap[ev._id]}
-                showRsvpButtons
-                onRsvp={onRsvp}
-              />
-            ))}
-          </View>
-        </View>
-      )}
-
-      {/* ── פעילות בקהילה (TODO) */}
-      <View>
-        <SectionHeader title="פעילות בקהילה" />
-        <View style={styles.emptySmall}>
-          <Text style={styles.emptySmallText}>
-            {/* TODO: create activityFeed query in convex/communities.ts */}
-            פעילות אחרונה תופיע כאן בקרוב
-          </Text>
-        </View>
-      </View>
-    </ScrollView>
-  );
-}
-
-// ─── Tab: אירועים ─────────────────────────────────────────────────────────────
-
-interface TabEventsProps {
-  events: EventDoc[];
-  rsvpMap: Record<string, RsvpStatus>;
-  onRsvp: (eventId: Id<'events'>, status: RsvpStatus) => void;
-  selectedMonth: Date;
-  onMonthChange: (d: Date) => void;
-  searchQuery: string;
-}
-
-function TabEvents({ events, rsvpMap, onRsvp, selectedMonth, onMonthChange, searchQuery }: TabEventsProps) {
-  const monthLabel = selectedMonth.toLocaleDateString('he-IL', {
-    month: 'long', year: 'numeric',
-  });
-
-  const eventsInMonth = useMemo(() => {
-    const start = new Date(
-      selectedMonth.getFullYear(), selectedMonth.getMonth(), 1
-    ).getTime();
-    const end = new Date(
-      selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0, 23, 59, 59, 999
-    ).getTime();
-    let filtered = events.filter((e) => e.startTime >= start && e.startTime <= end);
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      filtered = filtered.filter(
-        (e) =>
-          e.title.toLowerCase().includes(q) ||
-          (e.location ?? '').toLowerCase().includes(q) ||
-          (e.description ?? '').toLowerCase().includes(q)
-      );
-    }
-    // מיון: עתידיים קודם, עברו אחרון
-    const now = Date.now();
-    return filtered.sort((a, b) => {
-      const aPast = isEventPast(a);
-      const bPast = isEventPast(b);
-      if (aPast !== bPast) return aPast ? 1 : -1;
-      return a.startTime - b.startTime;
-    });
-  }, [events, selectedMonth, searchQuery]);
-
-  const prevMonth = () => {
-    const d = new Date(selectedMonth);
-    d.setMonth(d.getMonth() - 1);
-    onMonthChange(d);
-  };
-
-  const nextMonth = () => {
-    const d = new Date(selectedMonth);
-    d.setMonth(d.getMonth() + 1);
-    onMonthChange(d);
-  };
-
-  return (
-    <View style={styles.tabFlex}>
-      {/* Month selector */}
-      <View style={styles.monthSelector}>
-        <TouchableOpacity
-          onPress={nextMonth}
-          style={styles.monthArrow}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="חודש הבא"
-        >
-          <Ionicons name="chevron-back" size={20} color="#374151" />
-        </TouchableOpacity>
-        <Text style={styles.monthLabel}>{monthLabel}</Text>
-        <TouchableOpacity
-          onPress={prevMonth}
-          style={styles.monthArrow}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="חודש קודם"
-        >
-          <Ionicons name="chevron-forward" size={20} color="#374151" />
-        </TouchableOpacity>
-      </View>
-
-      {eventsInMonth.length === 0 ? (
-        <View style={styles.emptyFull}>
-          <Ionicons name="calendar-outline" size={48} color="#d1d5db" />
-          <Text style={styles.emptyText}>אין אירועים בחודש זה</Text>
-        </View>
-      ) : (
-        <FlatList<EventDoc>
-          data={eventsInMonth}
-          keyExtractor={(e) => e._id}
-          contentContainerStyle={styles.tabContent}
-          showsVerticalScrollIndicator={false}
-          renderItem={({ item }) => {
-            const past = isEventPast(item);
-            return (
-              <View style={past ? styles.pastEventRow : styles.eventRow}>
-                {/* Color dot + date */}
-                <View style={styles.eventRowLeft}>
-                  <Text style={styles.eventRowDate}>
-                    {new Date(item.startTime).toLocaleDateString('he-IL', {
-                      day: 'numeric', month: 'short',
-                    })}
-                  </Text>
-                  <View style={[styles.eventDot, { backgroundColor: getEventColor(item._id) }]} />
-                </View>
-
-                {/* Content */}
-                <View style={styles.eventRowContent}>
-                  <View style={styles.eventRowTop}>
-                    {past && (
-                      <View style={styles.pastBadge}>
-                        <Text style={styles.pastBadgeText}>עבר</Text>
-                      </View>
-                    )}
-                    <Text style={[styles.eventRowTitle, past && styles.textFaded]} numberOfLines={2}>
-                      {item.title}
-                    </Text>
-                  </View>
-                  {item.location ? (
-                    <Text style={[styles.eventRowLocation, past && styles.textFaded]} numberOfLines={1}>
-                      📍 {item.location}
-                    </Text>
-                  ) : null}
-                  {!past && (
-                    <View style={styles.rsvpButtons}>
-                      {(['yes', 'maybe', 'no'] as const).map((s) => (
-                        <TouchableOpacity
-                          key={s}
-                          style={[
-                            styles.rsvpBtn,
-                            rsvpMap[item._id] === s && { backgroundColor: PRIMARY },
-                          ]}
-                          onPress={() => onRsvp(item._id, s)}
-                          accessible
-                          accessibilityRole="button"
-                        >
-                          <Text
-                            style={[
-                              styles.rsvpBtnText,
-                              rsvpMap[item._id] === s && { color: '#fff' },
-                            ]}
-                          >
-                            {s === 'yes' ? 'כן' : s === 'maybe' ? 'אולי' : 'לא'}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              </View>
-            );
-          }}
-        />
-      )}
-    </View>
-  );
-}
-
-// ─── Tab: משימות ─────────────────────────────────────────────────────────────
-
-interface TabTasksProps {
-  tasks: TaskDoc[];
-  onToggle: (id: Id<'tasks'>) => void;
-}
-
-function TabTasks({ tasks, onToggle }: TabTasksProps) {
-  if (tasks.length === 0) {
-    return (
-      <View style={styles.emptyFull}>
-        <Ionicons name="checkmark-circle-outline" size={48} color="#d1d5db" />
-        <Text style={styles.emptyText}>אין משימות פתוחות לקהילה זו</Text>
-        {/* TODO: add task creation from community context */}
-      </View>
-    );
-  }
-
-  return (
-    <ScrollView
-      style={styles.tabScroll}
-      contentContainerStyle={styles.tabContent}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.taskList}>
-        {tasks.map((t) => (
-          <TaskRow key={t._id} task={t} onToggle={onToggle} />
-        ))}
-      </View>
-    </ScrollView>
-  );
-}
-
-// ─── Tab: פעילות (TODO) ───────────────────────────────────────────────────────
-
-function TabActivity() {
-  return (
-    <View style={styles.emptyFull}>
-      <Ionicons name="pulse-outline" size={48} color="#d1d5db" />
-      <Text style={styles.emptyText}>פעילות הקהילה תופיע כאן בקרוב</Text>
-      {/* TODO: create activityFeed query in convex/communities.ts */}
-    </View>
-  );
-}
-
-// ─── Overflow Popover ─────────────────────────────────────────────────────────
-
-interface OverflowMenuItem {
+interface OverflowItem {
   label: string;
   iconName: React.ComponentProps<typeof Ionicons>['name'];
   onPress: () => void;
@@ -582,7 +420,7 @@ interface OverflowMenuItem {
 interface OverflowMenuProps {
   visible: boolean;
   position: { x: number; y: number };
-  items: OverflowMenuItem[];
+  items: OverflowItem[];
   onClose: () => void;
 }
 
@@ -604,11 +442,7 @@ function OverflowMenu({ visible, position, items, onClose }: OverflowMenuProps) 
             <Text style={[styles.popoverLabel, m.danger && styles.popoverDanger]}>
               {m.label}
             </Text>
-            <Ionicons
-              name={m.iconName}
-              size={18}
-              color={m.danger ? '#ef4444' : '#374151'}
-            />
+            <Ionicons name={m.iconName} size={18} color={m.danger ? '#ef4444' : '#374151'} />
           </Pressable>
         ))}
       </View>
@@ -640,6 +474,7 @@ function SearchModal({ visible, value, onChange, onClose }: SearchModalProps) {
           autoFocus
           returnKeyType="search"
           onSubmitEditing={onClose}
+          accessibilityLabel="חיפוש אירוע"
         />
         <Ionicons name="search" size={20} color="#9ca3af" />
       </View>
@@ -647,66 +482,383 @@ function SearchModal({ visible, value, onChange, onClose }: SearchModalProps) {
   );
 }
 
-// ─── FAB ──────────────────────────────────────────────────────────────────────
+// ─── Tab: הכל ────────────────────────────────────────────────────────────────
 
-interface FabProps {
-  communityId: string;
+interface TabAllProps {
+  communityId: Id<'communities'>;
+  rsvpMap: Record<string, RsvpStatus>;
+  onRsvpPress: (eventId: Id<'events'>) => void;
+  onToggleTask: (id: Id<'tasks'>) => void;
+  onSeeMoreEvents: () => void;
+  onSeeMoreReminders: () => void;
 }
 
-function Fab({ communityId }: FabProps) {
-  const router = useRouter();
-  const [open, setOpen] = useState(false);
+function TabAll({
+  communityId,
+  rsvpMap,
+  onRsvpPress,
+  onToggleTask,
+  onSeeMoreEvents,
+  onSeeMoreReminders,
+}: TabAllProps) {
+  // Stable timestamps — computed once on mount, never change
+  const windowStart = useMemo(() => Date.now(), []);
+  const windowEnd = useMemo(() => NOW_PLUS_60_DAYS(), []);
+
+  // Memoized query args — prevents Convex from seeing new object references each render
+  const eventsArgs = useMemo(
+    () => ({ communityId, cursor: null as null, numItems: 8, fromTime: windowStart, toTime: windowEnd }),
+    [communityId, windowStart, windowEnd]
+  );
+  const remindersArgs = useMemo(
+    () => ({ communityId, cursor: null as null, numItems: 4 }),
+    [communityId]
+  );
+
+  const eventsPage = useQuery(api.events.listByCommunityPaged, eventsArgs);
+  const remindersPage = useQuery(api.tasks.listCommunityRemindersPaged, remindersArgs);
+
+  const events = (eventsPage?.page ?? []) as EventDoc[];
+  const reminders = (remindersPage?.page ?? []) as TaskDoc[];
+  const extraEvents = eventsPage?.isDone === false ? 1 : 0;
+  const extraReminders = remindersPage?.isDone === false ? 1 : 0;
+
+  const visibleEvents = events.slice(0, 4);
+  const visibleReminders = reminders.slice(0, 4);
+
+  const isLoadingEvents = eventsPage === undefined;
+  const isLoadingReminders = remindersPage === undefined;
 
   return (
-    <View style={styles.fabContainer} pointerEvents="box-none">
-      {open && (
-        <>
-          <Pressable style={styles.fabBackdrop} onPress={() => setOpen(false)} />
-          <TouchableOpacity
-            style={[styles.fabMenuItem]}
-            onPress={() => {
-              setOpen(false);
-              router.push(
-                `/(authenticated)/task/new?communityId=${communityId}` as Parameters<typeof router.push>[0]
-              );
-            }}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="יצירת משימה"
-          >
-            <Text style={styles.fabMenuLabel}>יצירת משימה</Text>
-            <View style={[styles.fabMenuIcon, { backgroundColor: '#10b981' }]}>
-              <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
+    <ScrollView
+      style={styles.tabScroll}
+      contentContainerStyle={styles.tabContent}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* ── האירועים שלי */}
+      <View>
+        <SectionHeader
+          title="האירועים שלי"
+          subtitle="אירועים קרובים ב-60 הימים הבאים"
+        />
+        {isLoadingEvents ? (
+          <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
+        ) : events.length === 0 ? (
+          <View style={styles.emptySmall}>
+            <Text style={styles.emptySmallText}>אין אירועים קרובים לקהילה זו</Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.eventsGrid}>
+              {visibleEvents.map((ev) => (
+                <EventCard
+                  key={ev._id}
+                  event={ev}
+                  rsvpStatus={rsvpMap[ev._id] ?? 'none'}
+                  onRsvpPress={onRsvpPress}
+                />
+              ))}
             </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.fabMenuItem}
-            onPress={() => {
-              setOpen(false);
-              router.push(
-                `/(authenticated)/event/new?communityId=${communityId}` as Parameters<typeof router.push>[0]
-              );
-            }}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="יצירת אירוע"
-          >
-            <Text style={styles.fabMenuLabel}>יצירת אירוע</Text>
-            <View style={[styles.fabMenuIcon, { backgroundColor: '#f59e0b' }]}>
-              <Ionicons name="calendar-outline" size={20} color="#fff" />
-            </View>
-          </TouchableOpacity>
-        </>
+            {(events.length > 4 || extraEvents > 0) && (
+              <TouchableOpacity
+                style={styles.seeMoreBtn}
+                onPress={onSeeMoreEvents}
+                accessible
+                accessibilityRole="button"
+              >
+                <Text style={styles.seeMoreText}>
+                  + ראה עוד ({Math.max(events.length - 4, extraEvents)})
+                </Text>
+              </TouchableOpacity>
+            )}
+          </>
+        )}
+      </View>
+
+      {/* ── כדאי לזכור */}
+      <View>
+        <SectionHeader
+          title="כדאי לזכור"
+          actionLabel={extraReminders > 0 || reminders.length > 4 ? 'ראה עוד' : undefined}
+          onAction={onSeeMoreReminders}
+        />
+        {isLoadingReminders ? (
+          <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
+        ) : reminders.length === 0 ? (
+          <View style={styles.emptySmall}>
+            <Text style={styles.emptySmallText}>אין תזכורות פתוחות לקהילה זו</Text>
+          </View>
+        ) : (
+          <View style={styles.taskList}>
+            {visibleReminders.map((t) => (
+              <TaskRow key={t._id} task={t} onToggle={onToggleTask} />
+            ))}
+          </View>
+        )}
+      </View>
+
+      {/* ── פעילות (TODO) */}
+      <View>
+        <SectionHeader title="פעילות בקהילה" />
+        <View style={styles.emptySmall}>
+          {/* TODO: create activityFeed query in convex/communities.ts */}
+          <Text style={styles.emptySmallText}>פעילות אחרונה תופיע כאן בקרוב</Text>
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
+// ─── Tab: אירועים ─────────────────────────────────────────────────────────────
+
+interface TabEventsProps {
+  communityId: Id<'communities'>;
+  rsvpMap: Record<string, RsvpStatus>;
+  onRsvpPress: (eventId: Id<'events'>) => void;
+  selectedMonth: Date;
+  onMonthChange: (d: Date) => void;
+  searchQuery: string;
+}
+
+function TabEvents({
+  communityId,
+  rsvpMap,
+  onRsvpPress,
+  selectedMonth,
+  onMonthChange,
+  searchQuery,
+}: TabEventsProps) {
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [accumulated, setAccumulated] = useState<EventDoc[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const monthStart = useMemo(
+    () => new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), 1).getTime(),
+    [selectedMonth]
+  );
+  const monthEnd = useMemo(
+    () => new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0, 23, 59, 59, 999).getTime(),
+    [selectedMonth]
+  );
+
+  const page = useQuery(api.events.listByCommunityPaged, {
+    communityId,
+    cursor,
+    numItems: 20,
+    fromTime: monthStart,
+    toTime: monthEnd,
+  });
+
+  useEffect(() => {
+    if (page?.page) {
+      setAccumulated((prev) => {
+        const ids = new Set(prev.map((e) => e._id));
+        const newItems = (page.page as EventDoc[]).filter((e) => !ids.has(e._id));
+        return cursor === null ? (page.page as EventDoc[]) : [...prev, ...newItems];
+      });
+      setLoadingMore(false);
+    }
+  }, [page, cursor]);
+
+  // Reset when month changes
+  useEffect(() => {
+    setCursor(null);
+    setAccumulated([]);
+  }, [monthStart]);
+
+  const filtered = useMemo(() => {
+    let result = accumulated;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (e) =>
+          e.title.toLowerCase().includes(q) ||
+          (e.location ?? '').toLowerCase().includes(q) ||
+          (e.description ?? '').toLowerCase().includes(q)
+      );
+    }
+    const now = Date.now();
+    return result.sort((a, b) => {
+      const aPast = isEventPast(a);
+      const bPast = isEventPast(b);
+      if (aPast !== bPast) return aPast ? 1 : -1;
+      return a.startTime - b.startTime;
+    });
+  }, [accumulated, searchQuery]);
+
+  const monthLabel = selectedMonth.toLocaleDateString('he-IL', {
+    month: 'long', year: 'numeric',
+  });
+
+  const renderItem = useCallback(
+    ({ item }: { item: EventDoc }) => (
+      <EventRow
+        event={item}
+        rsvpStatus={rsvpMap[item._id] ?? 'none'}
+        onRsvpPress={onRsvpPress}
+      />
+    ),
+    [rsvpMap, onRsvpPress]
+  );
+
+  const keyExtractor = useCallback((item: EventDoc) => item._id, []);
+
+  const handleLoadMore = useCallback(() => {
+    if (page?.isDone === false && page.continueCursor && !loadingMore) {
+      setLoadingMore(true);
+      setCursor(page.continueCursor);
+    }
+  }, [page, loadingMore]);
+
+  return (
+    <View style={styles.tabFlex}>
+      {/* Month selector */}
+      <View style={styles.monthSelector}>
+        <TouchableOpacity
+          onPress={() => {
+            const d = new Date(selectedMonth);
+            d.setMonth(d.getMonth() + 1);
+            onMonthChange(d);
+          }}
+          style={styles.monthArrow}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="חודש הבא"
+        >
+          <Ionicons name="chevron-back" size={20} color="#374151" />
+        </TouchableOpacity>
+        <Text style={styles.monthLabel}>{monthLabel}</Text>
+        <TouchableOpacity
+          onPress={() => {
+            const d = new Date(selectedMonth);
+            d.setMonth(d.getMonth() - 1);
+            onMonthChange(d);
+          }}
+          style={styles.monthArrow}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="חודש קודם"
+        >
+          <Ionicons name="chevron-forward" size={20} color="#374151" />
+        </TouchableOpacity>
+      </View>
+
+      {page === undefined ? (
+        <View style={styles.loadingCenter}>
+          <ActivityIndicator size="large" color={PRIMARY} />
+        </View>
+      ) : filtered.length === 0 ? (
+        <View style={styles.emptyFull}>
+          <Ionicons name="calendar-outline" size={48} color="#d1d5db" />
+          <Text style={styles.emptyText}>אין אירועים בחודש זה</Text>
+        </View>
+      ) : (
+        <FlatList<EventDoc>
+          data={filtered}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          contentContainerStyle={{ paddingBottom: 100 }}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={
+            loadingMore ? (
+              <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
+            ) : null
+          }
+          showsVerticalScrollIndicator={false}
+        />
       )}
-      <TouchableOpacity
-        style={[styles.fab, open && styles.fabOpen]}
-        onPress={() => setOpen((v) => !v)}
-        accessible
-        accessibilityRole="button"
-        accessibilityLabel="פעולות"
-      >
-        <Ionicons name={open ? 'close' : 'add'} size={26} color="#fff" />
-      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ─── Tab: תזכורות ─────────────────────────────────────────────────────────────
+
+interface TabRemindersProps {
+  communityId: Id<'communities'>;
+  onToggle: (id: Id<'tasks'>) => void;
+}
+
+function TabReminders({ communityId, onToggle }: TabRemindersProps) {
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [accumulated, setAccumulated] = useState<TaskDoc[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const page = useQuery(api.tasks.listCommunityRemindersPaged, {
+    communityId,
+    cursor,
+    numItems: 20,
+  });
+
+  useEffect(() => {
+    if (page?.page) {
+      setAccumulated((prev) => {
+        const ids = new Set(prev.map((t) => t._id));
+        const newItems = (page.page as TaskDoc[]).filter((t) => !ids.has(t._id));
+        return cursor === null ? (page.page as TaskDoc[]) : [...prev, ...newItems];
+      });
+      setLoadingMore(false);
+    }
+  }, [page, cursor]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: TaskDoc }) => <TaskRow task={item} onToggle={onToggle} />,
+    [onToggle]
+  );
+
+  const keyExtractor = useCallback((item: TaskDoc) => item._id, []);
+
+  const handleLoadMore = useCallback(() => {
+    if (page?.isDone === false && page.continueCursor && !loadingMore) {
+      setLoadingMore(true);
+      setCursor(page.continueCursor);
+    }
+  }, [page, loadingMore]);
+
+  if (page === undefined) {
+    return (
+      <View style={styles.loadingCenter}>
+        <ActivityIndicator size="large" color={PRIMARY} />
+      </View>
+    );
+  }
+
+  if (accumulated.length === 0) {
+    return (
+      <View style={styles.emptyFull}>
+        <Ionicons name="checkmark-circle-outline" size={48} color="#d1d5db" />
+        <Text style={styles.emptyText}>אין תזכורות פתוחות לקהילה זו</Text>
+      </View>
+    );
+  }
+
+  return (
+    <FlatList<TaskDoc>
+      data={accumulated}
+      keyExtractor={keyExtractor}
+      renderItem={renderItem}
+      contentContainerStyle={[styles.taskList, { marginHorizontal: 16, marginTop: 16, paddingBottom: 100 }]}
+      ItemSeparatorComponent={() => <View style={styles.taskSeparator} />}
+      onEndReached={handleLoadMore}
+      onEndReachedThreshold={0.3}
+      ListFooterComponent={
+        loadingMore ? (
+          <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
+        ) : null
+      }
+      showsVerticalScrollIndicator={false}
+    />
+  );
+}
+
+// ─── Tab: פעילות ─────────────────────────────────────────────────────────────
+
+function TabActivity() {
+  return (
+    <View style={styles.emptyFull}>
+      <Ionicons name="pulse-outline" size={48} color="#d1d5db" />
+      <Text style={styles.emptyText}>פעילות הקהילה תופיע כאן בקרוב</Text>
+      {/* TODO: create activityFeed query in convex/communities.ts */}
     </View>
   );
 }
@@ -720,68 +872,50 @@ export default function CommunityDetailScreen() {
 
   // ── Queries
   const community = useQuery(api.communities.getCommunity, { communityId });
-  const events = useQuery(api.events.listByCommunity, { communityId });
   const myRsvps = useQuery(api.eventRsvps.listByUser);
-  const tasks = useQuery(api.tasks.listByCommunity, { communityId });
 
   // ── Mutations
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
   const toggleCompleted = useMutation(api.tasks.toggleCompleted);
   const deleteCommunity = useMutation(api.communities.deleteCommunity);
+  const toggleNotifications = useMutation(api.communities.toggleNotifications);
 
   // ── Local state
   const [activeTab, setActiveTab] = useState<Tab>('הכל');
   const [selectedMonth, setSelectedMonth] = useState(() => new Date());
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 16, y: 80 });
+  const [addSheetOpen, setAddSheetOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [rsvpSheet, setRsvpSheet] = useState<Id<'events'> | null>(null);
   const menuBtnRef = useRef<View>(null);
 
-  // ── Derived data
-  const now = Date.now();
-
+  // ── RSVP map
   const rsvpMap = useMemo<Record<string, RsvpStatus>>(() => {
     if (!myRsvps) return {};
-    return Object.fromEntries(myRsvps.map((r) => [r.eventId, r.status as RsvpStatus]));
+    return Object.fromEntries(
+      myRsvps.map((r) => [r.eventId, r.status as RsvpStatus])
+    );
   }, [myRsvps]);
 
-  const futureEvents = useMemo<EventDoc[]>(() => {
-    if (!events) return [];
-    return (events as EventDoc[]).filter((e) => !isEventPast(e));
-  }, [events]);
-
-  const myEvents = useMemo<EventDoc[]>(
-    () => futureEvents.filter((e) => ['yes', 'maybe'].includes(rsvpMap[e._id] ?? 'none')),
-    [futureEvents, rsvpMap]
-  );
-
-  const unansweredEvents = useMemo<EventDoc[]>(
-    () => futureEvents.filter((e) => !rsvpMap[e._id] || rsvpMap[e._id] === 'none'),
-    [futureEvents, rsvpMap]
-  );
-
-  const communityTasks = useMemo<TaskDoc[]>(
-    () => (tasks ?? []) as TaskDoc[],
-    [tasks]
-  );
-
   // ── Handlers
-  const handleRsvp = useCallback(
-    (eventId: Id<'events'>, status: RsvpStatus) => {
-      upsertRsvp({ eventId, status }).catch(() =>
+  const handleRsvpSelect = useCallback(
+    (status: RsvpStatus) => {
+      if (!rsvpSheet) return;
+      upsertRsvp({ eventId: rsvpSheet, status }).catch(() =>
         Alert.alert('שגיאה', 'לא ניתן לשמור תגובה')
       );
     },
-    [upsertRsvp]
+    [rsvpSheet, upsertRsvp]
   );
 
   const handleToggleTask = useCallback(
     (taskId: Id<'tasks'>) => {
       toggleCompleted({ id: taskId }).catch(() =>
-        Alert.alert('שגיאה', 'לא ניתן לעדכן משימה')
+        Alert.alert('שגיאה', 'לא ניתן לעדכן תזכורת')
       );
-      // TODO: connect task completion to Convex mutation with optimistic update
+      // TODO: add optimistic update
     },
     [toggleCompleted]
   );
@@ -789,11 +923,11 @@ export default function CommunityDetailScreen() {
   const handleDeleteCommunity = useCallback(() => {
     Alert.alert(
       'מחיקת קהילה',
-      'מחיקת הקהילה תמחק גם את כל האירועים והמשימות שלה. הפעולה אינה הפיכה.',
+      'מחיקת קהילה תמחק גם את כל האירועים והתזכורות שלה עבור כל החברים. פעולה זו אינה הפיכה.',
       [
-        { text: 'ביטול', style: 'cancel' },
+        { text: 'בטל', style: 'cancel' },
         {
-          text: 'מחיקה',
+          text: 'מחק',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -808,6 +942,34 @@ export default function CommunityDetailScreen() {
     );
   }, [deleteCommunity, communityId, router]);
 
+  const handleToggleNotifications = useCallback(async () => {
+    try {
+      const result = await toggleNotifications({ communityId });
+      const msg = result?.notificationsEnabled
+        ? 'מעכשיו תקבל/י התראות על אירועים ושינויים בקהילה'
+        : 'ההתראות בוטלו לקהילה זו';
+      Alert.alert('התראות', msg, [{ text: 'אישור' }]);
+    } catch {
+      Alert.alert('שגיאה', 'לא ניתן לשנות הגדרות התראות');
+    }
+  }, [toggleNotifications, communityId]);
+
+  const handleSeeMoreEvents = useCallback(() => setActiveTab('אירועים'), []);
+  const handleSeeMoreReminders = useCallback(() => setActiveTab('תזכורות'), []);
+
+  const handleShare = useCallback(async () => {
+    const code = community?.inviteCode;
+    const name = community?.name ?? 'קהילה';
+    const message = code
+      ? `הצטרפו לקהילה "${name}":\ninyomi://community-join/${code}`
+      : `הצטרפו לקהילה "${name}" באפליקציית InYomi`;
+    try {
+      await Share.share({ message });
+    } catch {
+      Alert.alert('שגיאה', 'לא ניתן לשתף כרגע');
+    }
+  }, [community]);
+
   const handleMenuPress = useCallback(() => {
     if (!menuBtnRef.current) {
       setMenuOpen(true);
@@ -819,68 +981,61 @@ export default function CommunityDetailScreen() {
     });
   }, []);
 
-  const overflowItems = useMemo<OverflowMenuItem[]>(() => [
-    {
-      label: 'חיפוש אירוע',
-      iconName: 'search-outline',
-      onPress: () => { setActiveTab('אירועים'); setSearchOpen(true); },
-    },
-    {
-      label: 'הצג ביומן',
-      iconName: 'calendar-outline',
-      onPress: () => {
-        // TODO: add communityId filter to calendar screen
-        router.push(
-          `/(authenticated)/calendar?communityId=${communityId}` as Parameters<typeof router.push>[0]
-        );
+  const overflowItems = useMemo<OverflowItem[]>(
+    () => [
+      {
+        label: 'חיפוש אירוע',
+        iconName: 'search-outline',
+        onPress: () => {
+          setActiveTab('אירועים');
+          setSearchOpen(true);
+        },
       },
-    },
-    {
-      label: 'ניהול חברים',
-      iconName: 'people-outline',
-      onPress: () =>
-        router.push(
-          `/(authenticated)/community-members/${communityId}` as Parameters<typeof router.push>[0]
-        ),
-    },
-    {
-      label: 'התראות',
-      iconName: 'notifications-outline',
-      onPress: () => {
-        Alert.alert(
-          'התראות קהילה',
-          'מעכשיו תקבלו התראה על כל אירוע חדש או שינוי באירועי הקהילה.',
-          [{ text: 'אישור' }]
-        );
-        // TODO: add toggleMute mutation
+      {
+        label: 'הצג ביומן',
+        iconName: 'calendar-outline',
+        onPress: () => {
+          // TODO: add communityId filter to calendar screen
+          router.push(
+            `/(authenticated)/calendar?communityId=${communityId}` as Parameters<typeof router.push>[0]
+          );
+        },
       },
-    },
-    {
-      label: 'שיתוף קישור',
-      iconName: 'share-outline',
-      onPress: () => {
-        if (!community?.inviteCode) {
-          Alert.alert('שגיאה', 'לא נמצא קישור הזמנה לקהילה זו');
-          return;
-        }
-        Share.share({
-          message: `הצטרפו לקהילה "${community.name}": https://inyomi.app/join/${community.inviteCode}`,
-        });
+      {
+        label: 'ניהול חברים',
+        iconName: 'people-outline',
+        onPress: () =>
+          router.push(
+            `/(authenticated)/community-members/${communityId}` as Parameters<typeof router.push>[0]
+          ),
       },
-    },
-    {
-      label: 'מחיקת קהילה',
-      iconName: 'trash-outline',
-      danger: true,
-      onPress: handleDeleteCommunity,
-    },
-  ], [community, communityId, router, handleDeleteCommunity]);
+      {
+        label: community?.myNotificationsEnabled !== false ? 'בטל התראות' : 'הפעל התראות',
+        iconName: community?.myNotificationsEnabled !== false
+          ? 'notifications-off-outline'
+          : 'notifications-outline',
+        onPress: handleToggleNotifications,
+      },
+      {
+        label: 'שיתוף קישור',
+        iconName: 'share-outline',
+        onPress: handleShare,
+      },
+      {
+        label: 'מחיקת קהילה',
+        iconName: 'trash-outline',
+        danger: true,
+        onPress: handleDeleteCommunity,
+      },
+    ],
+    [community, communityId, router, handleToggleNotifications, handleDeleteCommunity, handleShare]
+  );
 
   // ── Loading / not found
   if (community === undefined) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
+        <View style={styles.loadingCenter}>
           <ActivityIndicator size="large" color={PRIMARY} />
         </View>
       </SafeAreaView>
@@ -890,8 +1045,17 @@ export default function CommunityDetailScreen() {
   if (community === null) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
+        <View style={styles.loadingCenter}>
+          <Ionicons name="alert-circle-outline" size={48} color="#d1d5db" />
           <Text style={styles.emptyText}>הקהילה לא נמצאה</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => router.back()}
+            accessible
+            accessibilityRole="button"
+          >
+            <Text style={styles.retryText}>חזור</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
@@ -903,7 +1067,7 @@ export default function CommunityDetailScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* ── Header */}
       <View style={styles.header}>
-        {/* שמאל: חזרה + שיתוף + ⋯ */}
+        {/* שמאל: ⋯ + "+" */}
         <View style={styles.headerLeft}>
           <View ref={menuBtnRef}>
             <TouchableOpacity
@@ -917,19 +1081,24 @@ export default function CommunityDetailScreen() {
             </TouchableOpacity>
           </View>
           <TouchableOpacity
-            onPress={() => {
-              if (!community.inviteCode) return;
-              Share.share({
-                message: `הצטרפו לקהילה "${community.name}": https://inyomi.app/join/${community.inviteCode}`,
-              });
-            }}
-            style={styles.headerIconBtn}
+            onPress={() => setAddSheetOpen(true)}
+            style={[styles.headerIconBtn, styles.headerAddBtn]}
             accessible
             accessibilityRole="button"
-            accessibilityLabel="שיתוף"
+            accessibilityLabel="הוסף אירוע או תזכורת"
           >
-            <Ionicons name="share-outline" size={20} color="#374151" />
+            <Ionicons name="add" size={22} color="#fff" />
           </TouchableOpacity>
+        </View>
+
+        {/* ימין: כפתור חזרה + שם + תיאור */}
+        <View style={styles.headerRight}>
+          <View style={styles.headerTextBlock}>
+            <Text style={styles.headerTitle} numberOfLines={2}>
+              {community.name}
+            </Text>
+            <Text style={styles.headerSubtitle}>{memberLabel}</Text>
+          </View>
           <TouchableOpacity
             onPress={() => router.back()}
             style={styles.headerIconBtn}
@@ -940,14 +1109,6 @@ export default function CommunityDetailScreen() {
             <Ionicons name="chevron-forward" size={22} color="#374151" />
           </TouchableOpacity>
         </View>
-
-        {/* ימין: שם + תיאור */}
-        <View style={styles.headerRight}>
-          <Text style={styles.headerTitle} numberOfLines={2}>
-            {community.name}
-          </Text>
-          <Text style={styles.headerSubtitle}>{memberLabel}</Text>
-        </View>
       </View>
 
       {/* ── Tabs */}
@@ -957,7 +1118,7 @@ export default function CommunityDetailScreen() {
         style={styles.tabsScroll}
         contentContainerStyle={styles.tabsRow}
       >
-        {[...TABS].reverse().map((tab) => {
+        {TABS.map((tab) => {
           const active = tab === activeTab;
           return (
             <TouchableOpacity
@@ -980,34 +1141,43 @@ export default function CommunityDetailScreen() {
       {/* ── Tab content */}
       {activeTab === 'הכל' && (
         <TabAll
-          myEvents={myEvents}
-          unansweredEvents={unansweredEvents}
-          tasks={communityTasks}
+          communityId={communityId}
           rsvpMap={rsvpMap}
-          onRsvp={handleRsvp}
+          onRsvpPress={setRsvpSheet}
           onToggleTask={handleToggleTask}
-          onSeeMoreEvents={() => setActiveTab('אירועים')}
+          onSeeMoreEvents={handleSeeMoreEvents}
+          onSeeMoreReminders={handleSeeMoreReminders}
         />
       )}
       {activeTab === 'אירועים' && (
         <TabEvents
-          events={(events ?? []) as EventDoc[]}
+          communityId={communityId}
           rsvpMap={rsvpMap}
-          onRsvp={handleRsvp}
+          onRsvpPress={setRsvpSheet}
           selectedMonth={selectedMonth}
           onMonthChange={setSelectedMonth}
           searchQuery={searchQuery}
         />
       )}
-      {activeTab === 'משימות' && (
-        <TabTasks tasks={communityTasks} onToggle={handleToggleTask} />
+      {activeTab === 'תזכורות' && (
+        <TabReminders communityId={communityId} onToggle={handleToggleTask} />
       )}
       {activeTab === 'פעילות' && <TabActivity />}
 
-      {/* ── FAB */}
-      <Fab communityId={communityId} />
+      {/* ── Modals */}
+      <AddActionSheet
+        visible={addSheetOpen}
+        communityId={communityId}
+        onClose={() => setAddSheetOpen(false)}
+      />
 
-      {/* ── Overflow menu */}
+      <RsvpBottomSheet
+        eventId={rsvpSheet}
+        currentStatus={rsvpSheet ? (rsvpMap[rsvpSheet] ?? 'none') : 'none'}
+        onSelect={handleRsvpSelect}
+        onClose={() => setRsvpSheet(null)}
+      />
+
       <OverflowMenu
         visible={menuOpen}
         position={menuPos}
@@ -1015,7 +1185,6 @@ export default function CommunityDetailScreen() {
         onClose={() => setMenuOpen(false)}
       />
 
-      {/* ── Search modal */}
       <SearchModal
         visible={searchOpen}
         value={searchQuery}
@@ -1030,8 +1199,7 @@ export default function CommunityDetailScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
-
-  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
 
   // ── Header
   header: {
@@ -1045,26 +1213,25 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f1f5f9',
     gap: 8,
   },
-  headerRight: { flex: 1, alignItems: 'flex-end' },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  headerRight: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 },
+  headerTextBlock: { alignItems: 'flex-end', flex: 1 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#111827',
     textAlign: 'right',
   },
-  headerSubtitle: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginTop: 2,
-    textAlign: 'right',
-  },
+  headerSubtitle: { fontSize: 12, color: '#6b7280', marginTop: 2, textAlign: 'right' },
   headerIconBtn: {
     width: 36,
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 18,
+  },
+  headerAddBtn: {
+    backgroundColor: PRIMARY,
   },
 
   // ── Tabs strip
@@ -1079,6 +1246,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     gap: 8,
+    justifyContent: 'flex-end',
   },
   tabChip: {
     height: 34,
@@ -1094,7 +1262,7 @@ const styles = StyleSheet.create({
   tabChipText: { fontSize: 14, color: '#374151', fontWeight: '500' },
   tabChipTextActive: { color: '#fff' },
 
-  // ── Scroll areas
+  // ── Scroll / flex
   tabScroll: { flex: 1 },
   tabFlex: { flex: 1 },
   tabContent: { padding: 16, gap: 20, paddingBottom: 100 },
@@ -1106,32 +1274,14 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 10,
   },
-  sectionHeaderRight: { flex: 1, alignItems: 'flex-end' },
-  sectionHeaderLeft: { alignItems: 'flex-start' },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#111827',
-    textAlign: 'right',
-  },
-  sectionSubtitle: {
-    fontSize: 12,
-    color: '#9ca3af',
-    textAlign: 'right',
-    marginTop: 2,
-  },
-  sectionAction: {
-    fontSize: 13,
-    color: PRIMARY,
-    fontWeight: '600',
-  },
+  sectionRight: { flex: 1, alignItems: 'flex-end' },
+  sectionLeft: { alignItems: 'flex-start', minWidth: 60 },
+  sectionTitle: { fontSize: 17, fontWeight: '700', color: '#111827', textAlign: 'right' },
+  sectionSubtitle: { fontSize: 12, color: '#9ca3af', textAlign: 'right', marginTop: 2 },
+  sectionAction: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
 
   // ── Events grid
-  eventsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
+  eventsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
 
   // ── Event Card
   eventCard: {
@@ -1146,85 +1296,52 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   eventCardPast: { opacity: 0.45 },
-  eventCardHeader: {
-    height: 100,
-    justifyContent: 'flex-end',
-    padding: 8,
-  },
+  eventCardHeader: { height: 90, justifyContent: 'flex-end', padding: 8 },
   eventCardOverlay: {
     position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 60,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    bottom: 0, left: 0, right: 0,
+    height: 55,
+    backgroundColor: 'rgba(0,0,0,0.32)',
   },
-  rsvpBadge: {
+  eventBadge: {
     alignSelf: 'flex-start',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 7,
   },
-  rsvpBadgeText: {
-    fontSize: 10,
-    color: '#fff',
-    fontWeight: '700',
-  },
-  eventCardBody: {
-    padding: 10,
-    gap: 4,
-    alignItems: 'flex-end',
-  },
-  eventCardTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#111827',
-    textAlign: 'right',
-  },
-  eventCardDate: {
-    fontSize: 11,
-    color: '#6b7280',
-    textAlign: 'right',
-  },
-  eventCardLocation: {
-    fontSize: 10,
-    color: '#9ca3af',
-    textAlign: 'right',
-  },
+  eventBadgeText: { fontSize: 10, color: '#fff', fontWeight: '700' },
+  eventCardBody: { padding: 10, gap: 3, alignItems: 'flex-end' },
+  eventCardTitle: { fontSize: 13, fontWeight: '700', color: '#111827', textAlign: 'right' },
+  eventCardDate: { fontSize: 11, color: '#6b7280', textAlign: 'right' },
+  eventCardLocation: { fontSize: 10, color: '#9ca3af', textAlign: 'right' },
 
-  // ── RSVP buttons
-  rsvpButtons: {
+  // ── Event Row (events tab)
+  eventRow: {
     flexDirection: 'row',
-    gap: 4,
-    marginTop: 6,
-    justifyContent: 'flex-end',
+    alignItems: 'flex-start',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#fff',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f1f5f9',
+    gap: 12,
   },
-  rsvpBtn: {
+  eventRowLeft: { alignItems: 'center', gap: 4, minWidth: 44 },
+  eventDot: { width: 8, height: 8, borderRadius: 4 },
+  eventRowDate: { fontSize: 11, color: '#9ca3af', textAlign: 'center' },
+  eventRowContent: { flex: 1, alignItems: 'flex-end', gap: 4 },
+  eventRowTop: { flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'flex-end', width: '100%' },
+  eventRowTitle: { fontSize: 15, fontWeight: '600', color: '#111827', textAlign: 'right', flex: 1 },
+  eventRowLocation: { fontSize: 12, color: '#9ca3af', textAlign: 'right' },
+  rsvpStatusBadge: {
+    alignSelf: 'flex-end',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
-    backgroundColor: '#f3f4f6',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
   },
-  rsvpBtnText: {
-    fontSize: 11,
-    color: '#374151',
-    fontWeight: '600',
-  },
+  rsvpStatusText: { fontSize: 11, color: '#fff', fontWeight: '700' },
 
-  // ── See more
-  seeMoreBtn: {
-    alignSelf: 'flex-end',
-    marginTop: 8,
-  },
-  seeMoreText: {
-    fontSize: 13,
-    color: PRIMARY,
-    fontWeight: '600',
-  },
-
-  // ── Task list
+  // ── Tasks
   taskList: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -1234,6 +1351,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 2,
+  },
+  taskSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#f1f5f9',
+    marginHorizontal: 16,
   },
   taskRow: {
     flexDirection: 'row',
@@ -1254,21 +1376,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   checkboxChecked: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  taskTitle: {
-    flex: 1,
-    fontSize: 14,
-    color: '#111827',
-    textAlign: 'right',
-  },
+  taskTitle: { flex: 1, fontSize: 14, color: '#111827', textAlign: 'right' },
   taskTitleDone: { textDecorationLine: 'line-through', color: '#9ca3af' },
-  taskDue: {
-    fontSize: 11,
-    color: '#9ca3af',
-    minWidth: 36,
-    textAlign: 'left',
-  },
+  taskDue: { fontSize: 11, color: '#9ca3af', minWidth: 36, textAlign: 'left' },
 
-  // ── Events tab list
+  // ── Month selector
   monthSelector: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1279,142 +1391,100 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f1f5f9',
   },
-  monthArrow: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  monthLabel: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-    textAlign: 'center',
-  },
-  eventRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: '#fff',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#f1f5f9',
-    gap: 12,
-  },
-  pastEventRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: '#fff',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#f1f5f9',
-    gap: 12,
-    opacity: 0.45,
-  },
-  eventRowLeft: { alignItems: 'center', gap: 4, minWidth: 48 },
-  eventDot: { width: 8, height: 8, borderRadius: 4 },
-  eventRowDate: { fontSize: 11, color: '#9ca3af', textAlign: 'center' },
-  eventRowContent: { flex: 1, alignItems: 'flex-end', gap: 4 },
-  eventRowTop: { flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'flex-end' },
-  eventRowTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#111827',
-    textAlign: 'right',
-    flex: 1,
-  },
-  eventRowLocation: { fontSize: 12, color: '#9ca3af', textAlign: 'right' },
-  pastBadge: {
-    backgroundColor: '#94a3b8',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  pastBadgeText: { fontSize: 10, color: '#fff', fontWeight: '700' },
-  textFaded: { color: '#9ca3af' },
+  monthArrow: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  monthLabel: { fontSize: 16, fontWeight: '700', color: '#111827', textAlign: 'center' },
+
+  // ── See more
+  seeMoreBtn: { alignSelf: 'flex-end', marginTop: 8 },
+  seeMoreText: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
 
   // ── Empty states
-  emptySmall: {
-    paddingVertical: 16,
-    alignItems: 'flex-end',
-  },
+  emptySmall: { paddingVertical: 16, alignItems: 'flex-end' },
   emptySmallText: { fontSize: 13, color: '#9ca3af', textAlign: 'right' },
-  emptyFull: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    padding: 32,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#6b7280',
-    textAlign: 'center',
-  },
+  emptyFull: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32 },
+  emptyText: { fontSize: 16, color: '#6b7280', textAlign: 'center' },
 
-  // ── FAB
-  fabContainer: {
-    position: 'absolute',
-    bottom: 24,
-    left: 24,
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  fabBackdrop: {
-    position: 'absolute',
-    top: -1000,
-    left: -1000,
-    right: -1000,
-    bottom: -1000,
-  },
-  fab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  // ── Retry
+  retryBtn: {
     backgroundColor: PRIMARY,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 6,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginTop: 8,
   },
-  fabOpen: { backgroundColor: '#374151' },
-  fabMenuItem: {
+  retryText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+
+  // ── RSVP Bottom Sheet
+  sheetBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 36,
+    paddingTop: 12,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  sheetTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+    marginBottom: 12,
+  },
+  sheetOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    alignSelf: 'flex-start',
+    gap: 12,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f3f4f6',
+    justifyContent: 'flex-end',
   },
-  fabMenuIcon: {
+  sheetOptionActive: { backgroundColor: '#f8fafc' },
+  sheetOptionText: { fontSize: 17, color: '#374151', textAlign: 'right' },
+
+  // ── Add Action Sheet
+  addSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 36,
+    paddingTop: 12,
+  },
+  addSheetOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f3f4f6',
+    justifyContent: 'flex-end',
+  },
+  addSheetIcon: {
     width: 44,
     height: 44,
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 4,
   },
-  fabMenuLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-    backgroundColor: '#fff',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-    textAlign: 'right',
-  },
+  addSheetLabel: { fontSize: 17, fontWeight: '600', color: '#111827', textAlign: 'right' },
 
   // ── Overflow popover
   popoverBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
@@ -1422,7 +1492,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     backgroundColor: '#fff',
     borderRadius: 12,
-    width: 210,
+    width: 215,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.12,
@@ -1465,9 +1535,5 @@ const styles = StyleSheet.create({
     elevation: 8,
     gap: 10,
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#111827',
-  },
+  searchInput: { flex: 1, fontSize: 16, color: '#111827' },
 });

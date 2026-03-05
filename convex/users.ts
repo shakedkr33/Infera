@@ -146,8 +146,8 @@ export const remove = mutation({
   },
 });
 
-// שליפת ה-Space הראשי של המשתמש הנוכחי (דרך טבלת members)
-// מחזיר null אם אין space או אם המשתמש לא מחובר
+// שליפת ה-Space הראשי של המשתמש הנוכחי
+// מחזיר Id<'spaces'> | null — לא מחזיר null בשקט: null פירושו "אין מרחב פעיל"
 export const getMySpace = query({
   args: {},
   handler: async (ctx) => {
@@ -160,14 +160,20 @@ export const getMySpace = query({
       .unique();
     if (!user) return null;
 
-    // TODO: כאשר יהיה defaultSpaceId – להחזיר אותו ישירות מ-user.defaultSpaceId
+    // 1. נסה members table — מוצא membership ומחזיר spaceId
     const membership = await ctx.db
       .query('members')
       .withIndex('by_user', (q) => q.eq('userId', user._id))
       .first();
-    if (!membership) return null;
+    if (membership) return membership.spaceId;
 
-    return await ctx.db.get(membership.spaceId);
+    // 2. fallback: user.defaultSpaceId (נאכלס ב-onboarding)
+    if ((user as unknown as { defaultSpaceId?: string }).defaultSpaceId) {
+      return (user as unknown as { defaultSpaceId: string }).defaultSpaceId;
+    }
+
+    // 3. אין מרחב — הקליינט מציג מצב שגיאה
+    return null;
   },
 });
 

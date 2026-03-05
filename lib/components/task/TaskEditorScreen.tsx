@@ -5,12 +5,14 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -63,9 +65,10 @@ export default function TaskEditorScreen({
   const [eventPickerOpen, setEventPickerOpen] = useState(false);
 
   // ── Convex: spaceId ─────────────────────────────────────────────────────
-  // TODO: כאשר defaultSpaceId ייאכלס ב-onboarding, לעבור לשליפה ישירה
+  // getMySpace מחזיר את ה-spaceId ישירות (Id<'spaces'> | null | undefined)
+  // undefined = עדיין טוען | null = אין מרחב פעיל | string = ה-ID
   const mySpace = useQuery(api.users.getMySpace);
-  const spaceId = mySpace?._id;
+  const spaceId = mySpace ?? undefined; // ממיר null ל-undefined עבור mutatio
 
   // ── Convex: edit mode – load existing task ───────────────────────────────
   const existingTask = useQuery(
@@ -166,6 +169,57 @@ export default function TaskEditorScreen({
   };
 
   const showDateFields = draft.dateOption !== 'none';
+
+  // ── spaceId loading / error states ────────────────────────────────────────
+  // mySpace === undefined  → still loading
+  // mySpace === null       → loaded but no space found
+  if (isCreate && mySpace === undefined) {
+    return (
+      <SafeAreaView style={s.safe}>
+        <View style={s.header}>
+          <Pressable onPress={handleBack} style={s.closeBtn} accessible accessibilityRole="button" accessibilityLabel="סגור">
+            <MaterialIcons name="close" size={22} color="#9ca3af" />
+          </Pressable>
+          <Text style={s.headerTitle}>יצירת משימה חדשה</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <View style={s.spaceLoadingContainer}>
+          <ActivityIndicator size="large" color={PRIMARY} />
+          <Text style={s.spaceLoadingText}>טוען פרטי מרחב...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (isCreate && mySpace === null) {
+    return (
+      <SafeAreaView style={s.safe}>
+        <View style={s.header}>
+          <Pressable onPress={handleBack} style={s.closeBtn} accessible accessibilityRole="button" accessibilityLabel="סגור">
+            <MaterialIcons name="close" size={22} color="#9ca3af" />
+          </Pressable>
+          <Text style={s.headerTitle}>יצירת משימה חדשה</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <View style={s.spaceLoadingContainer}>
+          <MaterialIcons name="error-outline" size={48} color="#d1d5db" />
+          <Text style={s.spaceErrorText}>לא נמצא מרחב פעיל</Text>
+          <Text style={s.spaceErrorSubtext}>
+            נדרש מרחב (space) כדי ליצור משימות. אנא השלם את תהליך ה-Onboarding.
+          </Text>
+          <TouchableOpacity
+            style={s.retryBtn}
+            onPress={() => router.back()}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="חזור"
+          >
+            <Text style={s.retryBtnText}>חזור</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={s.safe}>
@@ -414,8 +468,9 @@ export default function TaskEditorScreen({
       {/* Sticky Footer */}
       <View style={s.footer}>
         <Pressable
-          style={s.saveBtn}
+          style={[s.saveBtn, isCreate && !spaceId && s.saveBtnDisabled]}
           onPress={handleSave}
+          disabled={isCreate && !spaceId}
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel={isCreate ? 'צור משימה' : 'שמור משימה'}
@@ -605,4 +660,23 @@ const s = StyleSheet.create({
     elevation: 4,
   },
   saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  saveBtnDisabled: { opacity: 0.45 },
+  spaceLoadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: 32,
+  },
+  spaceLoadingText: { fontSize: 15, color: '#6b7280', textAlign: 'center' },
+  spaceErrorText: { fontSize: 18, fontWeight: '700', color: '#374151', textAlign: 'center' },
+  spaceErrorSubtext: { fontSize: 14, color: '#9ca3af', textAlign: 'center', lineHeight: 20 },
+  retryBtn: {
+    marginTop: 8,
+    backgroundColor: PRIMARY,
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 14,
+  },
+  retryBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
 });

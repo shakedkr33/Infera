@@ -82,6 +82,7 @@ export default defineSchema({
     // TODO: migrate groupId → communityId (groupId was v.optional(v.id('spaces')))
     sharedWithUserIds: v.optional(v.array(v.id('users'))), // משתמשים מוזמנים
     communityId: v.optional(v.id('communities')),
+    requiresRsvp: v.optional(v.boolean()), // האם האירוע דורש אישור השתתפות
   })
     .index('by_space_and_time', ['spaceId', 'startTime'])
     .index('by_creator', ['createdBy'])
@@ -251,6 +252,7 @@ export default defineSchema({
     pinned: v.boolean(),
     notificationsEnabled: v.boolean(),
     joinedAt: v.number(),
+    status: v.optional(v.union(v.literal('active'), v.literal('left'))),
   })
     .index('by_community', ['communityId'])
     .index('by_user', ['userId'])
