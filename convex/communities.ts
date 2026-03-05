@@ -328,3 +328,43 @@ export const leaveCommunity = mutation({
     await ctx.db.delete(membership._id);
   },
 });
+
+// ─────────────────────────────────────────────────────────────
+// קבלת חברי קהילה (למסך ניהול חברים)
+// ─────────────────────────────────────────────────────────────
+export const getCommunityMembers = query({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const community = await ctx.db.get(communityId);
+    if (!community || community.archived) return null;
+
+    const memberships = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community', (q) => q.eq('communityId', communityId))
+      .collect();
+
+    const membersWithInfo = await Promise.all(
+      memberships.map(async (m) => {
+        const user = await ctx.db.get(m.userId);
+        return {
+          userId: m.userId,
+          role: m.role as 'owner' | 'admin' | 'member',
+          joinedAt: m.joinedAt,
+          fullName: (user as { fullName?: string } | null)?.fullName ?? 'משתמש',
+          email: (user as { email?: string } | null)?.email ?? '',
+        };
+      })
+    );
+
+    return {
+      community: {
+        name: community.name,
+        inviteCode: community.inviteCode,
+      },
+      members: membersWithInfo,
+    };
+  },
+});

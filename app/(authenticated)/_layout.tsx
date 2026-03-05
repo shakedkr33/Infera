@@ -268,6 +268,7 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="family-profile" options={{ href: null }} />
           <Tabs.Screen name="community-create" options={{ href: null }} />
           <Tabs.Screen name="community-join/[code]" options={{ href: null }} />
+          <Tabs.Screen name="community-members/[id]" options={{ href: null }} />
         </Tabs>
 
         <ActionSheetModal

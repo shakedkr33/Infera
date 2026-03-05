@@ -1,6 +1,6 @@
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
-import { MaterialIcons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import { useCallback, useRef, useState } from 'react';
@@ -48,12 +48,12 @@ interface MenuPosition { x: number; y: number }
 function SkeletonCard() {
   return (
     <View style={styles.cardWrapper}>
-      <View style={[styles.colorBar, { backgroundColor: '#e5e7eb' }]} />
       <View style={styles.cardInner}>
         <View style={[styles.skeletonLine, { width: '65%' }]} />
         <View style={[styles.skeletonLine, { width: '35%', marginTop: 8 }]} />
         <View style={[styles.skeletonLine, { width: '50%', marginTop: 6, height: 10 }]} />
       </View>
+      <View style={[styles.colorBar, { backgroundColor: '#e5e7eb' }]} />
     </View>
   );
 }
@@ -80,43 +80,39 @@ function CommunityCard({ item, onPinToggle, onMenuPress, onPress }: CardProps) {
       accessibilityRole="button"
       accessibilityLabel={`קהילה: ${community.name}`}
     >
-      {/* פס צבע ימין */}
-      <View
-        style={[styles.colorBar, { backgroundColor: community.color ?? PRIMARY }]}
-      />
-
       <View style={styles.cardInner}>
-        {/* שורה עליונה: שם + כפתורים */}
+        {/* שורה עליונה: שם (ימין) + אייקונים (שמאל) */}
         <View style={styles.cardTopRow}>
-          <Text style={styles.cardName} numberOfLines={1}>
+          {/* שם – עד 2 שורות */}
+          <Text style={styles.cardName} numberOfLines={2}>
             {community.name}
           </Text>
+          {/* אייקונים בפינה שמאל-עליונה */}
           <View style={styles.cardActions}>
-            {/* נעץ */}
-            <Pressable
+            <TouchableOpacity
               onPress={onPinToggle}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessible
               accessibilityRole="button"
               accessibilityLabel={pinned ? 'בטל הצמדה' : 'הצמד'}
             >
-              <MaterialIcons
-                name="push-pin"
-                size={16}
-                color={pinned ? PRIMARY : '#d1d5db'}
+              <Ionicons
+                name={pinned ? 'pin' : 'pin-outline'}
+                size={pinned ? 18 : 16}
+                color={pinned ? PRIMARY : '#bbb'}
+                style={pinned ? { transform: [{ rotate: '-15deg' }] } : undefined}
               />
-            </Pressable>
-            {/* תפריט */}
+            </TouchableOpacity>
             <View ref={menuRef}>
-              <Pressable
+              <TouchableOpacity
                 onPress={() => onMenuPress(menuRef.current)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessible
                 accessibilityRole="button"
                 accessibilityLabel="אפשרויות"
               >
-                <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
-              </Pressable>
+                <Ionicons name="ellipsis-vertical" size={16} color="#999" />
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -130,68 +126,39 @@ function CommunityCard({ item, onPinToggle, onMenuPress, onPress }: CardProps) {
           <View style={styles.tagPlaceholder} />
         )}
 
-        {/* מספר חברים – TODO: חבר ל-memberCount אמיתי */}
+        {/* מספר חברים – TODO: חבר ל-memberCount אמיתי מ-getCommunityMembers */}
         <Text style={styles.memberCount}>חברים</Text>
+
+        {/* פעילות קרובה – TODO: חבר ל-nextActivityLabel מהשרת */}
+        <Text style={styles.nextActivity} numberOfLines={1}>
+          אין פעילויות קרובות
+        </Text>
       </View>
+
+      {/* פס צבע בצד ימין */}
+      <View style={[styles.colorBar, { backgroundColor: community.color ?? PRIMARY }]} />
     </Pressable>
   );
 }
 
-// ─── Popover Menu ─────────────────────────────────────────────────────────────
+// ─── Popover Menu (generic) ───────────────────────────────────────────────────
+
+interface PopoverMenuItem {
+  label: string;
+  iconName: React.ComponentProps<typeof Ionicons>['name'];
+  onPress: () => void;
+  danger?: boolean;
+}
 
 interface PopoverMenuProps {
   visible: boolean;
   position: MenuPosition;
-  item: CommunityItem | null;
   onClose: () => void;
-  onEdit: () => void;
-  onShare: () => void;
-  onTogglePin: () => void;
-  onDelete: () => void;
+  items: PopoverMenuItem[];
 }
 
-function PopoverMenu({
-  visible,
-  position,
-  item,
-  onClose,
-  onEdit,
-  onShare,
-  onTogglePin,
-  onDelete,
-}: PopoverMenuProps) {
-  if (!item) return null;
-
-  const menuItems = [
-    {
-      label: 'עריכת קהילה',
-      icon: 'edit' as const,
-      onPress: onEdit,
-      danger: false,
-    },
-    {
-      label: 'שיתוף קישור',
-      icon: 'share' as const,
-      onPress: onShare,
-      danger: false,
-    },
-    {
-      label: item.pinned ? 'בטל נעיצה' : 'נעץ קהילה',
-      icon: 'push-pin' as const,
-      onPress: onTogglePin,
-      danger: false,
-    },
-    ...(item.role === 'owner'
-      ? [
-          {
-            label: 'מחיקת קהילה',
-            icon: 'delete-outline' as const,
-            onPress: onDelete,
-            danger: true,
-          },
-        ]
-      : []),
-  ];
+function PopoverMenu({ visible, position, onClose, items }: PopoverMenuProps) {
+  if (!visible || items.length === 0) return null;
 
   return (
     <Modal
@@ -201,18 +168,13 @@ function PopoverMenu({
       onRequestClose={onClose}
     >
       <Pressable style={styles.popoverBackdrop} onPress={onClose} />
-      <View
-        style={[
-          styles.popover,
-          { top: position.y, right: position.x },
-        ]}
-      >
-        {menuItems.map((m, idx) => (
+      <View style={[styles.popover, { top: position.y, right: position.x }]}>
+        {items.map((m, idx) => (
           <Pressable
             key={m.label}
             style={[
               styles.popoverItem,
-              idx < menuItems.length - 1 && styles.popoverItemBorder,
+              idx < items.length - 1 && styles.popoverItemBorder,
             ]}
             onPress={() => {
               onClose();
@@ -225,8 +187,8 @@ function PopoverMenu({
             <Text style={[styles.popoverLabel, m.danger && styles.popoverDanger]}>
               {m.label}
             </Text>
-            <MaterialIcons
-              name={m.icon}
+            <Ionicons
+              name={m.iconName}
               size={18}
               color={m.danger ? '#ef4444' : '#374151'}
             />
@@ -264,7 +226,7 @@ export default function CommunitiesScreen() {
         setMenuItem(item);
         return;
       }
-      viewRef.measure((_fx, _fy, _w, _h, px, py) => {
+      viewRef.measure((_fx, _fy, _w, _h, _px, py) => {
         setMenuPos({ x: 16, y: py + _h + 4 });
         setMenuItem(item);
       });
@@ -285,22 +247,110 @@ export default function CommunitiesScreen() {
     (item: CommunityItem) => {
       Alert.alert(
         'מחיקת קהילה',
-        `האם למחוק את "${item.community.name}"? פעולה זו אינה הפיכה.`,
+        `מחיקת הקהילה תמחק גם את כל האירועים והמשימות שלה.\nהאם להמשיך?`,
         [
           { text: 'ביטול', style: 'cancel' },
           {
-            text: 'מחק',
+            text: 'מחיקה',
             style: 'destructive',
-            onPress: () => {
-              deleteCommunity({ communityId: item.community._id }).catch(() =>
-                Alert.alert('שגיאה', 'לא ניתן למחוק את הקהילה')
-              );
+            onPress: async () => {
+              try {
+                await deleteCommunity({ communityId: item.community._id });
+                setMenuItem(null);
+              } catch {
+                Alert.alert('שגיאה', 'לא ניתן למחוק את הקהילה');
+              }
             },
           },
         ]
       );
     },
     [deleteCommunity]
+  );
+
+  // ── בניית פריטי תפריט דינמית לפי הקהילה הנבחרת
+  const buildMenuItems = useCallback(
+    (item: CommunityItem): PopoverMenuItem[] => {
+      const { community, role, pinned } = item;
+
+      const inviteUrl = community.inviteCode
+        ? `https://inyomi.app/join/${community.inviteCode}`
+        : null;
+
+      const items: PopoverMenuItem[] = [
+        {
+          label: pinned ? 'בטל הצמדה' : 'הצמדה',
+          iconName: pinned ? 'pin' : 'pin-outline',
+          onPress: () => handleTogglePin(community._id),
+        },
+        {
+          label: 'ניהול חברים',
+          iconName: 'people-outline',
+          onPress: () => {
+            // TODO: create CommunityMembersScreen
+            router.push(
+              `/(authenticated)/community-members/${community._id}` as Parameters<typeof router.push>[0]
+            );
+          },
+        },
+        {
+          label: 'קישור הצטרפות',
+          iconName: 'share-outline',
+          onPress: () => {
+            if (!inviteUrl) {
+              Alert.alert('שגיאה', 'לא נמצא קישור הזמנה לקהילה זו');
+              return;
+            }
+            Share.share({
+              message: `הצטרפו לקהילה "${community.name}" באפליקציית Inyomi: ${inviteUrl}`,
+            });
+          },
+        },
+        {
+          label: 'קבל התראות',
+          iconName: 'notifications-outline',
+          onPress: () => {
+            Alert.alert(
+              'התראות קהילה',
+              'מעכשיו תקבלו התראה על כל אירוע חדש או שינוי באירועי הקהילה.',
+              [{ text: 'אישור' }]
+            );
+            // TODO: connect to notifications
+          },
+        },
+        {
+          label: 'השתק',
+          iconName: 'volume-mute-outline',
+          onPress: () => {
+            // TODO: add toggleMuteCommunity mutation to convex/communities.ts
+            Alert.alert('בקרוב', 'אפשרות ההשתקה תהיה זמינה בקרוב');
+          },
+        },
+        {
+          label: 'הצג ביומן',
+          iconName: 'calendar-outline',
+          onPress: () => {
+            // TODO: add communityId filter to calendar screen
+            router.push(
+              `/(authenticated)/calendar?communityId=${community._id}` as Parameters<typeof router.push>[0]
+            );
+          },
+        },
+      ];
+
+      // מחיקה – owner בלבד
+      if (role === 'owner') {
+        items.push({
+          label: 'מחיקת קהילה',
+          iconName: 'trash-outline',
+          danger: true,
+          onPress: () => handleDelete(item),
+        });
+      }
+
+      return items;
+    },
+    [handleTogglePin, handleDelete, router]
   );
 
   const isLoading = communitiesData === undefined;
@@ -362,7 +412,9 @@ export default function CommunitiesScreen() {
         <View style={styles.emptyContainer}>
           <MaterialIcons name="people-outline" size={60} color="#d1d5db" />
           <Text style={styles.emptyTitle}>
-            {activeFilter === 'הכל' ? 'עדיין אין קהילות' : `אין קהילות בקטגוריה "${activeFilter}"`}
+            {activeFilter === 'הכל'
+              ? 'עדיין אין קהילות'
+              : `אין קהילות בקטגוריה "${activeFilter}"`}
           </Text>
           {activeFilter === 'הכל' && (
             <Pressable
@@ -403,28 +455,8 @@ export default function CommunitiesScreen() {
       <PopoverMenu
         visible={menuItem !== null}
         position={menuPos}
-        item={menuItem}
         onClose={() => setMenuItem(null)}
-        onEdit={() => {
-          if (!menuItem) return;
-          // TODO: create edit community screen
-          router.push(
-            `/(authenticated)/community-edit/${menuItem.community._id}` as Parameters<typeof router.push>[0]
-          );
-        }}
-        onShare={() => {
-          if (!menuItem) return;
-          const url = `https://inyomi.app/join/${menuItem.community.inviteCode}`;
-          Share.share({ message: url });
-        }}
-        onTogglePin={() => {
-          if (!menuItem) return;
-          handleTogglePin(menuItem.community._id);
-        }}
-        onDelete={() => {
-          if (!menuItem) return;
-          handleDelete(menuItem);
-        }}
+        items={menuItem ? buildMenuItems(menuItem) : []}
       />
     </SafeAreaView>
   );
@@ -485,26 +517,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  chipActive: {
-    backgroundColor: PRIMARY,
-  },
-  chipText: {
-    fontSize: 13,
-    color: '#555',
-    fontWeight: '500',
-  },
-  chipTextActive: {
-    color: '#fff',
-  },
+  chipActive: { backgroundColor: PRIMARY },
+  chipText: { fontSize: 13, color: '#555', fontWeight: '500' },
+  chipTextActive: { color: '#fff' },
 
   // ── Grid
-  listContent: {
-    padding: 16,
-    gap: 12,
-  },
-  columnWrapper: {
-    gap: 12,
-  },
+  listContent: { padding: 16, gap: 12 },
+  columnWrapper: { gap: 12 },
 
   // ── Card
   cardWrapper: {
@@ -513,7 +532,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     flexDirection: 'row',
     overflow: 'hidden',
-    minHeight: 110,
+    minHeight: 140,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06,
@@ -521,7 +540,9 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   colorBar: {
-    width: 4,
+    width: 5,
+    borderTopRightRadius: 16,
+    borderBottomRightRadius: 16,
   },
   cardInner: {
     flex: 1,
@@ -544,6 +565,7 @@ const styles = StyleSheet.create({
   },
   cardActions: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 6,
     marginLeft: 4,
   },
@@ -555,19 +577,18 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     alignSelf: 'flex-end',
   },
-  tagText: {
-    fontSize: 11,
-    color: '#6b7280',
-    fontWeight: '500',
-  },
-  tagPlaceholder: {
-    height: 18,
-    marginTop: 8,
-  },
+  tagText: { fontSize: 11, color: '#6b7280', fontWeight: '500' },
+  tagPlaceholder: { height: 18, marginTop: 8 },
   memberCount: {
     fontSize: 11,
     color: '#888',
     marginTop: 4,
+    textAlign: 'right',
+  },
+  nextActivity: {
+    fontSize: 11,
+    color: '#aaa',
+    marginTop: 3,
     textAlign: 'right',
   },
 
@@ -600,25 +621,18 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 12,
   },
-  createBtnText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 15,
-  },
+  createBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
 
   // ── Popover
   popoverBackdrop: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    top: 0, left: 0, right: 0, bottom: 0,
   },
   popover: {
     position: 'absolute',
     backgroundColor: '#fff',
     borderRadius: 12,
-    width: 200,
+    width: 210,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.12,
@@ -627,11 +641,12 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   popoverItem: {
-    flexDirection: 'row-reverse',
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     paddingVertical: 12,
     paddingHorizontal: 14,
+    gap: 10,
   },
   popoverItemBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -641,8 +656,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#374151',
     textAlign: 'right',
+    flex: 1,
   },
-  popoverDanger: {
-    color: '#ef4444',
-  },
+  popoverDanger: { color: '#ef4444' },
 });
