@@ -2,6 +2,20 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 
 // ─────────────────────────────────────────────────────────────
+// שליפת כל אירועי קהילה לפי communityId
+// ─────────────────────────────────────────────────────────────
+export const listByCommunity = query({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    return await ctx.db
+      .query('events')
+      .withIndex('by_community_date', (q) => q.eq('communityId', communityId))
+      .order('asc')
+      .collect();
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // שליפת אירועים לפי טווח תאריכים
 // ─────────────────────────────────────────────────────────────
 export const listByDateRange = query({

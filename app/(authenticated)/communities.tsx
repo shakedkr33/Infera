@@ -441,9 +441,8 @@ export default function CommunitiesScreen() {
               onPinToggle={() => handleTogglePin(item.community._id)}
               onMenuPress={(ref) => handleMenuPress(item, ref)}
               onPress={() => {
-                // TODO: implement community detail screen
-                router.push(
-                  `/(authenticated)/communities/${item.community._id}` as Parameters<typeof router.push>[0]
+              router.push(
+                  `/(authenticated)/community/${item.community._id}` as Parameters<typeof router.push>[0]
                 );
               }}
             />

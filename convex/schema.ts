@@ -102,10 +102,12 @@ export default defineSchema({
     isAiGenerated: v.boolean(),
     createdBy: v.id('users'),
     createdAt: v.number(),
+    communityId: v.optional(v.id('communities')), // קהילה שאליה שייכת המשימה
   })
     .index('by_space_completed', ['spaceId', 'completed'])
     .index('by_assigned', ['assignedTo'])
-    .index('by_space', ['spaceId']),
+    .index('by_space', ['spaceId'])
+    .index('by_community', ['communityId']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת ימי הולדת
@@ -164,7 +166,9 @@ export default defineSchema({
       v.literal('none')
     ),
     updatedAt: v.number(),
-  }).index('by_event_user', ['eventId', 'userId']),
+  })
+    .index('by_event_user', ['eventId', 'userId'])
+    .index('by_user', ['userId']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת מצב רוח יומי

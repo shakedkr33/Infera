@@ -2,6 +2,21 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 
 // ─────────────────────────────────────────────────────────────
+// שליפת משימות פתוחות לפי קהילה
+// ─────────────────────────────────────────────────────────────
+export const listByCommunity = query({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    return await ctx.db
+      .query('tasks')
+      .withIndex('by_community', (q) => q.eq('communityId', communityId))
+      .filter((q) => q.eq(q.field('completed'), false))
+      .order('asc')
+      .collect();
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // שליפת כל המשימות של space (עם תאריך)
 // ─────────────────────────────────────────────────────────────
 export const listBySpace = query({

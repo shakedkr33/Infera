@@ -70,6 +70,33 @@ export const createCommunity = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
+// שליפת קהילה בודדת לפי ID (כולל memberCount ו-inviteCode)
+// ─────────────────────────────────────────────────────────────
+export const getCommunity = query({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const community = await ctx.db.get(communityId);
+    if (!community || community.archived) return null;
+
+    const memberships = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community', (q) => q.eq('communityId', communityId))
+      .collect();
+
+    const membership = memberships.find((m) => m.userId === userId);
+
+    return {
+      ...community,
+      memberCount: memberships.length,
+      myRole: membership?.role ?? null,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // שליפת הקהילות של המשתמש הנוכחי
 // ─────────────────────────────────────────────────────────────
 export const listMyCommunities = query({

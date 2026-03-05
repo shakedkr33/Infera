@@ -46,6 +46,28 @@ export const upsertRsvp = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
+// שליפת כל ה-RSVPs של המשתמש הנוכחי (לכל האירועים)
+// ─────────────────────────────────────────────────────────────
+export const listByUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+
+    const user = await ctx.db
+      .query('users')
+      .withIndex('by_email', (q) => q.eq('email', identity.email ?? ''))
+      .unique();
+    if (!user) return [];
+
+    return await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', user._id))
+      .collect();
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // שליפת RSVP של משתמש ספציפי לאירוע
 // ─────────────────────────────────────────────────────────────
 export const getRsvpForUser = query({
