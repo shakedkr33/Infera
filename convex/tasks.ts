@@ -1,3 +1,4 @@
+import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 
@@ -79,21 +80,15 @@ export const create = mutation({
     communityId: v.optional(v.id('communities')),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('לא מחובר למערכת');
-
-    // TODO: לאמת שהמשתמש הנוכחי שייך ל-spaceId לפני יצירה
-    const user = await ctx.db
-      .query('users')
-      .withIndex('by_email', (q) => q.eq('email', identity.email ?? ''))
-      .unique();
-    if (!user) throw new Error('משתמש לא נמצא');
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
 
     return await ctx.db.insert('tasks', {
       ...args,
+      spaceId: args.spaceId ?? undefined,
       completed: false,
       isAiGenerated: false,
-      createdBy: user._id,
+      createdBy: userId,
       createdAt: Date.now(),
     });
   },
@@ -105,13 +100,12 @@ export const create = mutation({
 export const toggleCompleted = mutation({
   args: { id: v.id('tasks') },
   handler: async (ctx, { id }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('לא מחובר למערכת');
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
 
     const task = await ctx.db.get(id);
     if (!task) throw new Error('משימה לא נמצאה');
 
-    // TODO: לוודא שהמשתמש הנוכחי הוא יוצר המשימה או assignedTo
     await ctx.db.patch(id, { completed: !task.completed });
   },
 });
@@ -140,14 +134,12 @@ export const update = mutation({
     category: v.optional(v.string()),
   },
   handler: async (ctx, { id, ...fields }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('לא מחובר למערכת');
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
 
-    // TODO: לאמת שהמשתמש הנוכחי הוא יוצר המשימה או assignedTo
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
 
-    // סנן undefined כדי לא לדרוס שדות קיימים
     const patch = Object.fromEntries(
       Object.entries(fields).filter(([, v]) => v !== undefined)
     );
@@ -161,10 +153,9 @@ export const update = mutation({
 export const remove = mutation({
   args: { id: v.id('tasks') },
   handler: async (ctx, { id }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('לא מחובר למערכת');
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
 
-    // TODO: לוודא שהמשתמש הנוכחי הוא יוצר המשימה
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
 

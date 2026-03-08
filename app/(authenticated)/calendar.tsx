@@ -358,7 +358,7 @@ function getFirstDayOfMonth(year: number, month: number): number {
   return new Date(year, month, 1).getDay();
 }
 
-function generateCalendarGrid(year: number, month: number): CalendarDay[][] {
+function generateCalendarGrid(year: number, month: number, monthlyEventsOverride?: Record<number, CalendarEvent[]>): CalendarDay[][] {
   const now = new Date();
   const todayDay = now.getDate();
   const todayMonth = now.getMonth();
@@ -367,6 +367,7 @@ function generateCalendarGrid(year: number, month: number): CalendarDay[][] {
   const daysInMonth = getDaysInMonth(year, month);
   const firstDayOffset = getFirstDayOfMonth(year, month);
   const daysInPrevMonth = getDaysInMonth(year, month - 1);
+  const eventsSource = monthlyEventsOverride ?? MOCK_MONTHLY_EVENTS;
 
   const allDays: CalendarDay[] = [];
 
@@ -384,7 +385,7 @@ function generateCalendarGrid(year: number, month: number): CalendarDay[][] {
       day: d,
       isCurrentMonth: true,
       isToday: d === todayDay && month === todayMonth && year === todayYear,
-      events: MOCK_MONTHLY_EVENTS[d] ?? [],
+      events: eventsSource[d] ?? [],
       birthday: MOCK_BIRTHDAYS[d],
     });
   }
@@ -416,7 +417,9 @@ function generateCalendarGrid(year: number, month: number): CalendarDay[][] {
 // ===== Main Component =====
 export default function CalendarScreen(): React.JSX.Element {
   const router = useRouter();
-  const { communityId } = useLocalSearchParams<{ communityId?: string }>();
+  const rawCommunityId = useLocalSearchParams<{ communityId?: string }>().communityId;
+  // Guard against the string "undefined" being passed as a route param
+  const communityId = rawCommunityId === 'undefined' ? undefined : rawCommunityId;
 
   const communityEvents = useQuery(
     api.events.listByCommunity,
@@ -453,10 +456,12 @@ export default function CalendarScreen(): React.JSX.Element {
     today.getDate()
   );
 
-  // === Calendar grid data ===
+  const isFiltered = !!communityId;
+
+  // === Calendar grid data — suppress mock dots when community filter is active ===
   const grid = useMemo(
-    () => generateCalendarGrid(displayYear, displayMonth),
-    [displayYear, displayMonth]
+    () => generateCalendarGrid(displayYear, displayMonth, isFiltered ? {} : undefined),
+    [displayYear, displayMonth, isFiltered]
   );
 
   // === Dynamic panel heights based on number of weeks ===
@@ -608,6 +613,9 @@ export default function CalendarScreen(): React.JSX.Element {
   };
 
   const handleViewModeChange = (mode: 'timeline' | 'monthly'): void => {
+    // Prevent switching to monthly view when community filter is active
+    if (isFiltered && mode === 'monthly') return;
+
     setViewMode(mode);
     saveViewMode(mode);
 
@@ -657,12 +665,22 @@ export default function CalendarScreen(): React.JSX.Element {
   useEffect(() => {
     if (communityId) {
       setViewMode('timeline');
+      // Immediately snap — no animation delay since this is initialization
+      slideAnim.setValue(1);
     }
-  }, [communityId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [communityId]); // slideAnim is stable (useState), excluded to avoid re-run
 
   // ── Build timeline data: use real events when filtering by community
   const timelineData = useMemo(() => {
-    if (!communityId || !communityEvents) return MOCK_TIMELINE_DATA;
+    // No filter — show normal mock/personal data
+    if (!isFiltered) return MOCK_TIMELINE_DATA;
+
+    // Filtered but still loading — return empty (not mock)
+    if (!communityEvents) return [];
+
+    // Filtered and loaded but no events — return empty
+    if (communityEvents.length === 0) return [];
 
     const grouped: Record<string, {
       dayLabel: string;
@@ -711,7 +729,17 @@ export default function CalendarScreen(): React.JSX.Element {
 
     // Sort ascending by actual timestamp (upcoming first)
     return Object.values(grouped).sort((a, b) => a.sortKey - b.sortKey);
-  }, [communityId, communityEvents]);
+  }, [isFiltered, communityEvents]);
+
+  // DEBUG — remove after validation
+  console.log('CALENDAR DEBUG:', {
+    rawCommunityId,                              // what actually arrives in the param
+    communityId,                                 // after "undefined" string guard
+    isFiltered,
+    viewMode,
+    communityEventsLength: communityEvents?.length, // undefined=loading, 0=empty, N=has events
+    timelineDataLength: timelineData.length,
+  });
 
   return (
     <SafeAreaView style={styles.safeArea}>

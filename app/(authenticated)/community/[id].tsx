@@ -876,13 +876,9 @@ export default function CommunityDetailScreen() {
   const deleteCommunity = useMutation(api.communities.deleteCommunity);
   const toggleNotifications = useMutation(api.communities.toggleNotifications);
 
-  // ── Back navigation with fallback
+  // ── Back navigation — always land on communities list
   const handleBack = useCallback(() => {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace('/(authenticated)/communities' as Parameters<typeof router.replace>[0]);
-    }
+    router.replace('/(authenticated)/communities' as Parameters<typeof router.replace>[0]);
   }, [router]);
 
   // ── Local state

@@ -65,7 +65,7 @@ export default defineSchema({
     description: v.optional(v.string()),
     startTime: v.number(),         // Unix timestamp (ms)
     endTime: v.number(),           // Unix timestamp (ms)
-    spaceId: v.id('spaces'),
+    spaceId: v.optional(v.id('spaces')),
     category: v.optional(v.string()),
     location: v.optional(v.string()),
     participants: v.optional(v.array(v.string())),

@@ -1,3 +1,4 @@
+import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 
@@ -69,7 +70,7 @@ export const create = mutation({
     startTime: v.number(),
     endTime: v.number(),
     allDay: v.optional(v.boolean()),
-    spaceId: v.id('spaces'),
+    spaceId: v.optional(v.id('spaces')),
     category: v.optional(v.string()),
     location: v.optional(v.string()),
     locationUrl: v.optional(v.string()),
@@ -80,20 +81,13 @@ export const create = mutation({
     requiresRsvp: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('לא מחובר למערכת');
-
-    // TODO: לאמת שהמשתמש הנוכחי שייך ל-spaceId לפני יצירה
-    const user = await ctx.db
-      .query('users')
-      .withIndex('by_email', (q) => q.eq('email', identity.email ?? ''))
-      .unique();
-    if (!user) throw new Error('משתמש לא נמצא');
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
 
     return await ctx.db.insert('events', {
       ...args,
       isAiGenerated: false,
-      createdBy: user._id,
+      createdBy: userId,
       createdAt: Date.now(),
     });
   },

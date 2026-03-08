@@ -51,7 +51,7 @@ export default function CommunityReminderNewScreen() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dateOption, setDateOption] = useState<DateOption>('today');
-  const [customDate, setCustomDate] = useState<Date | null>(null);
+  const [customDate, setCustomDate] = useState<Date>(new Date());
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [calendarPickerOpen, setCalendarPickerOpen] = useState(false);
   const [timeEnabled, setTimeEnabled] = useState(false);
@@ -99,7 +99,7 @@ export default function CommunityReminderNewScreen() {
     } else if (dateOption === 'tomorrow') {
       base = new Date();
       base.setDate(base.getDate() + 1);
-    } else if (dateOption === 'other' && customDate) {
+    } else if (dateOption === 'other') {
       base = new Date(customDate);
     } else {
       return undefined;
@@ -135,7 +135,11 @@ export default function CommunityReminderNewScreen() {
         spaceId: spaceId ?? undefined,
         communityId: communityId ? communityId as Id<'communities'> : undefined,
       });
-      router.back();
+      if (communityId) {
+        router.replace(`/(authenticated)/community/${communityId}` as Parameters<typeof router.replace>[0]);
+      } else {
+        router.back();
+      }
     } catch (e) {
       console.error('createReminder error:', e);
       Alert.alert('שגיאה', 'לא ניתן לשמור את התזכורת. נסה שוב.');
@@ -147,12 +151,20 @@ export default function CommunityReminderNewScreen() {
   // ── Section X: save disabled only while loading (undefined) or title is empty
   const isSaveDisabled = !title.trim() || saving || spaceId === undefined;
 
+  const handleClose = () => {
+    if (communityId) {
+      router.replace(`/(authenticated)/community/${communityId}` as Parameters<typeof router.replace>[0]);
+    } else {
+      router.back();
+    }
+  };
+
   // ── Loading state
   if (spaceId === undefined) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.closeBtn}>
+          <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
             <Ionicons name="close" size={22} color="#374151" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>תזכורת חדשה</Text>
@@ -170,7 +182,7 @@ export default function CommunityReminderNewScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.closeBtn}>
+          <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
             <Ionicons name="close" size={22} color="#374151" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>תזכורת חדשה</Text>
@@ -181,7 +193,7 @@ export default function CommunityReminderNewScreen() {
           <Text style={styles.errorStateTitle}>לא נמצא מרחב פעיל</Text>
           <TouchableOpacity
             style={styles.errorStateBtn}
-            onPress={() => router.back()}
+            onPress={handleClose}
             accessible
             accessibilityRole="button"
             accessibilityLabel="חזור"
@@ -195,7 +207,7 @@ export default function CommunityReminderNewScreen() {
 
   // ── Date chip label for "other"
   const otherChipLabel =
-    dateOption === 'other' && customDate
+    dateOption === 'other'
       ? customDate.toLocaleDateString('he-IL', { day: 'numeric', month: 'short' })
       : 'אחר';
 
@@ -204,7 +216,7 @@ export default function CommunityReminderNewScreen() {
       {/* ── Header */}
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={handleClose}
           style={styles.closeBtn}
           accessible
           accessibilityRole="button"
@@ -302,12 +314,9 @@ export default function CommunityReminderNewScreen() {
             {dateOption === 'other' ? (
               <>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
-                  {/* Calendar icon — opens monthly picker */}
+                  {/* Calendar icon — opens inline monthly grid */}
                   <TouchableOpacity
-                    onPress={() => {
-                      setCalendarPickerOpen(!calendarPickerOpen);
-                      setDatePickerOpen(false);
-                    }}
+                    onPress={() => { setCalendarPickerOpen(!calendarPickerOpen); setDatePickerOpen(false); }}
                     style={styles.calendarIconBtn}
                     accessible
                     accessibilityRole="button"
@@ -319,31 +328,28 @@ export default function CommunityReminderNewScreen() {
                   {/* Date value button — opens spinner */}
                   <TouchableOpacity
                     style={[styles.input, styles.dateValueBtn]}
-                    onPress={() => {
-                      setDatePickerOpen(!datePickerOpen);
-                      setCalendarPickerOpen(false);
-                    }}
+                    onPress={() => { setDatePickerOpen(!datePickerOpen); setCalendarPickerOpen(false); }}
                     accessible
                     accessibilityRole="button"
-                    accessibilityLabel={customDate ? customDate.toLocaleDateString('he-IL') : 'בחרי תאריך'}
+                    accessibilityLabel={customDate.toLocaleDateString('he-IL')}
                   >
-                    <Text style={{ fontSize: 15, color: customDate ? '#111827' : '#9ca3af' }}>
-                      {customDate
-                        ? customDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' })
-                        : 'בחרי תאריך'}
+                    <Text style={{ fontSize: 15, color: '#111827' }}>
+                      {customDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                     </Text>
                   </TouchableOpacity>
                 </View>
 
-                {/* Spinner picker */}
+                {/* Date spinner picker */}
                 {datePickerOpen ? (
-                  <View style={styles.pickerWrapper}>
+                  <View style={[styles.pickerWrapper, { width: '100%' }]}>
                     <DateTimePicker
-                      value={customDate ?? new Date()}
+                      value={customDate}
                       mode="date"
                       display="spinner"
-                      locale="he"
+                      themeVariant="light"
+                      locale="he-IL"
                       textColor="#111827"
+                      style={{ width: '100%', height: 180 }}
                       onChange={(_, date) => {
                         if (date) { setCustomDate(date); setDateOption('other'); }
                       }}
@@ -356,36 +362,31 @@ export default function CommunityReminderNewScreen() {
                       accessibilityLabel="אישור"
                     >
                       <Text style={styles.pickerConfirmText}>
-                        {customDate
-                          ? `אישור — ${customDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' })}`
-                          : 'אישור'}
+                        {`אישור — ${customDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' })}`}
                       </Text>
                     </TouchableOpacity>
                   </View>
                 ) : null}
 
-                {/* Calendar picker */}
+                {/* Inline monthly calendar picker */}
                 {calendarPickerOpen ? (
-                  <View style={styles.pickerWrapper}>
+                  <View style={{ backgroundColor: '#f3f4f6', borderRadius: 12, marginTop: 8, overflow: 'hidden' }}>
                     <DateTimePicker
-                      value={customDate ?? new Date()}
+                      value={customDate}
                       mode="date"
-                      display="calendar"
-                      locale="he"
+                      display="inline"
+                      themeVariant="light"
+                      locale="he-IL"
+                      accentColor="#36a9e2"
                       textColor="#111827"
                       onChange={(_, date) => {
-                        if (date) { setCustomDate(date); setDateOption('other'); setCalendarPickerOpen(false); }
+                        if (date) {
+                          setCustomDate(date);
+                          setDateOption('other');
+                          setTimeout(() => setCalendarPickerOpen(false), 150);
+                        }
                       }}
                     />
-                    <TouchableOpacity
-                      style={styles.pickerConfirmBtn}
-                      onPress={() => setCalendarPickerOpen(false)}
-                      accessible
-                      accessibilityRole="button"
-                      accessibilityLabel="אישור"
-                    >
-                      <Text style={styles.pickerConfirmText}>אישור</Text>
-                    </TouchableOpacity>
                   </View>
                 ) : null}
               </>
@@ -426,6 +427,8 @@ export default function CommunityReminderNewScreen() {
                         mode="time"
                         display="spinner"
                         is24Hour
+                        locale="he-IL"
+                        themeVariant="light"
                         textColor="#111827"
                         style={{ width: '100%', height: 180 }}
                         onChange={(_, time) => {

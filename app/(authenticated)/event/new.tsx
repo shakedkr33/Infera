@@ -50,7 +50,7 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
   const [saving, setSaving] = useState(false);
 
   // ── Date/time pickers
-  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [startTimeDate, setStartTimeDate] = useState<Date>(() => {
     const d = new Date();
     d.setHours(9, 0, 0, 0);
@@ -72,10 +72,6 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
   const handleSave = useCallback(async () => {
     if (!title.trim()) {
       setTitleError(true);
-      return;
-    }
-    if (!selectedDate) {
-      Alert.alert('שגיאה', 'נא לבחור תאריך');
       return;
     }
     // Only block if there's no communityId context either
@@ -101,11 +97,11 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
         allDay,
         location: locationType === 'address' ? location.trim() || undefined : undefined,
         onlineUrl: locationType === 'link' ? location.trim() || undefined : undefined,
-        spaceId: spaceId as Id<'spaces'>,
+        spaceId: spaceId ?? undefined,
         communityId: communityId as Id<'communities'>,
         requiresRsvp: rsvpRequired,
       });
-      router.back();
+      router.replace(`/(authenticated)/community/${communityId}` as Parameters<typeof router.replace>[0]);
     } catch (e) {
       console.error('createCommunityEvent error:', e);
       Alert.alert('שגיאה', 'לא ניתן לשמור את האירוע. נסה שוב.');
@@ -114,25 +110,17 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
     }
   }, [title, description, selectedDate, startTimeDate, endTimeDate, allDay, location, locationType, rsvpRequired, communityId, spaceId, createEvent, router]);
 
-  // Disabled while loading (undefined) or required fields missing; null spaceId OK if communityId exists
-  const isSaveDisabled = !title.trim() || !selectedDate || saving || spaceId === undefined;
-  console.log('EVENT isSaveDisabled:', {
-    titleEmpty: !title.trim(),
-    dateNull: !selectedDate,
-    saving,
-    spaceIdValue: spaceId,
-  });
+  // selectedDate is always set (initialized to today), so no null check needed
+  const isSaveDisabled = !title.trim() || saving || spaceId === undefined;
 
-  const dateLabel = selectedDate
-    ? selectedDate.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' })
-    : 'בחרי תאריך';
+  const dateLabel = selectedDate.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       {/* Header */}
       <View style={s.header}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={() => router.replace(`/(authenticated)/community/${communityId}` as Parameters<typeof router.replace>[0])}
           style={s.closeBtn}
           accessible
           accessibilityRole="button"
@@ -191,12 +179,9 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
             {/* תאריך */}
             <Text style={[s.fieldLabel, { marginTop: 12 }]}>תאריך</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
-              {/* Calendar icon — opens monthly picker */}
+              {/* Calendar icon — opens inline monthly grid */}
               <TouchableOpacity
-                onPress={() => {
-                  setCalendarPickerOpen(!calendarPickerOpen);
-                  setDatePickerOpen(false);
-                }}
+                onPress={() => { setCalendarPickerOpen(!calendarPickerOpen); setDatePickerOpen(false); }}
                 style={s.calendarIconBtn}
                 accessible
                 accessibilityRole="button"
@@ -208,31 +193,28 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
               {/* Date value button — opens spinner */}
               <TouchableOpacity
                 style={[s.input, s.dateValueBtn]}
-                onPress={() => {
-                  setDatePickerOpen(!datePickerOpen);
-                  setCalendarPickerOpen(false);
-                }}
+                onPress={() => { setDatePickerOpen(!datePickerOpen); setCalendarPickerOpen(false); }}
                 accessible
                 accessibilityRole="button"
                 accessibilityLabel={`תאריך: ${dateLabel}`}
               >
-                <Text style={{ fontSize: 15, color: selectedDate ? '#111827' : '#9ca3af' }}>
-                  {selectedDate
-                    ? selectedDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' })
-                    : 'בחרי תאריך'}
+                <Text style={{ fontSize: 15, color: '#111827' }}>
+                  {selectedDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                 </Text>
               </TouchableOpacity>
             </View>
 
-            {/* Spinner picker */}
+            {/* Date spinner picker */}
             {datePickerOpen ? (
-              <View style={s.pickerWrapper}>
+              <View style={[s.pickerWrapper, { width: '100%' }]}>
                 <DateTimePicker
-                  value={selectedDate ?? new Date()}
+                  value={selectedDate}
                   mode="date"
                   display="spinner"
-                  locale="he"
+                  themeVariant="light"
+                  locale="he-IL"
                   textColor="#111827"
+                  style={{ width: '100%', height: 180 }}
                   onChange={(_, date) => {
                     if (date) setSelectedDate(date);
                   }}
@@ -245,36 +227,30 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
                   accessibilityLabel="אישור"
                 >
                   <Text style={s.pickerConfirmText}>
-                    {selectedDate
-                      ? `אישור — ${selectedDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' })}`
-                      : 'אישור'}
+                    {`אישור — ${selectedDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' })}`}
                   </Text>
                 </TouchableOpacity>
               </View>
             ) : null}
 
-            {/* Calendar picker */}
+            {/* Inline monthly calendar picker */}
             {calendarPickerOpen ? (
-              <View style={s.pickerWrapper}>
+              <View style={{ backgroundColor: '#f3f4f6', borderRadius: 12, marginTop: 8, overflow: 'hidden' }}>
                 <DateTimePicker
-                  value={selectedDate ?? new Date()}
+                  value={selectedDate}
                   mode="date"
-                  display="calendar"
-                  locale="he"
+                  display="inline"
+                  themeVariant="light"
+                  locale="he-IL"
+                  accentColor="#36a9e2"
                   textColor="#111827"
                   onChange={(_, date) => {
-                    if (date) { setSelectedDate(date); setCalendarPickerOpen(false); }
+                    if (date) {
+                      setSelectedDate(date);
+                      setTimeout(() => setCalendarPickerOpen(false), 150);
+                    }
                   }}
                 />
-                <TouchableOpacity
-                  style={s.pickerConfirmBtn}
-                  onPress={() => setCalendarPickerOpen(false)}
-                  accessible
-                  accessibilityRole="button"
-                  accessibilityLabel="אישור"
-                >
-                  <Text style={s.pickerConfirmText}>אישור</Text>
-                </TouchableOpacity>
               </View>
             ) : null}
 
@@ -323,6 +299,8 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
                       mode="time"
                       display="spinner"
                       is24Hour
+                      locale="he-IL"
+                      themeVariant="light"
                       textColor="#111827"
                       style={{ width: '100%', height: 180 }}
                       onChange={(_, time) => {
@@ -351,6 +329,8 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
                       mode="time"
                       display="spinner"
                       is24Hour
+                      locale="he-IL"
+                      themeVariant="light"
                       textColor="#111827"
                       style={{ width: '100%', height: 180 }}
                       onChange={(_, time) => {
