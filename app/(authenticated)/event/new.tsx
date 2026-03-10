@@ -122,7 +122,7 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
       {/* Header */}
       <View style={s.header}>
         <TouchableOpacity
-          onPress={() => router.replace(`/(authenticated)/community/${communityId}` as Parameters<typeof router.replace>[0])}
+          onPress={() => router.back()}
           style={s.closeBtn}
           accessible
           accessibilityRole="button"

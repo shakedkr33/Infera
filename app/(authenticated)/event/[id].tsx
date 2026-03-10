@@ -116,8 +116,10 @@ export default function EventDetailScreen() {
       setMenuOpen(true);
       return;
     }
-    menuBtnRef.current.measure((_fx, _fy, _w, h, px, py) => {
-      setMenuPos({ x: Math.max(0, px), y: py + h + 4 });
+    menuBtnRef.current.measureInWindow((x, y, _w, h) => {
+      // Popover anchored to left; ensure it doesn't overflow left edge (x >= 0)
+      const popoverX = Math.max(0, x);
+      setMenuPos({ x: popoverX, y: y + h + 4 });
       setMenuOpen(true);
     });
   }, []);
@@ -231,9 +233,9 @@ export default function EventDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* ── Header */}
-      <View style={styles.header}>
-        {/* Right (RTL first): back button */}
+      {/* ── Header (RTL): right=back, center=title, left=⋯ */}
+      <View style={[styles.header, styles.headerRtl]}>
+        {/* First child → right in RTL: back button */}
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.headerIconBtn}
@@ -249,7 +251,7 @@ export default function EventDetailScreen() {
           {event.title}
         </Text>
 
-        {/* Left (RTL last): ⋯ for creator, placeholder for others */}
+        {/* Last child → left in RTL: ⋯ for creator */}
         <View ref={menuBtnRef} style={styles.headerIconBtn}>
           {isCreator && (
             <TouchableOpacity
@@ -416,7 +418,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f6f7f8' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
 
-  // ── Header
+  // ── Header (RTL: first=right, last=left)
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -426,6 +428,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f1f5f9',
     gap: 8,
+  },
+  headerRtl: {
+    flexDirection: 'row-reverse',
   },
   headerTitle: {
     flex: 1,
