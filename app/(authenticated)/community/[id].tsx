@@ -245,11 +245,11 @@ function AddPopoverMenu({ visible, position, communityId, onClose }: AddPopoverM
 interface EventCardProps {
   event: EventDoc;
   rsvpStatus: RsvpStatus;
-  onRsvpPress: (eventId: Id<'events'>) => void;
   currentUserId?: Id<'users'>;
 }
 
-function EventCard({ event, rsvpStatus, onRsvpPress, currentUserId }: EventCardProps) {
+function EventCard({ event, rsvpStatus, currentUserId }: EventCardProps) {
+  const router = useRouter();
   const color = getEventColor(event._id);
   const isCreator = currentUserId !== undefined && event.createdBy === currentUserId;
 
@@ -267,7 +267,7 @@ function EventCard({ event, rsvpStatus, onRsvpPress, currentUserId }: EventCardP
   return (
     <Pressable
       style={styles.eventCard}
-      onPress={() => { if (!isCreator) onRsvpPress(event._id); }}
+      onPress={() => router.push({ pathname: '/(authenticated)/event/[id]', params: { id: event._id } })}
       accessible
       accessibilityRole="button"
       accessibilityLabel={event.title}
@@ -552,7 +552,6 @@ function ReminderRowAll({ task, onToggle, onHide }: ReminderRowAllProps) {
 interface TabAllProps {
   communityId: Id<'communities'>;
   rsvpMap: Record<string, RsvpStatus>;
-  onRsvpPress: (eventId: Id<'events'>) => void;
   onToggleTask: (id: Id<'tasks'>) => void;
   onSeeMoreEvents: () => void;
   onSeeMoreReminders: () => void;
@@ -571,7 +570,6 @@ interface TabAllProps {
 function TabAll({
   communityId,
   rsvpMap,
-  onRsvpPress,
   onToggleTask,
   hiddenReminderIds,
   setHiddenReminderIds,
@@ -742,7 +740,6 @@ function TabAll({
                 key={ev._id}
                 event={ev}
                 rsvpStatus={rsvpMap[ev._id] ?? 'none'}
-                onRsvpPress={onRsvpPress}
                 currentUserId={currentUserId}
               />
             ))}
@@ -847,7 +844,6 @@ function TabAll({
                 key={ev._id}
                 event={ev}
                 rsvpStatus={rsvpMap[ev._id] ?? 'none'}
-                onRsvpPress={onRsvpPress}
                 currentUserId={currentUserId}
               />
             ))}
@@ -1492,7 +1488,6 @@ export default function CommunityDetailScreen() {
         <TabAll
           communityId={communityId}
           rsvpMap={rsvpMap}
-          onRsvpPress={setRsvpSheet}
           onToggleTask={handleToggleTask}
           onSeeMoreEvents={handleSeeMoreEvents}
           onSeeMoreReminders={handleSeeMoreReminders}

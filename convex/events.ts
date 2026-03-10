@@ -3,6 +3,16 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 
 // ─────────────────────────────────────────────────────────────
+// שליפת אירוע יחיד לפי מזהה
+// ─────────────────────────────────────────────────────────────
+export const getById = query({
+  args: { eventId: v.id('events') },
+  handler: async (ctx, { eventId }) => {
+    return await ctx.db.get(eventId);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // שליפת אירועי קהילה עם cursor pagination (לביצועים)
 // ─────────────────────────────────────────────────────────────
 export const listByCommunityPaged = query({
@@ -120,6 +130,21 @@ export const update = mutation({
     if (!existing) throw new Error('אירוע לא נמצא');
 
     await ctx.db.patch(id, fields);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// מחיקת אירוע (מאומת — רק יוצר האירוע)
+// ─────────────────────────────────────────────────────────────
+export const deleteEvent = mutation({
+  args: { eventId: v.id('events') },
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (event.createdBy !== userId) throw new Error('אין הרשאה');
+    await ctx.db.delete(eventId);
   },
 });
 
