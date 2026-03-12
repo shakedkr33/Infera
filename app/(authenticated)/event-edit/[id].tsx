@@ -20,6 +20,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
+import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -48,11 +50,20 @@ export default function EditEventScreen(): React.JSX.Element {
   const createEventTasks = useMutation(api.eventTasks.createBatch);
   const updateEventTask = useMutation(api.eventTasks.update);
   const removeEventTask = useMutation(api.eventTasks.remove);
-  const currentUserId = useQuery(api.users.getMyId);
+  const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
+  const currentUserId = useQuery(api.users.getMyId) ?? undefined;
+  const communityMembersData = useQuery(
+    api.communities.getCommunityMembers,
+    event?.communityId ? { communityId: event.communityId } : 'skip'
+  );
+  const communityMembers = communityMembersData?.members ?? [];
 
   const [tasks, setTasks] = useState<
-    { id: string; title: string; isNew: boolean }[]
+    { id: string; title: string; isNew: boolean; assignee?: LocalAssignee | null }[]
   >([]);
+  const [newTaskText, setNewTaskText] = useState('');
+  const [assigneeSheetTaskId, setAssigneeSheetTaskId] = useState<string | null>(null);
+  const [manualAssigneeName, setManualAssigneeName] = useState('');
 
   // ── Form state
   const [title, setTitle] = useState('');
@@ -111,11 +122,15 @@ export default function EditEventScreen(): React.JSX.Element {
   useEffect(() => {
     if (eventTasks === undefined) return;
     setTasks(
-      (eventTasks ?? []).map((t) => ({
-        id: t._id,
-        title: t.title,
-        isNew: false,
-      }))
+      (eventTasks ?? []).map((t) => {
+        const enriched = t as typeof t & { assigneeDisplay?: string };
+        const assignee: LocalAssignee | undefined = t.assignedToUserId
+          ? { type: 'user', userId: t.assignedToUserId, display: enriched.assigneeDisplay ?? '' }
+          : t.assignedToManual?.trim()
+          ? { type: 'manual', name: t.assignedToManual.trim() }
+          : undefined;
+        return { id: t._id, title: t.title, isNew: false, assignee };
+      })
     );
   }, [eventTasks]);
 
@@ -155,21 +170,64 @@ export default function EditEventScreen(): React.JSX.Element {
         tasks.filter((t) => !t.isNew).map((t) => t.id as string)
       );
 
-      const newTasksToCreate = tasks
-        .filter((t) => t.isNew && t.title.trim())
-        .map((t) => ({ title: t.title.trim() }));
-      if (newTasksToCreate.length > 0) {
-        await createEventTasks({ eventId, tasks: newTasksToCreate });
+      const newTasksList = tasks.filter((t) => t.isNew && t.title.trim());
+      if (newTasksList.length > 0) {
+        const taskIds = await createEventTasks({
+          eventId,
+          tasks: newTasksList.map((t) => ({ title: t.title.trim() })),
+        });
+        for (let i = 0; i < newTasksList.length; i++) {
+          const task = newTasksList[i];
+          const taskId = taskIds[i];
+          if (taskId && task.assignee) {
+            await setTaskAssignee({
+              id: taskId as Id<'eventTasks'>,
+              assignee:
+                task.assignee.type === 'user'
+                  ? { type: 'user', userId: task.assignee.userId as Id<'users'> }
+                  : { type: 'manual', name: task.assignee.name },
+            }).catch(() => {});
+          }
+        }
       }
 
       for (const t of tasks) {
         if (!t.isNew && existingIds.has(t.id)) {
           const orig = eventTasks?.find((x) => x._id === t.id);
-          if (orig && orig.title !== t.title.trim()) {
-            await updateEventTask({
-              id: t.id as Id<'eventTasks'>,
-              title: t.title.trim(),
-            });
+          if (orig) {
+            if (orig.title !== t.title.trim()) {
+              await updateEventTask({
+                id: t.id as Id<'eventTasks'>,
+                title: t.title.trim(),
+              });
+            }
+            // Detect assignee change
+            const origAssignee: LocalAssignee | null = orig.assignedToUserId
+              ? { type: 'user', userId: orig.assignedToUserId, display: '' }
+              : orig.assignedToManual?.trim()
+              ? { type: 'manual', name: orig.assignedToManual.trim() }
+              : null;
+            const localAssignee = t.assignee ?? null;
+            const changed =
+              JSON.stringify({
+                type: origAssignee?.type,
+                id: origAssignee?.type === 'user' ? origAssignee.userId : origAssignee?.type === 'manual' ? origAssignee.name : null,
+              }) !==
+              JSON.stringify({
+                type: localAssignee?.type,
+                id: localAssignee?.type === 'user' ? localAssignee.userId : localAssignee?.type === 'manual' ? localAssignee.name : null,
+              });
+            if (changed) {
+              await setTaskAssignee({
+                id: t.id as Id<'eventTasks'>,
+                assignee:
+                  localAssignee === null
+                    ? null
+                    : localAssignee.type === 'user'
+                    ? { type: 'user', userId: localAssignee.userId as Id<'users'> }
+                    : { type: 'manual', name: localAssignee.name },
+              }).catch(() => {});
+            }
           }
         }
       }
@@ -205,6 +263,7 @@ export default function EditEventScreen(): React.JSX.Element {
     createEventTasks,
     updateEventTask,
     removeEventTask,
+    setTaskAssignee,
     eventTasks,
     tasks,
     router,
@@ -653,57 +712,132 @@ export default function EditEventScreen(): React.JSX.Element {
             />
           </View>
 
-          {/* משימות */}
+          {/* משימות לאירוע */}
           <View style={s.card}>
-            <Text style={s.fieldLabel}>משימות (רשימת צ'ק)</Text>
-            <View style={s.tasksList}>
-              {tasks.map((t) => (
-                <View key={t.id} style={s.taskRow}>
-                  <TouchableOpacity
-                    onPress={() =>
-                      setTasks((prev) => prev.filter((x) => x.id !== t.id))
-                    }
-                    style={s.taskRemoveBtn}
-                    accessible
-                    accessibilityRole="button"
-                    accessibilityLabel="הסר משימה"
-                  >
-                    <Ionicons name="close-circle" size={20} color="#9ca3af" />
-                  </TouchableOpacity>
-                  <TextInput
-                    style={[s.input, s.taskInput]}
-                    value={t.title}
-                    onChangeText={(text) =>
-                      setTasks((prev) =>
-                        prev.map((x) =>
-                          x.id === t.id ? { ...x, title: text } : x
-                        )
-                      )
-                    }
-                    placeholder="כותרת משימה..."
-                    placeholderTextColor="#9ca3af"
-                    textAlign="right"
-                    accessible
-                    accessibilityLabel="כותרת משימה"
-                  />
-                </View>
-              ))}
+            <Text style={s.fieldLabel}>משימות לאירוע</Text>
+            {tasks.length > 0 && (
+              <View style={s.tasksList}>
+                {tasks.map((t) => (
+                  <View key={t.id} style={s.taskRow}>
+                    <TouchableOpacity
+                      onPress={() =>
+                        setTasks((prev) => prev.filter((x) => x.id !== t.id))
+                      }
+                      style={s.taskRemoveBtn}
+                      accessible
+                      accessibilityRole="button"
+                      accessibilityLabel="הסר משימה"
+                    >
+                      <Ionicons name="close-circle" size={20} color="#9ca3af" />
+                    </TouchableOpacity>
+                    <View style={s.taskContent}>
+                      <Text style={s.taskTitle} numberOfLines={2}>
+                        {t.title}
+                      </Text>
+                      {t.assignee ? (
+                        <TouchableOpacity
+                          onPress={() => {
+                            setAssigneeSheetTaskId(t.id);
+                            setManualAssigneeName('');
+                          }}
+                          style={s.assigneeChip}
+                          accessible
+                          accessibilityRole="button"
+                          accessibilityLabel={`ממונה: ${t.assignee.type === 'user' ? t.assignee.display : t.assignee.name}`}
+                        >
+                          <Ionicons name="person" size={12} color="#6b7280" />
+                          <Text style={s.assigneeChipText} numberOfLines={1}>
+                            {t.assignee.type === 'user'
+                              ? t.assignee.display
+                              : t.assignee.name}
+                          </Text>
+                        </TouchableOpacity>
+                      ) : communityMembers.length > 0 ? (
+                        <TouchableOpacity
+                          onPress={() => {
+                            setAssigneeSheetTaskId(t.id);
+                            setManualAssigneeName('');
+                          }}
+                          style={s.assignBtn}
+                          accessible
+                          accessibilityRole="button"
+                          accessibilityLabel="הקצה משימה"
+                        >
+                          <Ionicons
+                            name="person-add-outline"
+                            size={12}
+                            color={PRIMARY}
+                          />
+                          <Text style={s.assignBtnText}>הקצה</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+            {/* New task input row */}
+            <View style={s.newTaskInputRow}>
+              <TouchableOpacity
+                onPress={() => {
+                  if (!newTaskText.trim()) return;
+                  setTasks((prev) => [
+                    ...prev,
+                    {
+                      id: `tmp-${Date.now()}`,
+                      title: newTaskText.trim(),
+                      isNew: true,
+                    },
+                  ]);
+                  setNewTaskText('');
+                }}
+                style={[
+                  s.addTaskBtn,
+                  !newTaskText.trim() && s.addTaskBtnDisabled,
+                ]}
+                disabled={!newTaskText.trim()}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="הוסף משימה"
+              >
+                <Ionicons
+                  name="add-circle-outline"
+                  size={18}
+                  color={newTaskText.trim() ? PRIMARY : '#9ca3af'}
+                />
+                <Text
+                  style={[
+                    s.addTaskText,
+                    !newTaskText.trim() && s.addTaskTextDisabled,
+                  ]}
+                >
+                  הוסף
+                </Text>
+              </TouchableOpacity>
+              <TextInput
+                style={[s.input, s.newTaskInput]}
+                value={newTaskText}
+                onChangeText={setNewTaskText}
+                placeholder="כתוב משימה..."
+                placeholderTextColor="#9ca3af"
+                textAlign="right"
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  if (!newTaskText.trim()) return;
+                  setTasks((prev) => [
+                    ...prev,
+                    {
+                      id: `tmp-${Date.now()}`,
+                      title: newTaskText.trim(),
+                      isNew: true,
+                    },
+                  ]);
+                  setNewTaskText('');
+                }}
+                accessible
+                accessibilityLabel="משימה חדשה"
+              />
             </View>
-            <TouchableOpacity
-              onPress={() =>
-                setTasks((prev) => [
-                  ...prev,
-                  { id: `tmp-${Date.now()}`, title: '', isNew: true },
-                ])
-              }
-              style={s.addTaskBtn}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="הוסף משימה"
-            >
-              <Ionicons name="add-circle-outline" size={18} color={PRIMARY} />
-              <Text style={s.addTaskText}>הוסף משימה</Text>
-            </TouchableOpacity>
           </View>
 
           {/* RSVP */}
@@ -743,6 +877,58 @@ export default function EditEventScreen(): React.JSX.Element {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* ── Assignee sheet */}
+      <TaskAssigneeSheet
+        visible={!!assigneeSheetTaskId}
+        currentAssignee={
+          tasks.find((t) => t.id === assigneeSheetTaskId)?.assignee ?? null
+        }
+        members={communityMembers}
+        currentUserId={currentUserId}
+        isCreator
+        manualName={manualAssigneeName}
+        onManualNameChange={setManualAssigneeName}
+        onSelectUser={(userId, display) => {
+          if (!assigneeSheetTaskId) return;
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === assigneeSheetTaskId
+                ? { ...t, assignee: { type: 'user', userId, display } }
+                : t
+            )
+          );
+          setAssigneeSheetTaskId(null);
+        }}
+        onSelectManual={() => {
+          if (!assigneeSheetTaskId || !manualAssigneeName.trim()) return;
+          const name = manualAssigneeName.trim();
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === assigneeSheetTaskId
+                ? { ...t, assignee: { type: 'manual', name } }
+                : t
+            )
+          );
+          setAssigneeSheetTaskId(null);
+          setManualAssigneeName('');
+        }}
+        onUnassign={() => {
+          if (!assigneeSheetTaskId) return;
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === assigneeSheetTaskId
+                ? { ...t, assignee: null }
+                : t
+            )
+          );
+          setAssigneeSheetTaskId(null);
+        }}
+        onClose={() => {
+          setAssigneeSheetTaskId(null);
+          setManualAssigneeName('');
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -887,22 +1073,51 @@ const s = StyleSheet.create({
     marginBottom: 6,
   },
 
-  tasksList: { gap: 8 },
+  tasksList: { gap: 4, marginBottom: 8 },
   taskRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f3f4f6',
+  },
+  taskRemoveBtn: { padding: 4, marginTop: 2 },
+  taskContent: { flex: 1, gap: 4 },
+  taskTitle: { fontSize: 14, color: '#374151', textAlign: 'right' },
+  assigneeChip: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-end',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  assigneeChipText: { fontSize: 12, color: '#6b7280' },
+  assignBtn: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-end',
+  },
+  assignBtnText: { fontSize: 12, color: PRIMARY, fontWeight: '600' },
+  newTaskInputRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 8,
+    marginTop: 4,
   },
-  taskRemoveBtn: { padding: 4 },
-  taskInput: { flex: 1, marginTop: 0 },
+  newTaskInput: { flex: 1, marginTop: 0 },
   addTaskBtn: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-    alignSelf: 'flex-end',
+    gap: 4,
   },
+  addTaskBtnDisabled: { opacity: 0.4 },
   addTaskText: { fontSize: 14, color: PRIMARY, fontWeight: '600' },
+  addTaskTextDisabled: { color: '#9ca3af' },
   chipRow: { flexDirection: 'row-reverse', gap: 8, marginBottom: 4 },
   chip: {
     paddingHorizontal: 14,

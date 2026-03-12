@@ -4,6 +4,38 @@ import type { Id } from './_generated/dataModel';
 import type { QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 
+// ─────────────────────────────────────────────────────────────
+// סיכום משימות לפי קהילה (לתצוגת כרטיסי אירועים — ללא N+1)
+// ─────────────────────────────────────────────────────────────
+export const getTaskCountsByCommunity = query({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    const events = await ctx.db
+      .query('events')
+      .withIndex('by_community_date', (q) => q.eq('communityId', communityId))
+      .collect();
+
+    const counts: Record<string, { total: number; assigned: number }> = {};
+
+    await Promise.all(
+      events.map(async (ev) => {
+        const tasks = await ctx.db
+          .query('eventTasks')
+          .withIndex('by_event', (q) => q.eq('eventId', ev._id))
+          .collect();
+        counts[ev._id] = {
+          total: tasks.length,
+          assigned: tasks.filter(
+            (t) => t.assignedToUserId || t.assignedToManual?.trim()
+          ).length,
+        };
+      })
+    );
+
+    return counts;
+  },
+});
+
 async function isCommunityMember(
   ctx: QueryCtx,
   communityId: Id<'communities'>,
@@ -147,10 +179,12 @@ export const toggleCompleted = mutation({
     if (!event) throw new Error('אירוע לא נמצא');
 
     if (event.communityId) {
+      const communityId = event.communityId;
+      if (!communityId) throw new Error('אירוע זה אינו שייך לקהילה');
       const member = await ctx.db
         .query('communityMembers')
         .withIndex('by_community_user', (q) =>
-          q.eq('communityId', event.communityId).eq('userId', userId)
+          q.eq('communityId', communityId).eq('userId', userId)
         )
         .unique();
       if (!member) throw new Error('רק חברי הקהילה יכולים לעדכן משימות');

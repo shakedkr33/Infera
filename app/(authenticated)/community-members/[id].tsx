@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ActivityIndicator,
@@ -35,10 +35,29 @@ interface MemberInfo {
   email: string;
 }
 
-function MemberRow({ member }: { member: MemberInfo }) {
+interface MemberRowProps {
+  member: MemberInfo;
+  showRemove?: boolean;
+  onRemove?: () => void;
+}
+
+function MemberRow({ member, showRemove, onRemove }: MemberRowProps) {
   return (
     <View style={styles.memberRow}>
-      {/* badge role בצד שמאל */}
+      {/* כפתור הסרה — מופיע בצד שמאל כשרלוונטי */}
+      {showRemove ? (
+        <TouchableOpacity
+          onPress={onRemove}
+          style={styles.removeBtn}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel={`הסר את ${member.fullName}`}
+        >
+          <Ionicons name="person-remove-outline" size={20} color="#9ca3af" />
+        </TouchableOpacity>
+      ) : null}
+
+      {/* badge role */}
       <View
         style={[
           styles.roleBadge,
@@ -55,7 +74,7 @@ function MemberRow({ member }: { member: MemberInfo }) {
         </Text>
       </View>
 
-      {/* שם + אימייל בצד ימין */}
+      {/* שם + אימייל */}
       <View style={styles.memberInfo}>
         <Text style={styles.memberName} numberOfLines={1}>
           {member.fullName}
@@ -87,6 +106,19 @@ export default function CommunityMembersScreen() {
   const data = useQuery(api.communities.getCommunityMembers, {
     communityId: id as Id<'communities'>,
   });
+  const currentUserId = useQuery(api.users.getMyId) ?? undefined;
+
+  const leaveCommunity = useMutation(api.communities.leaveCommunity);
+  const removeMember = useMutation(api.communities.removeMember);
+
+  const communityId = id as Id<'communities'>;
+
+  const isOwner =
+    currentUserId !== undefined &&
+    (data?.members.some(
+      (m) => m.userId === currentUserId && m.role === 'owner'
+    ) ??
+      false);
 
   const handleInvite = () => {
     if (!data?.community.inviteCode) {
@@ -99,6 +131,62 @@ export default function CommunityMembersScreen() {
     });
     // TODO: add contacts picker flow – check which contacts are Inyomi users,
     //       send internal invite vs share link
+  };
+
+  const handleLeave = () => {
+    Alert.alert(
+      'עזיבת הקהילה',
+      'האם אתה בטוח שברצונך לעזוב את הקהילה?',
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'עזוב',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await leaveCommunity({ communityId });
+              router.replace(
+                '/(authenticated)/communities' as Parameters<
+                  typeof router.replace
+                >[0]
+              );
+            } catch (err) {
+              Alert.alert(
+                'שגיאה',
+                err instanceof Error ? err.message : 'לא ניתן לעזוב את הקהילה'
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleRemove = (member: MemberInfo) => {
+    Alert.alert(
+      'הסרת חבר',
+      `האם אתה בטוח שברצונך להסיר את ${member.fullName} מהקהילה?`,
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'הסר',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await removeMember({
+                communityId,
+                targetUserId: member.userId,
+              });
+            } catch (err) {
+              Alert.alert(
+                'שגיאה',
+                err instanceof Error ? err.message : 'לא ניתן להסיר את החבר'
+              );
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -148,12 +236,30 @@ export default function CommunityMembersScreen() {
           keyExtractor={(m) => m.userId}
           contentContainerStyle={styles.listContent}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
-          renderItem={({ item }) => <MemberRow member={item} />}
+          renderItem={({ item }) => (
+            <MemberRow
+              member={item}
+              showRemove={isOwner && item.userId !== currentUserId}
+              onRemove={() => handleRemove(item)}
+            />
+          )}
         />
       )}
 
-      {/* ── כפתור הזמנת חברים */}
+      {/* ── Footer: עזיבה + הזמנה */}
       <View style={styles.footer}>
+        {currentUserId !== undefined && !isOwner ? (
+          <TouchableOpacity
+            style={styles.leaveBtn}
+            onPress={handleLeave}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="עזיבת הקהילה"
+          >
+            <Ionicons name="exit-outline" size={18} color="#6b7280" />
+            <Text style={styles.leaveBtnText}>עזיבת הקהילה</Text>
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           style={styles.inviteBtn}
           onPress={handleInvite}
@@ -221,7 +327,7 @@ const styles = StyleSheet.create({
   },
 
   // ── List
-  listContent: { paddingBottom: 100 },
+  listContent: { paddingBottom: 140 },
   separator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#f1f5f9',
@@ -270,6 +376,9 @@ const styles = StyleSheet.create({
   roleBadgeOwner: { backgroundColor: '#e0f2fe' },
   roleText: { fontSize: 11, color: '#6b7280', fontWeight: '600' },
   roleTextOwner: { color: PRIMARY },
+  removeBtn: {
+    padding: 4,
+  },
 
   // ── Loading / Error
   loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
@@ -292,6 +401,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#f1f5f9',
+    gap: 10,
+  },
+  leaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 14,
+    paddingVertical: 12,
+  },
+  leaveBtnText: {
+    color: '#6b7280',
+    fontSize: 15,
+    fontWeight: '600',
   },
   inviteBtn: {
     backgroundColor: PRIMARY,

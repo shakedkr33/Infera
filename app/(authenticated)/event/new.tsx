@@ -19,6 +19,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import EventScreen from '@/lib/components/event/EventScreen';
+import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
+import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -68,9 +70,20 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
 
   const createEvent = useMutation(api.events.create);
   const createEventTasks = useMutation(api.eventTasks.createBatch);
+  const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
   const spaceId = useQuery(api.users.getMySpace);
+  const currentUserId = useQuery(api.users.getMyId) ?? undefined;
+  const communityMembersData = useQuery(api.communities.getCommunityMembers, {
+    communityId: communityId as Id<'communities'>,
+  });
+  const communityMembers = communityMembersData?.members ?? [];
 
-  const [tasks, setTasks] = useState<{ id: string; title: string }[]>([]);
+  const [tasks, setTasks] = useState<
+    { id: string; title: string; assignee?: LocalAssignee }[]
+  >([]);
+  const [newTaskText, setNewTaskText] = useState('');
+  const [assigneeSheetTaskId, setAssigneeSheetTaskId] = useState<string | null>(null);
+  const [manualAssigneeName, setManualAssigneeName] = useState('');
 
   const handleSave = useCallback(async () => {
     if (!title.trim()) {
@@ -107,14 +120,25 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
         requiresRsvp: rsvpRequired,
       };
       const eventId = await createEvent(eventArgs);
-      const tasksToCreate = tasks
-        .map((t) => t.title.trim())
-        .filter((t) => t.length > 0);
+      const tasksToCreate = tasks.filter((t) => t.title.trim().length > 0);
       if (tasksToCreate.length > 0) {
-        await createEventTasks({
+        const taskIds = await createEventTasks({
           eventId,
-          tasks: tasksToCreate.map((title) => ({ title })),
+          tasks: tasksToCreate.map((t) => ({ title: t.title.trim() })),
         });
+        for (let i = 0; i < tasksToCreate.length; i++) {
+          const task = tasksToCreate[i];
+          const taskId = taskIds[i];
+          if (taskId && task.assignee) {
+            await setTaskAssignee({
+              id: taskId as Id<'eventTasks'>,
+              assignee:
+                task.assignee.type === 'user'
+                  ? { type: 'user', userId: task.assignee.userId as Id<'users'> }
+                  : { type: 'manual', name: task.assignee.name },
+            }).catch(() => {});
+          }
+        }
       }
       router.replace(
         `/(authenticated)/community/${communityId}` as Parameters<
@@ -141,6 +165,7 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
     spaceId,
     createEvent,
     createEventTasks,
+    setTaskAssignee,
     router,
     tasks,
   ]);
@@ -502,57 +527,130 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
             />
           </View>
 
-          {/* משימות */}
+          {/* משימות לאירוע */}
           <View style={s.card}>
-            <Text style={s.fieldLabel}>משימות (רשימת צ'ק)</Text>
-            <View style={s.tasksList}>
-              {tasks.map((t) => (
-                <View key={t.id} style={s.taskRow}>
-                  <TouchableOpacity
-                    onPress={() =>
-                      setTasks((prev) => prev.filter((x) => x.id !== t.id))
-                    }
-                    style={s.taskRemoveBtn}
-                    accessible
-                    accessibilityRole="button"
-                    accessibilityLabel="הסר משימה"
-                  >
-                    <Ionicons name="close-circle" size={20} color="#9ca3af" />
-                  </TouchableOpacity>
-                  <TextInput
-                    style={[s.input, s.taskInput]}
-                    value={t.title}
-                    onChangeText={(text) =>
-                      setTasks((prev) =>
-                        prev.map((x) =>
-                          x.id === t.id ? { ...x, title: text } : x
-                        )
-                      )
-                    }
-                    placeholder="כותרת משימה..."
-                    placeholderTextColor="#9ca3af"
-                    textAlign="right"
-                    accessible
-                    accessibilityLabel="כותרת משימה"
-                  />
-                </View>
-              ))}
+            <Text style={s.fieldLabel}>משימות לאירוע</Text>
+            {tasks.length > 0 && (
+              <View style={s.tasksList}>
+                {tasks.map((t) => (
+                  <View key={t.id} style={s.taskRow}>
+                    <TouchableOpacity
+                      onPress={() =>
+                        setTasks((prev) => prev.filter((x) => x.id !== t.id))
+                      }
+                      style={s.taskRemoveBtn}
+                      accessible
+                      accessibilityRole="button"
+                      accessibilityLabel="הסר משימה"
+                    >
+                      <Ionicons name="close-circle" size={20} color="#9ca3af" />
+                    </TouchableOpacity>
+                    <View style={s.taskContent}>
+                      <Text style={s.taskTitle} numberOfLines={2}>
+                        {t.title}
+                      </Text>
+                      {t.assignee ? (
+                        <TouchableOpacity
+                          onPress={() => {
+                            setAssigneeSheetTaskId(t.id);
+                            setManualAssigneeName('');
+                          }}
+                          style={s.assigneeChip}
+                          accessible
+                          accessibilityRole="button"
+                          accessibilityLabel={`ממונה: ${t.assignee.type === 'user' ? t.assignee.display : t.assignee.name}`}
+                        >
+                          <Ionicons name="person" size={12} color="#6b7280" />
+                          <Text style={s.assigneeChipText} numberOfLines={1}>
+                            {t.assignee.type === 'user'
+                              ? t.assignee.display
+                              : t.assignee.name}
+                          </Text>
+                        </TouchableOpacity>
+                      ) : communityMembers.length > 0 ? (
+                        <TouchableOpacity
+                          onPress={() => {
+                            setAssigneeSheetTaskId(t.id);
+                            setManualAssigneeName('');
+                          }}
+                          style={s.assignBtn}
+                          accessible
+                          accessibilityRole="button"
+                          accessibilityLabel="הקצה משימה"
+                        >
+                          <Ionicons
+                            name="person-add-outline"
+                            size={12}
+                            color={PRIMARY}
+                          />
+                          <Text style={s.assignBtnText}>הקצה</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+            {/* New task input row */}
+            <View style={s.newTaskInputRow}>
+              <TouchableOpacity
+                onPress={() => {
+                  if (!newTaskText.trim()) return;
+                  setTasks((prev) => [
+                    ...prev,
+                    {
+                      id: `tmp-${Date.now()}`,
+                      title: newTaskText.trim(),
+                    },
+                  ]);
+                  setNewTaskText('');
+                }}
+                style={[
+                  s.addTaskBtn,
+                  !newTaskText.trim() && s.addTaskBtnDisabled,
+                ]}
+                disabled={!newTaskText.trim()}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="הוסף משימה"
+              >
+                <Ionicons
+                  name="add-circle-outline"
+                  size={18}
+                  color={newTaskText.trim() ? PRIMARY : '#9ca3af'}
+                />
+                <Text
+                  style={[
+                    s.addTaskText,
+                    !newTaskText.trim() && s.addTaskTextDisabled,
+                  ]}
+                >
+                  הוסף
+                </Text>
+              </TouchableOpacity>
+              <TextInput
+                style={[s.input, s.newTaskInput]}
+                value={newTaskText}
+                onChangeText={setNewTaskText}
+                placeholder="כתוב משימה..."
+                placeholderTextColor="#9ca3af"
+                textAlign="right"
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  if (!newTaskText.trim()) return;
+                  setTasks((prev) => [
+                    ...prev,
+                    {
+                      id: `tmp-${Date.now()}`,
+                      title: newTaskText.trim(),
+                    },
+                  ]);
+                  setNewTaskText('');
+                }}
+                accessible
+                accessibilityLabel="משימה חדשה"
+              />
             </View>
-            <TouchableOpacity
-              onPress={() =>
-                setTasks((prev) => [
-                  ...prev,
-                  { id: `tmp-${Date.now()}`, title: '' },
-                ])
-              }
-              style={s.addTaskBtn}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="הוסף משימה"
-            >
-              <Ionicons name="add-circle-outline" size={18} color={PRIMARY} />
-              <Text style={s.addTaskText}>הוסף משימה</Text>
-            </TouchableOpacity>
           </View>
 
           {/* RSVP */}
@@ -592,6 +690,58 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* ── Assignee sheet */}
+      <TaskAssigneeSheet
+        visible={!!assigneeSheetTaskId}
+        currentAssignee={
+          tasks.find((t) => t.id === assigneeSheetTaskId)?.assignee ?? null
+        }
+        members={communityMembers}
+        currentUserId={currentUserId}
+        isCreator
+        manualName={manualAssigneeName}
+        onManualNameChange={setManualAssigneeName}
+        onSelectUser={(userId, display) => {
+          if (!assigneeSheetTaskId) return;
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === assigneeSheetTaskId
+                ? { ...t, assignee: { type: 'user', userId, display } }
+                : t
+            )
+          );
+          setAssigneeSheetTaskId(null);
+        }}
+        onSelectManual={() => {
+          if (!assigneeSheetTaskId || !manualAssigneeName.trim()) return;
+          const name = manualAssigneeName.trim();
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === assigneeSheetTaskId
+                ? { ...t, assignee: { type: 'manual', name } }
+                : t
+            )
+          );
+          setAssigneeSheetTaskId(null);
+          setManualAssigneeName('');
+        }}
+        onUnassign={() => {
+          if (!assigneeSheetTaskId) return;
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === assigneeSheetTaskId
+                ? { ...t, assignee: undefined }
+                : t
+            )
+          );
+          setAssigneeSheetTaskId(null);
+        }}
+        onClose={() => {
+          setAssigneeSheetTaskId(null);
+          setManualAssigneeName('');
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -727,22 +877,51 @@ const s = StyleSheet.create({
     marginBottom: 6,
   },
 
-  tasksList: { gap: 8 },
+  tasksList: { gap: 4, marginBottom: 8 },
   taskRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f3f4f6',
+  },
+  taskRemoveBtn: { padding: 4, marginTop: 2 },
+  taskContent: { flex: 1, gap: 4 },
+  taskTitle: { fontSize: 14, color: '#374151', textAlign: 'right' },
+  assigneeChip: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-end',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  assigneeChipText: { fontSize: 12, color: '#6b7280' },
+  assignBtn: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-end',
+  },
+  assignBtnText: { fontSize: 12, color: PRIMARY, fontWeight: '600' },
+  newTaskInputRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 8,
+    marginTop: 4,
   },
-  taskRemoveBtn: { padding: 4 },
-  taskInput: { flex: 1, marginTop: 0 },
+  newTaskInput: { flex: 1, marginTop: 0 },
   addTaskBtn: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-    alignSelf: 'flex-end',
+    gap: 4,
   },
+  addTaskBtnDisabled: { opacity: 0.4 },
   addTaskText: { fontSize: 14, color: PRIMARY, fontWeight: '600' },
+  addTaskTextDisabled: { color: '#9ca3af' },
   chipRow: { flexDirection: 'row-reverse', gap: 8, marginBottom: 4 },
   chip: {
     paddingHorizontal: 14,

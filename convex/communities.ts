@@ -366,7 +366,6 @@ export const deleteCommunity = mutation({
 export const leaveCommunity = mutation({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
-    // TODO: הרשאות – owner לא יכול לעזוב לפני העברת בעלות
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
     const user = await ctx.db.get(userId);
@@ -381,7 +380,55 @@ export const leaveCommunity = mutation({
 
     if (!membership) throw new Error('המשתמש אינו חבר בקהילה זו');
 
+    if (membership.role === 'owner') {
+      throw new Error(
+        'בעל הקהילה לא יכול לעזוב. יש להעביר בעלות תחילה.'
+      );
+    }
+
     await ctx.db.delete(membership._id);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// הסרת חבר מהקהילה (owner בלבד)
+// ─────────────────────────────────────────────────────────────
+export const removeMember = mutation({
+  args: {
+    communityId: v.id('communities'),
+    targetUserId: v.id('users'),
+  },
+  handler: async (ctx, { communityId, targetUserId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const callerMembership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', userId)
+      )
+      .unique();
+
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new Error('רק בעל הקהילה יכול להסיר חברים');
+    }
+
+    if (targetUserId === userId) {
+      throw new Error('לא ניתן להסיר את עצמך מהקהילה');
+    }
+
+    const targetMembership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', targetUserId)
+      )
+      .unique();
+
+    if (!targetMembership) {
+      throw new Error('החבר אינו נמצא בקהילה זו');
+    }
+
+    await ctx.db.delete(targetMembership._id);
   },
 });
 
@@ -426,8 +473,10 @@ export const getCommunityMembers = query({
       .withIndex('by_community', (q) => q.eq('communityId', communityId))
       .collect();
 
+    const activeMembers = memberships.filter((m) => m.status !== 'left');
+
     const membersWithInfo = await Promise.all(
-      memberships.map(async (m) => {
+      activeMembers.map(async (m) => {
         const user = await ctx.db.get(m.userId);
         return {
           userId: m.userId,

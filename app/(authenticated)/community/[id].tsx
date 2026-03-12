@@ -42,6 +42,7 @@ const EVENT_COLORS = [
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type RsvpStatus = 'yes' | 'no' | 'maybe' | 'none';
+type TaskSummary = { total: number; assigned: number };
 
 interface EventDoc {
   _id: Id<'events'>;
@@ -285,6 +286,7 @@ interface EventCardProps {
   rsvpStatus: RsvpStatus;
   currentUserId?: Id<'users'>;
   isCancelled?: boolean;
+  taskSummary?: TaskSummary;
 }
 
 function EventCard({
@@ -292,6 +294,7 @@ function EventCard({
   rsvpStatus,
   currentUserId,
   isCancelled,
+  taskSummary,
 }: EventCardProps) {
   const router = useRouter();
   const color = getEventColor(event._id);
@@ -381,6 +384,18 @@ function EventCard({
         {rsvpStatus === 'yes' ? (
           <Text style={styles.eventCardConfirmed}>אישרת הגעה ✓</Text>
         ) : null}
+        {taskSummary && taskSummary.total > 0 ? (
+          <Text
+            style={[
+              styles.eventCardTaskSummary,
+              taskSummary.assigned === taskSummary.total
+                ? styles.eventCardTaskSummaryDone
+                : null,
+            ]}
+          >
+            {`${taskSummary.assigned}/${taskSummary.total} הוקצו`}
+          </Text>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -394,6 +409,7 @@ interface EventRowProps {
   onRsvpPress: (eventId: Id<'events'>) => void;
   isCancelled?: boolean;
   cancelReason?: string;
+  taskSummary?: TaskSummary;
 }
 
 function EventRow({
@@ -402,6 +418,7 @@ function EventRow({
   onRsvpPress,
   isCancelled,
   cancelReason,
+  taskSummary,
 }: EventRowProps) {
   const past = isEventPast(event);
 
@@ -498,6 +515,18 @@ function EventRow({
               {badgeLabel !== '' ? `${badgeLabel} ▾` : 'ממתין לאישור ▾'}
             </Text>
           </TouchableOpacity>
+        ) : null}
+        {taskSummary && taskSummary.total > 0 ? (
+          <Text
+            style={[
+              styles.eventRowTaskSummary,
+              taskSummary.assigned === taskSummary.total
+                ? styles.eventRowTaskSummaryDone
+                : null,
+            ]}
+          >
+            {`${taskSummary.assigned}/${taskSummary.total} הוקצו`}
+          </Text>
         ) : null}
       </View>
     </View>
@@ -751,6 +780,7 @@ interface TabAllProps {
   isRemindersOpen: boolean;
   setIsRemindersOpen: React.Dispatch<React.SetStateAction<boolean>>;
   currentUserId?: Id<'users'>;
+  taskCountsMap: Record<string, TaskSummary>;
 }
 
 function TabAll({
@@ -766,6 +796,7 @@ function TabAll({
   isRemindersOpen,
   setIsRemindersOpen,
   currentUserId,
+  taskCountsMap,
 }: TabAllProps) {
   // Stable timestamps — computed once on mount, never change
   const windowStart = useMemo(() => {
@@ -979,6 +1010,7 @@ function TabAll({
                 event={ev}
                 rsvpStatus={rsvpMap[ev._id] ?? 'none'}
                 currentUserId={currentUserId}
+                taskSummary={taskCountsMap[ev._id]}
               />
             ))}
           </View>
@@ -1088,6 +1120,7 @@ function TabAll({
                 event={ev}
                 rsvpStatus={rsvpMap[ev._id] ?? 'none'}
                 currentUserId={currentUserId}
+                taskSummary={taskCountsMap[ev._id]}
               />
             ))}
           </View>
@@ -1119,6 +1152,7 @@ interface TabEventsProps {
   onMonthChange: (d: Date) => void;
   searchQuery: string;
   currentUserId?: Id<'users'>;
+  taskCountsMap: Record<string, TaskSummary>;
 }
 
 function TabEvents({
@@ -1129,6 +1163,7 @@ function TabEvents({
   onMonthChange,
   searchQuery,
   currentUserId,
+  taskCountsMap,
 }: TabEventsProps) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [accumulated, setAccumulated] = useState<EventDoc[]>([]);
@@ -1226,9 +1261,10 @@ function TabEvents({
         event={item}
         rsvpStatus={rsvpMap[item._id] ?? 'none'}
         onRsvpPress={onRsvpPress}
+        taskSummary={taskCountsMap[item._id]}
       />
     ),
-    [rsvpMap, onRsvpPress]
+    [rsvpMap, onRsvpPress, taskCountsMap]
   );
 
   const keyExtractor = useCallback((item: EventDoc) => item._id, []);
@@ -1494,6 +1530,8 @@ export default function CommunityDetailScreen() {
   const community = useQuery(api.communities.getCommunity, { communityId });
   const myRsvps = useQuery(api.eventRsvps.listByUser);
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
+  const taskCountsMap =
+    useQuery(api.eventTasks.getTaskCountsByCommunity, { communityId }) ?? {};
 
   // ── Mutations
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
@@ -1903,6 +1941,7 @@ export default function CommunityDetailScreen() {
           isRemindersOpen={isRemindersOpen}
           setIsRemindersOpen={setIsRemindersOpen}
           currentUserId={currentUserId}
+          taskCountsMap={taskCountsMap}
         />
       )}
       {activeTab === 'אירועים' && (
@@ -1914,6 +1953,7 @@ export default function CommunityDetailScreen() {
           onMonthChange={setSelectedMonth}
           searchQuery={searchQuery}
           currentUserId={currentUserId}
+          taskCountsMap={taskCountsMap}
         />
       )}
       {activeTab === 'תזכורות' && (
@@ -2137,6 +2177,15 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginTop: 4,
   },
+  eventCardTaskSummary: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  eventCardTaskSummaryDone: {
+    color: '#86efac',
+  },
   cancelledEventsSection: {
     paddingTop: 24,
     gap: 12,
@@ -2217,6 +2266,15 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   rsvpStatusText: { fontSize: 11, color: '#fff', fontWeight: '700' },
+  eventRowTaskSummary: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  eventRowTaskSummaryDone: {
+    color: '#16a34a',
+  },
 
   // ── Tasks
   taskList: {

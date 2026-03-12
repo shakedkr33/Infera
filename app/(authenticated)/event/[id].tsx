@@ -20,6 +20,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
+import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,133 +56,6 @@ const RSVP_OPTIONS = [
   { status: 'maybe' as const, label: 'אולי', activeColor: '#eab308' },
   { status: 'no' as const, label: 'לא', activeColor: '#ef4444' },
 ];
-
-// ─── Assignee Sheet ───────────────────────────────────────────────────────────
-
-interface AssigneeSheetProps {
-  visible: boolean;
-  task: {
-    _id: string;
-    assigneeDisplay?: string;
-    assignedToUserId?: string;
-    assignedToManual?: string;
-  } | null;
-  members: Array<{ userId: Id<'users'>; fullName: string; email?: string }>;
-  currentUserId?: Id<'users'>;
-  isCreator: boolean;
-  manualName: string;
-  onManualNameChange: (v: string) => void;
-  onSelectUser: (userId: Id<'users'>) => void;
-  onSelectManual: () => void;
-  onUnassign: () => void;
-  onClose: () => void;
-}
-
-function AssigneeSheet({
-  visible,
-  task,
-  members,
-  currentUserId,
-  isCreator,
-  manualName,
-  onManualNameChange,
-  onSelectUser,
-  onSelectManual,
-  onUnassign,
-  onClose,
-}: AssigneeSheetProps) {
-  if (!visible) return null;
-
-  const hasAssignee = !!task?.assigneeDisplay?.trim();
-  const hasManual = !!task?.assignedToManual?.trim();
-  const hasUserId = !!task?.assignedToUserId;
-  const isAssignedToCurrentUser =
-    currentUserId && task?.assignedToUserId === currentUserId;
-  const canUnassign =
-    hasAssignee &&
-    (hasManual ? isCreator : isCreator || isAssignedToCurrentUser);
-
-  return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.assigneeSheetContainer}>
-        <Pressable
-          style={styles.sheetBackdrop}
-          onPress={onClose}
-        />
-        <View style={styles.assigneeSheet}>
-        <View style={styles.sheetHandle} />
-        <Text style={styles.assigneeSheetTitle}>הקצאת משימה</Text>
-
-        {hasAssignee && canUnassign ? (
-          <TouchableOpacity
-            onPress={onUnassign}
-            style={styles.unassignBtn}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="בטל הקצאה"
-          >
-            <Ionicons name="person-remove-outline" size={18} color="#ef4444" />
-            <Text style={styles.unassignBtnText}>בטל הקצאה</Text>
-          </TouchableOpacity>
-        ) : null}
-
-        <Text style={styles.assigneeSectionLabel}>חברי קהילה</Text>
-        <ScrollView
-          style={styles.membersScroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {members.map((m) => (
-            <TouchableOpacity
-              key={m.userId}
-              onPress={() => onSelectUser(m.userId)}
-              style={styles.memberRow}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel={m.fullName}
-            >
-              <Ionicons name="person" size={20} color={PRIMARY} />
-              <Text style={styles.memberRowName} numberOfLines={1}>
-                {m.fullName}
-                {currentUserId === m.userId ? ' (אני)' : ''}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-
-        <Text style={[styles.assigneeSectionLabel, { marginTop: 16 }]}>
-          הקלד שם
-        </Text>
-        <View style={styles.manualAssignRow}>
-          <TouchableOpacity
-            onPress={onSelectManual}
-            style={[
-              styles.manualAssignBtn,
-              !manualName.trim() && styles.manualAssignBtnDisabled,
-            ]}
-            disabled={!manualName.trim()}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="הקצה לפי שם"
-          >
-            <Text style={styles.manualAssignBtnText}>הקצה</Text>
-          </TouchableOpacity>
-          <TextInput
-            style={styles.manualAssignInput}
-            value={manualName}
-            onChangeText={onManualNameChange}
-            placeholder="שם..."
-            placeholderTextColor="#9ca3af"
-            textAlign="right"
-            accessible
-            accessibilityLabel="הקלד שם ממונה"
-          />
-        </View>
-        </View>
-      </View>
-    </Modal>
-  );
-}
 
 // ─── Overflow Menu ────────────────────────────────────────────────────────────
 
@@ -255,8 +130,6 @@ export default function EventDetailScreen() {
 
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
   const cancelEventMutation = useMutation(api.events.cancelEvent);
-  const toggleEventTask = useMutation(api.eventTasks.toggleCompleted);
-  const updateEventTask = useMutation(api.eventTasks.update);
   const removeEventTask = useMutation(api.eventTasks.remove);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
 
@@ -265,8 +138,6 @@ export default function EventDetailScreen() {
     event?.communityId ? { communityId: event.communityId } : 'skip'
   );
 
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState('');
   const [assigneeSheetTaskId, setAssigneeSheetTaskId] = useState<string | null>(
     null
   );
@@ -370,26 +241,6 @@ export default function EventDetailScreen() {
     return items;
   }, [handleShare, event?.status, eventId, router]);
 
-  const canManageTaskAssignment = useCallback(
-    (task: { assignedToUserId?: string; assignedToManual?: string }) => {
-      const communityId = event?.communityId;
-      const membersList = communityMembersData?.members ?? [];
-      const isCreatorLocal =
-        currentUserId !== undefined && event?.createdBy === currentUserId;
-      const isMember = membersList.some((m) => m.userId === currentUserId);
-      if (!communityId || !isMember) return false;
-      const hasManual = !!task.assignedToManual?.trim();
-      if (hasManual) return isCreatorLocal;
-      const assigned = !!task.assignedToUserId;
-      if (!assigned) return true;
-      return (
-        isCreatorLocal ||
-        (currentUserId && task.assignedToUserId === currentUserId)
-      );
-    },
-    [event?.communityId, event?.createdBy, communityMembersData, currentUserId]
-  );
-
   // ── Loading
   if (event === undefined) {
     return (
@@ -434,7 +285,11 @@ export default function EventDetailScreen() {
   const myRsvp = rsvps?.find((r) => r.userId === currentUserId);
   const currentStatus: RsvpStatus = (myRsvp?.status as RsvpStatus) ?? 'none';
   const members = communityMembersData?.members ?? [];
-  const isCommunityMember = members.some((m) => m.userId === currentUserId);
+
+  const assignedCount =
+    eventTasks?.filter(
+      (t) => !!t.assignedToUserId || !!t.assignedToManual?.trim()
+    ).length ?? 0;
 
   const yesCount = rsvps?.filter((r) => r.status === 'yes').length ?? 0;
   const maybeCount = rsvps?.filter((r) => r.status === 'maybe').length ?? 0;
@@ -443,6 +298,21 @@ export default function EventDetailScreen() {
 
   // Local variable to satisfy TypeScript in closures (event.onlineUrl may be undefined)
   const onlineUrl = event.onlineUrl;
+
+  // ── Assignee sheet: derive current assignee from the task being managed
+  const _assigneeSheetTask = assigneeSheetTaskId
+    ? (eventTasks?.find((t) => t._id === assigneeSheetTaskId) ?? null)
+    : null;
+  const currentAssigneeForSheet: LocalAssignee | null = _assigneeSheetTask?.assignedToUserId
+    ? {
+        type: 'user',
+        userId: _assigneeSheetTask.assignedToUserId,
+        display:
+          (_assigneeSheetTask as { assigneeDisplay?: string }).assigneeDisplay ?? '',
+      }
+    : _assigneeSheetTask?.assignedToManual?.trim()
+    ? { type: 'manual', name: _assigneeSheetTask.assignedToManual.trim() }
+    : null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -634,204 +504,119 @@ export default function EventDetailScreen() {
           ) : null /* Case C: creator — no RSVP section */
         }
 
-        {/* ── Section 3: משימות */}
+        {/* ── Section 3: משימות לאירוע */}
         {eventTasks !== undefined && (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>משימות</Text>
+            {/* Header: title + assignment summary */}
+            <View style={styles.taskSectionHeader}>
+              {eventTasks.length > 0 ? (
+                <Text
+                  style={[
+                    styles.taskSummary,
+                    assignedCount === eventTasks.length
+                      ? styles.taskSummaryAllDone
+                      : null,
+                  ]}
+                >
+                  {`${assignedCount}/${eventTasks.length} הוקצו`}
+                </Text>
+              ) : null}
+              <Text style={styles.sectionTitle}>משימות לאירוע</Text>
+            </View>
+
             {eventTasks.length === 0 ? (
               <View style={styles.emptyParticipants}>
-                <Ionicons
-                  name="checkmark-done-outline"
-                  size={32}
-                  color="#d1d5db"
-                />
+                <Ionicons name="list-outline" size={32} color="#d1d5db" />
                 <Text style={styles.emptyParticipantsText}>
-                  אין משימות לאירוע זה
+                  לא נוספו משימות לאירוע הזה
                 </Text>
               </View>
             ) : (
               <View style={styles.tasksList}>
                 {eventTasks.map((task) => {
-                  const isEditing = editingTaskId === task._id;
-                  const canAssign = canManageTaskAssignment(task);
-                  const assigneeDisplay = (task as { assigneeDisplay?: string })
-                    ?.assigneeDisplay;
+                  const assigneeDisplay = (
+                    task as { assigneeDisplay?: string }
+                  ).assigneeDisplay?.trim();
+                  const isAssigned = !!assigneeDisplay;
                   return (
                     <View key={task._id} style={styles.taskRow}>
-                      <Pressable
-                        onPress={() =>
-                          toggleEventTask({ id: task._id }).catch(() =>
-                            Alert.alert('שגיאה', 'לא ניתן לעדכן משימה')
-                          )
-                        }
-                        style={styles.taskCheckbox}
-                        accessible
-                        accessibilityRole="checkbox"
-                        accessibilityLabel={task.title}
-                        accessibilityState={{ checked: task.completed }}
-                      >
-                        <View
-                          style={[
-                            styles.checkbox,
-                            task.completed && styles.checkboxChecked,
-                          ]}
-                        >
-                          {task.completed && (
-                            <Ionicons
-                              name="checkmark"
-                              size={13}
-                              color="#fff"
-                            />
-                          )}
-                        </View>
-                      </Pressable>
-                      {isEditing ? (
-                        <TextInput
-                          style={[styles.input, styles.taskInput]}
-                          value={editingTitle}
-                          onChangeText={setEditingTitle}
-                          onBlur={async () => {
-                            const t = editingTitle.trim();
-                            setEditingTaskId(null);
-                            if (t && t !== task.title) {
-                              try {
-                                await updateEventTask({
-                                  id: task._id,
-                                  title: t,
-                                });
-                              } catch {
-                                Alert.alert('שגיאה', 'לא ניתן לעדכן משימה');
-                              }
-                            }
-                          }}
-                          onSubmitEditing={async () => {
-                            const t = editingTitle.trim();
-                            setEditingTaskId(null);
-                            if (t && t !== task.title) {
-                              try {
-                                await updateEventTask({
-                                  id: task._id,
-                                  title: t,
-                                });
-                              } catch {
-                                Alert.alert('שגיאה', 'לא ניתן לעדכן משימה');
-                              }
-                            }
-                          }}
-                          autoFocus
-                          accessible
-                          accessibilityLabel="ערוך כותרת"
-                        />
-                      ) : (
-                        <View style={styles.taskContent}>
-                          <Pressable
-                            style={styles.taskTitleWrap}
+                      {/* Actions — left side in RTL (creator only) */}
+                      {isCreator && (
+                        <View style={styles.taskActions}>
+                          <TouchableOpacity
                             onPress={() => {
-                              setEditingTaskId(task._id);
-                              setEditingTitle(task.title);
+                              setAssigneeSheetTaskId(task._id);
+                              setManualAssigneeName('');
                             }}
+                            style={styles.taskActionBtn}
                             accessible
                             accessibilityRole="button"
-                            accessibilityLabel={`ערוך: ${task.title}`}
+                            accessibilityLabel={
+                              isAssigned ? 'שנה הקצאה' : 'הקצה משימה'
+                            }
                           >
-                            <Text
-                              style={[
-                                styles.taskTitle,
-                                task.completed && styles.taskTitleDone,
-                              ]}
-                              numberOfLines={2}
-                            >
-                              {task.title}
-                            </Text>
-                          </Pressable>
-                          {canAssign && !assigneeDisplay ? (
-                            <TouchableOpacity
-                              onPress={() => {
-                                setAssigneeSheetTaskId(task._id);
-                                setManualAssigneeName('');
-                              }}
-                              style={styles.assignBtn}
-                              accessible
-                              accessibilityRole="button"
-                              accessibilityLabel="הקצה משימה"
-                            >
-                              <Ionicons
-                                name="person-add-outline"
-                                size={14}
-                                color={PRIMARY}
-                              />
-                              <Text style={styles.assignBtnText}>
-                                הקצה
-                              </Text>
-                            </TouchableOpacity>
-                          ) : canAssign && assigneeDisplay ? (
-                            <TouchableOpacity
-                              onPress={() => {
-                                setAssigneeSheetTaskId(task._id);
-                                setManualAssigneeName('');
-                              }}
-                              style={styles.assigneeChip}
-                              accessible
-                              accessibilityRole="button"
-                              accessibilityLabel={`הקצאה: ${assigneeDisplay}`}
-                            >
-                              <Text
-                                style={styles.assigneeChipText}
-                                numberOfLines={1}
-                              >
-                                {assigneeDisplay}
-                              </Text>
-                              <Ionicons
-                                name="chevron-back"
-                                size={12}
-                                color="#6b7280"
-                              />
-                            </TouchableOpacity>
-                          ) : assigneeDisplay ? (
-                            <Text
-                              style={styles.taskAssignee}
-                              numberOfLines={1}
-                            >
-                              {assigneeDisplay}
-                            </Text>
-                          ) : null}
-                        </View>
-                      )}
-                      {isCreator && !isEditing && (
-                        <TouchableOpacity
-                          onPress={() => {
-                            Alert.alert(
-                              'מחק משימה',
-                              'האם למחוק את המשימה?',
-                              [
-                                { text: 'ביטול', style: 'cancel' },
-                                {
-                                  text: 'מחק',
-                                  style: 'destructive',
-                                  onPress: () =>
-                                    removeEventTask({ id: task._id }).catch(
-                                      () =>
+                            <Ionicons
+                              name={
+                                isAssigned ? 'person' : 'person-add-outline'
+                              }
+                              size={18}
+                              color={isAssigned ? PRIMARY : '#9ca3af'}
+                            />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => {
+                              Alert.alert(
+                                'מחק משימה',
+                                'האם למחוק את המשימה?',
+                                [
+                                  { text: 'ביטול', style: 'cancel' },
+                                  {
+                                    text: 'מחק',
+                                    style: 'destructive',
+                                    onPress: () =>
+                                      removeEventTask({
+                                        id: task._id,
+                                      }).catch(() =>
                                         Alert.alert(
                                           'שגיאה',
                                           'לא ניתן למחוק משימה'
                                         )
-                                    ),
-                                },
-                              ]
-                            );
-                          }}
-                          style={styles.taskDeleteBtn}
-                          accessible
-                          accessibilityRole="button"
-                          accessibilityLabel="מחק משימה"
-                        >
-                          <Ionicons
-                            name="trash-outline"
-                            size={18}
-                            color="#9ca3af"
-                          />
-                        </TouchableOpacity>
+                                      ),
+                                  },
+                                ]
+                              );
+                            }}
+                            style={styles.taskActionBtn}
+                            accessible
+                            accessibilityRole="button"
+                            accessibilityLabel="מחק משימה"
+                          >
+                            <Ionicons
+                              name="trash-outline"
+                              size={18}
+                              color="#d1d5db"
+                            />
+                          </TouchableOpacity>
+                        </View>
                       )}
+                      {/* Content — right side in RTL */}
+                      <View style={styles.taskContent}>
+                        <Text style={styles.taskTitle} numberOfLines={2}>
+                          {task.title}
+                        </Text>
+                        {isAssigned ? (
+                          <Text
+                            style={styles.taskAssignedLabel}
+                            numberOfLines={1}
+                          >
+                            {`הוקצה ל־${assigneeDisplay}`}
+                          </Text>
+                        ) : (
+                          <Text style={styles.taskUnassignedLabel}>
+                            לא הוקצה
+                          </Text>
+                        )}
+                      </View>
                     </View>
                   );
                 })}
@@ -890,13 +675,9 @@ export default function EventDetailScreen() {
       />
 
       {/* ── Assignee sheet */}
-      <AssigneeSheet
+      <TaskAssigneeSheet
         visible={!!assigneeSheetTaskId}
-        task={
-          assigneeSheetTaskId
-            ? eventTasks?.find((t) => t._id === assigneeSheetTaskId) ?? null
-            : null
-        }
+        currentAssignee={currentAssigneeForSheet}
         members={members}
         currentUserId={currentUserId}
         isCreator={isCreator}
@@ -1255,69 +1036,52 @@ const styles = StyleSheet.create({
   },
 
   // ── Tasks
-  tasksList: { gap: 10 },
+  taskSectionHeader: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  taskSummary: {
+    fontSize: 13,
+    color: '#9ca3af',
+    fontWeight: '600',
+  },
+  taskSummaryAllDone: {
+    color: '#16a34a',
+  },
+  tasksList: { gap: 0 },
   taskRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f3f4f6',
   },
-  taskCheckbox: { padding: 4 },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxChecked: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  taskContent: { flex: 1, gap: 4 },
-  taskTitleWrap: {},
+  taskContent: { flex: 1, gap: 3 },
   taskTitle: {
     fontSize: 14,
+    fontWeight: '500',
     color: '#374151',
     textAlign: 'right',
   },
-  taskTitleDone: {
-    textDecorationLine: 'line-through',
-    color: '#9ca3af',
-  },
-  taskAssignee: {
+  taskAssignedLabel: {
     fontSize: 12,
-    color: '#6b7280',
+    color: PRIMARY,
+    fontWeight: '600',
     textAlign: 'right',
   },
-  assignBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    alignSelf: 'flex-end',
-  },
-  assignBtnText: { fontSize: 12, color: PRIMARY, fontWeight: '600' },
-  assigneeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    alignSelf: 'flex-end',
-  },
-  assigneeChipText: {
+  taskUnassignedLabel: {
     fontSize: 12,
-    color: '#6b7280',
+    color: '#9ca3af',
+    textAlign: 'right',
   },
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 14,
-    color: '#111827',
-    backgroundColor: '#fafafa',
+  taskActions: {
+    flexDirection: 'row',
+    gap: 2,
+    alignItems: 'center',
   },
-  taskInput: { minHeight: 36 },
-  taskDeleteBtn: { padding: 4 },
+  taskActionBtn: { padding: 4 },
 
   // ── Error states
   notFoundText: {
@@ -1373,91 +1137,4 @@ const styles = StyleSheet.create({
   popoverLabel: { fontSize: 15, color: '#374151', textAlign: 'right', flex: 1 },
   popoverDanger: { color: '#ef4444' },
 
-  // ── Assignee sheet
-  assigneeSheetContainer: { flex: 1 },
-  sheetBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  assigneeSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingBottom: 36,
-    maxHeight: '70%',
-  },
-  sheetHandle: {
-    width: 40,
-    height: 4,
-    backgroundColor: '#e5e7eb',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginTop: 12,
-    marginBottom: 16,
-  },
-  assigneeSheetTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    textAlign: 'right',
-    marginBottom: 12,
-  },
-  unassignBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    marginBottom: 8,
-  },
-  unassignBtnText: { fontSize: 15, color: '#ef4444', fontWeight: '600' },
-  assigneeSectionLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6b7280',
-    textAlign: 'right',
-  },
-  membersScroll: { maxHeight: 200, marginTop: 8 },
-  memberRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#f1f5f9',
-  },
-  memberRowName: {
-    flex: 1,
-    fontSize: 15,
-    color: '#374151',
-    textAlign: 'right',
-  },
-  manualAssignRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 8,
-  },
-  manualAssignInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: '#111827',
-  },
-  manualAssignBtn: {
-    backgroundColor: PRIMARY,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  manualAssignBtnDisabled: { backgroundColor: '#9ca3af', opacity: 0.7 },
-  manualAssignBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });
