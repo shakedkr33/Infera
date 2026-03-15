@@ -79,11 +79,11 @@ type Item = {
   completed: boolean;
   allDay?: boolean;
   pending?: boolean;
-  // TODO: לחבר לנתוני קבוצה אמיתיים מ-Convex כשהסכמה מוכנה
   groupName?: string;
-  // TODO: לחבר לשדות אמיתיים ב-Convex
   remoteUrl?: string;
-  rsvpStatus?: 'none' | 'yes' | 'no' | 'maybe'; // TODO: לחבר ל-RSVP אמיתי מ-Convex
+  rsvpStatus?: 'none' | 'yes' | 'no' | 'maybe';
+  communityId?: string; // set only for community events — used to route to event detail
+  personalTaskSummary?: string; // set when current user has assigned tasks in this event
 };
 
 type UndatedTask = {
@@ -238,21 +238,21 @@ export default function HomeScreen() {
     },
   ]);
 
-  // ── All-day events (mock) ──────────────────────────────────────────────────
-  // TODO: לחבר לנתוני קבוצה אמיתיים מ-Convex כשהסכמה מוכנה
-  const allDayEvents: Array<{
-    id: string;
-    title: string;
-    iconColor: string;
-    groupName?: string;
-  }> = [
-    {
-      id: 'ad1',
-      title: 'חג ראש חודש',
-      iconColor: '#36a9e2',
-      groupName: 'משפחה',
-    },
-  ];
+
+  // ── Community: date range for selectedDate ────────────────────────────────
+  const { from, to } = useMemo(() => {
+    const d = new Date(selectedDate);
+    d.setHours(0, 0, 0, 0);
+    const fromMs = d.getTime();
+    const toMs = fromMs + 24 * 60 * 60 * 1000 - 1;
+    return { from: fromMs, to: toMs };
+  }, [selectedDate]);
+
+  const communityEvents =
+    useQuery(api.events.listCommunityEventsForDate, { from, to }) ?? [];
+
+  const assignedEventTasks =
+    useQuery(api.eventTasks.listMyAssignedEventTasksForDate, { from, to }) ?? [];
 
   // ── Convex: dated tasks ────────────────────────────────────────────────────
   // TODO: לאחד עם events מ-Convex כשיחובר (api.events.listByDateRange)
@@ -289,12 +289,112 @@ export default function HomeScreen() {
     [convexTasks, selectedDate]
   );
 
-  // allItems = Convex tasks (today) + mock event items
-  // TODO: להחליף את items לחלוטין ב-events מ-Convex כשיחובר
-  const allItems = useMemo(
-    () => [...todayTasks, ...items],
-    [todayTasks, items]
+  // ── Community event items mapped to Item shape ────────────────────────────
+  const communityEventItems: Item[] = useMemo(() => {
+    const taskCountByEvent: Record<string, number> = {};
+    for (const t of assignedEventTasks) {
+      taskCountByEvent[t.eventId] = (taskCountByEvent[t.eventId] ?? 0) + 1;
+    }
+    return communityEvents.map((ev) => {
+      const count = taskCountByEvent[ev._id] ?? 0;
+      const personalTaskSummary =
+        count === 0
+          ? undefined
+          : count === 1
+            ? 'יש לך משימה אחת באירוע הזה'
+            : `יש לך ${count} משימות באירוע הזה`;
+      return {
+        id: ev._id,
+        time: ev.allDay
+          ? ''
+          : new Date(ev.startTime).toLocaleTimeString('he-IL', {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+        endTime: ev.allDay
+          ? undefined
+          : ev.endTime != null
+            ? new Date(ev.endTime).toLocaleTimeString('he-IL', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : undefined,
+        title: ev.title,
+        location: ev.location ?? '',
+        type: 'event' as const,
+        icon: 'event',
+        iconBg: '#E8F5FD',
+        iconColor: '#36a9e2',
+        assigneeColor: '#36a9e2',
+        completed: false,
+        allDay: ev.allDay,
+        groupName: ev.communityName,
+        communityId: ev.communityId,
+        personalTaskSummary,
+      };
+    });
+  }, [communityEvents, assignedEventTasks]);
+
+  // ── Assigned event task items mapped to Item shape ────────────────────────
+  const assignedTaskItems: Item[] = useMemo(
+    () =>
+      assignedEventTasks.map((t) => ({
+        id: t._id,
+        time: t.eventAllDay
+          ? ''
+          : new Date(t.eventStartTime).toLocaleTimeString('he-IL', {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+        title: t.title,
+        location: t.eventTitle,
+        type: 'task' as const,
+        icon: 'check-box',
+        iconBg: '#F0FDF4',
+        iconColor: '#16a34a',
+        assigneeColor: '#16a34a',
+        completed: false,
+        allDay: t.eventAllDay,
+        groupName: t.communityName,
+      })),
+    [assignedEventTasks]
   );
+
+  // ── All-day section: mock + real community events only ────────────────────
+  const allDayEvents = useMemo(() => {
+    const allDayCommunityEvents = communityEventItems
+      .filter((i) => i.allDay)
+      .map((i) => ({
+        id: i.id,
+        title: i.title,
+        iconColor: i.iconColor,
+        groupName: i.groupName,
+      }));
+    return [
+      { id: 'ad1', title: 'חג ראש חודש', iconColor: '#36a9e2', groupName: 'משפחה' },
+      ...allDayCommunityEvents,
+    ];
+  }, [communityEventItems]);
+
+  // allItems = Convex tasks (today) + mock event items + community events
+  const allItems = useMemo(() => {
+    const timedCommunityEvents = communityEventItems.filter((i) => !i.allDay);
+    const merged = [
+      ...todayTasks,
+      ...items,
+      ...timedCommunityEvents,
+    ];
+    const toMinutes = (t: string) => {
+      const [h, m] = t.split(':').map(Number);
+      return Number.isNaN(h) || Number.isNaN(m) ? 0 : h * 60 + m;
+    };
+    return merged.sort((a, b) => {
+      if (!a.time && !b.time) return 0;
+      if (!a.time) return 1;
+      if (!b.time) return -1;
+      return toMinutes(a.time) - toMinutes(b.time);
+    });
+  }, [todayTasks, items, communityEventItems]);
 
   // ── Convex: undated tasks ──────────────────────────────────────────────────
   const convexUndatedTasks = useQuery(
@@ -396,8 +496,14 @@ export default function HomeScreen() {
         pathname: '/(authenticated)/task/[id]',
         params: { id: item.id },
       });
+    } else if (item.communityId) {
+      // Community events → navigate directly to full event detail screen
+      router.push({
+        pathname: '/(authenticated)/event/[id]',
+        params: { id: item.id },
+      });
     } else {
-      // Events → open detail sheet
+      // Personal events → open generic bottom sheet
       openEventSheet(item);
     }
   };
@@ -1154,7 +1260,7 @@ export default function HomeScreen() {
             {/* All-day events */}
             {allDayEvents.length > 0 && (
               <View style={{ paddingHorizontal: 24, marginBottom: 8 }}>
-                <Text style={styles.allDayLabel}>אירועים לכל היום</Text>
+                <Text style={styles.allDayLabel}>אירועים/משימות של כל היום</Text>
                 {allDayEvents.map((ev) => (
                   <Pressable
                     key={ev.id}
@@ -1464,6 +1570,11 @@ export default function HomeScreen() {
                                       {item.groupName}
                                     </Text>
                                   </View>
+                                ) : null}
+                                {item.personalTaskSummary ? (
+                                  <Text style={styles.personalTaskSummary}>
+                                    {item.personalTaskSummary}
+                                  </Text>
                                 ) : null}
 
                                 {/* Navigate / Join button */}
@@ -2517,6 +2628,12 @@ const styles = StyleSheet.create({
   groupText: {
     fontSize: 12,
     color: '#64748b',
+  },
+  personalTaskSummary: {
+    fontSize: 12,
+    color: '#36a9e2',
+    textAlign: 'right',
+    marginTop: 2,
   },
 
   // ── Pending badge ────────────────────────────────────────────────────────────

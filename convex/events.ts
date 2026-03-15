@@ -222,3 +222,51 @@ export const remove = mutation({
     await ctx.db.delete(id);
   },
 });
+
+// ─────────────────────────────────────────────────────────────
+// אירועי קהילות עבור תאריך נבחר — לדף הבית
+// מחזיר את כל האירועים בקהילות של המשתמש הנוכחי בטווח הזמן
+// ─────────────────────────────────────────────────────────────
+export const listCommunityEventsForDate = query({
+  args: { from: v.number(), to: v.number() },
+  handler: async (ctx, { from, to }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const memberships = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+
+    const activeMembers = memberships.filter((m) => m.status !== 'left');
+
+    const results = await Promise.all(
+      activeMembers.map(async ({ communityId }) => {
+        const community = await ctx.db.get(communityId);
+        if (!community || community.archived) return [];
+
+        const events = await ctx.db
+          .query('events')
+          .withIndex('by_community_date', (q) =>
+            q.eq('communityId', communityId).gte('startTime', from).lte('startTime', to)
+          )
+          .collect();
+
+        return events
+          .filter((ev) => ev.status !== 'cancelled')
+          .map((ev) => ({
+            _id: ev._id,
+            title: ev.title,
+            startTime: ev.startTime,
+            endTime: ev.endTime,
+            allDay: ev.allDay ?? false,
+            communityId,
+            communityName: community.name,
+            location: ev.location,
+          }));
+      })
+    );
+
+    return results.flat();
+  },
+});

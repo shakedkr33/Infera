@@ -267,6 +267,66 @@ export const setAssignee = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
+// משימות מוקצות למשתמש הנוכחי בקהילות — לדף הבית
+// ─────────────────────────────────────────────────────────────
+export const listMyAssignedEventTasksForDate = query({
+  args: { from: v.number(), to: v.number() },
+  handler: async (ctx, { from, to }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const memberships = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+
+    const activeMembers = memberships.filter((m) => m.status !== 'left');
+
+    const results = await Promise.all(
+      activeMembers.map(async ({ communityId }) => {
+        const community = await ctx.db.get(communityId);
+        if (!community || community.archived) return [];
+
+        const events = await ctx.db
+          .query('events')
+          .withIndex('by_community_date', (q) =>
+            q.eq('communityId', communityId).gte('startTime', from).lte('startTime', to)
+          )
+          .collect();
+
+        const activeEvents = events.filter((ev) => ev.status !== 'cancelled');
+
+        const taskRows = await Promise.all(
+          activeEvents.map(async (ev) => {
+            const tasks = await ctx.db
+              .query('eventTasks')
+              .withIndex('by_event', (q) => q.eq('eventId', ev._id))
+              .collect();
+
+            return tasks
+              .filter((t) => t.assignedToUserId === userId)
+              .map((t) => ({
+                _id: t._id,
+                title: t.title,
+                eventId: ev._id,
+                eventTitle: ev.title,
+                eventStartTime: ev.startTime,
+                eventAllDay: ev.allDay ?? false,
+                communityId,
+                communityName: community.name,
+              }));
+          })
+        );
+
+        return taskRows.flat();
+      })
+    );
+
+    return results.flat();
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // מחיקת משימה
 // ─────────────────────────────────────────────────────────────
 export const remove = mutation({
