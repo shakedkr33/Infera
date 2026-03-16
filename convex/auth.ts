@@ -1,36 +1,48 @@
-import { Password } from '@convex-dev/auth/providers/Password';
+import { Phone } from '@convex-dev/auth/providers/Phone';
 import { convexAuth } from '@convex-dev/auth/server';
 
-// הגדרת מערכת האימות (Authentication)
-// קובץ זה מגדיר את ספקי ההזדהות והלוגיקה של יצירת משתמשים
+// The Phone() wrapper only forwards sendVerificationRequest to the top-level
+// provider object. generateVerificationToken is placed inside options and is
+// never read by the library's token-generation logic (signIn.js reads
+// provider.generateVerificationToken directly). We spread Phone() and patch
+// generateVerificationToken onto the top-level object so the library finds it.
+const generate6DigitOtp = () =>
+  Promise.resolve(String(Math.floor(100000 + Math.random() * 900000)));
+
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
-  providers: [Password], // שימוש בסיסמה (אימייל וסיסמה) כספק הזדהות
+  providers: [
+    {
+      ...Phone({
+        sendVerificationRequest: async ({ identifier: phone, token: code }) => {
+          // SMS_PROVIDER_STUB: replace this with Twilio Verify in Phase 2
+          // RATE_LIMIT_STUB: add server-side rate limiting in Phase 2
+          console.log(`[Auth] OTP for ${phone}: ${code}`);
+        },
+      }),
+      generateVerificationToken: generate6DigitOtp,
+    },
+  ],
   session: {
-    totalDurationMs: 30 * 24 * 60 * 60 * 1000, // משך זמן ה-Session (30 ימים)
+    totalDurationMs: 30 * 24 * 60 * 60 * 1000, // 30 days
   },
   callbacks: {
-    // פונקציה שנקראת בעת יצירה או עדכון של משתמש
     async createOrUpdateUser(ctx, args) {
       const now = Date.now();
+      // For Phone provider, the identifier is in args.profile.phone (E.164 format)
+      const phone = (args.profile as { phone?: string }).phone ?? undefined;
 
-      // אם המשתמש כבר קיים (למשל, התחברות נוספת), נעדכן את הפרטים שלו
       if (args.existingUserId) {
         await ctx.db.patch(args.existingUserId, {
-          email: args.profile.email,
-          emailVerified: args.profile.emailVerified ?? false,
-          fullName: args.profile.name || 'User',
+          phone,
           updatedAt: now,
         });
         return args.existingUserId;
       }
 
-      // יצירת משתמש חדש עם כל השדות הנדרשים לפי ה-Schema
       return await ctx.db.insert('users', {
-        email: args.profile.email ?? '',
-        emailVerified: args.profile.emailVerified ?? false,
-        fullName: args.profile.name || 'User',
-        role: 'user', // תפקיד ברירת מחדל
-        isActive: true, // משתמש פעיל כברירת מחדל
+        phone,
+        role: 'user',
+        isActive: true,
         createdAt: now,
         updatedAt: now,
       });

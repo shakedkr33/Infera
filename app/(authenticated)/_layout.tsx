@@ -1,5 +1,5 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import { useConvexAuth } from 'convex/react';
+import { useConvexAuth, useQuery } from 'convex/react';
 import { Redirect, Tabs, useRootNavigationState, useRouter } from 'expo-router';
 import { useContext, useState } from 'react';
 import {
@@ -16,6 +16,7 @@ import {
 import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import { ActionSheetContext } from '@/contexts/ActionSheetContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
+import { api } from '@/convex/_generated/api';
 
 // ─── Regular Tab Button (icon + label wrapped in selection pill) ──────────────
 
@@ -169,7 +170,17 @@ export default function AuthenticatedLayout() {
   const navigationState = useRootNavigationState();
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
 
-  if (!navigationState?.key || isLoading || isRevenueCatLoading) {
+  // Fetch onboarding status — skip the query while not yet authenticated to avoid
+  // an unnecessary round-trip and potential auth errors
+  const userStatus = useQuery(
+    api.users.getCurrentUserStatus,
+    isAuthenticated ? {} : 'skip'
+  );
+
+  // Wait for: navigation tree, auth state, RevenueCat, and user profile to resolve
+  const isUserStatusLoading = isAuthenticated && userStatus === undefined;
+
+  if (!navigationState?.key || isLoading || isRevenueCatLoading || isUserStatusLoading) {
     return (
       <View className="flex-1 bg-white items-center justify-center">
         <ActivityIndicator size="large" color="#4A9FE2" />
@@ -179,6 +190,11 @@ export default function AuthenticatedLayout() {
 
   if (!isAuthenticated) {
     return <Redirect href="/(auth)/sign-in" />;
+  }
+
+  // Route to onboarding if the user has never completed it (new user or profile missing)
+  if (!userStatus?.onboardingComplete) {
+    return <Redirect href="/onboarding-hero" />;
   }
 
   if (PAYMENT_SYSTEM_ENABLED && !isPremium) {

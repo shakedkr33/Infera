@@ -1,6 +1,8 @@
 import * as Contacts from 'expo-contacts';
 import { useRef, useState } from 'react';
 import { Keyboard } from 'react-native';
+import { useMutation } from 'convex/react';
+import { api } from '@/convex/_generated/api';
 
 import {
   PET_COLORS,
@@ -44,6 +46,7 @@ export function useFamilyProfileEditor(
   initialFamilyMembers: FamilyMember[] = []
 ) {
   const { data, updateData } = useOnboarding();
+  const finishOnboarding = useMutation(api.onboarding.finishOnboarding);
 
   // ── Core profile state ────────────────────────────────────────────────────
   const [firstName, setFirstName] = useState(data.firstName || '');
@@ -250,10 +253,15 @@ export function useFamilyProfileEditor(
     setTimeout(() => pickContact(), 350);
   };
 
-  /** Persist the full profile to OnboardingContext. Call on final save/finish. */
-  const saveAll = () => {
+  /**
+   * Persist the full profile to OnboardingContext and to Convex.
+   * Returns the mutation Promise so callers can await completion before navigating.
+   */
+  const saveAll = (): Promise<{ spaceId: string }> => {
     const nameSource = ownerFullName.trim() || firstName.trim();
     const nameParts = nameSource.split(' ');
+
+    // Update in-memory context (used by other steps if needed)
     updateData({
       firstName: nameParts[0] || nameSource,
       personalColor,
@@ -265,6 +273,16 @@ export function useFamilyProfileEditor(
         },
         familyMembers,
       },
+    });
+
+    // Persist to Convex — sets onboardingCompleted: true on the user record
+    return finishOnboarding({
+      fullName: nameSource || 'משתמשת',
+      profileColor: personalColor,
+      spaceType: data.spaceType ?? 'personal',
+      challenges: data.challenges ?? [],
+      sources: data.sources ?? [],
+      childCount: data.childCount,
     });
   };
 

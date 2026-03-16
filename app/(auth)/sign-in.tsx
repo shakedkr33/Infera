@@ -1,248 +1,230 @@
 import { useAuthActions } from '@convex-dev/auth/react';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  Image,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { parseIsraeliPhone } from '@/lib/phoneUtils';
 
-export default function SignInScreen() {
+export default function PhoneInputScreen() {
   const { signIn } = useAuthActions();
   const router = useRouter();
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [flow, setFlow] = useState<'signIn' | 'signUp'>('signIn');
+  const [phone, setPhone] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<TextInput>(null);
 
-  const isSignUp = flow === 'signUp';
+  // Validate and send OTP — errors only shown after user taps continue
+  const handleContinue = async () => {
+    // Guard: duplicate submit
+    if (isLoading) return;
 
-  const onSubmitPress = async () => {
-    if (!email || !password) {
-      Alert.alert('שגיאה', 'אנא הזן אימייל וסיסמה');
+    const normalized = parseIsraeliPhone(phone.trim());
+    if (!normalized) {
+      setError('מספר הטלפון לא תקין. אנא הזיני מספר ישראלי בפורמט 05X-XXXXXXX.');
       return;
     }
-    if (isSignUp && password.length < 6) {
-      Alert.alert('שגיאה', 'הסיסמה חייבת להכיל לפחות 6 תווים');
-      return;
-    }
 
-    setLoading(true);
-    try {
-      await signIn('password', { email, password, flow });
-    } catch (err: unknown) {
-      const msg = isSignUp
-        ? 'ההרשמה נכשלה. ייתכן שהאימייל כבר קיים'
-        : 'ההתחברות נכשלה. ודא שהאימייל והסיסמה נכונים';
-      Alert.alert('שגיאה', msg);
-    } finally {
-      setLoading(false);
-    }
-  };
+    setIsLoading(true);
+    setError(null);
 
-  // DEV: יצירת חשבון טסט מהיר
-  const onDevTestPress = async () => {
-    setLoading(true);
     try {
-      await signIn('password', {
-        email: 'test@test.com',
-        password: 'test1234',
-        flow: 'signUp',
+      await signIn('phone', { phone: normalized });
+      // Navigate to verification screen, passing the normalized number as param
+      router.push({
+        pathname: '/(auth)/verify',
+        params: { phone: normalized },
       });
-    } catch {
-      // חשבון קיים — ננסה התחברות
-      try {
-        await signIn('password', {
-          email: 'test@test.com',
-          password: 'test1234',
-          flow: 'signIn',
-        });
-      } catch (err2: unknown) {
-        Alert.alert('שגיאה', 'לא ניתן ליצור/לחבר חשבון טסט');
-      }
+    } catch (err) {
+      console.error('[Auth] Failed to send OTP:', err);
+      setError('לא הצלחנו לשלוח קוד. בדקי את החיבור לאינטרנט ונסי שוב.');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  // Google/Apple - לעתיד
-  const onGooglePress = () => {
-    Alert.alert('בקרוב', 'התחברות עם Google תהיה זמינה בקרוב! 🚀');
-  };
-
-  const onApplePress = () => {
-    Alert.alert('בקרוב', 'התחברות עם Apple תהיה זמינה בקרוב! 🚀');
-  };
+  const hasInput = phone.trim().length > 0;
 
   return (
-    <SafeAreaView className="flex-1 bg-[#f6f7f8]">
+    <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
+        style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        className="flex-1"
       >
-        <View className="flex-1 items-center justify-start pt-16 px-6">
-          {/* לוגו */}
-          <View className="items-center mb-12">
-            <View className="w-20 h-20 bg-[#36a9e2]/10 rounded-full items-center justify-center mb-6">
-              <Text className="text-[#36a9e2] text-5xl">🧠</Text>
-            </View>
-            <Text className="text-[#111517] text-3xl font-extrabold tracking-tight text-center">
-              ברוכים הבאים ל-InYomi
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* כותרות */}
+          <View style={styles.headerBlock}>
+            <Text style={styles.title}>מה מספר הטלפון שלך?</Text>
+            <Text style={styles.subtitle}>
+              נשלח לך קוד אימות כדי להיכנס
             </Text>
           </View>
 
-          {/* כפתור Google */}
-          <TouchableOpacity
-            className="w-full bg-white border border-[#e5e7eb] rounded-3xl h-14 px-5 flex-row items-center justify-center gap-3 mb-3"
-            style={{
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.05,
-              shadowRadius: 12,
-              elevation: 2,
-            }}
-            onPress={onGooglePress}
-            activeOpacity={0.7}
-          >
-            <Image
-              source={{
-                uri: 'https://lh3.googleusercontent.com/COxitqgJr1sJnIDe8-jiKhxDx1FrYbtRHKJ9z_hELisAlapwE9LUPh6fcXIfb5vwpbMl4xl9H9TRFPc5NOO8Sb3VSgIBrfRYvW6cUA',
+          {/* שדה טלפון */}
+          <View style={styles.inputBlock}>
+            <Text style={styles.inputLabel}>מספר טלפון</Text>
+            <TextInput
+              ref={inputRef}
+              style={[styles.input, error ? styles.inputError : null]}
+              value={phone}
+              onChangeText={(text) => {
+                setPhone(text);
+                // Clear error as soon as user starts editing again
+                if (error) setError(null);
               }}
-              style={{ width: 20, height: 20 }}
+              placeholder="050-123-4567"
+              placeholderTextColor="#9ca3af"
+              keyboardType="phone-pad"
+              textContentType="telephoneNumber"
+              autoComplete="tel"
+              returnKeyType="done"
+              onSubmitEditing={handleContinue}
+              autoFocus
+              textAlign="right"
+              accessible={true}
+              accessibilityLabel="מספר טלפון"
+              accessibilityHint="הזיני מספר טלפון ישראלי"
             />
-            <Text className="text-[#111517] text-[17px] font-semibold">
-              המשך עם Google
-            </Text>
-          </TouchableOpacity>
-
-          {/* כפתור Apple */}
-          <TouchableOpacity
-            className="w-full bg-black rounded-3xl h-14 px-5 flex-row items-center justify-center gap-3 mb-6"
-            style={{
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.05,
-              shadowRadius: 12,
-              elevation: 2,
-            }}
-            onPress={onApplePress}
-            activeOpacity={0.7}
-          >
-            <Text className="text-white text-2xl">🍎</Text>
-            <Text className="text-white text-[17px] font-semibold">
-              המשך עם Apple
-            </Text>
-          </TouchableOpacity>
-
-          {/* מפריד "או" */}
-          <View className="w-full flex-row items-center py-4">
-            <View className="flex-1 h-px bg-[#d1d1d6]" />
-            <Text className="text-[#8e8e93] text-[15px] font-medium mx-4">
-              או
-            </Text>
-            <View className="flex-1 h-px bg-[#d1d1d6]" />
-          </View>
-
-          {/* שדה אימייל */}
-          <View className="w-full mb-4">
-            <Text className="text-[#8e8e93] text-sm font-semibold mb-2 text-right mr-1">
-              אימייל
-            </Text>
-            <TextInput
-              className="w-full bg-white border border-[#d1d1d6] rounded-3xl h-14 px-4 text-[#111517] text-base text-right"
-              value={email}
-              onChangeText={setEmail}
-              placeholder="name@example.com"
-              placeholderTextColor="#8e8e93"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              editable={!loading}
-            />
-          </View>
-
-          {/* שדה סיסמה */}
-          <View className="w-full mb-8">
-            <Text className="text-[#8e8e93] text-sm font-semibold mb-2 text-right mr-1">
-              סיסמה
-            </Text>
-            <TextInput
-              className="w-full bg-white border border-[#d1d1d6] rounded-3xl h-14 px-4 text-[#111517] text-base text-right"
-              value={password}
-              onChangeText={setPassword}
-              placeholder="לפחות 6 תווים"
-              placeholderTextColor="#8e8e93"
-              secureTextEntry={true}
-              editable={!loading}
-            />
-          </View>
-
-          {/* כפתור ראשי */}
-          <TouchableOpacity
-            className="w-full bg-[#36a9e2] rounded-3xl h-14 px-5 items-center justify-center mb-4"
-            style={{
-              shadowColor: '#36a9e2',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.2,
-              shadowRadius: 8,
-              elevation: 3,
-            }}
-            onPress={onSubmitPress}
-            disabled={loading}
-            activeOpacity={0.8}
-          >
-            {loading ? (
-              <ActivityIndicator color="#ffffff" />
-            ) : (
-              <Text className="text-white text-lg font-bold">
-                {isSignUp ? 'הרשמה' : 'התחברות'}
+            {error ? (
+              <Text style={styles.errorText} accessibilityRole="alert">
+                {error}
               </Text>
+            ) : null}
+          </View>
+
+          {/* כפתור המשך */}
+          <Pressable
+            onPress={handleContinue}
+            style={[
+              styles.continueBtn,
+              (!hasInput || isLoading) && styles.continueBtnDisabled,
+            ]}
+            disabled={!hasInput || isLoading}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="המשך"
+            accessibilityHint="שלח קוד אימות לטלפון"
+            accessibilityState={{ disabled: !hasInput || isLoading }}
+          >
+            {isLoading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.continueBtnText}>המשך</Text>
             )}
-          </TouchableOpacity>
+          </Pressable>
 
-          {/* toggle sign-in / sign-up */}
-          <TouchableOpacity
-            onPress={() => setFlow(isSignUp ? 'signIn' : 'signUp')}
-            className="py-2"
-          >
-            <Text className="text-[#36a9e2] text-sm text-center font-semibold">
-              {isSignUp ? 'יש לך חשבון? התחבר' : 'אין לך חשבון? הרשמה'}
-            </Text>
-          </TouchableOpacity>
-
-          {/* טיפ */}
-          <Text className="text-[#8e8e93] text-xs text-center mt-3">
-            💡 Google/Apple יהיו זמינים בקרוב
+          {/* הסבר בתחתית */}
+          <Text style={styles.disclaimer}>
+            בהמשך את מאשרת את תנאי השימוש ומדיניות הפרטיות של InYomi
           </Text>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* כפתור Dev - רק בפיתוח! */}
-      {__DEV__ && (
-        <View className="px-6 pb-4 bg-[#f6f7f8]">
-          <TouchableOpacity
-            onPress={onDevTestPress}
-            disabled={loading}
-            className="w-full py-3 px-6 bg-orange-500/10 border-2 border-orange-400 border-dashed rounded-2xl"
-          >
-            <Text className="text-orange-500 text-center text-sm font-bold">
-              🚧 DEV: כניסה עם test@test.com
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* סרגל תחתון iOS */}
-      <View className="items-center pb-2 bg-[#f6f7f8]">
-        <View className="w-32 h-1.5 bg-gray-300 rounded-full" />
-      </View>
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  flex: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 40,
+  },
+  headerBlock: {
+    marginTop: 24,
+    marginBottom: 40,
+    alignItems: 'flex-end',
+  },
+  title: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#111418',
+    textAlign: 'right',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'right',
+  },
+  inputBlock: {
+    marginBottom: 32,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    textAlign: 'right',
+    marginBottom: 8,
+  },
+  input: {
+    height: 56,
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    fontSize: 18,
+    color: '#111418',
+    backgroundColor: '#f9fafb',
+    textAlign: 'right',
+  },
+  inputError: {
+    borderColor: '#ef4444',
+    backgroundColor: '#fff5f5',
+  },
+  errorText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#ef4444',
+    textAlign: 'right',
+  },
+  continueBtn: {
+    height: 56,
+    backgroundColor: '#4A9FE2',
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#4A9FE2',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  continueBtnDisabled: {
+    backgroundColor: '#bfdbfe',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  continueBtnText: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  disclaimer: {
+    marginTop: 24,
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+});

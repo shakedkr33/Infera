@@ -215,3 +215,23 @@ export const getMyId = query({
     return await getAuthUserId(ctx);
   },
 });
+
+// סטטוס המשתמש הנוכחי: האם יש פרופיל, האם האונבורדינג הושלם
+// משמש לניתוב פוסט-אימות — מחזיר null כשלא מחובר (caller משתמש ב-'skip')
+export const getCurrentUserStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return { hasProfile: false, onboardingComplete: false };
+    }
+
+    return {
+      hasProfile: true,
+      onboardingComplete: user.onboardingCompleted === true,
+    };
+  },
+});

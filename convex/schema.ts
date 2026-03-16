@@ -9,7 +9,10 @@ export default defineSchema({
   // טבלת משתמשים
   // ═══════════════════════════════════════════════════════
   users: defineTable({
-    email: v.string(),
+    // Phone auth — primary identifier
+    phone: v.optional(v.string()), // E.164 format, e.g. +972501234567
+    // Email retained as optional for backwards-compatibility and future use
+    email: v.optional(v.string()),
     emailVerified: v.optional(v.boolean()),
     fullName: v.optional(v.string()),
     profileColor: v.optional(v.string()),
@@ -24,6 +27,7 @@ export default defineSchema({
     defaultSpaceId: v.optional(v.id('spaces')),
   })
     .index('by_email', ['email'])
+    .index('by_phone', ['phone'])
     .index('by_role', ['role']),
 
   // ═══════════════════════════════════════════════════════

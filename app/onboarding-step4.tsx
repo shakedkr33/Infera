@@ -97,9 +97,9 @@ export default function OnboardingStep4() {
     }
   };
 
-  const handleFamilyFinish = () => {
-    saveAll();
-    router.push('/(auth)/sign-in');
+  const handleFamilyFinish = async () => {
+    await saveAll();
+    router.replace('/(authenticated)');
   };
 
   // ── Shared edit card renderer ─────────────────────────────────────────────

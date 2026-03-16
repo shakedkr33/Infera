@@ -1,3 +1,4 @@
+import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import { mutation } from './_generated/server';
 
@@ -6,53 +7,56 @@ import { mutation } from './_generated/server';
  * היא מעדכנת את פרטי המשתמש ויוצרת עבורו את ה-Space (מרחב העבודה) הראשון.
  */
 export const finishOnboarding = mutation({
-  // הגדרת הנתונים שאנחנו מצפים לקבל מהמסכים שעיצבת
   args: {
-    fullName: v.string(), // מגיע ממסך הפרופיל
-    profileColor: v.string(), // מגיע ממסך הפרופיל
-    spaceType: v.string(), // מגיע משלב 1 (מי מנהל את הלו"ז?)
-    challenges: v.array(v.string()), // מגיע משלב 2 (האתגר היומי)
-    sources: v.array(v.string()), // מגיע משלב 3 (מקורות מידע)
-    childCount: v.optional(v.number()), // מגיע ממסך הילדים (אם רלוונטי)
+    fullName: v.string(),
+    profileColor: v.string(),
+    spaceType: v.string(),
+    challenges: v.array(v.string()),
+    sources: v.array(v.string()),
+    childCount: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    // 1. בדיקה שהמשתמש מחובר (ביצע Login עם גוגל/אפל)
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
+    // 1. בדיקה שהמשתמש מחובר
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
       throw new Error('חייבים להיות מחוברים כדי לסיים את האונבורדינג');
     }
 
-    // 2. מציאת המשתמש בבסיס הנתונים ועדכון הפרטים שלו
-    const user = await ctx.db
-      .query('users')
-      .withIndex('by_email', (q) => q.eq('email', identity.email!))
-      .unique();
-
+    // 2. מציאת המשתמש בבסיס הנתונים
+    const user = await ctx.db.get(userId);
     if (!user) throw new Error('משתמש לא נמצא');
 
-    await ctx.db.patch(user._id, {
+    // 3. עדכון פרטי המשתמש
+    await ctx.db.patch(userId, {
       fullName: args.fullName,
       profileColor: args.profileColor,
       isActive: true,
       updatedAt: Date.now(),
     });
 
-    // 3. יצירת המרחב (Space) הראשון שלו - ה"בית" של הנתונים שלו
+    // 4. יצירת המרחב (Space) הראשון
     const spaceId = await ctx.db.insert('spaces', {
       name: args.spaceType === 'family' ? 'הבית שלנו' : 'המרחב שלי',
-      type: args.spaceType as any,
-      ownerId: user._id,
+      type: args.spaceType as 'personal' | 'couple' | 'family' | 'business',
+      ownerId: userId,
       onboardingChallenges: args.challenges,
       primarySources: args.sources,
-      createdAt: Date.now(), // 🆕 תוקן! הוספנו createdAt
+      createdAt: Date.now(),
     });
 
-    // 4. הוספת המשתמש כ"מנהל" (Admin) בתוך המרחב החדש
+    // 5. הוספת המשתמש כ-Admin במרחב החדש
     await ctx.db.insert('members', {
-      userId: user._id,
-      spaceId: spaceId,
+      userId,
+      spaceId,
       role: 'admin',
-      joinedAt: Date.now(), // 🆕 תוקן! הוספנו joinedAt
+      joinedAt: Date.now(),
+    });
+
+    // 6. סימון האונבורדינג כהושלם ושמירת ה-Space הראשי
+    await ctx.db.patch(userId, {
+      onboardingCompleted: true,
+      defaultSpaceId: spaceId,
+      updatedAt: Date.now(),
     });
 
     return { spaceId };
