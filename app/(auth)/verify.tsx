@@ -77,8 +77,9 @@ export default function VerifyScreen() {
 
       try {
         await signIn('phone', { phone, code: digits });
-        // On success: isAuthenticated flips → (auth)/_layout.tsx redirects to /(authenticated)
-        // No explicit navigation needed here
+        // Navigate to onboarding so new users always start the onboarding flow.
+        // router.replace prevents going back to the verify screen.
+        router.replace('/onboarding-hero');
       } catch (err) {
         console.error('[Auth] OTP verify failed:', err);
         setError(mapAuthError(err));

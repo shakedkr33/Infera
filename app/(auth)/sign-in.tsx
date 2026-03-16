@@ -1,8 +1,10 @@
+import { parseIsraeliPhone } from '@/lib/phoneUtils';
 import { useAuthActions } from '@convex-dev/auth/react';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -13,7 +15,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { parseIsraeliPhone } from '@/lib/phoneUtils';
 
 export default function PhoneInputScreen() {
   const { signIn } = useAuthActions();
@@ -24,14 +25,12 @@ export default function PhoneInputScreen() {
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<TextInput>(null);
 
-  // Validate and send OTP — errors only shown after user taps continue
   const handleContinue = async () => {
-    // Guard: duplicate submit
     if (isLoading) return;
 
     const normalized = parseIsraeliPhone(phone.trim());
     if (!normalized) {
-      setError('מספר הטלפון לא תקין. אנא הזיני מספר ישראלי בפורמט 05X-XXXXXXX.');
+      setError('מספר הטלפון לא תקין. אנא הזן/י מספר ישראלי בפורמט 05X-XXXXXXX.');
       return;
     }
 
@@ -40,14 +39,13 @@ export default function PhoneInputScreen() {
 
     try {
       await signIn('phone', { phone: normalized });
-      // Navigate to verification screen, passing the normalized number as param
       router.push({
         pathname: '/(auth)/verify',
         params: { phone: normalized },
       });
     } catch (err) {
       console.error('[Auth] Failed to send OTP:', err);
-      setError('לא הצלחנו לשלוח קוד. בדקי את החיבור לאינטרנט ונסי שוב.');
+      setError('לא הצלחנו לשלוח קוד. בדוק/י את החיבור לאינטרנט ונסה/י שוב.');
     } finally {
       setIsLoading(false);
     }
@@ -56,80 +54,113 @@ export default function PhoneInputScreen() {
   const hasInput = phone.trim().length > 0;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          {/* כותרות */}
-          <View style={styles.headerBlock}>
-            <Text style={styles.title}>מה מספר הטלפון שלך?</Text>
-            <Text style={styles.subtitle}>
-              נשלח לך קוד אימות כדי להיכנס
-            </Text>
+          <View style={styles.logoWrapper}>
+            <Image
+              source={require('@/assets/images/logo-inyomi.png')}
+              style={styles.logo}
+              resizeMode="contain"
+              accessibilityLabel="InYomi Logo"
+            />
           </View>
 
-          {/* שדה טלפון */}
-          <View style={styles.inputBlock}>
-            <Text style={styles.inputLabel}>מספר טלפון</Text>
-            <TextInput
-              ref={inputRef}
-              style={[styles.input, error ? styles.inputError : null]}
-              value={phone}
-              onChangeText={(text) => {
-                setPhone(text);
-                // Clear error as soon as user starts editing again
-                if (error) setError(null);
-              }}
-              placeholder="050-123-4567"
-              placeholderTextColor="#9ca3af"
-              keyboardType="phone-pad"
-              textContentType="telephoneNumber"
-              autoComplete="tel"
-              returnKeyType="done"
-              onSubmitEditing={handleContinue}
-              autoFocus
-              textAlign="right"
-              accessible={true}
-              accessibilityLabel="מספר טלפון"
-              accessibilityHint="הזיני מספר טלפון ישראלי"
-            />
+          <View style={styles.card}>
+            <Text style={styles.headline}>כניסה מהירה</Text>
+
+            <Text style={styles.supporting}>
+              הקלד/י מספר טלפון ונשלח אליך קוד SMS להתחברות
+            </Text>
+
+            <Text style={styles.fieldLabel}>מספר טלפון</Text>
+
+            <View style={[styles.phoneRow, error ? styles.phoneRowError : null]}>
+              <View style={styles.prefix}>
+                <Text style={styles.prefixText}>+972</Text>
+              </View>
+
+              <View style={styles.prefixDivider} />
+
+              <TextInput
+                ref={inputRef}
+                style={styles.input}
+                value={phone}
+                onChangeText={(text) => {
+                  setPhone(text);
+                  if (error) setError(null);
+                }}
+                placeholder="050-000-0000"
+                placeholderTextColor="#9ca3af"
+                keyboardType="phone-pad"
+                textContentType="telephoneNumber"
+                autoComplete="tel"
+                returnKeyType="done"
+                onSubmitEditing={handleContinue}
+                autoFocus
+                textAlign="left"
+                accessible={true}
+                accessibilityLabel="מספר טלפון"
+                accessibilityHint="הזן/י מספר טלפון ישראלי"
+              />
+            </View>
+
             {error ? (
               <Text style={styles.errorText} accessibilityRole="alert">
                 {error}
               </Text>
             ) : null}
+
+            <Pressable
+              onPress={handleContinue}
+              style={[
+                styles.cta,
+                (!hasInput || isLoading) && styles.ctaDisabled,
+              ]}
+              disabled={!hasInput || isLoading}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="שלח קוד"
+              accessibilityHint="שלח קוד אימות לטלפון"
+              accessibilityState={{ disabled: !hasInput || isLoading }}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="#ffffff" />
+              ) : (
+                <Text style={styles.ctaText}>שלח קוד</Text>
+              )}
+            </Pressable>
+
+            <Text style={styles.legal}>
+              {'בלחיצה על "שלח קוד" הנך מאשר/ת את '}
+              <Text
+                style={styles.legalLink}
+                onPress={() => {}}
+                accessible={true}
+                accessibilityRole="link"
+                accessibilityLabel="תנאי השימוש"
+              >
+                תנאי השימוש
+              </Text>
+              {' ואת '}
+              <Text
+                style={styles.legalLink}
+                onPress={() => {}}
+                accessible={true}
+                accessibilityRole="link"
+                accessibilityLabel="מדיניות הפרטיות"
+              >
+                מדיניות הפרטיות
+              </Text>
+              {' של InYomi'}
+            </Text>
           </View>
-
-          {/* כפתור המשך */}
-          <Pressable
-            onPress={handleContinue}
-            style={[
-              styles.continueBtn,
-              (!hasInput || isLoading) && styles.continueBtnDisabled,
-            ]}
-            disabled={!hasInput || isLoading}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="המשך"
-            accessibilityHint="שלח קוד אימות לטלפון"
-            accessibilityState={{ disabled: !hasInput || isLoading }}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.continueBtnText}>המשך</Text>
-            )}
-          </Pressable>
-
-          {/* הסבר בתחתית */}
-          <Text style={styles.disclaimer}>
-            בהמשך את מאשרת את תנאי השימוש ומדיניות הפרטיות של InYomi
-          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -137,94 +168,134 @@ export default function PhoneInputScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  safe: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f0f4f8',
   },
   flex: {
     flex: 1,
   },
-  scrollContent: {
+  scroll: {
     flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: 16,
+    paddingHorizontal: 20,
+    paddingTop: 28,
     paddingBottom: 40,
   },
-  headerBlock: {
-    marginTop: 24,
-    marginBottom: 40,
-    alignItems: 'flex-end',
+
+  logoWrapper: {
+    alignItems: 'center',
+    marginBottom: 24,
   },
-  title: {
+  logo: {
+    width: 150,
+    height: 88,
+  },
+
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 28,
+    paddingBottom: 28,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  headline: {
     fontSize: 26,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#111418',
-    textAlign: 'right',
-    marginBottom: 8,
+    textAlign: 'center',
+    marginBottom: 10,
   },
-  subtitle: {
-    fontSize: 16,
-    color: '#6b7280',
-    textAlign: 'right',
-  },
-  inputBlock: {
-    marginBottom: 32,
-  },
-  inputLabel: {
+  supporting: {
     fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 28,
+  },
+  fieldLabel: {
+    fontSize: 13,
     fontWeight: '600',
     color: '#374151',
     textAlign: 'right',
     marginBottom: 8,
   },
-  input: {
+
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     height: 56,
     borderWidth: 1.5,
     borderColor: '#e5e7eb',
     borderRadius: 14,
-    paddingHorizontal: 16,
-    fontSize: 18,
-    color: '#111418',
     backgroundColor: '#f9fafb',
-    textAlign: 'right',
+    overflow: 'hidden',
   },
-  inputError: {
+  phoneRowError: {
     borderColor: '#ef4444',
     backgroundColor: '#fff5f5',
   },
+  prefix: {
+    paddingHorizontal: 14,
+    height: '100%',
+    justifyContent: 'center',
+    backgroundColor: '#f3f4f6',
+  },
+  prefixText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  prefixDivider: {
+    width: 1,
+    height: '65%',
+    backgroundColor: '#d1d5db',
+  },
+  input: {
+    flex: 1,
+    height: '100%',
+    paddingHorizontal: 14,
+    fontSize: 17,
+    color: '#111418',
+  },
   errorText: {
     marginTop: 8,
-    fontSize: 14,
+    fontSize: 13,
     color: '#ef4444',
     textAlign: 'right',
   },
-  continueBtn: {
+
+  cta: {
+    marginTop: 24,
+    marginBottom: 16,
     height: 56,
-    backgroundColor: '#4A9FE2',
     borderRadius: 16,
+    backgroundColor: '#36A9E2',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#4A9FE2',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
   },
-  continueBtnDisabled: {
-    backgroundColor: '#bfdbfe',
-    shadowOpacity: 0,
-    elevation: 0,
+  ctaDisabled: {
+    backgroundColor: '#A7D6F0',
   },
-  continueBtnText: {
-    color: '#ffffff',
+  ctaText: {
+    color: '#FFFFFF',
     fontSize: 17,
     fontWeight: '700',
   },
-  disclaimer: {
-    marginTop: 24,
-    fontSize: 12,
+
+  legal: {
+    marginTop: 4,
+    fontSize: 11,
     color: '#9ca3af',
     textAlign: 'center',
     lineHeight: 18,
+  },
+  legalLink: {
+    color: '#36a9e2',
+    textDecorationLine: 'underline',
   },
 });

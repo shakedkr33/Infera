@@ -1,63 +1,52 @@
 import { useRouter } from 'expo-router';
 import { useRef } from 'react';
-import { Dimensions, Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
-const SCREEN_H = Dimensions.get('window').height;
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function WelcomeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const isNavigating = useRef(false);
+
+  const goToSignIn = () => {
+    if (isNavigating.current) return;
+    isNavigating.current = true;
+    router.replace('/(auth)/sign-in');
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.inner}>
+      <View style={styles.content}>
+        <View style={styles.phoneSection}>
+          <View style={styles.phoneMockup}>
+            <View style={styles.phoneScreen}>
+              <View style={styles.phoneScreenPlaceholder} />
+            </View>
+          </View>
+        </View>
 
-        <View style={styles.logoArea}>
+        <View style={styles.brandSection}>
           <Image
             source={require('@/assets/images/logo-inyomi.png')}
             style={styles.logo}
             resizeMode="contain"
             accessibilityLabel="InYomi Logo"
           />
-        </View>
 
-        {/* HERO_AREA: replace Image with Video component in Phase 2 */}
-        <View style={styles.heroContainer}>
-          <Image
-            source={require('@/assets/images/icon.png')}
-            style={styles.heroImage}
-            resizeMode="cover"
-            accessibilityLabel=""
-            accessibilityElementsHidden={true}
-          />
-        </View>
-
-        <View style={styles.bottomArea}>
-          <Text style={styles.title}>ברוכים הבאים ל־InYomi</Text>
-          <Text style={styles.subtitle}>
+          <Text style={styles.headline}>
             כל האירועים, המשימות והתיאומים שלך במקום אחד
           </Text>
         </View>
-
-        <View style={styles.spacer} />
-
-        <Pressable
-          onPress={() => {
-            if (isNavigating.current) return;
-            isNavigating.current = true;
-            router.replace('/(auth)/sign-in');
-          }}
-          style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="כניסה עם מספר טלפון"
-        >
-          <Text style={styles.ctaText}>כניסה עם מספר טלפון</Text>
-        </Pressable>
-
       </View>
 
+      <Pressable
+        onPress={goToSignIn}
+        style={[styles.cta, { bottom: insets.bottom + 24 }]}
+        accessibilityRole="button"
+        accessibilityLabel="בואו נתחיל"
+      >
+        <Text style={styles.ctaText}>בואו נתחיל</Text>
+      </Pressable>
     </SafeAreaView>
   );
 }
@@ -65,70 +54,88 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f6f7f8',
     paddingHorizontal: 24,
-    paddingBottom: 24,
+    position: 'relative',
   },
-  inner: {
+
+  content: {
     flex: 1,
-  },
-  logoArea: {
     alignItems: 'center',
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingTop: 16,
+    paddingBottom: 170,
   },
-  logo: {
-    width: 160,
-    height: 94,
-  },
-  heroContainer: {
-    height: SCREEN_H * 0.42,
-    borderRadius: 28,
-    overflow: 'hidden',
-    backgroundColor: '#f0f7fd',
-  },
-  heroImage: {
+
+  phoneSection: {
     width: '100%',
-    height: '100%',
+    alignItems: 'center',
+    marginTop: 4,
   },
-  bottomArea: {
-    marginTop: 20,
-    marginBottom: 16,
+
+  phoneMockup: {
+    width: 270,
+    height: 500,
+    backgroundColor: '#0d1117',
+    borderRadius: 48,
+    padding: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
+    elevation: 16,
   },
-  title: {
-    fontSize: 22,
+
+  phoneScreen: {
+    flex: 1,
+    borderRadius: 36,
+    overflow: 'hidden',
+    backgroundColor: '#e8edf2',
+  },
+
+  phoneScreenPlaceholder: {
+    flex: 1,
+    backgroundColor: '#dde5ec',
+  },
+
+  brandSection: {
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+
+  logo: {
+    width: 150,
+    height: 88,
+    marginBottom: 4,
+  },
+
+  headline: {
+    fontSize: 16,
     fontWeight: '700',
     color: '#111418',
     textAlign: 'center',
-    marginBottom: 6,
+    lineHeight: 24,
+    paddingHorizontal: 20,
+    maxWidth: 320,
   },
-  subtitle: {
-    fontSize: 15,
-    color: '#6b7280',
-    textAlign: 'center',
-    lineHeight: 23,
-  },
-  spacer: {
-    flex: 1,
-  },
+
   cta: {
-    height: 56,
-    backgroundColor: '#36a9e2',
-    borderRadius: 16,
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    height: 60,
+    backgroundColor: '#36A9E2',
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#36a9e2',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.28,
-    shadowRadius: 8,
-    elevation: 4,
+    zIndex: 50,
+    borderWidth: 1,
+    borderColor: '#2497d3',
   },
-  ctaPressed: {
-    opacity: 0.85,
-  },
+
   ctaText: {
-    color: '#ffffff',
-    fontSize: 17,
-    fontWeight: '700',
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
   },
 });
