@@ -5,19 +5,32 @@ import React, { useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
+import { useOnboarding } from '../contexts/OnboardingContext';
 
 const COUNTS = [1, 2, 3, 4, '5+'] as const;
 
 export default function OnboardingChildrenSelect() {
   const router = useRouter();
-  // No default — user must make an explicit selection
-  const [selected, setSelected] = useState<number | '5+' | null>(null);
-  const [customCount, setCustomCount] = useState('');
+  const { data, updateData } = useOnboarding();
+
+  // Restore previous selection from context so navigating back preserves the choice
+  const [selected, setSelected] = useState<number | '5+' | null>(() => {
+    if (!data.childCount) return null;
+    return data.childCount >= 5 ? '5+' : (data.childCount as number);
+  });
+  const [customCount, setCustomCount] = useState(() => {
+    if (data.childCount && data.childCount >= 5) return data.childCount.toString();
+    return '';
+  });
 
   const handleSelect = (value: number | '5+') => {
     setSelected(value);
     if (value !== '5+') {
       setCustomCount('');
+      // Persist immediately so back-navigation restores this choice
+      updateData({ childCount: value as number });
+    } else {
+      updateData({ childCount: undefined });
     }
   };
 
@@ -38,6 +51,7 @@ export default function OnboardingChildrenSelect() {
   const handleContinue = async () => {
     if (!canContinue) return;
     const count = getFinalCount();
+    updateData({ childCount: count });
     await AsyncStorage.setItem('childrenCount', count.toString());
     router.push('/onboarding-step2');
   };
@@ -125,6 +139,8 @@ export default function OnboardingChildrenSelect() {
                   const num = text.replace(/[^0-9]/g, '');
                   if (num === '' || Number.parseInt(num, 10) <= 10) {
                     setCustomCount(num);
+                    const parsed = Number.parseInt(num, 10);
+                    if (parsed > 0) updateData({ childCount: parsed });
                   }
                 }}
                 placeholder="5"

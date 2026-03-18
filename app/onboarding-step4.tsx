@@ -1,6 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -67,6 +67,117 @@ function ProgressHeader({
   );
 }
 
+// ── Name fields — reused in both personal and family views ────────────────────
+
+function NameFields({
+  firstName,
+  onChangeFirstName,
+  lastName,
+  onChangeLastName,
+  nickname,
+  onChangeNickname,
+  inputHeight = 50,
+}: {
+  firstName: string;
+  onChangeFirstName: (v: string) => void;
+  lastName: string;
+  onChangeLastName: (v: string) => void;
+  nickname: string;
+  onChangeNickname: (v: string) => void;
+  inputHeight?: number;
+}) {
+  return (
+    <>
+      <Text className="text-sm font-bold text-gray-700 text-right mb-2">
+        שם פרטי ושם משפחה
+      </Text>
+      <View className="flex-row-reverse gap-2 mb-3">
+        <TextInput
+          value={firstName}
+          onChangeText={onChangeFirstName}
+          placeholder="שם פרטי"
+          placeholderTextColor="#9ca3af"
+          className="flex-1 bg-[#f6f7f8] rounded-2xl px-3 text-right text-base"
+          style={{ height: inputHeight }}
+          returnKeyType="next"
+          accessible={true}
+          accessibilityLabel="שם פרטי"
+        />
+        <TextInput
+          value={lastName}
+          onChangeText={onChangeLastName}
+          placeholder="שם משפחה"
+          placeholderTextColor="#9ca3af"
+          className="flex-1 bg-[#f6f7f8] rounded-2xl px-3 text-right text-base"
+          style={{ height: inputHeight }}
+          returnKeyType="next"
+          accessible={true}
+          accessibilityLabel="שם משפחה"
+        />
+      </View>
+      <Text className="text-xs text-gray-400 text-right mb-1">
+        כינוי (אופציונלי — לשימוש פנימי)
+      </Text>
+      <TextInput
+        value={nickname}
+        onChangeText={onChangeNickname}
+        placeholder="למשל: דנה׳לה, אבא, אמא..."
+        placeholderTextColor="#9ca3af"
+        className="bg-[#f6f7f8] rounded-2xl px-3 text-right text-base"
+        style={{ height: inputHeight }}
+        returnKeyType="done"
+        accessible={true}
+        accessibilityLabel="כינוי"
+      />
+      <View className="mb-4" />
+    </>
+  );
+}
+
+// ── Compact saved personal profile card ───────────────────────────────────────
+
+function ProfileSavedCard({
+  displayName,
+  color,
+  onEdit,
+}: {
+  displayName: string;
+  color: string;
+  onEdit: () => void;
+}) {
+  const initials = displayName.trim().substring(0, 2);
+  return (
+    <Pressable
+      onPress={onEdit}
+      accessible={true}
+      accessibilityRole="button"
+      accessibilityLabel={`ערוך פרופיל — ${displayName}`}
+      className="bg-white p-4 rounded-2xl flex-row items-center justify-between mb-4"
+      style={shadows.soft}
+    >
+      {/* Edit icon — left side (RTL end) */}
+      <View className="p-2">
+        <MaterialIcons name="edit" size={18} color="#9ca3af" />
+      </View>
+
+      {/* Name + avatar — right side (RTL start) */}
+      <View className="flex-row items-center gap-3">
+        <Text className="font-bold text-[15px] text-gray-900">
+          {displayName}
+        </Text>
+        <View
+          style={{ backgroundColor: color }}
+          className="w-10 h-10 rounded-full items-center justify-center"
+        >
+          <Text className="text-xs font-bold text-white opacity-80">
+            {initials}
+          </Text>
+        </View>
+      </View>
+    </Pressable>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function OnboardingStep4() {
@@ -91,16 +202,12 @@ export default function OnboardingStep4() {
     setNickname,
     personalColor,
     setPersonalColor,
-    ownerFullName,
-    setOwnerFullName,
     familyMembers,
     pendingMember,
     setPendingMember,
     editingId,
     isBottomSheetOpen,
     setIsBottomSheetOpen,
-    ownerSaved,
-    personalSaved,
     personMembers,
     petMembers,
     canAddPerson,
@@ -117,20 +224,84 @@ export default function OnboardingStep4() {
     startEditMember,
     removeMember,
     handleSavePersonalName,
-    handleSaveOwnerName,
     handleFromContacts,
     saveAll,
   } = editor;
 
+  // ── Personal profile save state ───────────────────────────────────────────
+
+  // Tracks whether the user has explicitly saved the profile form.
+  // Resets whenever any profile field changes, requiring a re-save before continue.
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  const handleFirstNameChange = useCallback(
+    (v: string) => {
+      setFirstName(v);
+      setProfileSaved(false);
+    },
+    [setFirstName]
+  );
+
+  const handleLastNameChange = useCallback(
+    (v: string) => {
+      setLastName(v);
+      setProfileSaved(false);
+    },
+    [setLastName]
+  );
+
+  const handleNicknameChange = useCallback(
+    (v: string) => {
+      setNickname(v);
+      setProfileSaved(false);
+    },
+    [setNickname]
+  );
+
+  const handlePersonalColorChange = useCallback(
+    (c: string) => {
+      setPersonalColor(c);
+      setProfileSaved(false);
+    },
+    [setPersonalColor]
+  );
+
+  const handleSaveProfile = () => {
+    handleSavePersonalName(); // saves firstName, lastName, nickname, personalColor to context
+    setProfileSaved(true);
+  };
+
+  // ── Validation ────────────────────────────────────────────────────────────
+
+  const canSaveProfile =
+    firstName.trim().length > 0 && lastName.trim().length > 0;
+
+  const canContinuePersonal = canSaveProfile && profileSaved;
+
+  // Block the final CTA while any add/edit entry is unsaved
+  const hasUnsavedEntry = !!pendingMember || !!editingId;
+
+  // Final CTA is ready only when own profile is valid+saved AND no pending row
+  const canFinish = profileSaved && canSaveProfile && !hasUnsavedEntry;
+
+  // ── Derived display name for saved personal card ──────────────────────────
+
+  const savedDisplayName =
+    nickname.trim() ||
+    [firstName.trim(), lastName.trim()].filter(Boolean).join(' ') ||
+    'הפרופיל שלך';
+
   // ── Navigation ────────────────────────────────────────────────────────────
 
-  const handlePersonalContinue = () => {
-    // Pre-fill owner name from split fields so the family view is pre-populated
-    const fullName = [firstName.trim(), lastName.trim()]
-      .filter(Boolean)
-      .join(' ');
-    setOwnerFullName(fullName || firstName);
-    setCurrentView('family');
+  const handlePersonalContinue = async () => {
+    if (!profileSaved) return;
+    if (cameFromPersonal) {
+      // Personal-only path: finish onboarding immediately, no family setup
+      await saveAll();
+      router.replace('/(authenticated)');
+    } else {
+      setCurrentView('family');
+    }
   };
 
   const handleFamilyBack = () => {
@@ -196,107 +367,84 @@ export default function OnboardingStep4() {
               הפרופיל שלך ב-InYomi
             </Text>
             <Text className="text-sm text-gray-400 text-center mb-6">
-              כאן נגדיר איך תופיע/י בתוך הלוז
+              כאן נגדיר איך תופיע/י בתוך הלו״ז
             </Text>
 
-            {/* Profile card */}
-            <View className="bg-white rounded-3xl p-5 mb-4" style={shadows.soft}>
-
-              {/* Name row: first + last on same line */}
-              <Text className="text-sm font-bold text-gray-700 text-right mb-2">
-                שם פרטי ושם משפחה
-              </Text>
-              <View className="flex-row-reverse gap-2 mb-1">
-                <TextInput
-                  value={firstName}
-                  onChangeText={setFirstName}
-                  placeholder="שם פרטי"
-                  placeholderTextColor="#9ca3af"
-                  className="flex-1 bg-[#f6f7f8] rounded-2xl px-3 text-right text-base"
-                  style={{ height: 50 }}
-                  returnKeyType="next"
-                  accessible={true}
-                  accessibilityLabel="שם פרטי"
-                />
-                <TextInput
-                  value={lastName}
-                  onChangeText={setLastName}
-                  placeholder="שם משפחה"
-                  placeholderTextColor="#9ca3af"
-                  className="flex-1 bg-[#f6f7f8] rounded-2xl px-3 text-right text-base"
-                  style={{ height: 50 }}
-                  returnKeyType="next"
-                  accessible={true}
-                  accessibilityLabel="שם משפחה"
-                />
-              </View>
-
-              {/* Nickname — optional */}
-              <Text className="text-xs text-gray-400 text-right mb-1 mt-3">
-                כינוי (אופציונלי — לשימוש פנימי)
-              </Text>
+            {/* Profile: compact card after save, full form before */}
+            {profileSaved ? (
+              <ProfileSavedCard
+                displayName={savedDisplayName}
+                color={personalColor}
+                onEdit={() => setProfileSaved(false)}
+              />
+            ) : (
               <View
-                className="flex-row items-center bg-[#f6f7f8] rounded-2xl overflow-hidden mb-1"
-                style={{ minHeight: 50 }}
+                className="bg-white rounded-3xl p-5 mb-4"
+                style={shadows.soft}
               >
+                <NameFields
+                  firstName={firstName}
+                  onChangeFirstName={handleFirstNameChange}
+                  lastName={lastName}
+                  onChangeLastName={handleLastNameChange}
+                  nickname={nickname}
+                  onChangeNickname={handleNicknameChange}
+                />
+
+                {/* Color picker */}
+                <Text className="text-sm font-bold text-gray-700 text-right mb-3">
+                  בחירת צבע אישי
+                </Text>
+                <Text className="text-xs text-gray-400 text-right mb-3">
+                  הצבע שלך יזהה אותך בלו״ז, במשימות ובאירועים משותפים
+                </Text>
+                <ColorPicker
+                  selectedColor={personalColor}
+                  onSelectColor={handlePersonalColorChange}
+                />
+
+                {/* Save profile button */}
                 <Pressable
-                  onPress={handleSavePersonalName}
+                  onPress={handleSaveProfile}
+                  disabled={!canSaveProfile}
                   accessible={true}
                   accessibilityRole="button"
-                  accessibilityLabel="שמור פרטים"
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
-                  className="w-14 self-stretch items-center justify-center"
-                  style={{ backgroundColor: colors.primary }}
+                  accessibilityLabel="שמירת פרטים"
+                  accessibilityState={{ disabled: !canSaveProfile }}
+                  className="mt-5 h-12 rounded-xl items-center justify-center"
+                  style={{
+                    backgroundColor: canSaveProfile
+                      ? colors.primary
+                      : '#e5e7eb',
+                  }}
                 >
-                  <MaterialIcons name="check" size={22} color="white" />
+                  <Text
+                    className="font-bold text-base"
+                    style={{
+                      color: canSaveProfile ? '#ffffff' : '#9ca3af',
+                    }}
+                  >
+                    שמירת פרטים
+                  </Text>
                 </Pressable>
-                <TextInput
-                  value={nickname}
-                  onChangeText={setNickname}
-                  placeholder="למשל: דנה׳לה, אבא, אמא..."
-                  placeholderTextColor="#9ca3af"
-                  className="flex-1 px-3 text-base text-right"
-                  style={{ height: 50 }}
-                  returnKeyType="done"
-                  onSubmitEditing={handleSavePersonalName}
-                  accessible={true}
-                  accessibilityLabel="כינוי"
-                />
               </View>
-              {personalSaved ? (
-                <Text
-                  className="text-xs text-right mt-1 mb-3"
-                  style={{ color: colors.primary }}
-                >
-                  נשמר ✓
-                </Text>
-              ) : (
-                <View className="mb-4" />
-              )}
+            )}
 
-              {/* Color picker */}
-              <Text className="text-sm font-bold text-gray-700 text-right mb-3">
-                בחירת צבע אישי
-              </Text>
-              <Text className="text-xs text-gray-400 text-right mb-3">
-                הצבע שלך יזהה אותך בלוז, במשימות ובאירועים משותפים
-              </Text>
-              <ColorPicker
-                selectedColor={personalColor}
-                onSelectColor={setPersonalColor}
-              />
-            </View>
-
-            {/* Sharing prompt card */}
+            {/* Sharing prompt card — shown for all paths as an optional section */}
             <View className="bg-white rounded-3xl p-5" style={shadows.soft}>
-              <Text className="text-base font-bold text-gray-900 text-right mb-1">
-                רוצה לשתף את הלוז עם מישהו?
+              <Text className="text-base font-bold text-gray-900 text-right mb-2">
+                עם מי תרצה/י לשתף לעיתים קרובות?
               </Text>
-              <Text className="text-sm text-gray-400 text-right mb-4">
-                הוסיפ/י את האנשים שתרצה/י לשתף איתם אירועים, משימות ותזכורות
+              <Text className="text-sm text-gray-400 text-right mb-3 leading-relaxed">
+                האנשים שתוסיף/י כאן יופיעו לך אחר כך בלחיצה אחת כשתיצור/י
+                אירוע, משימה או תזכורת.
+              </Text>
+              <Text className="text-xs text-gray-300 text-right mb-4 leading-relaxed">
+                האנשים שתוסיף/י כאן לא ישותפו אוטומטית. בכל אירוע, משימה או
+                תזכורת תוכל/י לבחור עם מי לשתף.
               </Text>
               <Pressable
-                onPress={handlePersonalContinue}
+                onPress={() => setCurrentView('family')}
                 accessible={true}
                 accessibilityRole="link"
                 accessibilityLabel="הוסיפי אנשים לשיתוף"
@@ -318,21 +466,29 @@ export default function OnboardingStep4() {
           >
             <Pressable
               onPress={handlePersonalContinue}
-              disabled={!firstName.trim()}
+              disabled={!canContinuePersonal}
               accessible={true}
               accessibilityRole="button"
-              accessibilityLabel="המשך"
+              accessibilityLabel={
+                cameFromPersonal ? 'סיימנו, בואו נתחיל!' : 'המשך'
+              }
+              accessibilityState={{ disabled: !canContinuePersonal }}
               className="w-full h-16 rounded-2xl items-center justify-center"
               style={[
                 {
-                  backgroundColor: firstName.trim()
+                  backgroundColor: canContinuePersonal
                     ? colors.primary
                     : '#e5e7eb',
                 },
-                shadows.primaryCta,
+                canContinuePersonal ? shadows.primaryCta : {},
               ]}
             >
-              <Text className="text-white font-bold text-lg">המשך</Text>
+              <Text
+                className="font-bold text-lg"
+                style={{ color: canContinuePersonal ? '#ffffff' : '#9ca3af' }}
+              >
+                {cameFromPersonal ? 'סיימנו, בואו נתחיל!' : 'המשך'}
+              </Text>
             </Pressable>
           </View>
         </KeyboardAvoidingView>
@@ -360,71 +516,66 @@ export default function OnboardingStep4() {
           <Text className="text-xs font-bold text-gray-400 text-right mb-2 pr-1">
             הפרופיל שלך
           </Text>
-          <View className="bg-white rounded-3xl p-5 mb-6" style={shadows.soft}>
-            <View className="flex-row-reverse items-center gap-4 mb-4">
-              <View
-                className="w-14 h-14 rounded-full items-center justify-center"
-                style={{ backgroundColor: personalColor }}
-              >
-                <MaterialIcons name="person" size={28} color="white" />
-              </View>
-              <View className="flex-1">
-                <Text className="text-xs text-gray-400 text-right mb-1">
-                  השם שלך
-                </Text>
-                <View
-                  className="flex-row items-center bg-[#f6f7f8] rounded-xl overflow-hidden"
-                  style={{ minHeight: 44 }}
-                >
-                  <Pressable
-                    onPress={handleSaveOwnerName}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="שמור שם"
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
-                    className="w-12 self-stretch items-center justify-center"
-                    style={{ backgroundColor: colors.primary }}
-                  >
-                    <MaterialIcons name="check" size={20} color="white" />
-                  </Pressable>
-                  <TextInput
-                    value={ownerFullName}
-                    onChangeText={setOwnerFullName}
-                    placeholder="שם פרטי ושם משפחה"
-                    placeholderTextColor="#9ca3af"
-                    className="flex-1 px-3 text-right text-base"
-                    style={{ height: 44 }}
-                    returnKeyType="done"
-                    onSubmitEditing={handleSaveOwnerName}
-                  />
-                </View>
-                {ownerSaved ? (
-                  <Text
-                    className="text-xs text-right mt-1"
-                    style={{ color: colors.primary }}
-                  >
-                    נשמר ✓
-                  </Text>
-                ) : null}
-              </View>
-            </View>
-            <Text className="text-xs text-gray-400 text-right mb-2">
-              צבע אישי
-            </Text>
-            <ColorPicker
-              selectedColor={personalColor}
-              onSelectColor={setPersonalColor}
-              takenColors={familyMembers.map((m) => m.color)}
-              size={38}
+
+          {profileSaved ? (
+            <ProfileSavedCard
+              displayName={savedDisplayName}
+              color={personalColor}
+              onEdit={() => setProfileSaved(false)}
             />
-          </View>
+          ) : (
+            <View className="bg-white rounded-3xl p-5 mb-6" style={shadows.soft}>
+              {/* Name fields — use wrapped handlers so any edit resets saved state */}
+              <NameFields
+                firstName={firstName}
+                onChangeFirstName={handleFirstNameChange}
+                lastName={lastName}
+                onChangeLastName={handleLastNameChange}
+                nickname={nickname}
+                onChangeNickname={handleNicknameChange}
+                inputHeight={44}
+              />
+
+              <Text className="text-xs text-gray-400 text-right mb-2">
+                צבע אישי
+              </Text>
+              <ColorPicker
+                selectedColor={personalColor}
+                onSelectColor={handlePersonalColorChange}
+                takenColors={familyMembers.map((m) => m.color)}
+                size={38}
+              />
+
+              {/* Save profile button */}
+              <Pressable
+                onPress={handleSaveProfile}
+                disabled={!canSaveProfile}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="שמירת פרטים"
+                accessibilityState={{ disabled: !canSaveProfile }}
+                className="mt-5 h-12 rounded-xl items-center justify-center"
+                style={{
+                  backgroundColor: canSaveProfile ? colors.primary : '#e5e7eb',
+                }}
+              >
+                <Text
+                  className="font-bold text-base"
+                  style={{ color: canSaveProfile ? '#ffffff' : '#9ca3af' }}
+                >
+                  שמירת פרטים
+                </Text>
+              </Pressable>
+            </View>
+          )}
 
           {/* ── People / sharing section ──────────────────────────────────── */}
           <Text className="text-sm font-bold text-gray-700 text-right mb-1 pr-1">
-            עם מי תרצה/י לשתף את הלוז? (עד {MAX_PEOPLE})
+            עם מי תרצה/י לשתף לעיתים קרובות? (עד {MAX_PEOPLE})
           </Text>
           <Text className="text-xs text-gray-400 text-right mb-2 pr-1 leading-relaxed">
-            הוסיפ/י את האנשים שתרצה/י לשתף איתם אירועים, משימות ותזכורות
+            האנשים שתוסיף/י כאן יופיעו לך אחר כך בלחיצה אחת כשתיצור/י אירוע,
+            משימה או תזכורת.
           </Text>
 
           {/* Disclaimer */}
@@ -544,7 +695,7 @@ export default function OnboardingStep4() {
             חיות מחמד (אופציונלי, עד {MAX_PETS})
           </Text>
           <Text className="text-xs text-gray-400 text-right mb-3 pr-1">
-            כדי שלא נפספס ימי הולדת 🐾
+            כדי לזכור בקלות משימות ותזכורות שקשורות אליהן
           </Text>
           <View className="bg-white rounded-3xl p-5 mb-4" style={shadows.soft}>
             {petMembers.length === 0 && !isAddingNewPet ? (
@@ -640,20 +791,28 @@ export default function OnboardingStep4() {
           </Text>
         </ScrollView>
 
-        {/* Footer CTA */}
+        {/* Footer CTA — enabled only when own profile is saved and no pending row */}
         <View
           className="px-5 pb-10 pt-4"
           style={{ backgroundColor: 'rgba(246,247,248,0.97)' }}
         >
           <Pressable
             onPress={handleFamilyFinish}
+            disabled={!canFinish}
             accessible={true}
             accessibilityRole="button"
             accessibilityLabel="סיימנו, בואו נתחיל!"
+            accessibilityState={{ disabled: !canFinish }}
             className="w-full h-16 rounded-2xl items-center justify-center"
-            style={[{ backgroundColor: colors.primary }, shadows.primaryCta]}
+            style={[
+              { backgroundColor: canFinish ? colors.primary : '#e5e7eb' },
+              canFinish ? shadows.primaryCta : {},
+            ]}
           >
-            <Text className="text-white font-bold text-lg">
+            <Text
+              className="font-bold text-lg"
+              style={{ color: canFinish ? '#ffffff' : '#9ca3af' }}
+            >
               סיימנו, בואו נתחיל!
             </Text>
           </Pressable>

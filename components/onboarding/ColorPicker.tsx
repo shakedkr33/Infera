@@ -56,25 +56,35 @@ export function ColorPicker({
   return (
     <View>
       <View className="flex-row justify-between">
-        {palette.map((color) => (
-          <Pressable
-            key={color}
-            onPress={() => handlePress(color)}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel={`צבע ${color}`}
-            style={{
-              width: size,
-              height: size,
-              borderRadius,
-              backgroundColor: color,
-              borderWidth: selectedColor === color ? 2.5 : 0,
-              borderColor:
-                selectedColor === color ? colors.slate : 'transparent',
-              opacity: takenColors.includes(color) ? 0.35 : 1,
-            }}
-          />
-        ))}
+        {palette.map((color) => {
+          const isTaken = takenColors.includes(color);
+          const isSelected = selectedColor === color;
+          return (
+            <Pressable
+              key={color}
+              onPress={() => handlePress(color)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={`צבע ${color}${isTaken ? ' — תפוס' : ''}`}
+              accessibilityState={{ disabled: isTaken }}
+              style={{
+                width: size,
+                height: size,
+                borderRadius,
+                backgroundColor: color,
+                // taken: still the same color, slightly muted + neutral border
+                // selected: dark slate ring
+                opacity: isTaken ? 0.55 : 1,
+                borderWidth: isSelected ? 2.5 : isTaken ? 1.5 : 0,
+                borderColor: isSelected
+                  ? colors.slate
+                  : isTaken
+                    ? 'rgba(0,0,0,0.18)'
+                    : 'transparent',
+              }}
+            />
+          );
+        })}
       </View>
       {conflictMessage ? (
         <Text className="text-xs text-right mt-2" style={{ color: '#f59e0b' }}>

@@ -84,6 +84,8 @@ export function FamilyMemberEditCard({
   takenColors,
   palette,
 }: EditCardProps) {
+  const canSave = name.trim().length > 0;
+
   return (
     <View
       className="bg-white border-2 p-4 rounded-2xl mb-3"
@@ -108,31 +110,21 @@ export function FamilyMemberEditCard({
         </Pressable>
       </View>
 
-      {/* Input row: prominent V button on LEFT, text input fills rest */}
+      {/* Name input — single field, no split */}
       <View
-        className="flex-row items-center bg-[#f6f7f8] rounded-xl overflow-hidden mb-4"
+        className="bg-[#f6f7f8] rounded-xl overflow-hidden mb-4"
         style={{ minHeight: 52 }}
       >
-        <Pressable
-          onPress={onConfirm}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="שמור"
-          className="w-14 self-stretch items-center justify-center"
-          style={{ backgroundColor: '#10b981' }}
-        >
-          <MaterialIcons name="check" size={24} color="white" />
-        </Pressable>
         <TextInput
           value={name}
           onChangeText={onChangeName}
           placeholder="שם..."
           placeholderTextColor="#9ca3af"
-          className="flex-1 px-3 text-base font-bold text-[#111517]"
+          className="flex-1 px-4 text-base font-bold text-[#111517]"
           style={{ textAlign: 'right', height: 52 }}
           autoFocus
           returnKeyType="done"
-          onSubmitEditing={onConfirm}
+          onSubmitEditing={canSave ? onConfirm : undefined}
         />
       </View>
 
@@ -143,6 +135,25 @@ export function FamilyMemberEditCard({
         palette={palette}
         size={38}
       />
+
+      {/* Save button — blue, full width, disabled while name is empty */}
+      <Pressable
+        onPress={onConfirm}
+        disabled={!canSave}
+        accessible={true}
+        accessibilityRole="button"
+        accessibilityLabel="שמירה"
+        accessibilityState={{ disabled: !canSave }}
+        className="mt-4 h-12 rounded-xl items-center justify-center"
+        style={{ backgroundColor: canSave ? colors.primary : '#e5e7eb' }}
+      >
+        <Text
+          className="font-bold text-base"
+          style={{ color: canSave ? '#ffffff' : '#9ca3af' }}
+        >
+          שמירה
+        </Text>
+      </Pressable>
     </View>
   );
 }
