@@ -1,9 +1,8 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMutation, useQuery } from 'convex/react';
-import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
@@ -20,15 +19,13 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
-import type { MoodValue } from '@/components/mood/MoodIcon';
-import { MoodIcon } from '@/components/mood/MoodIcon';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
-import { getCountdownLabel } from '@/lib/utils/birthday';
+import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -51,17 +48,11 @@ function isSameDay(a: Date, b: Date): boolean {
 
 // ─── Mood data ────────────────────────────────────────────────────────────────
 
-const MOODS: { value: MoodValue; label: string; shortText: string }[] = [
-  { value: 4, label: 'מדהים', shortText: 'יום מוצלח ומלא בעשייה! ⭐' },
-  { value: 3, label: 'בסדר', shortText: 'יום טוב וסביר 👍' },
-  { value: 2, label: 'רגיל', shortText: 'יום שגרתי כרגיל.' },
-  { value: 1, label: 'עמוס', shortText: 'יום עמוס – כל הכבוד שעברת אותו.' },
-  { value: 0, label: 'מתסכל', shortText: 'יום קשה. מחר יהיה טוב יותר 💙' },
-];
-
-const MOOD_ITEM_WIDTH = 80;
-const wheelMoods = [...MOODS, ...MOODS, ...MOODS];
-const MOOD_INITIAL_X = MOODS.length * MOOD_ITEM_WIDTH;
+const MOODS = [
+  { value: 2, label: 'טוב', emoji: '😊' },
+  { value: 1, label: 'רגיל', emoji: '😐' },
+  { value: 0, label: 'עמוס', emoji: '😓' },
+] as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -103,6 +94,10 @@ export default function HomeScreen() {
   // getMySpace מחזיר את ה-spaceId ישירות (Id<'spaces'> | null)
   const spaceId = useQuery(api.users.getMySpace);
 
+  // ── Convex: current user (for greeting name + avatar) ─────────────────────
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const userFirstName = currentUser?.fullName?.split(' ')[0] ?? null;
+
   // ── Convex: tasks mutations ────────────────────────────────────────────────
   const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
   const [showToast, setShowToast] = useState(true);
@@ -113,15 +108,6 @@ export default function HomeScreen() {
     'carousel'
   );
   const [devClearBirthdays, setDevClearBirthdays] = useState(false);
-
-  // ── Mood popup state ───────────────────────────────────────────────────────
-  const [hasSeenMoodPopupToday, setHasSeenMoodPopupToday] = useState(false);
-  const [lastMoodDate, setLastMoodDate] = useState<string | null>(null);
-  const [isMoodModalVisible, setIsMoodModalVisible] = useState(false);
-  // Tracks the in-modal selection before the user confirms
-  const [tempMoodSelection, setTempMoodSelection] = useState<number | null>(
-    null
-  );
 
   // ── Insight card ───────────────────────────────────────────────────────────
   const [dismissedInsightDate, setDismissedInsightDate] = useState<
@@ -145,11 +131,6 @@ export default function HomeScreen() {
   // ── Undated tasks "show all" modal ─────────────────────────────────────────
   const [showAllUndated, setShowAllUndated] = useState(false);
 
-  // ── Mood wheel live index ──────────────────────────────────────────────────
-  const [currentMoodIndex, setCurrentMoodIndex] = useState<number>(
-    MOODS.length
-  ); // default: middle of wheelMoods
-
   const openEventSheet = (item: Item) => {
     setSelectedEvent(item as EventItem);
     setIsEventSheetVisible(true);
@@ -160,10 +141,6 @@ export default function HomeScreen() {
   };
 
   const dateScrollRef = useRef<ScrollView>(null);
-  const moodScrollRef = useRef<ScrollView>(null);
-  const moodPopupRef = useRef<ScrollView>(null);
-  const moodWheelInitialized = useRef(false);
-  const moodPopupInitialized = useRef(false);
 
   const {
     unseenCount,
@@ -360,9 +337,9 @@ export default function HomeScreen() {
     [assignedEventTasks]
   );
 
-  // ── All-day section: mock + real community events only ────────────────────
+  // ── All-day section: real community events only ────────────────────────────
   const allDayEvents = useMemo(() => {
-    const allDayCommunityEvents = communityEventItems
+    return communityEventItems
       .filter((i) => i.allDay)
       .map((i) => ({
         id: i.id,
@@ -370,31 +347,40 @@ export default function HomeScreen() {
         iconColor: i.iconColor,
         groupName: i.groupName,
       }));
-    return [
-      { id: 'ad1', title: 'חג ראש חודש', iconColor: '#36a9e2', groupName: 'משפחה' },
-      ...allDayCommunityEvents,
-    ];
   }, [communityEventItems]);
 
-  // allItems = Convex tasks (today) + mock event items + community events
+  // allItems = Convex tasks (today) + mock event items + community events + assigned event tasks
+  // TODO: filter by selectedDate when events are wired to Convex
   const allItems = useMemo(() => {
     const timedCommunityEvents = communityEventItems.filter((i) => !i.allDay);
-    const merged = [
+    // Assigned event tasks appear as separate actionable items in the timeline.
+    // communityEventItems uses event._id; assignedTaskItems uses task._id — no collision.
+    // Deduplicate by id as a conservative guard.
+    const timedAssignedTasks = assignedTaskItems.filter((i) => !i.allDay);
+    const seen = new Set<string>();
+    const deduped: Item[] = [];
+    for (const item of [
       ...todayTasks,
       ...items,
       ...timedCommunityEvents,
-    ];
+      ...timedAssignedTasks,
+    ]) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id);
+        deduped.push(item);
+      }
+    }
     const toMinutes = (t: string) => {
       const [h, m] = t.split(':').map(Number);
       return Number.isNaN(h) || Number.isNaN(m) ? 0 : h * 60 + m;
     };
-    return merged.sort((a, b) => {
+    return deduped.sort((a, b) => {
       if (!a.time && !b.time) return 0;
       if (!a.time) return 1;
       if (!b.time) return -1;
       return toMinutes(a.time) - toMinutes(b.time);
     });
-  }, [todayTasks, items, communityEventItems]);
+  }, [todayTasks, items, communityEventItems, assignedTaskItems]);
 
   // ── Convex: undated tasks ──────────────────────────────────────────────────
   const convexUndatedTasks = useQuery(
@@ -442,13 +428,11 @@ export default function HomeScreen() {
   const visibleItems = allItems.filter((i) => i.rsvpStatus !== 'no');
 
   // ── Insight card ───────────────────────────────────────────────────────────
-  const showInsightCard = hasEventsOrTasks && dismissedInsightDate !== todayISO;
-  // TODO: להחליף ללוגיקת AI בעתיד
-  const insightText =
-    allItems.length > 3
-      ? 'יש לך יום עמוס היום, שווה לשקול להזיז משימה אחת למחר.'
-      : 'היום שלך נראה רגוע, אולי זה זמן טוב להשלים משהו קטן מהמשימות הפתוחות.';
-
+  // TODO: re-enable when AI insight is ready
+  // const showInsightCard = hasEventsOrTasks && dismissedInsightDate !== todayISO;
+  // const insightText = allItems.length > 3
+  //   ? 'יש לך יום עמוס היום, שווה לשקול להזיז משימה אחת למחר.'
+  //   : 'היום שלך נראה רגוע, אולי זה זמן טוב להשלים משהו קטן מהמשימות הפתוחות.';
   const dismissInsight = () => setDismissedInsightDate(todayISO);
 
   // ── Task handlers ──────────────────────────────────────────────────────────
@@ -508,16 +492,6 @@ export default function HomeScreen() {
     }
   };
 
-  // ── Mood helpers ───────────────────────────────────────────────────────────
-  // TODO: להחליף ללוגיקת AI בעתיד (לחבר רגש + תובנה)
-  const shouldShowMoodPrompt = useCallback((): boolean => {
-    const lastHour = allItems.reduce((max, item) => {
-      const h = parseInt(item.time.split(':')[0], 10);
-      return Number.isNaN(h) ? max : h > max ? h : max;
-    }, 0);
-    const moodStartHour = Math.max(19, lastHour);
-    return new Date().getHours() >= moodStartHour;
-  }, [allItems]);
 
   // Load last-used navigation app from storage
   useEffect(() => {
@@ -525,56 +499,6 @@ export default function HomeScreen() {
       if (val) setLastNavApp(val as 'waze' | 'google' | 'apple');
     });
   }, []);
-
-  // Reset mood state when a new day begins
-  useEffect(() => {
-    if (lastMoodDate !== null && lastMoodDate !== todayISO) {
-      setHasSeenMoodPopupToday(false);
-      setSelectedMood(null);
-    }
-  }, []); // runs once on mount
-
-  // Check every minute whether to show the mood popup
-  useEffect(() => {
-    if (!canShowMoodFeatures) return; // לא להציג למשתמש ללא אירועים
-    const check = () => {
-      if (
-        shouldShowMoodPrompt() &&
-        selectedMood === null &&
-        !hasSeenMoodPopupToday
-      ) {
-        setTempMoodSelection(null);
-        setIsMoodModalVisible(true);
-      }
-    };
-    check();
-    const interval = setInterval(check, 60_000);
-    return () => clearInterval(interval);
-  }, [
-    canShowMoodFeatures,
-    shouldShowMoodPrompt,
-    selectedMood,
-    hasSeenMoodPopupToday,
-  ]);
-
-  // Scroll main mood wheel to initial position after mount
-  useEffect(() => {
-    moodWheelInitialized.current = false;
-    setTimeout(() => {
-      moodScrollRef.current?.scrollTo({ x: MOOD_INITIAL_X, animated: false });
-    }, 150);
-  }, []);
-
-  // Scroll popup mood wheel when modal opens; reset guard so first event is skipped
-  useEffect(() => {
-    if (isMoodModalVisible) {
-      moodPopupInitialized.current = false;
-      setTempMoodSelection(selectedMood);
-      setTimeout(() => {
-        moodPopupRef.current?.scrollTo({ x: MOOD_INITIAL_X, animated: false });
-      }, 150);
-    }
-  }, [isMoodModalVisible]);
 
   // Scroll date carousel to today on mount
   useEffect(() => {
@@ -593,94 +517,6 @@ export default function HomeScreen() {
     const timer = setTimeout(() => setShowToast(false), 5000);
     return () => clearTimeout(timer);
   }, []);
-
-  const playMoodSound = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  // Confirm selection from modal — requires explicit tap on "אישור"
-  const confirmMoodSelection = () => {
-    if (tempMoodSelection === null) return;
-    if (tempMoodSelection !== selectedMood) playMoodSound();
-    setSelectedMood(tempMoodSelection);
-    setHasSeenMoodPopupToday(true);
-    setLastMoodDate(todayISO);
-    setIsMoodModalVisible(false);
-    // Sync bottom wheel to the confirmed mood
-    const idx = MOODS.findIndex((m) => m.value === tempMoodSelection);
-    const targetX = (MOODS.length + idx) * MOOD_ITEM_WIDTH;
-    setTimeout(() => {
-      moodWheelInitialized.current = false;
-      moodScrollRef.current?.scrollTo({ x: targetX, animated: false });
-    }, 50);
-  };
-
-  // Direct selection from bottom wheel (tap or scroll)
-  const handleMoodSelect = (value: number) => {
-    if (value !== selectedMood) playMoodSound();
-    setSelectedMood(value);
-    setHasSeenMoodPopupToday(true);
-    setLastMoodDate(todayISO);
-    setIsMoodModalVisible(false);
-    const idx = MOODS.findIndex((m) => m.value === value);
-    const targetX = (MOODS.length + idx) * MOOD_ITEM_WIDTH;
-    setTimeout(() => {
-      moodWheelInitialized.current = false;
-      moodScrollRef.current?.scrollTo({ x: targetX, animated: false });
-    }, 50);
-  };
-
-  // Popup scroll-end: loop-snap + update tempMoodSelection (NO confirm yet)
-  const handlePopupScrollEnd = (e: {
-    nativeEvent: { contentOffset: { x: number } };
-  }) => {
-    if (!moodPopupInitialized.current) {
-      moodPopupInitialized.current = true;
-      return;
-    }
-    const offsetX = e.nativeEvent.contentOffset.x;
-    const rawIndex = Math.round(offsetX / MOOD_ITEM_WIDTH);
-    const normalizedIndex = rawIndex % MOODS.length;
-    setTempMoodSelection(MOODS[normalizedIndex].value);
-    if (rawIndex < MOODS.length) {
-      moodPopupRef.current?.scrollTo({
-        x: (rawIndex + MOODS.length) * MOOD_ITEM_WIDTH,
-        animated: false,
-      });
-    } else if (rawIndex >= MOODS.length * 2) {
-      moodPopupRef.current?.scrollTo({
-        x: (rawIndex - MOODS.length) * MOOD_ITEM_WIDTH,
-        animated: false,
-      });
-    }
-  };
-
-  // Bottom wheel scroll-end: immediate selection + loop-snap
-  const handleBottomScrollEnd = (e: {
-    nativeEvent: { contentOffset: { x: number } };
-  }) => {
-    if (!moodWheelInitialized.current) {
-      moodWheelInitialized.current = true;
-      return;
-    }
-    const offsetX = e.nativeEvent.contentOffset.x;
-    const rawIndex = Math.round(offsetX / MOOD_ITEM_WIDTH);
-    const normalizedIndex = rawIndex % MOODS.length;
-    handleMoodSelect(MOODS[normalizedIndex].value);
-    setTimeout(() => {
-      if (rawIndex < MOODS.length) {
-        moodScrollRef.current?.scrollTo({
-          x: (rawIndex + MOODS.length) * MOOD_ITEM_WIDTH,
-          animated: false,
-        });
-      } else if (rawIndex >= MOODS.length * 2) {
-        moodScrollRef.current?.scrollTo({
-          x: (rawIndex - MOODS.length) * MOOD_ITEM_WIDTH,
-          animated: false,
-        });
-      }
-    }, 0);
-  };
 
   // ── Navigation picker handlers ─────────────────────────────────────────────
 
@@ -715,70 +551,6 @@ export default function HomeScreen() {
   };
 
   const AVATAR_COLORS = ['#FFD1DC', '#E0F2F1', '#FFF9C4', '#E8EAF6', '#FCE4EC'];
-
-  const moodWheelPad = (screenWidth - 48 - MOOD_ITEM_WIDTH) / 2;
-  const moodPopupHPad = Math.max(
-    0,
-    (screenWidth * 0.88 - 56 - MOOD_ITEM_WIDTH) / 2
-  );
-
-  // ── Mood wheel (reused in bottom section and popup) ────────────────────────
-  const renderMoodWheel = (
-    ref: React.RefObject<ScrollView | null>,
-    pad: number,
-    onScrollEnd: (e: { nativeEvent: { contentOffset: { x: number } } }) => void,
-    activeMoodValue: number | null = selectedMood,
-    onItemTap?: (value: number) => void
-  ) => (
-    <ScrollView
-      ref={ref}
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      snapToInterval={MOOD_ITEM_WIDTH}
-      decelerationRate="fast"
-      scrollEventThrottle={16}
-      contentContainerStyle={{ paddingHorizontal: pad }}
-      onScroll={(e) => {
-        const offsetX = e.nativeEvent.contentOffset.x;
-        const rawIndex = Math.round(offsetX / MOOD_ITEM_WIDTH);
-        const normalized = rawIndex % MOODS.length;
-        setCurrentMoodIndex(rawIndex);
-        // Live update: modal temp selection or bottom wheel selection
-        if (onItemTap) {
-          setTempMoodSelection(MOODS[normalized].value);
-        } else {
-          setSelectedMood(MOODS[normalized].value);
-        }
-      }}
-      onMomentumScrollEnd={onScrollEnd}
-    >
-      {wheelMoods.map((mood, i) => {
-        const distance = Math.abs(i - currentMoodIndex);
-        const isCenter = distance === 0;
-        const iconSize = isCenter ? 56 : distance === 1 ? 42 : 32;
-        const iconOpacity = isCenter ? 1 : distance === 1 ? 0.55 : 0.35;
-        return (
-          <Pressable
-            key={i}
-            onPress={() => (onItemTap ?? handleMoodSelect)(mood.value)}
-            style={styles.moodItem}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel={mood.label}
-          >
-            <View style={{ opacity: iconOpacity }}>
-              <MoodIcon value={mood.value} size={iconSize} active={isCenter} />
-            </View>
-            <Text
-              style={[styles.moodLabel, isCenter && styles.moodLabelActive]}
-            >
-              {isCenter ? mood.label : ''}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </ScrollView>
-  );
 
   // ── Month calendar grid ─────────────────────────────────────────────────────
   const HEB_DAYS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
@@ -834,16 +606,12 @@ export default function HomeScreen() {
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const nextEvent = allItems.find((i) => !i.allDay && !i.completed);
-  const selectedMoodData = MOODS.find((m) => m.value === selectedMood);
 
-  const handleMoodCardPress = () => {
-    // If same day — reopen modal to change mood
-    if (lastMoodDate === todayISO) {
-      setTempMoodSelection(selectedMood);
-      setIsMoodModalVisible(true);
-    }
-    // Past day — silently ignore
-  };
+  // ── Birthday strip: filter to next 30 days only (Home Screen only) ─────────
+  const thirtyDaysFromNow = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const upcomingBirthdays = contextBirthdays.filter(
+    (b) => getNextOccurrence(b) <= thirtyDaysFromNow
+  );
 
   // ── Helpers to scroll date carousel back to today ──────────────────────────
   const scrollToToday = () => {
@@ -892,7 +660,9 @@ export default function HomeScreen() {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <View style={{ alignItems: 'flex-end' }}>
             <Text style={styles.headerDate}>{todayLabel}</Text>
-            <Text style={styles.headerGreeting}>{greeting}, שקד</Text>
+            <Text style={styles.headerGreeting}>
+              {userFirstName ? `${greeting}, ${userFirstName}` : greeting}
+            </Text>
           </View>
           <Pressable
             onPress={() => router.push('/(authenticated)/profile')}
@@ -901,33 +671,15 @@ export default function HomeScreen() {
             accessibilityLabel="פתח פרופיל"
           >
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>ש</Text>
+              <Text style={styles.avatarText}>
+                {userFirstName ? userFirstName[0].toUpperCase() : '?'}
+              </Text>
             </View>
           </Pressable>
         </View>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
-        {/* ── Daily Insight card ─────────────────────────────────────────────── */}
-        {showInsightCard && (
-          <View style={styles.insightCard}>
-            <View style={styles.insightHeader}>
-              <Text style={styles.insightLabel}>תובנה יומית</Text>
-              <Pressable
-                onPress={dismissInsight}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="סגור תובנה"
-              >
-                <MaterialIcons name="close" size={18} color="#94a3b8" />
-              </Pressable>
-            </View>
-            {/* TODO: להחליף ללוגיקת AI בעתיד */}
-            <Text style={styles.insightText}>{insightText}</Text>
-          </View>
-        )}
-
         {/* ── Date section header (toggle + "היום" chip) ────────────────────── */}
         <View style={styles.dateSectionRow}>
           {!isSameDay(selectedDate, today) && (
@@ -1021,7 +773,7 @@ export default function HomeScreen() {
 
         {hasEventsOrTasks && (
           <Text style={styles.subtitleCount}>
-            יש לך {allItems.filter((i) => !i.allDay).length + 1} פעילויות היום
+            יש לך {allItems.filter((i) => !i.allDay).length} פעילויות היום
           </Text>
         )}
 
@@ -1070,9 +822,8 @@ export default function HomeScreen() {
         {/* ── Upcoming event card (only if next event exists) ───────────────── */}
         {hasEventsOrTasks && nextEvent && (
           <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
-            {/* Tapping anywhere on the card opens the detail sheet */}
             <Pressable
-              onPress={() => openEventSheet(nextEvent)}
+              onPress={() => handleCardPress(nextEvent)}
               accessible={true}
               accessibilityRole="button"
               accessibilityLabel={`פרטי אירוע: ${nextEvent.title}`}
@@ -1080,28 +831,51 @@ export default function HomeScreen() {
               <View style={[styles.cardShadow, styles.eventCard]}>
                 <View style={styles.eventAccentBar} />
                 <View style={{ padding: 24, paddingRight: 32 }}>
+                  {/* Top row: "האירוע הבא" pill (right) + relative start time (left) */}
                   <View style={styles.eventTopRow}>
                     <View style={styles.eventNextPill}>
                       <Text style={styles.eventNextPillText}>האירוע הבא</Text>
                     </View>
-                    <Text style={styles.eventTime}>{nextEvent.time}</Text>
+                    {/* Relative time — only for timed events starting within 2 hours */}
+                    {(() => {
+                      if (!nextEvent.time) return null;
+                      const [h, m] = nextEvent.time.split(':').map(Number);
+                      if (Number.isNaN(h) || Number.isNaN(m)) return null;
+                      const eventDate = new Date();
+                      eventDate.setHours(h, m, 0, 0);
+                      const diffMins = Math.round(
+                        (eventDate.getTime() - Date.now()) / 60000
+                      );
+                      if (diffMins <= 0 || diffMins > 120) return null;
+                      return (
+                        <Text
+                          style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}
+                        >
+                          {`מתחיל בעוד ${diffMins} דק׳`}
+                        </Text>
+                      );
+                    })()}
                   </View>
-                  {nextEvent.endTime && (
-                    <Text
-                      style={{
-                        color: '#94a3b8',
-                        fontSize: 13,
-                        textAlign: 'left',
-                        marginTop: -4,
-                        marginBottom: 6,
-                      }}
-                    >
-                      עד {nextEvent.endTime}
-                    </Text>
-                  )}
+
+                  {/* Title */}
                   <Text style={styles.eventTitle}>{nextEvent.title}</Text>
 
-                  {/* Address row: icon+address group on right, nav button on left */}
+                  {/* Time range: start – end (or just start) */}
+                  <Text
+                    style={{
+                      color: '#36a9e2',
+                      fontSize: 22,
+                      fontWeight: '700',
+                      textAlign: 'right',
+                      marginBottom: 8,
+                    }}
+                  >
+                    {nextEvent.endTime
+                      ? `${nextEvent.time} – ${nextEvent.endTime}`
+                      : nextEvent.time}
+                  </Text>
+
+                  {/* Address row: location text right, "נווט" button left */}
                   <View style={styles.eventAddressRow}>
                     <View style={styles.eventAddressGroup}>
                       <MaterialIcons
@@ -1113,27 +887,24 @@ export default function HomeScreen() {
                         {nextEvent.location}
                       </Text>
                     </View>
-                    <Pressable
-                      style={styles.navBtn}
-                      onPress={(e) => {
-                        e.stopPropagation?.();
-                        handleOpenNavPicker(nextEvent.location);
-                      }}
-                      accessible={true}
-                      accessibilityRole="button"
-                      accessibilityLabel="נווט"
-                    >
-                      <MaterialIcons name="near-me" size={16} color="#8d6e63" />
-                      <Text style={styles.navBtnText}>נווט</Text>
-                    </Pressable>
+                    {nextEvent.location ? (
+                      <Pressable
+                        style={styles.navBtn}
+                        onPress={(e) => {
+                          e.stopPropagation?.();
+                          handleOpenNavPicker(nextEvent.location);
+                        }}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="נווט"
+                      >
+                        <MaterialIcons name="near-me" size={16} color="#8d6e63" />
+                        <Text style={styles.navBtnText}>נווט</Text>
+                      </Pressable>
+                    ) : null}
                   </View>
 
-                  <View style={styles.trafficAlert}>
-                    <MaterialIcons name="traffic" size={20} color="#ff6b6b" />
-                    <Text style={styles.trafficText}>
-                      עומס כבד באיילון: מומלץ לצאת ב-08:15
-                    </Text>
-                  </View>
+                  {/* TODO: wire real traffic data here */}
                 </View>
               </View>
             </Pressable>
@@ -1219,33 +990,36 @@ export default function HomeScreen() {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingRight: 24, paddingLeft: 8 }}
+              contentContainerStyle={{
+                paddingRight: 24,
+                paddingLeft: 8,
+                flexDirection: 'row-reverse',
+                gap: 12,
+              }}
             >
-              <View style={{ flexDirection: 'row-reverse', gap: 12 }}>
-                {contextBirthdays.map((b, idx) => (
-                  <Pressable
-                    key={b.id}
-                    onPress={() => openBirthdayCard(b)}
-                    style={styles.birthdayCard}
-                  >
-                    <View
-                      style={[
-                        styles.birthdayAvatar,
-                        {
-                          backgroundColor:
-                            AVATAR_COLORS[idx % AVATAR_COLORS.length],
-                        },
-                      ]}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.birthdayCountdown}>
-                        {getCountdownLabel(b)}:
-                      </Text>
-                      <Text style={styles.birthdayName}>{b.name}</Text>
-                    </View>
-                  </Pressable>
-                ))}
-              </View>
+              {upcomingBirthdays.map((b, idx) => (
+                <Pressable
+                  key={b.id}
+                  onPress={() => openBirthdayCard(b)}
+                  style={styles.birthdayCard}
+                >
+                  <View
+                    style={[
+                      styles.birthdayAvatar,
+                      {
+                        backgroundColor:
+                          AVATAR_COLORS[idx % AVATAR_COLORS.length],
+                      },
+                    ]}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.birthdayCountdown}>
+                      {getCountdownLabel(b)}:
+                    </Text>
+                    <Text style={styles.birthdayName}>{b.name}</Text>
+                  </View>
+                </Pressable>
+              ))}
             </ScrollView>
           )}
         </View>
@@ -1310,10 +1084,10 @@ export default function HomeScreen() {
               </View>
             )}
 
-            {/* Hourly timeline */}
+            {/* Hourly timeline — nextEvent is shown in the card above, exclude it here */}
             <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
               {visibleItems
-                .filter((i) => !i.allDay)
+                .filter((i) => !i.allDay && i.id !== nextEvent?.id)
                 .map((item) => (
                   <Swipeable
                     key={item.id}
@@ -1382,7 +1156,7 @@ export default function HomeScreen() {
                                 />
                               )}
                               <View style={{ flex: 1 }}>
-                                {/* Title row + RSVP badge */}
+                                {/* Title row + assignee circles */}
                                 <View
                                   style={{
                                     flexDirection: 'row-reverse',
@@ -1399,75 +1173,81 @@ export default function HomeScreen() {
                                   >
                                     {item.title}
                                   </Text>
-                                  {item.pending && (
-                                    <Pressable
-                                      onPress={(e) => {
-                                        e.stopPropagation?.();
-                                        setOpenRsvpForId((prev) =>
-                                          prev === item.id ? null : item.id
-                                        );
-                                      }}
-                                      hitSlop={{
-                                        top: 8,
-                                        bottom: 8,
-                                        left: 8,
-                                        right: 8,
-                                      }}
-                                      accessible={true}
-                                      accessibilityRole="button"
-                                      accessibilityLabel="סטטוס אישור"
-                                    >
-                                      {(!item.rsvpStatus ||
-                                        item.rsvpStatus === 'none') && (
-                                        <View style={styles.pendingBadge}>
-                                          <Text style={styles.pendingBadgeText}>
-                                            ממתין לאישור
-                                          </Text>
-                                        </View>
-                                      )}
-                                      {item.rsvpStatus === 'yes' && (
-                                        <View
-                                          style={[
-                                            styles.pendingBadge,
-                                            { backgroundColor: '#dcfce7' },
-                                          ]}
-                                        >
-                                          <Text
-                                            style={[
-                                              styles.pendingBadgeText,
-                                              { color: '#166534' },
-                                            ]}
-                                          >
-                                            ✓ מאושר
-                                          </Text>
-                                        </View>
-                                      )}
-                                      {item.rsvpStatus === 'maybe' && (
-                                        <View
-                                          style={[
-                                            styles.pendingBadge,
-                                            { backgroundColor: '#fef9c3' },
-                                          ]}
-                                        >
-                                          <Text
-                                            style={[
-                                              styles.pendingBadgeText,
-                                              { color: '#854d0e' },
-                                            ]}
-                                          >
-                                            אולי
-                                          </Text>
-                                        </View>
-                                      )}
-                                    </Pressable>
-                                  )}
-                                  <View
-                                    style={[
-                                      styles.assigneeCircle,
-                                      { backgroundColor: item.assigneeColor },
-                                    ]}
-                                  />
+                                  {/* Assignee circles row — expandable for multiple assignees */}
+                                  <View style={{ flexDirection: 'row-reverse', gap: 4 }}>
+                                    <View
+                                      style={[
+                                        styles.assigneeCircle,
+                                        { backgroundColor: item.assigneeColor },
+                                      ]}
+                                    />
+                                  </View>
                                 </View>
+
+                                {/* Status badge — below title/assignee row, RTL-aligned */}
+                                {item.pending && (
+                                  <Pressable
+                                    onPress={(e) => {
+                                      e.stopPropagation?.();
+                                      setOpenRsvpForId((prev) =>
+                                        prev === item.id ? null : item.id
+                                      );
+                                    }}
+                                    hitSlop={{
+                                      top: 8,
+                                      bottom: 8,
+                                      left: 8,
+                                      right: 8,
+                                    }}
+                                    accessible={true}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="סטטוס אישור"
+                                    style={{ alignSelf: 'flex-end', marginTop: 4 }}
+                                  >
+                                    {(!item.rsvpStatus ||
+                                      item.rsvpStatus === 'none') && (
+                                      <View style={styles.pendingBadge}>
+                                        <Text style={styles.pendingBadgeText}>
+                                          ממתין לאישור
+                                        </Text>
+                                      </View>
+                                    )}
+                                    {item.rsvpStatus === 'yes' && (
+                                      <View
+                                        style={[
+                                          styles.pendingBadge,
+                                          { backgroundColor: '#dcfce7' },
+                                        ]}
+                                      >
+                                        <Text
+                                          style={[
+                                            styles.pendingBadgeText,
+                                            { color: '#166534' },
+                                          ]}
+                                        >
+                                          ✓ מאושר
+                                        </Text>
+                                      </View>
+                                    )}
+                                    {item.rsvpStatus === 'maybe' && (
+                                      <View
+                                        style={[
+                                          styles.pendingBadge,
+                                          { backgroundColor: '#fef9c3' },
+                                        ]}
+                                      >
+                                        <Text
+                                          style={[
+                                            styles.pendingBadgeText,
+                                            { color: '#854d0e' },
+                                          ]}
+                                        >
+                                          אולי
+                                        </Text>
+                                      </View>
+                                    )}
+                                  </Pressable>
+                                )}
 
                                 {/* RSVP inline chips */}
                                 {openRsvpForId === item.id && (
@@ -1796,44 +1576,66 @@ export default function HomeScreen() {
 
         {/* ── Mood section — shown only when user has events/tasks ──────────── */}
         {canShowMoodFeatures && (
-          <View
-            style={{ paddingHorizontal: 24, marginTop: 8, marginBottom: 32 }}
-          >
+          <View style={{ paddingHorizontal: 24, marginTop: 8, marginBottom: 40 }}>
             <Text style={styles.moodTitle}>איך הרגיש היום שלך?</Text>
-
-            {selectedMood !== null && selectedMoodData ? (
-              // Compact card after mood is selected
-              // TODO: להחליף ללוגיקת AI בעתיד (לחבר רגש + תובנה יומית)
+            {selectedMood === null ? (
+              <View style={{ flexDirection: 'row-reverse', gap: 10 }}>
+                {MOODS.map((mood) => (
+                  <Pressable
+                    key={mood.value}
+                    onPress={() => setSelectedMood(mood.value)}
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#fff',
+                      borderRadius: 16,
+                      paddingVertical: 14,
+                      alignItems: 'center',
+                      gap: 4,
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.05,
+                      shadowRadius: 4,
+                      elevation: 1,
+                    }}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel={mood.label}
+                  >
+                    <Text style={{ fontSize: 26 }}>{mood.emoji}</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151' }}>
+                      {mood.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : (
               <Pressable
-                onPress={handleMoodCardPress}
-                style={styles.moodCompactCard}
+                onPress={() => setSelectedMood(null)}
+                style={{
+                  backgroundColor: '#f0f7ff',
+                  borderRadius: 16,
+                  padding: 14,
+                  flexDirection: 'row-reverse',
+                  alignItems: 'center',
+                  gap: 10,
+                }}
                 accessible={true}
                 accessibilityRole="button"
-                accessibilityLabel={`הרגש שנבחר: ${selectedMoodData.label}`}
+                accessibilityLabel="שנה את הרגש שנבחר"
               >
-                <MoodIcon
-                  value={selectedMoodData.value}
-                  size={40}
-                  active={true}
+                <Text style={{ fontSize: 24 }}>
+                  {MOODS.find((m) => m.value === selectedMood)?.emoji}
+                </Text>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: '#111517' }}>
+                  {MOODS.find((m) => m.value === selectedMood)?.label}
+                </Text>
+                <MaterialIcons
+                  name="edit"
+                  size={14}
+                  color="#94a3b8"
+                  style={{ marginRight: 'auto' }}
                 />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.moodCompactLabel}>
-                    {selectedMoodData.label}
-                  </Text>
-                  <Text style={styles.moodCompactPhrase}>
-                    {selectedMoodData.shortText}
-                  </Text>
-                </View>
-                {lastMoodDate === todayISO && (
-                  <MaterialIcons name="edit" size={16} color="#94a3b8" />
-                )}
               </Pressable>
-            ) : (
-              renderMoodWheel(
-                moodScrollRef,
-                moodWheelPad,
-                handleBottomScrollEnd
-              )
             )}
           </View>
         )}
@@ -1845,8 +1647,9 @@ export default function HomeScreen() {
           <View style={[styles.toastShadow, styles.toastCard]}>
             <View style={{ flex: 1 }}>
               <Text style={styles.toastText}>
-                ברוכים הבאים הביתה, שקד! הכל מוכן. ה-AI של InYomi כבר התחילה
-                לעבוד לסנכרן לך את היום.
+                {userFirstName
+                  ? `ברוכים הבאים הביתה, ${userFirstName}! הכל מוכן. ה-AI של InYomi כבר התחילה לעבוד לסנכרן לך את היום.`
+                  : 'ברוכים הבאים הביתה! הכל מוכן. ה-AI של InYomi כבר התחילה לעבוד לסנכרן לך את היום.'}
               </Text>
             </View>
             <MaterialIcons name="auto-awesome" size={20} color="#36a9e2" />
@@ -1859,50 +1662,6 @@ export default function HomeScreen() {
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
       />
-
-      {/* ── Mood Modal ─────────────────────────────────────────────────────── */}
-      <Modal
-        animationType="fade"
-        transparent
-        visible={isMoodModalVisible}
-        onRequestClose={() => setIsMoodModalVisible(false)}
-      >
-        <View style={styles.moodModalOverlay}>
-          <View style={styles.moodModalCard}>
-            <Text style={styles.moodModalTitle}>איך הרגיש היום שלך?</Text>
-            {renderMoodWheel(
-              moodPopupRef,
-              moodPopupHPad,
-              handlePopupScrollEnd,
-              tempMoodSelection,
-              (v) => setTempMoodSelection(v)
-            )}
-            {/* Confirm button — only active after scrolling to a mood */}
-            <Pressable
-              style={[
-                styles.moodConfirmBtn,
-                tempMoodSelection === null && styles.moodConfirmBtnDisabled,
-              ]}
-              onPress={confirmMoodSelection}
-              disabled={tempMoodSelection === null}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="אישור בחירת רגש"
-            >
-              <Text style={styles.moodConfirmBtnText}>אישור</Text>
-            </Pressable>
-            <Pressable
-              style={styles.moodModalClose}
-              onPress={() => setIsMoodModalVisible(false)}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="סגור"
-            >
-              <Text style={styles.moodModalCloseText}>סגור</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
 
       {/* ── Event Detail Sheet ──────────────────────────────────────────────── */}
       <EventDetailsBottomSheet
@@ -2456,21 +2215,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   navBtnText: { color: '#8d6e63', fontWeight: '700', fontSize: 13 },
-  trafficAlert: {
-    backgroundColor: '#fff5f5',
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 16,
-    gap: 8,
-  },
-  trafficText: {
-    color: '#ff6b6b',
-    fontSize: 12,
-    fontWeight: '700',
-    flex: 1,
-    textAlign: 'right',
-  },
 
   // ── Birthdays ───────────────────────────────────────────────────────────────
   sectionHeader: {
@@ -2487,12 +2231,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f3f4f6',
     borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 8,
-    width: 144,
+    gap: 6,
+    width: 116,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
@@ -2500,9 +2244,9 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   birthdayAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: '#f3f4f6',
   },
@@ -2671,98 +2415,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // ── Mood carousel ───────────────────────────────────────────────────────────
+  // ── Mood section ────────────────────────────────────────────────────────────
   moodTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: '#111517',
     textAlign: 'right',
     marginBottom: 16,
-  },
-  moodItem: {
-    width: MOOD_ITEM_WIDTH,
-    alignItems: 'center',
-    paddingVertical: 8,
-    // Reserve height for largest size (56) so non-active items don't jump layout
-    minHeight: 80,
-    justifyContent: 'flex-end',
-    gap: 4,
-  },
-  moodLabel: { fontSize: 12, color: '#94a3b8', textAlign: 'center' },
-  moodLabelActive: { fontSize: 14, color: '#111517', fontWeight: '700' },
-
-  // ── Compact mood card (after selection) ─────────────────────────────────────
-  moodCompactCard: {
-    backgroundColor: '#f0f7ff',
-    borderRadius: 16,
-    padding: 16,
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 12,
-  },
-  moodCompactLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#111517',
-    textAlign: 'right',
-  },
-  moodCompactPhrase: {
-    fontSize: 13,
-    color: '#6b7280',
-    textAlign: 'right',
-    marginTop: 2,
-  },
-
-  // ── Mood popup modal ────────────────────────────────────────────────────────
-  moodModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  moodModalCard: {
-    backgroundColor: '#fff',
-    borderRadius: 28,
-    padding: 28,
-    width: '88%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 24,
-    elevation: 12,
-  },
-  moodModalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111517',
-    textAlign: 'right',
-    marginBottom: 20,
-  },
-  moodConfirmBtn: {
-    marginTop: 20,
-    backgroundColor: '#36a9e2',
-    borderRadius: 50,
-    paddingVertical: 13,
-    alignItems: 'center',
-  },
-  moodConfirmBtnDisabled: {
-    backgroundColor: '#e5e7eb',
-  },
-  moodConfirmBtnText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  moodModalClose: {
-    marginTop: 12,
-    alignSelf: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 24,
-  },
-  moodModalCloseText: {
-    color: '#94a3b8',
-    fontSize: 15,
-    fontWeight: '600',
   },
 
   // ── Toast ───────────────────────────────────────────────────────────────────
