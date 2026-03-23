@@ -30,6 +30,10 @@ export function RelatedTasksSection({
     onChange(updated);
   };
 
+  const deleteTask = (taskId: string): void => {
+    onChange(tasks.filter((t) => t.id !== taskId));
+  };
+
   const addTask = (): void => {
     Alert.prompt(
       'משימה חדשה',
@@ -62,7 +66,7 @@ export function RelatedTasksSection({
           <MaterialIcons name="checklist" size={24} color="#d97706" />
         </View>
         <View style={s.headerContent}>
-          <Text style={[s.label, { color: '#d97706' }]}>משימות קשורות</Text>
+          <Text style={s.label}>משימות קשורות</Text>
           <Text style={s.progressText}>
             {completedCount} מתוך {tasks.length} הושלמו
           </Text>
@@ -87,37 +91,48 @@ export function RelatedTasksSection({
       {tasks.map((task) => {
         const assignee = getAssignee(task.assigneeId);
         return (
-          <Pressable
-            key={task.id}
-            style={s.taskRow}
-            onPress={() => toggleTask(task.id)}
-            accessible={true}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: task.completed }}
-            accessibilityLabel={task.title}
-          >
-            <View style={[s.checkbox, task.completed && s.checkboxDone]}>
-              {task.completed && (
-                <MaterialIcons name="check" size={14} color="#fff" />
-              )}
-            </View>
-            <Text
-              style={[s.taskTitle, task.completed && s.taskTitleDone]}
-              numberOfLines={1}
+          <View key={task.id} style={s.taskRow}>
+            <Pressable
+              onPress={() => toggleTask(task.id)}
+              style={s.taskCheckArea}
+              accessible={true}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: task.completed }}
+              accessibilityLabel={task.title}
             >
-              {task.title}
-            </Text>
-            {task.colorDot != null && (
-              <View style={[s.colorDot, { backgroundColor: task.colorDot }]} />
-            )}
-            {assignee != null && (
-              <View
-                style={[s.assigneeAvatar, { backgroundColor: assignee.color }]}
-              >
-                <Text style={s.assigneeInitial}>{assignee.name.charAt(0)}</Text>
+              <View style={[s.checkbox, task.completed && s.checkboxDone]}>
+                {task.completed && (
+                  <MaterialIcons name="check" size={14} color="#fff" />
+                )}
               </View>
-            )}
-          </Pressable>
+              <Text
+                style={[s.taskTitle, task.completed && s.taskTitleDone]}
+                numberOfLines={1}
+              >
+                {task.title}
+              </Text>
+              {task.colorDot != null && (
+                <View style={[s.colorDot, { backgroundColor: task.colorDot }]} />
+              )}
+              {assignee != null && (
+                <View
+                  style={[s.assigneeAvatar, { backgroundColor: assignee.color }]}
+                >
+                  <Text style={s.assigneeInitial}>{assignee.name.charAt(0)}</Text>
+                </View>
+              )}
+            </Pressable>
+            <Pressable
+              onPress={() => deleteTask(task.id)}
+              style={s.deleteBtn}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={`מחק משימה: ${task.title}`}
+              hitSlop={8}
+            >
+              <MaterialIcons name="close" size={16} color="#94a3b8" />
+            </Pressable>
+          </View>
         );
       })}
 
@@ -177,9 +192,10 @@ const s = StyleSheet.create({
   },
   headerContent: { flex: 1 },
   label: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    textAlign: 'right',
     marginBottom: 2,
   },
   progressText: {
@@ -202,10 +218,19 @@ const s = StyleSheet.create({
   taskRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
     paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#f8fafc',
+  },
+  taskCheckArea: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  deleteBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
   },
   checkbox: {
     width: 22,

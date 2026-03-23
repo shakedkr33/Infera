@@ -124,7 +124,7 @@ const s = StyleSheet.create({
   sectionLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#334155',
+    color: '#111827',
     textAlign: 'right',
   },
   avatarsGroup: {

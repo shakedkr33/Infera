@@ -329,12 +329,18 @@ export default function HomeScreen() {
   const communityEvents =
     useQuery(api.events.listCommunityEventsForDate, { from, to }) ?? [];
 
+  // ── Personal events for selected date ─────────────────────────────────────
+  const personalEventData =
+    useQuery(
+      api.events.listByDateRange,
+      spaceId ? { spaceId: spaceId as Id<'spaces'>, from, to } : 'skip'
+    ) ?? [];
+
   const assignedEventTasks =
     useQuery(api.eventTasks.listMyAssignedEventTasksForDate, { from, to }) ??
     [];
 
   // ── Convex: dated tasks ────────────────────────────────────────────────────
-  // TODO: לאחד עם events מ-Convex כשיחובר (api.events.listByDateRange)
   const convexTasks = useQuery(
     api.tasks.listBySpace,
     spaceId ? { spaceId } : 'skip'
@@ -439,21 +445,51 @@ export default function HomeScreen() {
     [assignedEventTasks]
   );
 
-  // ── All-day section: real community events only ────────────────────────────
-  const allDayEvents = useMemo(() => {
-    return communityEventItems
-      .filter((i) => i.allDay)
-      .map((i) => ({
-        id: i.id,
-        title: i.title,
-        iconColor: i.iconColor,
-        groupName: i.groupName,
-      }));
-  }, [communityEventItems]);
+  // ── Personal events for selected date mapped to Item shape ───────────────
+  const personalEventItems: Item[] = useMemo(
+    () =>
+      personalEventData.map((ev) => ({
+        id: ev._id,
+        time: ev.allDay
+          ? ''
+          : new Date(ev.startTime).toLocaleTimeString('he-IL', {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+        endTime:
+          !ev.allDay && ev.endTime != null
+            ? new Date(ev.endTime).toLocaleTimeString('he-IL', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : undefined,
+        title: ev.title,
+        location: ev.location ?? '',
+        type: 'event' as const,
+        icon: 'event',
+        iconBg: '#e8f5fd',
+        iconColor: '#36a9e2',
+        assigneeColor: '#36a9e2',
+        completed: false,
+        allDay: ev.allDay,
+      })),
+    [personalEventData]
+  );
 
-  // allItems = Convex tasks (today) + mock event items + community events + assigned event tasks
-  // TODO: filter by selectedDate when events are wired to Convex
+  // ── All-day section: community + personal all-day events ──────────────────
+  const allDayEvents = useMemo(() => {
+    const communityAllDay = communityEventItems
+      .filter((i) => i.allDay)
+      .map((i) => ({ id: i.id, title: i.title, iconColor: i.iconColor, groupName: i.groupName }));
+    const personalAllDay = personalEventItems
+      .filter((i) => i.allDay)
+      .map((i) => ({ id: i.id, title: i.title, iconColor: i.iconColor, groupName: undefined }));
+    return [...communityAllDay, ...personalAllDay];
+  }, [communityEventItems, personalEventItems]);
+
+  // allItems = personal events + tasks (today) + mock items + community events + assigned tasks
   const allItems = useMemo(() => {
+    const timedPersonalEvents = personalEventItems.filter((i) => !i.allDay);
     const timedCommunityEvents = communityEventItems.filter((i) => !i.allDay);
     // Assigned event tasks appear as separate actionable items in the timeline.
     // communityEventItems uses event._id; assignedTaskItems uses task._id — no collision.
@@ -464,6 +500,7 @@ export default function HomeScreen() {
     for (const item of [
       ...todayTasks,
       ...items,
+      ...timedPersonalEvents,
       ...timedCommunityEvents,
       ...timedAssignedTasks,
     ]) {
@@ -482,7 +519,7 @@ export default function HomeScreen() {
       if (!b.time) return -1;
       return toMinutes(a.time) - toMinutes(b.time);
     });
-  }, [todayTasks, items, communityEventItems, assignedTaskItems]);
+  }, [todayTasks, items, personalEventItems, communityEventItems, assignedTaskItems]);
 
   // ── Convex: undated tasks ──────────────────────────────────────────────────
   const convexUndatedTasks = useQuery(

@@ -115,8 +115,8 @@ const s = StyleSheet.create({
   },
   label: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#334155',
+    fontWeight: '600',
+    color: '#111827',
     textAlign: 'right',
   },
   statusText: {

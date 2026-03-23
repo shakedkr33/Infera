@@ -3,6 +3,8 @@ import { router } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,7 +13,13 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { DateTimeCard } from '@/lib/components/event/DateTimeCard';
+import {
+  DateTimeCard,
+  applyDuration,
+  fmt2,
+  roundToNextHour,
+} from '@/lib/components/event/DateTimeCard';
+// applyDuration is used in makeEmptyEvent to set a sensible default end time
 import { LocationCard } from '@/lib/components/event/LocationCard';
 import { NotesCard } from '@/lib/components/event/NotesCard';
 import { ParticipantsCard } from '@/lib/components/event/ParticipantsCard';
@@ -25,22 +33,45 @@ import type {
 
 const PRIMARY = '#36a9e2';
 
-const EMPTY_EVENT: EventData = {
-  title: '',
-  date: Date.now(),
-  startTime: undefined,
-  endTime: undefined,
-  isAllDay: false,
-  recurrence: 'none',
-  location: undefined,
-  notes: undefined,
-  remindersEnabled: true,
-  reminderTypes: ['hour_before'],
-  participants: [],
-  tasks: [],
-  showAllTasksToAll: false,
-  createdAt: Date.now(),
-};
+/**
+ * Build smart default start/end for a new event.
+ * @param selectedDateMs  optional pre-selected calendar date (midnight Unix ms)
+ */
+function makeEmptyEvent(selectedDateMs?: number): EventData {
+  const now = new Date();
+  const startD = roundToNextHour(now); // e.g. 22:08 → 23:00
+
+  // Base date: use selectedDate if provided, otherwise today midnight
+  const baseMidnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  ).getTime();
+  const startDate = selectedDateMs ?? baseMidnight;
+
+  const startTime = `${fmt2(startD.getHours())}:00`;
+
+  // Default duration: 1 hour. applyDuration handles cross-midnight automatically.
+  const { endDate, endTime } = applyDuration(startDate, startTime, 60);
+
+  return {
+    title: '',
+    date: startDate,
+    startTime,
+    endDate,
+    endTime,
+    isAllDay: false,
+    recurrence: 'none',
+    location: undefined,
+    notes: undefined,
+    remindersEnabled: true,
+    reminderTypes: ['hour_before'],
+    participants: [],
+    tasks: [],
+    showAllTasksToAll: false,
+    createdAt: Date.now(),
+  };
+}
 
 const MOCK_EVENT: EventData = {
   id: '1',
@@ -70,18 +101,25 @@ const MOCK_EVENT: EventData = {
 interface EventScreenProps {
   mode: 'create' | 'details';
   eventId?: string;
+  /** Pre-selected date (midnight Unix ms) when opened from a calendar day tap. */
+  selectedDate?: number;
+  /** Called when the user confirms save. Should call the Convex mutation. */
+  onSave?: (data: EventData) => Promise<void>;
 }
 
 export default function EventScreen({
   mode,
   eventId: _eventId,
+  selectedDate,
+  onSave,
 }: EventScreenProps): React.JSX.Element {
   const isCreate = mode === 'create';
   // TODO: replace MOCK_EVENT with Convex query using _eventId
-  const [event, setEvent] = useState<EventData>(
-    isCreate ? EMPTY_EVENT : MOCK_EVENT
+  const [event, setEvent] = useState<EventData>(() =>
+    isCreate ? makeEmptyEvent(selectedDate) : MOCK_EVENT
   );
   const [titleError, setTitleError] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const autosave = useCallback(
@@ -89,7 +127,7 @@ export default function EventScreen({
       if (isCreate) return;
       clearTimeout(autosaveTimer.current);
       autosaveTimer.current = setTimeout(() => {
-        // TODO: call Convex mutation with _data
+        // TODO: call Convex update mutation with _data
       }, 600);
     },
     [isCreate]
@@ -106,20 +144,43 @@ export default function EventScreen({
     [autosave]
   );
 
-  const handleSave = (): void => {
+  const handleSave = async (): Promise<void> => {
     if (!event.title.trim()) {
       setTitleError(true);
       return;
     }
-    // TODO: call Convex mutation
-    router.back();
+    if (isSaving) return;
+
+    setIsSaving(true);
+    try {
+      if (onSave) {
+        await onSave(event);
+      }
+      // Reset form so reopening shows a clean slate
+      setEvent(makeEmptyEvent(selectedDate));
+      // Use replace (not back) so the create screen is removed from the stack
+      router.replace('/(authenticated)' as Parameters<typeof router.replace>[0]);
+    } catch {
+      Alert.alert('שגיאה', 'לא ניתן לשמור. נסה שוב.');
+    } finally {
+      // Always unblock the save button — whether nav succeeded, failed, or threw
+      setIsSaving(false);
+    }
   };
 
   const handleBack = (): void => {
     if (isCreate && event.title.trim()) {
       Alert.alert('לצאת בלי לשמור?', 'השינויים לא יישמרו', [
         { text: 'ביטול', style: 'cancel' },
-        { text: 'צא', style: 'destructive', onPress: () => router.back() },
+        {
+          text: 'צא',
+          style: 'destructive',
+          onPress: () => {
+            // Reset form on confirmed discard
+            setEvent(makeEmptyEvent(selectedDate));
+            router.back();
+          },
+        },
       ]);
     } else {
       router.back();
@@ -148,101 +209,120 @@ export default function EventScreen({
         </Text>
         {isCreate ? (
           <Pressable
-            style={s.saveButton}
+            style={[s.saveButton, isSaving && s.saveButtonDisabled]}
             onPress={handleSave}
+            disabled={isSaving}
             accessible={true}
             accessibilityRole="button"
             accessibilityLabel="שמור אירוע"
           >
-            <Text style={s.saveButtonText}>שמור</Text>
+            <Text style={s.saveButtonText}>
+              {isSaving ? 'שומר...' : 'שמור'}
+            </Text>
           </Pressable>
         ) : (
           <View style={{ width: 40 }} />
         )}
       </View>
 
-      <ScrollView
-        style={s.scroll}
-        contentContainerStyle={s.scrollContent}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
+      {/* KeyboardAvoidingView prevents keyboard from hiding notes/bottom fields */}
+      <KeyboardAvoidingView
+        style={s.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
       >
-        {/* Event Title — compact field */}
-        <View style={s.titleSection}>
-          <TextInput
-            style={[s.titleInput, titleError && s.titleInputError]}
-            value={event.title}
-            onChangeText={(text) => {
-              setTitleError(false);
-              updateEvent({ title: text });
+        <ScrollView
+          style={s.scroll}
+          contentContainerStyle={s.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Event Title — compact field */}
+          <View style={s.titleSection}>
+            <TextInput
+              style={[s.titleInput, titleError && s.titleInputError]}
+              value={event.title}
+              onChangeText={(text) => {
+                setTitleError(false);
+                updateEvent({ title: text });
+              }}
+              placeholder="שם האירוע"
+              placeholderTextColor="#94a3b8"
+              textAlign="right"
+              autoFocus={isCreate}
+              accessible={true}
+              accessibilityLabel="שם האירוע"
+            />
+            {titleError && (
+              <Text style={s.errorText}>שם האירוע הוא שדה חובה</Text>
+            )}
+          </View>
+
+          {/* Date & Time */}
+          <DateTimeCard
+            startDate={event.date}
+            startTime={event.startTime}
+            endDate={event.endDate ?? event.date}
+            endTime={event.endTime}
+            isAllDay={event.isAllDay}
+            onChange={(updates) => {
+              const patch: Partial<EventData> = {};
+              if (updates.startDate !== undefined) patch.date = updates.startDate;
+              if (updates.startTime !== undefined) patch.startTime = updates.startTime;
+              if (updates.endDate !== undefined) patch.endDate = updates.endDate;
+              if (updates.endTime !== undefined) patch.endTime = updates.endTime;
+              if (updates.isAllDay !== undefined) patch.isAllDay = updates.isAllDay;
+              updateEvent(patch);
             }}
-            placeholder="שם האירוע"
-            placeholderTextColor="#94a3b8"
-            textAlign="right"
-            autoFocus={isCreate}
-            accessible={true}
-            accessibilityLabel="שם האירוע"
           />
-          {titleError && (
-            <Text style={s.errorText}>שם האירוע הוא שדה חובה</Text>
-          )}
-        </View>
 
-        {/* Date & Time */}
-        <DateTimeCard
-          date={event.date}
-          startTime={event.startTime}
-          endTime={event.endTime}
-          isAllDay={event.isAllDay}
-          onChange={(updates) => updateEvent(updates)}
-        />
+          {/* Participants */}
+          <ParticipantsCard
+            participants={event.participants}
+            onChange={(p) => updateEvent({ participants: p })}
+          />
 
-        {/* Recurrence */}
-        <RecurrenceRow
-          value={event.recurrence}
-          onChange={(val) => updateEvent({ recurrence: val })}
-        />
+          {/* Location */}
+          <LocationCard
+            location={event.location}
+            onChange={(loc) => updateEvent({ location: loc })}
+          />
 
-        {/* Participants */}
-        <ParticipantsCard
-          participants={event.participants}
-          onChange={(p) => updateEvent({ participants: p })}
-        />
+          {/* Recurrence — between Location and Reminders */}
+          <RecurrenceRow
+            value={event.recurrence}
+            onChange={(val) => updateEvent({ recurrence: val })}
+          />
 
-        {/* Location */}
-        <LocationCard
-          location={event.location}
-          onChange={(loc) => updateEvent({ location: loc })}
-        />
+          {/* Reminders */}
+          <RemindersCard
+            enabled={event.remindersEnabled}
+            types={event.reminderTypes}
+            onChange={(enabled: boolean, types: ReminderType[]) =>
+              updateEvent({ remindersEnabled: enabled, reminderTypes: types })
+            }
+          />
 
-        {/* Reminders */}
-        <RemindersCard
-          enabled={event.remindersEnabled}
-          types={event.reminderTypes}
-          onChange={(enabled: boolean, types: ReminderType[]) =>
-            updateEvent({ remindersEnabled: enabled, reminderTypes: types })
-          }
-        />
+          {/* Related Tasks */}
+          <RelatedTasksSection
+            tasks={event.tasks}
+            participants={event.participants}
+            completedCount={completedTasks}
+            showAllTasksToAll={event.showAllTasksToAll}
+            showToggle={hasMultipleAssignees}
+            onChange={(tasks) => updateEvent({ tasks })}
+            onToggleVisibility={(val) => updateEvent({ showAllTasksToAll: val })}
+          />
 
-        {/* Related Tasks */}
-        <RelatedTasksSection
-          tasks={event.tasks}
-          participants={event.participants}
-          completedCount={completedTasks}
-          showAllTasksToAll={event.showAllTasksToAll}
-          showToggle={hasMultipleAssignees}
-          onChange={(tasks) => updateEvent({ tasks })}
-          onToggleVisibility={(val) => updateEvent({ showAllTasksToAll: val })}
-        />
+          {/* Notes */}
+          <NotesCard
+            notes={event.notes}
+            onChange={(notes) => updateEvent({ notes })}
+          />
 
-        {/* Notes */}
-        <NotesCard
-          notes={event.notes}
-          onChange={(notes) => updateEvent({ notes })}
-        />
-
-        <View style={{ height: 60 }} />
-      </ScrollView>
+          <View style={{ height: 60 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Share FAB */}
       {!isCreate && (
@@ -334,6 +414,7 @@ function RecurrenceRow({
 
 const s = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#f6f8f8' },
+  flex: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -364,6 +445,9 @@ const s = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
+  },
+  saveButtonDisabled: {
+    opacity: 0.5,
   },
   saveButtonText: {
     color: '#fff',
@@ -414,8 +498,8 @@ const s = StyleSheet.create({
   },
   recurrenceText: {
     fontSize: 14,
-    fontWeight: '500',
-    color: '#334155',
+    fontWeight: '600',
+    color: '#111827',
     textAlign: 'right',
   },
   recurrenceOptions: {

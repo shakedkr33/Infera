@@ -26,9 +26,10 @@ export type ReminderType =
 export interface EventData {
   id?: string;
   title: string;
-  date: number;
-  startTime?: string;
-  endTime?: string;
+  date: number;         // start date as midnight Unix ms
+  startTime?: string;   // "HH:MM"
+  endDate?: number;     // end date as midnight Unix ms (may differ from date for cross-midnight)
+  endTime?: string;     // "HH:MM"
   isAllDay: boolean;
   recurrence: RecurrenceType;
   location?: string;

@@ -45,7 +45,7 @@ export function LocationCard({
         accessibilityRole="button"
         accessibilityLabel="הוסף מיקום"
       >
-        <MaterialIcons name="add-location-alt" size={18} color="#94a3b8" />
+        <MaterialIcons name="add-location-alt" size={18} color="#374151" />
         <Text style={s.emptyText}>הוסף מיקום</Text>
       </Pressable>
     );
@@ -165,7 +165,7 @@ function TypeChip({
 
 const s = StyleSheet.create({
   emptyRow: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#fff',
@@ -180,7 +180,8 @@ const s = StyleSheet.create({
   },
   emptyText: {
     fontSize: 14,
-    color: '#94a3b8',
+    fontWeight: '600',
+    color: '#111827',
     textAlign: 'right',
   },
   card: {
@@ -202,7 +203,7 @@ const s = StyleSheet.create({
   headerLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#334155',
+    color: '#111827',
     textAlign: 'right',
   },
   closeBtn: {

@@ -21,6 +21,7 @@ import type { Id } from '@/convex/_generated/dataModel';
 import EventScreen from '@/lib/components/event/EventScreen';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
+import type { EventData } from '@/lib/types/event';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -752,13 +753,81 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
 // ─── Route Entry ──────────────────────────────────────────────────────────────
 
 export default function NewEventScreen(): React.JSX.Element {
-  const { communityId } = useLocalSearchParams<{ communityId?: string }>();
+  const { communityId, selectedDate: selectedDateParam } = useLocalSearchParams<{
+    communityId?: string;
+    selectedDate?: string;
+  }>();
+  const createEvent = useMutation(api.events.create);
+  const spaceId = useQuery(api.users.getMySpace);
+
+  const selectedDate = selectedDateParam ? Number(selectedDateParam) : undefined;
+
+  const handlePersonalSave = useCallback(
+    async (data: EventData): Promise<void> => {
+      // Block save if spaceId hasn't resolved — an event without spaceId
+      // is invisible to listByDateRange and will never appear in the calendar.
+      if (spaceId === undefined) {
+        throw new Error('טוען נתונים, נסה שוב.');
+      }
+      if (spaceId === null) {
+        throw new Error('לא נמצא מרחב אישי. נסה לצאת ולהיכנס מחדש.');
+      }
+      const resolvedSpaceId = spaceId as Id<'spaces'>;
+
+      const baseDate = new Date(data.date);
+
+      let startMs: number;
+      if (data.startTime) {
+        const [hStr, mStr] = data.startTime.split(':');
+        const d = new Date(baseDate);
+        d.setHours(Number(hStr ?? '9'), Number(mStr ?? '0'), 0, 0);
+        startMs = d.getTime();
+      } else {
+        startMs = data.date;
+      }
+
+      let endMs: number;
+      if (data.endTime) {
+        const [hStr, mStr] = data.endTime.split(':');
+        // Use endDate if provided (handles cross-midnight correctly),
+        // fall back to startDate for events that finish on the same day.
+        const endBase =
+          data.endDate != null ? new Date(data.endDate) : baseDate;
+        const d = new Date(
+          endBase.getFullYear(),
+          endBase.getMonth(),
+          endBase.getDate()
+        );
+        d.setHours(Number(hStr ?? '10'), Number(mStr ?? '0'), 0, 0);
+        endMs = d.getTime();
+      } else {
+        endMs = startMs + 60 * 60 * 1000; // default +1 hour
+      }
+
+      // Let any Convex errors propagate — EventScreen.handleSave catches them
+      await createEvent({
+        title: data.title,
+        startTime: startMs,
+        endTime: endMs,
+        allDay: data.isAllDay || undefined,
+        spaceId: resolvedSpaceId,
+        location: data.location?.trim() || undefined,
+      });
+    },
+    [createEvent, spaceId]
+  );
 
   if (communityId) {
     return <CommunityEventForm communityId={communityId} />;
   }
 
-  return <EventScreen mode="create" />;
+  return (
+    <EventScreen
+      mode="create"
+      onSave={handlePersonalSave}
+      selectedDate={selectedDate}
+    />
+  );
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────

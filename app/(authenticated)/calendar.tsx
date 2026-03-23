@@ -438,6 +438,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
   const currentUser = useQuery(api.users.getCurrentUser);
   const userFirstName = currentUser?.fullName?.split(' ')[0] ?? null;
+  const spaceId = useQuery(api.users.getMySpace);
 
   const [viewMode, setViewMode] = useState<'timeline' | 'monthly'>('timeline');
   const [slideAnim] = useState(new Animated.Value(0));
@@ -472,16 +473,49 @@ export default function CalendarScreen(): React.JSX.Element {
 
   const isFiltered = !!communityId;
 
-  // === Calendar grid data — suppress mock dots when community filter is active ===
-  const grid = useMemo(
-    () =>
-      generateCalendarGrid(
-        displayYear,
-        displayMonth,
-        isFiltered ? {} : undefined
-      ),
-    [displayYear, displayMonth, isFiltered]
-  );
+  // === Personal events for the displayed month ===
+  const monthRange = useMemo(() => {
+    const from = new Date(displayYear, displayMonth, 1).setHours(0, 0, 0, 0);
+    const to = new Date(displayYear, displayMonth + 1, 0).setHours(23, 59, 59, 999);
+    return { from, to };
+  }, [displayYear, displayMonth]);
+
+  const personalEvents =
+    useQuery(
+      api.events.listByDateRange,
+      spaceId ? { spaceId: spaceId as Id<'spaces'>, from: monthRange.from, to: monthRange.to } : 'skip'
+    ) ?? [];
+
+  // === Calendar grid data ===
+  const grid = useMemo(() => {
+    if (isFiltered) {
+      // Community filter active — suppress personal event dots
+      return generateCalendarGrid(displayYear, displayMonth, {});
+    }
+    if (personalEvents.length === 0) {
+      // No personal events (or still loading) — fall back to empty dots
+      return generateCalendarGrid(displayYear, displayMonth, {});
+    }
+    // Build real event markers keyed by day-of-month
+    const eventsByDay: Record<number, CalendarEvent[]> = {};
+    for (const ev of personalEvents) {
+      const d = new Date(ev.startTime);
+      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth) continue;
+      const day = d.getDate();
+      if (!eventsByDay[day]) eventsByDay[day] = [];
+      eventsByDay[day].push({
+        id: ev._id,
+        title: ev.title,
+        time: ev.allDay
+          ? ''
+          : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+        category: 'אישי',
+        categoryColor: PRIMARY_BLUE,
+        assigneeColors: [],
+      });
+    }
+    return generateCalendarGrid(displayYear, displayMonth, eventsByDay);
+  }, [displayYear, displayMonth, isFiltered, personalEvents]);
 
   // === Dynamic panel heights based on number of weeks ===
   const compactPanelHeight =
@@ -692,13 +726,65 @@ export default function CalendarScreen(): React.JSX.Element {
 
   // ── Build timeline data: use real events when filtering by community
   const timelineData = useMemo(() => {
-    // No filter — show normal mock/personal data
-    if (!isFiltered) return MOCK_TIMELINE_DATA;
+    if (!isFiltered) {
+      // Build real timeline from personal events
+      if (personalEvents.length === 0) return [];
 
-    // Filtered but still loading — return empty (not mock)
+      const todayD = new Date();
+      const grouped: Record<
+        string,
+        {
+          dayLabel: string;
+          dayNumber: string;
+          isToday: boolean;
+          events: (typeof MOCK_TIMELINE_DATA)[0]['events'];
+          sortKey: number;
+        }
+      > = {};
+
+      for (const event of personalEvents) {
+        const d = new Date(event.startTime);
+        const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+        const isToday =
+          d.getFullYear() === todayD.getFullYear() &&
+          d.getMonth() === todayD.getMonth() &&
+          d.getDate() === todayD.getDate();
+
+        if (!grouped[key]) {
+          grouped[key] = {
+            dayLabel: d.toLocaleDateString('he-IL', {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            }),
+            dayNumber: String(d.getDate()),
+            isToday,
+            events: [],
+            sortKey: d.getTime(),
+          };
+        }
+
+        const timeStr = event.allDay
+          ? ''
+          : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+        grouped[key].events.push({
+          id: event._id,
+          category: 'אישי',
+          categoryColor: PRIMARY_BLUE,
+          title: event.title,
+          time: timeStr,
+          location: event.location ?? '',
+          icon: 'event',
+          cancelled: false,
+        });
+      }
+
+      return Object.values(grouped).sort((a, b) => a.sortKey - b.sortKey);
+    }
+
+    // Community filter active — show community events only
     if (!communityEvents) return [];
-
-    // Filtered and loaded but no events — return empty
     if (communityEvents.length === 0) return [];
 
     const grouped: Record<
@@ -751,7 +837,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
     // Sort ascending by actual timestamp (upcoming first)
     return Object.values(grouped).sort((a, b) => a.sortKey - b.sortKey);
-  }, [isFiltered, communityEvents]);
+  }, [isFiltered, communityEvents, personalEvents]);
 
   // DEBUG — remove after validation
   console.log('CALENDAR DEBUG:', {

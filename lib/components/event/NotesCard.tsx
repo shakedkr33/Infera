@@ -35,7 +35,7 @@ export function NotesCard({
           <MaterialIcons name="description" size={24} color="#059669" />
         </View>
         <View style={s.content}>
-          <Text style={[s.label, { color: '#059669' }]}>הערות</Text>
+          <Text style={s.label}>הערות</Text>
           <TextInput
             style={s.notesInput}
             value={notes}
@@ -92,9 +92,10 @@ const s = StyleSheet.create({
   },
   content: { flex: 1 },
   label: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    textAlign: 'right',
     marginBottom: 4,
   },
   notesInput: {
