@@ -3,6 +3,131 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useState } from 'react';
 import { Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
+// ─── Custom RTL Calendar Grid ─────────────────────────────────────────────────
+
+const MONTH_NAMES_HE = [
+  'ינואר','פברואר','מרץ','אפריל','מאי','יוני',
+  'יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר',
+];
+// Index 0 = Sunday → rightmost column in RTL
+const DAY_LABELS = ["א'", "ב'", "ג'", "ד'", "ה'", "ו'", 'ש'];
+
+interface CalendarGridProps {
+  value: Date;
+  minimumDate?: Date;
+  accentColor: string;
+  onChange: (date: Date) => void;
+}
+
+function CalendarGrid({ value, minimumDate, accentColor, onChange }: CalendarGridProps) {
+  const [viewYear, setViewYear] = useState(value.getFullYear());
+  const [viewMonth, setViewMonth] = useState(value.getMonth());
+
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const startDayOfWeek = new Date(viewYear, viewMonth, 1).getDay(); // 0=Sun
+
+  // Build flat cell array: leading nulls then 1..daysInMonth, padded to multiple of 7
+  const cells: (number | null)[] = Array(startDayOfWeek).fill(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const weeks: (number | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+
+  const goToPrev = () => {
+    if (viewMonth === 0) { setViewYear(y => y - 1); setViewMonth(11); }
+    else setViewMonth(m => m - 1);
+  };
+  const goToNext = () => {
+    if (viewMonth === 11) { setViewYear(y => y + 1); setViewMonth(0); }
+    else setViewMonth(m => m + 1);
+  };
+
+  return (
+    <View style={cal.wrapper}>
+      {/* Header */}
+      <View style={cal.header}>
+        <Pressable onPress={goToNext} hitSlop={8}>
+          <MaterialIcons name="chevron-left" size={24} color={accentColor} />
+        </Pressable>
+        <Text style={cal.headerTitle}>{MONTH_NAMES_HE[viewMonth]} {viewYear}</Text>
+        <Pressable onPress={goToPrev} hitSlop={8}>
+          <MaterialIcons name="chevron-right" size={24} color={accentColor} />
+        </Pressable>
+      </View>
+
+      {/* Day-of-week labels — row-reverse → א' on far right */}
+      <View style={cal.row}>
+        {DAY_LABELS.map((lbl) => (
+          <View key={lbl} style={cal.cell}>
+            <Text style={cal.dayLabel}>{lbl}</Text>
+          </View>
+        ))}
+      </View>
+
+      {/* Date rows */}
+      {weeks.map((week, wi) => (
+        <View key={wi} style={cal.row}>
+          {week.map((day, di) => {
+            if (day === null) return <View key={di} style={cal.cell} />;
+            const isSelected =
+              day === value.getDate() &&
+              viewMonth === value.getMonth() &&
+              viewYear === value.getFullYear();
+            const isDisabled =
+              !!minimumDate &&
+              new Date(viewYear, viewMonth, day) < minimumDate;
+            return (
+              <Pressable
+                key={di}
+                style={cal.cell}
+                onPress={() => !isDisabled && onChange(new Date(viewYear, viewMonth, day))}
+                disabled={isDisabled}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel={`${day} ${MONTH_NAMES_HE[viewMonth]}`}
+                accessibilityState={{ selected: isSelected, disabled: isDisabled }}
+              >
+                <View style={[cal.dayCircle, isSelected && { backgroundColor: accentColor }]}>
+                  <Text
+                    style={[
+                      cal.dayText,
+                      isDisabled && cal.dayTextDisabled,
+                      isSelected && cal.dayTextSelected,
+                    ]}
+                  >
+                    {day}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const cal = StyleSheet.create({
+  wrapper: { paddingHorizontal: 4, paddingBottom: 8 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+  },
+  headerTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  // row-reverse so index-0 (Sunday) appears on the RIGHT
+  row: { flexDirection: 'row-reverse' },
+  cell: { flex: 1, alignItems: 'center', paddingVertical: 4 },
+  dayLabel: { fontSize: 12, color: '#6b7280', fontWeight: '600' },
+  dayCircle: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  dayText: { fontSize: 14, color: '#111827' },
+  dayTextDisabled: { color: '#d1d5db' },
+  dayTextSelected: { color: '#fff', fontWeight: '700' },
+});
+
 const PRIMARY = '#36a9e2';
 const TINT = '#e8f5fd';
 
@@ -377,23 +502,15 @@ export function DateTimeCard({
         </View>
       )}
 
-      {/* Inline grid: start date — no transform, iOS LTR layout accepted */}
+      {/* Custom RTL calendar grid: start date */}
       {openPicker === 'startDateGrid' && (
         <View style={s.gridWrapper}>
-          <DateTimePicker
+          <CalendarGrid
             value={new Date(startDate)}
-            mode="date"
-            display="inline"
-            locale="he-IL"
             accentColor={PRIMARY}
-            themeVariant="light"
-            // @ts-ignore — valid iOS prop
-            textColor="#111827"
-            onChange={(_, selected) => {
-              if (selected) {
-                handleStartDateChange(selected);
-                setTimeout(closePicker, 150);
-              }
+            onChange={(selected) => {
+              handleStartDateChange(selected);
+              setTimeout(closePicker, 150);
             }}
           />
         </View>
@@ -448,24 +565,16 @@ export function DateTimeCard({
         </View>
       )}
 
-      {/* Inline grid: end date — no transform, iOS LTR layout accepted */}
+      {/* Custom RTL calendar grid: end date */}
       {openPicker === 'endDateGrid' && !isAllDay && (
         <View style={s.gridWrapper}>
-          <DateTimePicker
+          <CalendarGrid
             value={new Date(endDate)}
-            mode="date"
-            display="inline"
             minimumDate={new Date(startDate)}
-            locale="he-IL"
             accentColor={PRIMARY}
-            themeVariant="light"
-            // @ts-ignore
-            textColor="#111827"
-            onChange={(_, selected) => {
-              if (selected) {
-                handleEndDateChange(selected);
-                setTimeout(closePicker, 150);
-              }
+            onChange={(selected) => {
+              handleEndDateChange(selected);
+              setTimeout(closePicker, 150);
             }}
           />
         </View>
