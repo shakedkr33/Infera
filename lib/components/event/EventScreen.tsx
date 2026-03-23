@@ -3,15 +3,17 @@ import { router } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
+  FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+// Alert is still used for save errors
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   DateTimeCard,
@@ -20,16 +22,16 @@ import {
   roundToNextHour,
 } from '@/lib/components/event/DateTimeCard';
 // applyDuration is used in makeEmptyEvent to set a sensible default end time
-import { LocationCard } from '@/lib/components/event/LocationCard';
+import {
+  LocationCard,
+  type LocationUpdate,
+} from '@/lib/components/event/LocationCard';
 import { NotesCard } from '@/lib/components/event/NotesCard';
 import { ParticipantsCard } from '@/lib/components/event/ParticipantsCard';
 import { RelatedTasksSection } from '@/lib/components/event/RelatedTasksSection';
 import { RemindersCard } from '@/lib/components/event/RemindersCard';
-import type {
-  EventData,
-  RecurrenceType,
-  ReminderType,
-} from '@/lib/types/event';
+import type { EventData, RecurrenceType } from '@/lib/types/event';
+import { makeReminder } from '@/lib/types/event';
 
 const PRIMARY = '#36a9e2';
 
@@ -63,9 +65,10 @@ function makeEmptyEvent(selectedDateMs?: number): EventData {
     isAllDay: false,
     recurrence: 'none',
     location: undefined,
+    onlineUrl: undefined,
     notes: undefined,
     remindersEnabled: true,
-    reminderTypes: ['hour_before'],
+    reminders: [makeReminder('hour_before')],
     participants: [],
     tasks: [],
     showAllTasksToAll: false,
@@ -85,7 +88,7 @@ const MOCK_EVENT: EventData = {
   locationCoords: { lat: 32.08, lng: 34.78 },
   notes: '',
   remindersEnabled: true,
-  reminderTypes: ['morning_same_day', 'hour_before'],
+  reminders: [makeReminder('at_event'), makeReminder('hour_before')],
   participants: [
     { id: '1', name: 'שרה', color: '#ff6b6b', avatarUrl: undefined },
     { id: '2', name: 'דן', color: '#4ecdc4', avatarUrl: undefined },
@@ -97,6 +100,16 @@ const MOCK_EVENT: EventData = {
   showAllTasksToAll: true,
   createdAt: Date.now(),
 };
+
+/** Returns true when start < end (valid range), or when validation can be skipped. */
+function isValidDateRange(event: EventData): boolean {
+  if (event.isAllDay || !event.startTime || !event.endTime) return true;
+  const [sh, sm] = event.startTime.split(':').map(Number);
+  const [eh, em] = event.endTime.split(':').map(Number);
+  const startMs = new Date(event.date).setHours(sh ?? 0, sm ?? 0, 0, 0);
+  const endMs = new Date(event.endDate ?? event.date).setHours(eh ?? 0, em ?? 0, 0, 0);
+  return startMs < endMs;
+}
 
 interface EventScreenProps {
   mode: 'create' | 'details';
@@ -120,7 +133,8 @@ export default function EventScreen({
   );
   const [titleError, setTitleError] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const autosaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const autosave = useCallback(
     (_data: EventData) => {
@@ -149,6 +163,14 @@ export default function EventScreen({
       setTitleError(true);
       return;
     }
+    if (!isValidDateRange(event)) {
+      Alert.alert(
+        'שגיאה בתאריכים',
+        'לא ניתן לשמור את האירוע. על תאריך ושעת ההתחלה לחול לפני תאריך ושעת הסיום.',
+        [{ text: 'אישור', style: 'default' }]
+      );
+      return;
+    }
     if (isSaving) return;
 
     setIsSaving(true);
@@ -158,8 +180,12 @@ export default function EventScreen({
       }
       // Reset form so reopening shows a clean slate
       setEvent(makeEmptyEvent(selectedDate));
-      // Use replace (not back) so the create screen is removed from the stack
-      router.replace('/(authenticated)' as Parameters<typeof router.replace>[0]);
+      // Return to wherever the user came from (calendar, home, etc.)
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/(authenticated)');
+      }
     } catch {
       Alert.alert('שגיאה', 'לא ניתן לשמור. נסה שוב.');
     } finally {
@@ -168,23 +194,36 @@ export default function EventScreen({
     }
   };
 
-  const handleBack = (): void => {
-    if (isCreate && event.title.trim()) {
-      Alert.alert('לצאת בלי לשמור?', 'השינויים לא יישמרו', [
-        { text: 'ביטול', style: 'cancel' },
-        {
-          text: 'צא',
-          style: 'destructive',
-          onPress: () => {
-            // Reset form on confirmed discard
-            setEvent(makeEmptyEvent(selectedDate));
-            router.back();
-          },
-        },
-      ]);
-    } else {
+  /** true if the user touched any meaningful field */
+  const isFormDirty = (): boolean =>
+    event.title.trim().length > 0 ||
+    event.participants.length > 0 ||
+    event.tasks.length > 0 ||
+    !!event.location ||
+    !!event.onlineUrl ||
+    !!event.notes;
+
+  const goBack = (): void => {
+    if (router.canGoBack()) {
       router.back();
+    } else {
+      router.replace('/(authenticated)');
     }
+  };
+
+  const handleBack = (): void => {
+    if (isCreate && isFormDirty()) {
+      setDiscardOpen(true);
+    } else {
+      goBack();
+    }
+  };
+
+  const confirmDiscard = (): void => {
+    setDiscardOpen(false);
+    setEvent(makeEmptyEvent(selectedDate));
+    setTitleError(false);
+    goBack();
   };
 
   const completedTasks = event.tasks.filter((t) => t.completed).length;
@@ -193,20 +232,8 @@ export default function EventScreen({
 
   return (
     <SafeAreaView style={s.safeArea}>
-      {/* Header */}
+      {/* Header — save on LEFT, title centered, back arrow on RIGHT */}
       <View style={s.header}>
-        <Pressable
-          style={s.backButton}
-          onPress={handleBack}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="חזרה"
-        >
-          <MaterialIcons name="arrow-forward" size={22} color="#111517" />
-        </Pressable>
-        <Text style={s.headerTitle}>
-          {isCreate ? 'יצירת אירוע' : 'פרטי אירוע'}
-        </Text>
         {isCreate ? (
           <Pressable
             style={[s.saveButton, isSaving && s.saveButtonDisabled]}
@@ -223,6 +250,18 @@ export default function EventScreen({
         ) : (
           <View style={{ width: 40 }} />
         )}
+        <Text style={s.headerTitle}>
+          {isCreate ? 'יצירת אירוע' : 'פרטי אירוע'}
+        </Text>
+        <Pressable
+          style={s.backButton}
+          onPress={handleBack}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="חזרה"
+        >
+          <MaterialIcons name="arrow-forward" size={22} color="#111517" />
+        </Pressable>
       </View>
 
       {/* KeyboardAvoidingView prevents keyboard from hiding notes/bottom fields */}
@@ -231,97 +270,120 @@ export default function EventScreen({
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
-        <ScrollView
+        <FlatList
           style={s.scroll}
           contentContainerStyle={s.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-        >
-          {/* Event Title — compact field */}
-          <View style={s.titleSection}>
-            <TextInput
-              style={[s.titleInput, titleError && s.titleInputError]}
-              value={event.title}
-              onChangeText={(text) => {
-                setTitleError(false);
-                updateEvent({ title: text });
-              }}
-              placeholder="שם האירוע"
-              placeholderTextColor="#94a3b8"
-              textAlign="right"
-              autoFocus={isCreate}
-              accessible={true}
-              accessibilityLabel="שם האירוע"
-            />
-            {titleError && (
-              <Text style={s.errorText}>שם האירוע הוא שדה חובה</Text>
-            )}
-          </View>
+          nestedScrollEnabled={true}
+          data={[null]}
+          keyExtractor={() => 'form'}
+          renderItem={() => (
+            <>
+              {/* Event Title — compact field */}
+              <View style={s.titleSection}>
+                <TextInput
+                  style={[s.titleInput, titleError && s.titleInputError]}
+                  value={event.title}
+                  onChangeText={(text) => {
+                    setTitleError(false);
+                    updateEvent({ title: text });
+                  }}
+                  placeholder="שם האירוע"
+                  placeholderTextColor="#94a3b8"
+                  textAlign="right"
+                  autoFocus={isCreate}
+                  accessible={true}
+                  accessibilityLabel="שם האירוע"
+                />
+                {titleError && (
+                  <Text style={s.errorText}>שם האירוע הוא שדה חובה</Text>
+                )}
+              </View>
 
-          {/* Date & Time */}
-          <DateTimeCard
-            startDate={event.date}
-            startTime={event.startTime}
-            endDate={event.endDate ?? event.date}
-            endTime={event.endTime}
-            isAllDay={event.isAllDay}
-            onChange={(updates) => {
-              const patch: Partial<EventData> = {};
-              if (updates.startDate !== undefined) patch.date = updates.startDate;
-              if (updates.startTime !== undefined) patch.startTime = updates.startTime;
-              if (updates.endDate !== undefined) patch.endDate = updates.endDate;
-              if (updates.endTime !== undefined) patch.endTime = updates.endTime;
-              if (updates.isAllDay !== undefined) patch.isAllDay = updates.isAllDay;
-              updateEvent(patch);
-            }}
-          />
+              {/* Date & Time */}
+              <DateTimeCard
+                startDate={event.date}
+                startTime={event.startTime}
+                endDate={event.endDate ?? event.date}
+                endTime={event.endTime}
+                isAllDay={event.isAllDay}
+                onChange={(updates) => {
+                  const patch: Partial<EventData> = {};
+                  if (updates.startDate !== undefined) patch.date = updates.startDate;
+                  if (updates.startTime !== undefined) patch.startTime = updates.startTime;
+                  if (updates.endDate !== undefined) patch.endDate = updates.endDate;
+                  if (updates.endTime !== undefined) patch.endTime = updates.endTime;
+                  if (updates.isAllDay !== undefined) {
+                    patch.isAllDay = updates.isAllDay;
+                    // BUG 4: toggling all-day resets reminders
+                    if (updates.isAllDay) {
+                      patch.remindersEnabled = false;
+                      patch.reminders = [];
+                    } else {
+                      patch.remindersEnabled = true;
+                      patch.reminders = [makeReminder('hour_before')];
+                    }
+                  }
+                  updateEvent(patch);
+                }}
+              />
 
-          {/* Participants */}
-          <ParticipantsCard
-            participants={event.participants}
-            onChange={(p) => updateEvent({ participants: p })}
-          />
+              {/* Participants */}
+              <ParticipantsCard
+                participants={event.participants}
+                onChange={(p) => updateEvent({ participants: p })}
+              />
 
-          {/* Location */}
-          <LocationCard
-            location={event.location}
-            onChange={(loc) => updateEvent({ location: loc })}
-          />
+              {/* Location */}
+              <LocationCard
+                location={event.location}
+                onlineUrl={event.onlineUrl}
+                onChange={(update: LocationUpdate) =>
+                  updateEvent({
+                    location: update.location || undefined,
+                    onlineUrl: update.onlineUrl || undefined,
+                  })
+                }
+              />
 
-          {/* Recurrence — between Location and Reminders */}
-          <RecurrenceRow
-            value={event.recurrence}
-            onChange={(val) => updateEvent({ recurrence: val })}
-          />
+              {/* Recurrence — between Location and Reminders */}
+              <RecurrenceRow
+                value={event.recurrence}
+                onChange={(val) => updateEvent({ recurrence: val })}
+              />
 
-          {/* Reminders */}
-          <RemindersCard
-            enabled={event.remindersEnabled}
-            types={event.reminderTypes}
-            onChange={(enabled: boolean, types: ReminderType[]) =>
-              updateEvent({ remindersEnabled: enabled, reminderTypes: types })
-            }
-          />
+              {/* Reminders */}
+              <RemindersCard
+                enabled={event.remindersEnabled}
+                reminders={event.reminders}
+                isAllDay={event.isAllDay}
+                onChange={(enabled, reminders) =>
+                  updateEvent({ remindersEnabled: enabled, reminders })
+                }
+              />
 
-          {/* Related Tasks */}
-          <RelatedTasksSection
-            tasks={event.tasks}
-            participants={event.participants}
-            completedCount={completedTasks}
-            showAllTasksToAll={event.showAllTasksToAll}
-            showToggle={hasMultipleAssignees}
-            onChange={(tasks) => updateEvent({ tasks })}
-            onToggleVisibility={(val) => updateEvent({ showAllTasksToAll: val })}
-          />
+              {/* Notes — above related tasks */}
+              <NotesCard
+                notes={event.notes}
+                onChange={(notes) => updateEvent({ notes })}
+              />
 
-          {/* Notes */}
-          <NotesCard
-            notes={event.notes}
-            onChange={(notes) => updateEvent({ notes })}
-          />
+              {/* Related Tasks — last section */}
+              <RelatedTasksSection
+                tasks={event.tasks}
+                participants={event.participants}
+                completedCount={completedTasks}
+                showAllTasksToAll={event.showAllTasksToAll}
+                showToggle={hasMultipleAssignees}
+                onChange={(tasks) => updateEvent({ tasks })}
+                onToggleVisibility={(val) => updateEvent({ showAllTasksToAll: val })}
+              />
 
-          <View style={{ height: 60 }} />
-        </ScrollView>
+              <View style={{ height: 60 }} />
+            </>
+          )}
+        />
       </KeyboardAvoidingView>
 
       {/* Share FAB */}
@@ -335,6 +397,49 @@ export default function EventScreen({
           <MaterialIcons name="share" size={22} color="#64748b" />
         </Pressable>
       )}
+
+      {/* ── Custom discard confirmation modal (RTL-safe, replaces Alert) ── */}
+      <Modal
+        visible={discardOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDiscardOpen(false)}
+      >
+        <Pressable
+          style={s.discardOverlay}
+          onPress={() => setDiscardOpen(false)}
+          accessible={false}
+        >
+          <Pressable style={s.discardBox} onPress={() => undefined}>
+            <Text style={s.discardTitle}>יציאה ללא שמירה</Text>
+            <Text style={s.discardMessage}>
+              האם ברצונך למחוק את הנתונים שהכנסת?
+            </Text>
+            <View style={s.discardDivider} />
+            <View style={s.discardBtns}>
+              <Pressable
+                style={s.discardBtnDestructive}
+                onPress={confirmDiscard}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="מחק וצא"
+              >
+                <Text style={s.discardBtnDestructiveText}>מחק וצא</Text>
+              </Pressable>
+              <View style={s.discardBtnDivider} />
+              <Pressable
+                style={s.discardBtnCancel}
+                onPress={() => setDiscardOpen(false)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="המשך עריכה"
+              >
+                <Text style={s.discardBtnCancelText}>המשך עריכה</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -539,5 +644,73 @@ const s = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 3,
+  },
+  // ── Discard modal ─────────────────────────────────────────────────────────
+  discardOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  discardBox: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  discardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'center',
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 6,
+  },
+  discardMessage: {
+    fontSize: 14,
+    color: '#374151',
+    textAlign: 'right',
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    lineHeight: 20,
+  },
+  discardDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#e2e8f0',
+  },
+  discardBtns: {
+    flexDirection: 'row',
+  },
+  discardBtnDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: '#e2e8f0',
+  },
+  discardBtnDestructive: {
+    flex: 1,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  discardBtnDestructiveText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#ef4444',
+    textAlign: 'center',
+  },
+  discardBtnCancel: {
+    flex: 1,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  discardBtnCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: PRIMARY,
+    textAlign: 'center',
   },
 });

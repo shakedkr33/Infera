@@ -2,6 +2,7 @@ export interface Participant {
   id: string;
   name: string;
   email?: string;
+  phone?: string;
   avatarUrl?: string;
   color: string;
 }
@@ -18,25 +19,61 @@ export interface EventTask {
 
 export type RecurrenceType = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
+// ─── Reminders ────────────────────────────────────────────────────────────────
+
+/** @deprecated kept for backward-compat reading; write path now uses Reminder[] */
 export type ReminderType =
   | 'hour_before'
   | 'morning_same_day'
   | 'day_before_evening';
+
+export type ReminderPreset = 'at_event' | 'hour_before' | 'day_before' | 'custom';
+export type ReminderUnit = 'minutes' | 'hours' | 'days';
+
+export interface Reminder {
+  preset: ReminderPreset;
+  /**
+   * Exact offset in minutes before event start.
+   * For all-day events this is interpreted relative to 09:00 local time on
+   * the event day (e.g. hour_before = 08:00, day_before = 09:00 previous day).
+   * The server/notification layer should use this field directly.
+   */
+  offsetMinutes: number;
+  /** Numeric value entered by user — only when preset === 'custom' */
+  customValue?: number;
+  /** Time unit chosen by user — only when preset === 'custom' */
+  customUnit?: ReminderUnit;
+}
+
+const REMINDER_DEFAULTS: Record<ReminderPreset, Omit<Reminder, 'preset'>> = {
+  at_event:    { offsetMinutes: 0 },
+  hour_before: { offsetMinutes: 60 },
+  day_before:  { offsetMinutes: 1440 },
+  custom:      { offsetMinutes: 30, customValue: 30, customUnit: 'minutes' },
+};
+
+/** Build a Reminder with the correct default offsetMinutes for a given preset. */
+export function makeReminder(preset: ReminderPreset): Reminder {
+  return { preset, ...REMINDER_DEFAULTS[preset] };
+}
+
+// ─── EventData ────────────────────────────────────────────────────────────────
 
 export interface EventData {
   id?: string;
   title: string;
   date: number;         // start date as midnight Unix ms
   startTime?: string;   // "HH:MM"
-  endDate?: number;     // end date as midnight Unix ms (may differ from date for cross-midnight)
+  endDate?: number;     // end date as midnight Unix ms (cross-midnight safe)
   endTime?: string;     // "HH:MM"
   isAllDay: boolean;
   recurrence: RecurrenceType;
-  location?: string;
+  location?: string;    // physical address → events.location
+  onlineUrl?: string;   // meeting link → events.onlineUrl
   locationCoords?: { lat: number; lng: number };
   notes?: string;
   remindersEnabled: boolean;
-  reminderTypes: ReminderType[];
+  reminders: Reminder[];
   participants: Participant[];
   tasks: EventTask[];
   showAllTasksToAll: boolean;

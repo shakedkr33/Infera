@@ -411,7 +411,7 @@ export default function EventDetailScreen() {
             </View>
           )}
 
-          {/* Location */}
+          {/* Location — address text (display-only for MVP) */}
           {event.location ? (
             <View style={styles.detailRow}>
               <Ionicons name="location-outline" size={18} color={PRIMARY} />
@@ -419,7 +419,7 @@ export default function EventDetailScreen() {
             </View>
           ) : null}
 
-          {/* Online URL */}
+          {/* Online URL — meeting/video link */}
           {onlineUrl ? (
             <View style={styles.detailRow}>
               <Ionicons name="videocam-outline" size={18} color={PRIMARY} />
@@ -429,9 +429,9 @@ export default function EventDetailScreen() {
                 }}
                 accessible
                 accessibilityRole="link"
-                accessibilityLabel="קישור לפגישה"
+                accessibilityLabel="הצטרפות לפגישה"
               >
-                <Text style={styles.linkText}>קישור לפגישה</Text>
+                <Text style={styles.linkText}>הצטרפות לפגישה</Text>
               </TouchableOpacity>
             </View>
           ) : null}

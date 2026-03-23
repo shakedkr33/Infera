@@ -812,6 +812,7 @@ export default function NewEventScreen(): React.JSX.Element {
         allDay: data.isAllDay || undefined,
         spaceId: resolvedSpaceId,
         location: data.location?.trim() || undefined,
+        onlineUrl: data.onlineUrl?.trim() || undefined,
       });
     },
     [createEvent, spaceId]

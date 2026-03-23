@@ -1,67 +1,101 @@
-import { MaterialIcons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { useRef, useState } from 'react';
 import {
-  Linking,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 
 const PRIMARY = '#36a9e2';
 const TINT = '#e8f5fd';
+const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY ?? '';
 
-type LocMode = 'none' | 'address' | 'link';
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type LocMode = 'address' | 'link';
+
+/** Values emitted on every change. Callers spread these into event state. */
+export interface LocationUpdate {
+  location: string;   // physical address → EventData.location
+  onlineUrl: string;  // meeting URL     → EventData.onlineUrl
+}
 
 interface LocationCardProps {
+  /** Current physical address (EventData.location) */
   location?: string;
-  onChange: (loc: string) => void;
+  /** Current meeting URL (EventData.onlineUrl) */
+  onlineUrl?: string;
+  onChange: (update: LocationUpdate) => void;
 }
 
-function isLink(s?: string): boolean {
-  return s != null && (s.startsWith('http') || s.startsWith('www.'));
-}
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export function LocationCard({
   location,
+  onlineUrl,
   onChange,
 }: LocationCardProps): React.JSX.Element {
-  const hasLocation = location != null && location.trim() !== '';
+  const hasAddress = !!location?.trim();
+  const hasLink = !!onlineUrl?.trim();
 
-  const [locMode, setLocMode] = useState<LocMode>(() => {
-    if (!hasLocation) return 'none';
-    return isLink(location) ? 'link' : 'address';
-  });
-  const [cardOpen, setCardOpen] = useState(hasLocation);
+  // Derive initial open/mode from saved values
+  const [cardOpen, setCardOpen] = useState(hasAddress || hasLink);
+  const [locMode, setLocMode] = useState<LocMode>(hasLink ? 'link' : 'address');
 
-  /* ── Closed: tap to open ── */
+  // Ref to imperatively clear the Google Places input text
+  const placesRef = useRef<React.ElementRef<typeof GooglePlacesAutocomplete>>(null);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
+  const handleOpen = (): void => {
+    setLocMode('address');
+    setCardOpen(true);
+  };
+
+  const handleClose = (): void => {
+    placesRef.current?.clear();
+    setCardOpen(false);
+    setLocMode('address');
+    onChange({ location: '', onlineUrl: '' });
+  };
+
+  const switchMode = (mode: LocMode): void => {
+    if (mode === locMode) return;
+    placesRef.current?.clear();
+    setLocMode(mode);
+    onChange({ location: '', onlineUrl: '' });
+  };
+
+  // ── Collapsed ─────────────────────────────────────────────────────────────
+
   if (!cardOpen) {
     return (
       <Pressable
         style={s.emptyRow}
-        onPress={() => setCardOpen(true)}
+        onPress={handleOpen}
         accessible={true}
         accessibilityRole="button"
         accessibilityLabel="הוסף מיקום"
       >
-        <MaterialIcons name="add-location-alt" size={18} color="#374151" />
+        <View style={s.emptyIconCircle}>
+          <Ionicons name="location-outline" size={18} color="#36a9e2" />
+        </View>
         <Text style={s.emptyText}>הוסף מיקום</Text>
       </Pressable>
     );
   }
 
-  /* ── Open: type selector + optional input ── */
+  // ── Expanded ──────────────────────────────────────────────────────────────
+
   return (
     <View style={s.card}>
-      {/* Close / header row */}
+      {/* Header: label (right) + X button (left) */}
       <View style={s.headerRow}>
         <Pressable
-          onPress={() => {
-            setCardOpen(false);
-            setLocMode('none');
-            onChange('');
-          }}
+          onPress={handleClose}
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel="הסר מיקום"
@@ -72,73 +106,92 @@ export function LocationCard({
         <Text style={s.headerLabel}>מיקום</Text>
       </View>
 
-      {/* Type chips: כתובת | קישור */}
+      {/* Mode chips — right-aligned for RTL */}
       <View style={s.typeRow}>
         <TypeChip
           label="קישור"
-          icon="link"
           active={locMode === 'link'}
-          onPress={() => {
-            setLocMode('link');
-            onChange('');
-          }}
+          onPress={() => switchMode('link')}
         />
         <TypeChip
           label="כתובת"
-          icon="place"
           active={locMode === 'address'}
-          onPress={() => {
-            setLocMode('address');
-            onChange('');
-          }}
+          onPress={() => switchMode('address')}
         />
       </View>
 
-      {/* Input — only after type chosen */}
-      {locMode !== 'none' && (
-        <View style={s.inputRow}>
+      {/* ── Address mode: Google Places Autocomplete ── */}
+      {locMode === 'address' && (
+        <View style={s.inputWrapper}>
+          <GooglePlacesAutocomplete
+            ref={placesRef}
+            placeholder="חפשי כתובת..."
+            query={{ key: PLACES_KEY, language: 'he' }}
+            onPress={(data) => {
+              // MVP: store only the human-readable address string
+              onChange({ location: data.description, onlineUrl: '' });
+            }}
+            onFail={() => {
+              // Graceful degradation: user keeps whatever they typed
+            }}
+            textInputProps={{
+              value: location ?? '',
+              onChangeText: (text: string) =>
+                onChange({ location: text, onlineUrl: '' }),
+              textAlign: 'right' as const,
+              placeholderTextColor: '#94a3b8',
+              accessibilityLabel: 'חיפוש כתובת',
+            }}
+            fetchDetails={false}
+            enablePoweredByContainer={false}
+            keepResultsAfterBlur={false}
+            listViewDisplayed="auto"
+            keyboardShouldPersistTaps="handled"
+            isRowScrollable={false}
+            styles={{
+              container: s.placesContainer,
+              textInputContainer: s.placesTextInputContainer,
+              textInput: s.placesTextInput,
+              listView: s.placesList,
+              row: s.placesRow,
+              description: s.placesDescription,
+              separator: s.placesSeparator,
+              poweredContainer: { display: 'none' },
+            }}
+          />
+        </View>
+      )}
+
+      {/* ── Link mode: plain URL TextInput ── */}
+      {locMode === 'link' && (
+        <View style={s.inputWrapper}>
           <TextInput
-            style={s.locationInput}
-            value={location}
-            onChangeText={onChange}
-            placeholder={locMode === 'address' ? 'הכנס כתובת' : 'הדבק קישור'}
+            style={s.linkInput}
+            value={onlineUrl ?? ''}
+            onChangeText={(text) => onChange({ location: '', onlineUrl: text })}
+            placeholder="https://..."
             placeholderTextColor="#94a3b8"
             textAlign="right"
             autoCapitalize="none"
             autoCorrect={false}
-            keyboardType={locMode === 'link' ? 'url' : 'default'}
-            autoFocus
+            keyboardType="url"
+            accessible={true}
+            accessibilityLabel="קישור לפגישה"
           />
-          {locMode === 'address' && hasLocation && (
-            <Pressable
-              style={s.navBtn}
-              onPress={() =>
-                Linking.openURL(
-                  `https://maps.google.com/?q=${encodeURIComponent(location ?? '')}`
-                )
-              }
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="נווט למיקום"
-            >
-              <MaterialIcons name="navigation" size={14} color="#fff" />
-              <Text style={s.navBtnText}>נווט</Text>
-            </Pressable>
-          )}
         </View>
       )}
     </View>
   );
 }
 
+// ─── TypeChip ─────────────────────────────────────────────────────────────────
+
 function TypeChip({
   label,
-  icon,
   active,
   onPress,
 }: {
   label: string;
-  icon: string;
   active: boolean;
   onPress: () => void;
 }): React.JSX.Element {
@@ -151,17 +204,14 @@ function TypeChip({
       accessibilityState={{ selected: active }}
       accessibilityLabel={label}
     >
-      <MaterialIcons
-        name={icon as never}
-        size={14}
-        color={active ? PRIMARY : '#64748b'}
-      />
       <Text style={[s.typeChipText, active && s.typeChipTextActive]}>
         {label}
       </Text>
     </Pressable>
   );
 }
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
   emptyRow: {
@@ -181,13 +231,23 @@ const s = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#111827',
+    color: '#374151',
     textAlign: 'right',
+  },
+  emptyIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#e8f5fd',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   card: {
     backgroundColor: '#fff',
     borderRadius: 14,
-    padding: 14,
+    paddingTop: 14,
+    paddingHorizontal: 14,
+    // No paddingBottom — inputWrapper provides it so the dropdown isn't clipped
     marginBottom: 10,
     shadowColor: '#000',
     shadowOpacity: 0.04,
@@ -215,10 +275,7 @@ const s = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   typeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 20,
     backgroundColor: '#f1f5f9',
@@ -232,38 +289,77 @@ const s = StyleSheet.create({
   typeChipText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#64748b',
+    color: '#475569',
   },
   typeChipTextActive: {
     color: PRIMARY,
   },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  inputWrapper: {
     borderTopWidth: 1,
     borderTopColor: '#f1f5f9',
     paddingTop: 10,
+    paddingBottom: 14,
   },
-  locationInput: {
-    flex: 1,
+
+  // ── GooglePlacesAutocomplete style overrides ──────────────────────────────
+  placesContainer: {
+    flex: 0,
+  },
+  placesTextInputContainer: {
+    backgroundColor: 'transparent',
+    borderTopWidth: 0,
+    borderBottomWidth: 0,
+    paddingHorizontal: 0,
+  },
+  placesTextInput: {
+    height: 42,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 12,
     fontSize: 15,
-    color: '#0f172a',
+    color: '#111827',
+    backgroundColor: '#fafafa',
     textAlign: 'right',
-    paddingVertical: 4,
+    marginBottom: 0,
   },
-  navBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: '#795548',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
+  placesList: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    marginTop: 4,
+    backgroundColor: '#fff',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
   },
-  navBtnText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
+  placesRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+  },
+  placesDescription: {
+    fontSize: 14,
+    color: '#111827',
+    textAlign: 'right',
+  },
+  placesSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#f1f5f9',
+  },
+
+  // ── Link (URL) input ──────────────────────────────────────────────────────
+  linkInput: {
+    height: 42,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    fontSize: 15,
+    color: '#111827',
+    backgroundColor: '#fafafa',
+    textAlign: 'right',
   },
 });

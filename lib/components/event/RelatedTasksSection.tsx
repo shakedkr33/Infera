@@ -60,16 +60,16 @@ export function RelatedTasksSection({
 
   return (
     <View style={s.section}>
-      {/* Header */}
+      {/* Header — content right, icon badge left (matches reminders pattern) */}
       <View style={s.headerRow}>
-        <View style={[s.iconCircle, { backgroundColor: '#fef3c7' }]}>
-          <MaterialIcons name="checklist" size={24} color="#d97706" />
-        </View>
         <View style={s.headerContent}>
           <Text style={s.label}>משימות קשורות</Text>
           <Text style={s.progressText}>
             {completedCount} מתוך {tasks.length} הושלמו
           </Text>
+        </View>
+        <View style={[s.iconCircle, { backgroundColor: '#e8f5fd' }]}>
+          <MaterialIcons name="checklist" size={20} color="#36a9e2" />
         </View>
       </View>
 
