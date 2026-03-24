@@ -8,6 +8,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -22,6 +23,29 @@ const TINT = '#e8f5fd';
 const CIRCLE_BG = '#e8f5fd';
 const CIRCLE_BORDER = '#36a9e2';
 const CIRCLE_TEXT = '#36a9e2';
+
+// ─── Phone helpers ────────────────────────────────────────────────────────────
+
+/** Strip all non-digit characters for stable comparison */
+function normalizePhone(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
+
+/** Prefer mobile/נייד label; otherwise first available number */
+function getPrimaryPhone(contact: Contacts.Contact): string {
+  const phones = contact.phoneNumbers ?? [];
+  if (phones.length === 0) return '';
+  const mobileLabels = ['mobile', 'iphone', 'cell', 'נייד'];
+  const mobile = phones.find((p) =>
+    mobileLabels.some((lbl) => (p.label ?? '').toLowerCase().includes(lbl))
+  );
+  return (mobile ?? phones[0])?.number ?? '';
+}
+
+/** Stable key for a contact: prefer contact.id, fallback to normalised phone */
+function contactKey(contact: Contacts.Contact): string {
+  return (contact as { id?: string }).id ?? normalizePhone(getPrimaryPhone(contact));
+}
 
 // ─── Email parsing ────────────────────────────────────────────────────────────
 
@@ -52,6 +76,8 @@ export function ParticipantsCard({
   const [contacts, setContacts] = useState<Contacts.Contact[]>([]);
   const [contactSearch, setContactSearch] = useState('');
   const [loadingContacts, setLoadingContacts] = useState(false);
+  /** Temporarily selected contact keys (stable id or normalised phone) */
+  const [draftContactIds, setDraftContactIds] = useState<string[]>([]);
   // "הצג הכל" list modal
   const [listOpen, setListOpen] = useState(false);
 
@@ -67,6 +93,7 @@ export function ParticipantsCard({
     setContactSearch('');
     setContacts([]);
     setSheetView('main');
+    setDraftContactIds([]);
   }, []);
 
   // ── Add participants from email textarea ──────────────────────────────────
@@ -113,6 +140,7 @@ export function ParticipantsCard({
       );
       setContacts(withPhone);
       setContactSearch('');
+      setDraftContactIds([]);
       setSheetView('contacts');
     } catch {
       Alert.alert('שגיאה', 'לא ניתן לטעון אנשי קשר.');
@@ -121,22 +149,50 @@ export function ParticipantsCard({
     }
   }, []);
 
-  // ── Select a contact ──────────────────────────────────────────────────────
-  const selectContact = (contact: Contacts.Contact): void => {
-    const phone = contact.phoneNumbers?.[0]?.number ?? '';
-    if (!phone) return;
-    if (participants.some((p) => p.phone === phone)) {
-      setSheetView('main');
+  // ── Already-added guard (normalised phone dedupe) ─────────────────────────
+  const addedPhones = new Set(
+    participants
+      .map((p) => normalizePhone(p.phone ?? ''))
+      .filter((n) => n.length > 0)
+  );
+
+  const isAlreadyAdded = (contact: Contacts.Contact): boolean => {
+    const norm = normalizePhone(getPrimaryPhone(contact));
+    return norm.length > 0 && addedPhones.has(norm);
+  };
+
+  // ── Toggle a contact in/out of draft selection ────────────────────────────
+  const toggleContactDraft = (contact: Contacts.Contact): void => {
+    if (isAlreadyAdded(contact)) return; // already in event — ignore
+    const key = contactKey(contact);
+    setDraftContactIds((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    );
+  };
+
+  // ── Commit all drafted contacts at once ───────────────────────────────────
+  const saveContactsDraft = (): void => {
+    if (draftContactIds.length === 0) {
+      closeSheet();
       return;
     }
-    const next: Participant = {
-      id: `contact-${Date.now()}`,
-      name: contact.name ?? phone,
-      phone,
-      color: CIRCLE_BG,
-    };
-    onChange([...participants, next]);
-    setSheetView('main');
+    const newOnes: Participant[] = draftContactIds
+      .map((key) => contacts.find((c) => contactKey(c) === key))
+      .filter((c): c is Contacts.Contact => c != null)
+      .map((c, i) => {
+        const phone = getPrimaryPhone(c);
+        const localDisplayName = c.name?.trim() || undefined;
+        // TODO: for shared event view, resolve sharedDisplayName via user lookup by phone before rendering to non-creator participants
+        return {
+          id: `contact-${Date.now()}-${i}`,
+          name: localDisplayName ?? phone,
+          phone,
+          localDisplayName,
+          color: CIRCLE_BG,
+        };
+      });
+    onChange([...participants, ...newOnes]);
+    closeSheet();
   };
 
   const removeParticipant = (id: string): void => {
@@ -212,16 +268,24 @@ export function ParticipantsCard({
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
-          <Pressable style={s.modalOverlay} onPress={closeSheet}>
-            <Pressable style={s.sheet} onPress={() => undefined}>
+          <View style={{ flex: 1 }}>
+            {/* Backdrop — separate from sheet so sheet gestures never reach it */}
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeSheet} />
+            <View style={s.modalSheetWrapper}>
+            <View
+              style={[s.sheet, sheetView === 'contacts' && s.sheetContacts]}
+            >
               <View style={s.handle} />
 
               {/* ── Contacts view ── */}
               {sheetView === 'contacts' && (
-                <>
+                <View style={s.contactsViewContainer}>
                   <View style={s.sheetHeaderRow}>
                     <Pressable
-                      onPress={() => setSheetView('main')}
+                      onPress={() => {
+                        setSheetView('main');
+                        setDraftContactIds([]);
+                      }}
                       accessible={true}
                       accessibilityRole="button"
                       accessibilityLabel="חזרה"
@@ -229,8 +293,57 @@ export function ParticipantsCard({
                       <Ionicons name="chevron-forward" size={22} color="#334155" />
                     </Pressable>
                     <Text style={s.sheetTitle}>בחירה מאנשי קשר</Text>
-                    <View style={{ width: 22 }} />
+                    {/* Live counter */}
+                    {draftContactIds.length > 0 ? (
+                      <Text style={s.draftCounter}>נבחרו {draftContactIds.length}</Text>
+                    ) : (
+                      <View style={{ width: 42 }} />
+                    )}
                   </View>
+
+                  {/* ── Selected-contact chips — above search, capped height ── */}
+                  {draftContactIds.length > 0 && (
+                    <View style={s.selectedSummaryBox}>
+                      <Text style={s.selectedSummaryLabel}>נבחרו</Text>
+                      <ScrollView
+                        scrollEnabled
+                        nestedScrollEnabled
+                        showsVerticalScrollIndicator
+                        scrollIndicatorInsets={{ right: 1 }}
+                        style={{ maxHeight: 96 }}
+                        keyboardShouldPersistTaps="handled"
+                      >
+                        <View style={s.chipWrap}>
+                          {draftContactIds.map((key) => {
+                            const c = contacts.find((ct) => contactKey(ct) === key);
+                            const phone = c ? getPrimaryPhone(c) : '';
+                            const label = c?.name?.trim() || phone || key;
+                            return (
+                              <View key={key} style={s.chip}>
+                                {/* ✕ on LEFT side (RTL logical end) */}
+                                <Pressable
+                                  onPress={() => {
+                                    setDraftContactIds((prev) =>
+                                      prev.filter((k) => k !== key)
+                                    );
+                                  }}
+                                  hitSlop={6}
+                                  accessible={true}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`הסר ${label}`}
+                                >
+                                  <Ionicons name="close" size={12} color={PRIMARY} />
+                                </Pressable>
+                                <Text style={s.chipText} numberOfLines={1}>
+                                  {label}
+                                </Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      </ScrollView>
+                    </View>
+                  )}
 
                   <TextInput
                     style={s.searchInput}
@@ -245,32 +358,82 @@ export function ParticipantsCard({
 
                   <FlatList
                     data={filteredContacts}
-                    keyExtractor={(c, i) => (c as { id?: string }).id ?? `c-${i}`}
+                    keyExtractor={(c, i) => contactKey(c) || `c-${i}`}
                     style={s.contactList}
+                    contentContainerStyle={{ paddingBottom: 4 }}
                     keyboardShouldPersistTaps="handled"
-                    renderItem={({ item }) => (
-                      <Pressable
-                        style={s.contactRow}
-                        onPress={() => selectContact(item)}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel={item.name ?? ''}
-                      >
-                        <Text style={s.contactPhone} numberOfLines={1}>
-                          {item.phoneNumbers?.[0]?.number}
-                        </Text>
-                        <Text style={s.contactName} numberOfLines={1}>
-                          {item.name}
-                        </Text>
-                      </Pressable>
-                    )}
+                    scrollEnabled
+                    nestedScrollEnabled
+                    renderItem={({ item }) => {
+                      const alreadyAdded = isAlreadyAdded(item);
+                      const key = contactKey(item);
+                      const selected = !alreadyAdded && draftContactIds.includes(key);
+                      const phone = getPrimaryPhone(item);
+                      const displayName = item.name?.trim() || phone;
+                      return (
+                        <Pressable
+                          style={[
+                            s.contactRow,
+                            selected && s.contactRowSelected,
+                            alreadyAdded && s.contactRowDisabled,
+                          ]}
+                          onPress={() => toggleContactDraft(item)}
+                          disabled={alreadyAdded}
+                          accessible={true}
+                          accessibilityRole="checkbox"
+                          accessibilityState={{ checked: selected, disabled: alreadyAdded }}
+                          accessibilityLabel={displayName}
+                        >
+                          {/* RTL: name+phone on the right, checkmark on the left */}
+                          <View style={s.contactRowInfo}>
+                            <Text style={s.contactName} numberOfLines={1}>
+                              {displayName}
+                            </Text>
+                            {phone.length > 0 && (
+                              <Text style={s.contactPhone} numberOfLines={1}>
+                                {phone}
+                              </Text>
+                            )}
+                          </View>
+                          {/* Checkmark on visual left (logical end in RTL) */}
+                          <View style={[s.contactCheck, selected && s.contactCheckSelected]}>
+                            {(selected || alreadyAdded) && (
+                              <Ionicons
+                                name="checkmark"
+                                size={14}
+                                color={alreadyAdded ? '#94a3b8' : '#fff'}
+                              />
+                            )}
+                          </View>
+                        </Pressable>
+                      );
+                    }}
                     ListEmptyComponent={
                       <Text style={s.emptyContacts}>
                         {loadingContacts ? 'טוען...' : 'לא נמצאו אנשי קשר'}
                       </Text>
                     }
                   />
-                </>
+
+                  {/* Save button — pinned to bottom */}
+                  <Pressable
+                    style={[
+                      s.saveBtn,
+                      draftContactIds.length === 0 && s.saveBtnDisabled,
+                    ]}
+                    onPress={saveContactsDraft}
+                    disabled={draftContactIds.length === 0}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel={`שמור ${draftContactIds.length} אנשי קשר`}
+                  >
+                    <Text style={s.saveBtnText}>
+                      {draftContactIds.length > 0
+                        ? `שמור (${draftContactIds.length})`
+                        : 'שמור'}
+                    </Text>
+                  </Pressable>
+                </View>
               )}
 
               {/* ── Main view ── */}
@@ -327,8 +490,9 @@ export function ParticipantsCard({
                   </Pressable>
                 </>
               )}
-            </Pressable>
-          </Pressable>
+            </View>
+            </View>
+          </View>
         </KeyboardAvoidingView>
       </Modal>
 
@@ -469,6 +633,10 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.35)',
     justifyContent: 'flex-end',
   },
+  modalSheetWrapper: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
   sheet: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 20,
@@ -476,7 +644,16 @@ const s = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: Platform.OS === 'ios' ? 36 : 24,
     paddingTop: 12,
+    // No flex:1 here — main view ("הוסף משתתף") must size to content only
     maxHeight: '88%',
+  },
+  // Applied only in contacts view — restores flex distribution for FlatList
+  sheetContacts: {
+    flex: 1,
+  },
+  // Flex container for the contacts view — distributes space so FlatList fills remainder
+  contactsViewContainer: {
+    flex: 1,
   },
   handle: {
     width: 40,
@@ -572,13 +749,28 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   contactList: {
-    maxHeight: 340,
+    // flex: 1 fills remaining space between summary/search and the save button
+    flex: 1,
   },
   contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingVertical: 11,
     paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f1f5f9',
+    gap: 10,
+  },
+  contactRowSelected: {
+    backgroundColor: TINT,
+    borderRadius: 8,
+  },
+  contactRowDisabled: {
+    opacity: 0.4,
+  },
+  contactRowInfo: {
+    flex: 1,
+    alignItems: 'flex-end',
   },
   contactName: {
     fontSize: 14,
@@ -590,6 +782,71 @@ const s = StyleSheet.create({
     fontSize: 12,
     color: '#6b7280',
     textAlign: 'right',
+  },
+  // Checkmark box on visual left (logical end in RTL)
+  contactCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactCheckSelected: {
+    backgroundColor: PRIMARY,
+    borderColor: PRIMARY,
+  },
+  // Selected-contact chips summary box (above search field)
+  selectedSummaryBox: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  selectedSummaryLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: 'right',
+    marginBottom: 6,
+  },
+  // RTL chip wrap — inside ScrollView, no maxHeight needed here
+  chipWrap: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: TINT,
+    borderWidth: 1,
+    borderColor: PRIMARY,
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  chipText: {
+    fontSize: 13,
+    color: '#111827',
+    fontWeight: '500',
+  },
+  // Live counter shown in header row
+  draftCounter: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: PRIMARY,
+    minWidth: 42,
+    textAlign: 'right',
+  },
+  saveBtnDisabled: {
+    backgroundColor: '#e5e7eb',
   },
   emptyContacts: {
     fontSize: 14,

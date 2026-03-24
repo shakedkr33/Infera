@@ -1,8 +1,15 @@
 export interface Participant {
   id: string;
+  /** Display name used throughout the app. For contact-sourced participants this
+   *  is populated from localDisplayName at creation time. */
   name: string;
   email?: string;
+  /** Stable identifier — normalised phone number from device contacts. */
   phone?: string;
+  /** The device contact's name as seen by the creator. Kept separate so it
+   *  is never confused with a future server-resolved shared display name. */
+  localDisplayName?: string;
+  // TODO: for shared event view, resolve sharedDisplayName via user lookup by phone before rendering to non-creator participants
   avatarUrl?: string;
   color: string;
 }
@@ -11,8 +18,12 @@ export interface EventTask {
   id: string;
   title: string;
   completed: boolean;
+  /** @deprecated single-assignee; prefer assignedParticipantIds */
   assigneeId?: string;
+  /** @deprecated resolved object; prefer assignedParticipantIds */
   assignee?: Participant;
+  /** IDs of Participant objects assigned to this task (multi-select) */
+  assignedParticipantIds?: string[];
   dueDate?: number;
   colorDot?: string;
 }

@@ -332,7 +332,24 @@ export default function EventScreen({
               {/* Participants */}
               <ParticipantsCard
                 participants={event.participants}
-                onChange={(p) => updateEvent({ participants: p })}
+                onChange={(p) => {
+                  // Clean up task assignments for removed participants
+                  const removedIds = new Set(
+                    event.participants
+                      .filter((prev) => !p.some((next) => next.id === prev.id))
+                      .map((prev) => prev.id)
+                  );
+                  const tasks =
+                    removedIds.size > 0
+                      ? event.tasks.map((t) => ({
+                          ...t,
+                          assignedParticipantIds: (
+                            t.assignedParticipantIds ?? []
+                          ).filter((id) => !removedIds.has(id)),
+                        }))
+                      : event.tasks;
+                  updateEvent({ participants: p, tasks });
+                }}
               />
 
               {/* Location */}
@@ -378,6 +395,9 @@ export default function EventScreen({
                 showToggle={hasMultipleAssignees}
                 onChange={(tasks) => updateEvent({ tasks })}
                 onToggleVisibility={(val) => updateEvent({ showAllTasksToAll: val })}
+                onAddParticipants={() => {
+                  // Sheet closes; user scrolls up to add participants in ParticipantsCard
+                }}
               />
 
               <View style={{ height: 60 }} />

@@ -2,6 +2,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+const PRIMARY = '#36a9e2';
+const TINT = '#e8f5fd';
+
 interface NotesCardProps {
   notes?: string;
   onChange: (notes: string) => void;
@@ -30,25 +33,24 @@ export function NotesCard({
 
   return (
     <View style={s.card}>
-      <View style={s.row}>
-        <View style={[s.iconCircle, { backgroundColor: '#d1fae5' }]}>
-          <MaterialIcons name="description" size={24} color="#059669" />
-        </View>
-        <View style={s.content}>
-          <Text style={s.label}>הערות</Text>
-          <TextInput
-            style={s.notesInput}
-            value={notes}
-            onChangeText={onChange}
-            placeholder="הוסף הערה, קישור, זום או מידע חשוב"
-            placeholderTextColor="#94a3b8"
-            multiline
-            numberOfLines={3}
-            textAlign="right"
-            autoFocus
-          />
+      <View style={s.headerRow}>
+        <Text style={s.label}>הערות</Text>
+        {/* Icon badge — last child = right side in flexDirection:'row', matching תזכורות/מיקום */}
+        <View style={s.iconCircle}>
+          <MaterialIcons name="description" size={20} color={PRIMARY} />
         </View>
       </View>
+      <TextInput
+        style={s.notesInput}
+        value={notes}
+        onChangeText={onChange}
+        placeholder="הוסף הערה, תיאור האירוע, קישור או מידע חשוב"
+        placeholderTextColor="#94a3b8"
+        multiline
+        numberOfLines={3}
+        textAlign="right"
+        autoFocus
+      />
     </View>
   );
 }
@@ -63,6 +65,7 @@ const s = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 1,
+    gap: 10,
   },
   emptyCard: {
     flexDirection: 'row',
@@ -78,25 +81,25 @@ const s = StyleSheet.create({
     elevation: 1,
   },
   emptyText: { fontSize: 15, color: '#94a3b8' },
-  row: {
+  headerRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
+    alignItems: 'center',
+    gap: 10,
   },
   iconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: TINT,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  content: { flex: 1 },
   label: {
+    flex: 1,
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
     textAlign: 'right',
-    marginBottom: 4,
   },
   notesInput: {
     fontSize: 15,
