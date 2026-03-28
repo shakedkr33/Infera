@@ -231,25 +231,11 @@ export default function EventScreen({
     new Set(event.tasks.map((t) => t.assigneeId).filter(Boolean)).size > 1;
 
   return (
-    <SafeAreaView style={s.safeArea}>
-      {/* Header — save on LEFT, title centered, back arrow on RIGHT */}
+    <SafeAreaView style={s.safeArea} edges={['top', 'bottom']}>
+      {/* Header — title centered, back arrow on RIGHT, no save action here */}
       <View style={s.header}>
-        {isCreate ? (
-          <Pressable
-            style={[s.saveButton, isSaving && s.saveButtonDisabled]}
-            onPress={handleSave}
-            disabled={isSaving}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="שמור אירוע"
-          >
-            <Text style={s.saveButtonText}>
-              {isSaving ? 'שומר...' : 'שמור'}
-            </Text>
-          </Pressable>
-        ) : (
-          <View style={{ width: 40 }} />
-        )}
+        {/* Left spacer matches back button width for visual centering */}
+        <View style={{ width: 40 }} />
         <Text style={s.headerTitle}>
           {isCreate ? 'יצירת אירוע' : 'פרטי אירוע'}
         </Text>
@@ -264,11 +250,9 @@ export default function EventScreen({
         </Pressable>
       </View>
 
-      {/* KeyboardAvoidingView prevents keyboard from hiding notes/bottom fields */}
       <KeyboardAvoidingView
         style={s.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
       >
         <FlatList
           style={s.scroll}
@@ -316,7 +300,6 @@ export default function EventScreen({
                   if (updates.endTime !== undefined) patch.endTime = updates.endTime;
                   if (updates.isAllDay !== undefined) {
                     patch.isAllDay = updates.isAllDay;
-                    // BUG 4: toggling all-day resets reminders
                     if (updates.isAllDay) {
                       patch.remindersEnabled = false;
                       patch.reminders = [];
@@ -333,7 +316,6 @@ export default function EventScreen({
               <ParticipantsCard
                 participants={event.participants}
                 onChange={(p) => {
-                  // Clean up task assignments for removed participants
                   const removedIds = new Set(
                     event.participants
                       .filter((prev) => !p.some((next) => next.id === prev.id))
@@ -364,7 +346,7 @@ export default function EventScreen({
                 }
               />
 
-              {/* Recurrence — between Location and Reminders */}
+              {/* Recurrence */}
               <RecurrenceRow
                 value={event.recurrence}
                 onChange={(val) => updateEvent({ recurrence: val })}
@@ -380,13 +362,13 @@ export default function EventScreen({
                 }
               />
 
-              {/* Notes — above related tasks */}
+              {/* Notes */}
               <NotesCard
                 notes={event.notes}
                 onChange={(notes) => updateEvent({ notes })}
               />
 
-              {/* Related Tasks — last section */}
+              {/* Related Tasks */}
               <RelatedTasksSection
                 tasks={event.tasks}
                 participants={event.participants}
@@ -395,15 +377,31 @@ export default function EventScreen({
                 showToggle={hasMultipleAssignees}
                 onChange={(tasks) => updateEvent({ tasks })}
                 onToggleVisibility={(val) => updateEvent({ showAllTasksToAll: val })}
-                onAddParticipants={() => {
-                  // Sheet closes; user scrolls up to add participants in ParticipantsCard
-                }}
+                onAddParticipants={() => {}}
               />
 
-              <View style={{ height: 60 }} />
+              <View style={{ height: 20 }} />
             </>
           )}
         />
+
+        {/* ── Sticky footer — inside KAV so it rides above the keyboard ── */}
+        {isCreate && (
+          <View style={s.footer}>
+            <Pressable
+              style={[s.footerSaveBtn, (!event.title.trim() || isSaving) && s.footerSaveBtnDisabled]}
+              onPress={handleSave}
+              disabled={!event.title.trim() || isSaving}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={isSaving ? 'שומר...' : 'שמור אירוע'}
+            >
+              <Text style={[s.footerSaveBtnText, (!event.title.trim() || isSaving) && s.footerSaveBtnTextDisabled]}>
+                {isSaving ? 'שומר...' : 'שמור אירוע'}
+              </Text>
+            </Pressable>
+          </View>
+        )}
       </KeyboardAvoidingView>
 
       {/* Share FAB */}
@@ -565,19 +563,31 @@ const s = StyleSheet.create({
     fontWeight: '700',
     color: '#111517',
   },
-  saveButton: {
+  // ── Sticky bottom save CTA ────────────────────────────────────────────────
+  footer: {
+    backgroundColor: '#f6f8f8',
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e2e8f0',
+  },
+  footerSaveBtn: {
     backgroundColor: PRIMARY,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: 'center',
   },
-  saveButtonDisabled: {
-    opacity: 0.5,
+  footerSaveBtnDisabled: {
+    backgroundColor: '#e5e7eb',
   },
-  saveButtonText: {
+  footerSaveBtnText: {
     color: '#fff',
     fontWeight: '700',
-    fontSize: 14,
+    fontSize: 16,
+  },
+  footerSaveBtnTextDisabled: {
+    color: '#9ca3af',
   },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 16, paddingTop: 4 },
