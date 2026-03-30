@@ -216,6 +216,55 @@ export const getMyId = query({
   },
 });
 
+// FIXED: added getMyProfile query for authenticated rehydration
+// Returns the minimal profile data needed to restore OnboardingContext after app restart.
+// familyContacts (children/pets from onboarding step 4) ARE stored in Convex (familyContacts field)
+// and ARE rehydrated into OnboardingContext.familyData by hydrateFromServer on app restart.
+export const getMyProfile = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const user = await ctx.db.get(userId);
+    if (!user) return null;
+
+    let spaceType: string | undefined;
+    if (user.defaultSpaceId) {
+      const space = await ctx.db.get(user.defaultSpaceId);
+      spaceType = space?.type;
+    }
+
+    return {
+      fullName: user.fullName,
+      profileColor: user.profileColor,
+      spaceType,
+      familyContacts: user.familyContacts,
+    };
+  },
+});
+
+// עדכון פרופיל המשתמש הנוכחי (לשימוש חוזר לאחר אונבורדינג)
+// FIXED: family profile persistence — use this instead of finishOnboarding for returning users
+export const updateMyProfile = mutation({
+  args: {
+    fullName: v.optional(v.string()),
+    profileColor: v.optional(v.string()),
+    familyContacts: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if (args.fullName !== undefined) patch.fullName = args.fullName;
+    if (args.profileColor !== undefined) patch.profileColor = args.profileColor;
+    if (args.familyContacts !== undefined) patch.familyContacts = args.familyContacts;
+
+    await ctx.db.patch(userId, patch);
+  },
+});
+
 // סטטוס המשתמש הנוכחי: האם יש פרופיל, האם האונבורדינג הושלם
 // משמש לניתוב פוסט-אימות — מחזיר null כשלא מחובר (caller משתמש ב-'skip')
 export const getCurrentUserStatus = query({

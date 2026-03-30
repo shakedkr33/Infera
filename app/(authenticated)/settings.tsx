@@ -46,12 +46,8 @@ export default function SettingsScreen() {
   const deleteMyAccount = useMutation(api.users.deleteMyAccount);
 
   const { data: onboardingData } = useOnboarding();
+  // FIXED: removed isPersonalOnly flag — profile screen is unified for all space types
   const familyMembers = onboardingData.familyData?.familyMembers ?? [];
-  const isPersonalOnly =
-    onboardingData.spaceType === 'personal' && familyMembers.length === 0;
-  const profileRowTitle = isPersonalOnly
-    ? 'ניהול פרופיל אישי'
-    : 'ניהול פרופיל משפחתי';
   const profileMemberCount = familyMembers.length;
 
   // ============================================================================
@@ -169,7 +165,7 @@ export default function SettingsScreen() {
             onPress={() => router.push('/(authenticated)/family-profile')}
             accessible={true}
             accessibilityRole="button"
-            accessibilityLabel={profileRowTitle}
+            accessibilityLabel={"ניהול פרופיל"}
             className={`${tw.flexRow} items-center gap-3 p-4 rounded-xl bg-zinc-900 border border-zinc-800`}
           >
             <ChevronLeft size={20} color="#71717a" />
@@ -177,7 +173,7 @@ export default function SettingsScreen() {
               <Text
                 className={`text-white text-base font-semibold ${tw.textStart}`}
               >
-                {profileRowTitle}
+                {"ניהול פרופיל"}
               </Text>
               {profileMemberCount > 0 && (
                 <Text

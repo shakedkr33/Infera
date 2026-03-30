@@ -218,14 +218,14 @@ export default function OnboardingStep4() {
     getTakenColorsForPet,
     openAddPersonSheet,
     handleAddPet,
+    handleContactSelected,
     startManualAddPerson,
     confirmPendingMember,
     cancelPending,
     startEditMember,
     removeMember,
     handleSavePersonalName,
-    handleFromContacts,
-    saveAll,
+    syncToContext,
   } = editor;
 
   // ── Personal profile save state ───────────────────────────────────────────
@@ -286,19 +286,22 @@ export default function OnboardingStep4() {
 
   // ── Derived display name for saved personal card ──────────────────────────
 
-  const savedDisplayName =
-    nickname.trim() ||
-    [firstName.trim(), lastName.trim()].filter(Boolean).join(' ') ||
-    'הפרופיל שלך';
+  // FIXED: savedDisplayName now shows "firstName lastName (nickname)" format
+  const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(' ');
+  const savedDisplayName = fullName
+    ? nickname.trim()
+      ? `${fullName} (${nickname.trim()})`
+      : fullName
+    : 'הפרופיל שלך';
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
-  const handlePersonalContinue = async () => {
+  // FIXED: removed premature saveAll() — deferred to post-OTP
+  const handlePersonalContinue = () => {
     if (!profileSaved) return;
     if (cameFromPersonal) {
-      // Personal-only path: finish onboarding immediately, no family setup
-      await saveAll();
-      router.replace('/(authenticated)');
+      syncToContext();
+      router.replace('/(auth)/sign-in');
     } else {
       setCurrentView('family');
     }
@@ -312,9 +315,9 @@ export default function OnboardingStep4() {
     }
   };
 
-  const handleFamilyFinish = async () => {
-    await saveAll();
-    router.replace('/(authenticated)');
+  const handleFamilyFinish = () => {
+    syncToContext();
+    router.replace('/(auth)/sign-in');
   };
 
   // ── Edit card renderer ────────────────────────────────────────────────────
@@ -432,28 +435,29 @@ export default function OnboardingStep4() {
 
             {/* Sharing prompt card — shown for all paths as an optional section */}
             <View className="bg-white rounded-3xl p-5" style={shadows.soft}>
+              {/* FIXED: clarified family-specific wording */}
               <Text className="text-base font-bold text-gray-900 text-right mb-2">
-                עם מי תרצה/י לשתף לעיתים קרובות?
+                רוצה להוסיף בני משפחה?
               </Text>
               <Text className="text-sm text-gray-400 text-right mb-3 leading-relaxed">
-                האנשים שתוסיף/י כאן יופיעו לך אחר כך בלחיצה אחת כשתיצור/י אירוע,
-                משימה או תזכורת.
+                אפשר להוסיף עכשיו או אחר כך בן/בת זוג, ילדים או אנשים קבועים בבית.
               </Text>
               <Text className="text-xs text-gray-300 text-right mb-4 leading-relaxed">
                 האנשים שתוסיף/י כאן לא ישותפו אוטומטית. בכל אירוע, משימה או
                 תזכורת תוכל/י לבחור עם מי לשתף.
               </Text>
+              {/* FIXED: clarified family-specific wording */}
               <Pressable
                 onPress={() => setCurrentView('family')}
                 accessible={true}
                 accessibilityRole="link"
-                accessibilityLabel="הוסיפי אנשים לשיתוף"
+                accessibilityLabel="להוסיף בני משפחה"
               >
                 <Text
                   className="text-right font-semibold"
                   style={{ color: colors.primary }}
                 >
-                  הוסיפ/י אנשים לשיתוף ←
+                  להוסיף בני משפחה ←
                 </Text>
               </Pressable>
             </View>
@@ -464,13 +468,14 @@ export default function OnboardingStep4() {
             className="px-5 pb-10 pt-4"
             style={{ backgroundColor: 'rgba(246,247,248,0.97)' }}
           >
+            {/* FIXED: replaced "לא עכשיו" with "בואו נתחיל" — primary CTA now reflects continuation, not rejection */}
             <Pressable
               onPress={handlePersonalContinue}
               disabled={!canContinuePersonal}
               accessible={true}
               accessibilityRole="button"
               accessibilityLabel={
-                cameFromPersonal ? 'סיימנו, בואו נתחיל!' : 'המשך'
+                cameFromPersonal ? 'בואו נתחיל' : 'המשך'
               }
               accessibilityState={{ disabled: !canContinuePersonal }}
               className="w-full h-16 rounded-2xl items-center justify-center"
@@ -487,7 +492,8 @@ export default function OnboardingStep4() {
                 className="font-bold text-lg"
                 style={{ color: canContinuePersonal ? '#ffffff' : '#9ca3af' }}
               >
-                {cameFromPersonal ? 'סיימנו, בואו נתחיל!' : 'המשך'}
+                {/* FIXED: clarified family-specific wording */}
+                {cameFromPersonal ? 'בואו נתחיל' : 'המשך'}{/* FIXED: renamed "לא עכשיו" → "בואו נתחיל" */}
               </Text>
             </Pressable>
           </View>
@@ -542,10 +548,11 @@ export default function OnboardingStep4() {
               <Text className="text-xs text-gray-400 text-right mb-2">
                 צבע אישי
               </Text>
+              {/* FIXED: taken colors now pass { color, name } for initials overlay */}
               <ColorPicker
                 selectedColor={personalColor}
                 onSelectColor={handlePersonalColorChange}
-                takenColors={familyMembers.map((m) => m.color)}
+                takenColors={familyMembers.map((m) => ({ color: m.color, name: m.name }))}
                 size={38}
               />
 
@@ -573,12 +580,12 @@ export default function OnboardingStep4() {
           )}
 
           {/* ── People / sharing section ──────────────────────────────────── */}
+          {/* FIXED: clarified family-specific wording */}
           <Text className="text-sm font-bold text-gray-700 text-right mb-1 pr-1">
-            עם מי תרצה/י לשתף לעיתים קרובות? (עד {MAX_PEOPLE})
+            רוצה להוסיף בני משפחה?
           </Text>
           <Text className="text-xs text-gray-400 text-right mb-2 pr-1 leading-relaxed">
-            האנשים שתוסיף/י כאן יופיעו לך אחר כך בלחיצה אחת כשתיצור/י אירוע,
-            משימה או תזכורת.
+            אפשר להוסיף בן/בת זוג, ילדים או אנשים קבועים בבית — עכשיו או בכל שלב אחר.
           </Text>
 
           {/* Disclaimer */}
@@ -825,7 +832,7 @@ export default function OnboardingStep4() {
       <AddPersonBottomSheet
         visible={isBottomSheetOpen}
         onClose={() => setIsBottomSheetOpen(false)}
-        onFromContacts={handleFromContacts}
+        onContactSelected={handleContactSelected}
         onManual={startManualAddPerson}
       />
     </SafeAreaView>

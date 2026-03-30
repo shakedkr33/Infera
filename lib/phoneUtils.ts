@@ -4,8 +4,11 @@
  *
  * Accepted input formats:
  *   050-123-4567, 050 123 4567, 0501234567
+ *   526417758 (no leading 0 — bare subscriber number starting with 5)
  *   +972501234567, 972501234567
  */
+// FIXED: normalize phone number to handle leading 0 with Israeli prefix
+// Also accepts bare subscriber numbers (e.g. 526417758) without leading 0
 export function normalizeIsraeliPhone(raw: string): string | null {
   // Strip all spaces, dashes, and parentheses
   const stripped = raw.replace(/[\s\-()]/g, '');
@@ -19,7 +22,13 @@ export function normalizeIsraeliPhone(raw: string): string | null {
   }
 
   if (stripped.startsWith('0')) {
+    // e.g. 0526417758 → +972526417758
     return `+972${stripped.slice(1)}`;
+  }
+
+  if (stripped.startsWith('5')) {
+    // e.g. 526417758 → +972526417758 (user omitted leading 0)
+    return `+972${stripped}`;
   }
 
   return null;

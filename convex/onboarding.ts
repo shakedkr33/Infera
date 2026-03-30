@@ -14,6 +14,8 @@ export const finishOnboarding = mutation({
     challenges: v.array(v.string()),
     sources: v.array(v.string()),
     childCount: v.optional(v.number()),
+    // FIXED: family profile persistence — stores family contacts as JSON blob
+    familyContacts: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     // 1. בדיקה שהמשתמש מחובר
@@ -30,6 +32,7 @@ export const finishOnboarding = mutation({
     await ctx.db.patch(userId, {
       fullName: args.fullName,
       profileColor: args.profileColor,
+      familyContacts: args.familyContacts,
       isActive: true,
       updatedAt: Date.now(),
     });

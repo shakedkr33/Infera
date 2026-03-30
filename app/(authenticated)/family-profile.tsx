@@ -1,5 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -35,29 +36,26 @@ export default function FamilyProfileScreen() {
   const router = useRouter();
   const { data } = useOnboarding();
 
-  const savedFamilyMembers = data.familyData?.familyMembers ?? [];
-  const isPersonalOnly =
-    data.spaceType === 'personal' && savedFamilyMembers.length === 0;
-  const screenTitle = isPersonalOnly
-    ? 'ניהול פרופיל אישי'
-    : 'ניהול פרופיל משפחתי';
+  // FIXED: removed isPersonalOnly flag — screen is unified for all space types
+  const screenTitle = 'ניהול פרופיל';
 
   // Initialise from previously saved context data (unlike onboarding which starts empty)
   const editor = useFamilyProfileEditor(data.familyData?.familyMembers ?? []);
   const {
     firstName,
     setFirstName,
+    lastName,
+    setLastName,
+    nickname,
+    setNickname,
     personalColor,
     setPersonalColor,
-    ownerFullName,
-    setOwnerFullName,
     familyMembers,
     pendingMember,
     setPendingMember,
     editingId,
     isBottomSheetOpen,
     setIsBottomSheetOpen,
-    ownerSaved,
     personalSaved,
     personMembers,
     petMembers,
@@ -75,13 +73,36 @@ export default function FamilyProfileScreen() {
     startEditMember,
     removeMember,
     handleSavePersonalName,
-    handleSaveOwnerName,
-    handleFromContacts,
-    saveAll,
+    handleContactSelected,
+    saveProfile,
   } = editor;
 
+  // FIXED: profile form now collapses to saved display card after save
+  // FIXED: profile card now opens collapsed if user already has saved data
+  const [profileSaved, setProfileSaved] = useState(
+    () => firstName.trim().length > 0
+  );
+
+  const handleFirstNameChange = (v: string) => { setFirstName(v); setProfileSaved(false); };
+  const handleLastNameChange = (v: string) => { setLastName(v); setProfileSaved(false); };
+  const handleNicknameChange = (v: string) => { setNickname(v); setProfileSaved(false); };
+
+  const handleSaveProfile = () => {
+    handleSavePersonalName();
+    setProfileSaved(true);
+  };
+
+  // FIXED: displayName shows "firstName lastName (nickname)" format
+  const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(' ');
+  const displayName = fullName
+    ? nickname.trim()
+      ? `${fullName} (${nickname.trim()})`
+      : fullName
+    : 'הפרופיל שלך';
+
   const handleSaveAndClose = () => {
-    saveAll();
+    // FIXED: family profile persistence — saveProfile() patches existing user, no new space created
+    saveProfile();
     router.back();
   };
 
@@ -109,137 +130,6 @@ export default function FamilyProfileScreen() {
       />
     );
   };
-
-  // ── Render: Personal-only mode ────────────────────────────────────────────
-
-  if (isPersonalOnly) {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          {/* Top bar */}
-          <View className="flex-row items-center justify-between px-5 pt-3 pb-1">
-            <Pressable
-              onPress={() => router.back()}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="חזרה"
-              className="p-2"
-            >
-              <MaterialIcons
-                name="arrow-forward"
-                size={24}
-                color={colors.slate}
-              />
-            </Pressable>
-            <Text
-              className="text-base font-bold text-right"
-              style={{ color: colors.slate }}
-            >
-              {screenTitle}
-            </Text>
-            <View className="w-10" />
-          </View>
-
-          <ScrollView
-            className="flex-1 px-5"
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingTop: 24, paddingBottom: 180 }}
-            keyboardShouldPersistTaps="handled"
-          >
-            {/* Personal profile card */}
-            <View className="bg-white rounded-3xl p-5" style={shadows.soft}>
-              <View className="items-center mb-5">
-                <View className="relative">
-                  <View
-                    className="w-20 h-20 rounded-full items-center justify-center"
-                    style={{ backgroundColor: '#e9edf0' }}
-                  >
-                    <MaterialIcons name="person" size={40} color="#b0bec5" />
-                  </View>
-                  <View
-                    className="absolute bottom-0 right-0 w-7 h-7 rounded-full items-center justify-center"
-                    style={{ backgroundColor: colors.primary }}
-                  >
-                    <MaterialIcons name="camera-alt" size={14} color="white" />
-                  </View>
-                </View>
-              </View>
-
-              <Text className="text-sm font-bold text-gray-700 text-right mb-2">
-                השם שלך
-              </Text>
-              <View
-                className="flex-row items-center bg-[#f6f7f8] rounded-2xl overflow-hidden"
-                style={{ minHeight: 56 }}
-              >
-                <Pressable
-                  onPress={handleSavePersonalName}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel="שמור שם"
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
-                  className="w-14 self-stretch items-center justify-center"
-                  style={{ backgroundColor: colors.primary }}
-                >
-                  <MaterialIcons name="check" size={24} color="white" />
-                </Pressable>
-                <TextInput
-                  value={firstName}
-                  onChangeText={setFirstName}
-                  placeholder="דנה כהן"
-                  placeholderTextColor="#9ca3af"
-                  className="flex-1 px-3 text-base text-right"
-                  style={{ height: 56 }}
-                  returnKeyType="done"
-                  onSubmitEditing={handleSavePersonalName}
-                />
-              </View>
-              {personalSaved ? (
-                <Text
-                  className="text-xs text-right mt-1 mb-4"
-                  style={{ color: colors.primary }}
-                >
-                  נשמר ✓
-                </Text>
-              ) : (
-                <View className="mb-5" />
-              )}
-
-              <Text className="text-sm font-bold text-gray-700 text-right mb-3">
-                בחירת צבע אישי
-              </Text>
-              <ColorPicker
-                selectedColor={personalColor}
-                onSelectColor={setPersonalColor}
-              />
-            </View>
-          </ScrollView>
-
-          {/* Bottom save button */}
-          <View
-            className="px-5 pb-10 pt-4"
-            style={{ backgroundColor: 'rgba(246,247,248,0.97)' }}
-          >
-            <Pressable
-              onPress={handleSaveAndClose}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="שמירה וסגירה"
-              className="w-full h-16 rounded-2xl items-center justify-center"
-              style={[{ backgroundColor: colors.primary }, shadows.primaryCta]}
-            >
-              <Text className="text-white font-bold text-lg">שמירה</Text>
-            </Pressable>
-          </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    );
-  }
-
-  // ── Render: Family mode ───────────────────────────────────────────────────
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
@@ -278,74 +168,130 @@ export default function FamilyProfileScreen() {
           keyboardShouldPersistTaps="handled"
         >
           {/* ── Owner card ────────────────────────────────────────────────── */}
+          {/* FIXED: replaced ownerFullName with split fields, removed fake camera affordance */}
+          {/* FIXED: profile form now collapses to saved display card after save */}
           <Text className="text-xs font-bold text-gray-400 text-right mb-2 pr-1">
             השם שלך
           </Text>
-          <View className="bg-white rounded-3xl p-5 mb-6" style={shadows.soft}>
-            <View className="flex-row-reverse items-center gap-4 mb-4">
-              <View
-                className="w-14 h-14 rounded-full items-center justify-center"
-                style={{ backgroundColor: personalColor }}
-              >
-                <MaterialIcons name="person" size={28} color="white" />
+
+          {profileSaved ? (
+            <Pressable
+              onPress={() => setProfileSaved(false)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={`ערוך פרופיל — ${displayName}`}
+              className="bg-white p-4 rounded-2xl flex-row items-center justify-between mb-6"
+              style={shadows.soft}
+            >
+              <View className="p-2">
+                <MaterialIcons name="edit" size={18} color="#9ca3af" />
               </View>
-              <View className="flex-1">
-                <Text className="text-xs text-gray-400 text-right mb-1">
-                  השם שלך
+              <View className="flex-row items-center gap-3">
+                <Text className="font-bold text-[15px] text-gray-900">
+                  {displayName}
                 </Text>
                 <View
-                  className="flex-row items-center bg-[#f6f7f8] rounded-xl overflow-hidden"
-                  style={{ minHeight: 44 }}
+                  style={{ backgroundColor: personalColor }}
+                  className="w-10 h-10 rounded-full items-center justify-center"
                 >
-                  <Pressable
-                    onPress={handleSaveOwnerName}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="שמור שם"
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
-                    className="w-12 self-stretch items-center justify-center"
-                    style={{ backgroundColor: colors.primary }}
-                  >
-                    <MaterialIcons name="check" size={20} color="white" />
-                  </Pressable>
+                  <Text className="text-xs font-bold text-white opacity-80">
+                    {displayName.substring(0, 2)}
+                  </Text>
+                </View>
+              </View>
+            </Pressable>
+          ) : (
+            <View className="bg-white rounded-3xl p-5 mb-6" style={shadows.soft}>
+              <View className="flex-row-reverse items-center gap-4 mb-4">
+                <View
+                  className="w-14 h-14 rounded-full items-center justify-center"
+                  style={{ backgroundColor: personalColor }}
+                >
+                  <Text style={{ color: 'white', fontSize: 22, fontWeight: '700' }}>
+                    {(firstName || '?').charAt(0)}
+                  </Text>
+                </View>
+                <View className="flex-1">
+                  <Text className="text-xs text-gray-400 text-right mb-1">
+                    שם פרטי ושם משפחה
+                  </Text>
+                  <View className="flex-row-reverse gap-2 mb-2">
+                    <TextInput
+                      value={firstName}
+                      onChangeText={handleFirstNameChange}
+                      placeholder="שם פרטי"
+                      placeholderTextColor="#9ca3af"
+                      className="flex-1 bg-[#f6f7f8] rounded-xl px-3 text-right text-base"
+                      style={{ height: 44 }}
+                      returnKeyType="next"
+                      accessible={true}
+                      accessibilityLabel="שם פרטי"
+                    />
+                    <TextInput
+                      value={lastName}
+                      onChangeText={handleLastNameChange}
+                      placeholder="שם משפחה"
+                      placeholderTextColor="#9ca3af"
+                      className="flex-1 bg-[#f6f7f8] rounded-xl px-3 text-right text-base"
+                      style={{ height: 44 }}
+                      returnKeyType="next"
+                      accessible={true}
+                      accessibilityLabel="שם משפחה"
+                    />
+                  </View>
                   <TextInput
-                    value={ownerFullName}
-                    onChangeText={setOwnerFullName}
-                    placeholder="דנה כהן"
+                    value={nickname}
+                    onChangeText={handleNicknameChange}
+                    placeholder="כינוי (אופציונלי)"
                     placeholderTextColor="#9ca3af"
-                    className="flex-1 px-3 text-right text-base"
+                    className="bg-[#f6f7f8] rounded-xl px-3 text-right text-base mb-2"
                     style={{ height: 44 }}
                     returnKeyType="done"
-                    onSubmitEditing={handleSaveOwnerName}
+                    onSubmitEditing={handleSaveProfile}
+                    accessible={true}
+                    accessibilityLabel="כינוי"
                   />
-                </View>
-                {ownerSaved ? (
-                  <Text
-                    className="text-xs text-right mt-1"
-                    style={{ color: colors.primary }}
+                  {/* FIXED: replaced ✓ icon button with labeled "שמירת פרטים" button */}
+                  <Pressable
+                    onPress={handleSaveProfile}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel="שמירת פרטים"
+                    className="mt-1 h-12 rounded-xl items-center justify-center"
+                    style={{ backgroundColor: colors.primary }}
                   >
-                    נשמר ✓
-                  </Text>
-                ) : null}
+                    <Text className="text-white font-bold text-base">שמירת פרטים</Text>
+                  </Pressable>
+                  {personalSaved ? (
+                    <Text
+                      className="text-xs text-right mt-1"
+                      style={{ color: colors.primary }}
+                    >
+                      נשמר ✓
+                    </Text>
+                  ) : null}
+                </View>
               </View>
+              <Text className="text-xs text-gray-400 text-right mb-2">
+                בחירת צבע אישי
+              </Text>
+              {/* FIXED: taken colors now pass { color, name } for initials overlay */}
+              <ColorPicker
+                selectedColor={personalColor}
+                onSelectColor={setPersonalColor}
+                takenColors={familyMembers.map((m) => ({ color: m.color, name: m.name }))}
+                size={38}
+              />
             </View>
-            <Text className="text-xs text-gray-400 text-right mb-2">
-              בחירת צבע אישי
-            </Text>
-            <ColorPicker
-              selectedColor={personalColor}
-              onSelectColor={setPersonalColor}
-              takenColors={familyMembers.map((m) => m.color)}
-              size={38}
-            />
-          </View>
+          )}
 
           {/* ── People section ─────────────────────────────────────────────── */}
           <Text className="text-sm font-bold text-gray-700 text-right mb-1 pr-1">
             בני משפחה נוספים (עד {MAX_PEOPLE})
           </Text>
           <Text className="text-xs text-gray-400 text-right mb-3 pr-1 leading-relaxed">
-            הוסיפ/י ילדים, בן/בת זוג, הורים – כל מי שחשוב לך.
+            {/* FIXED: updated family members section description text */}
+            הוסיפ/י בן/בת זוג, ילדים, הורים - כל מי שתרצו לשתף לו אירועים ומשימות בקלות
           </Text>
           <View className="bg-white rounded-3xl p-5 mb-5" style={shadows.soft}>
             {personMembers.length === 0 && !isAddingNewPerson ? (
@@ -444,7 +390,8 @@ export default function FamilyProfileScreen() {
             חיות מחמד (עד {MAX_PETS})
           </Text>
           <Text className="text-xs text-gray-400 text-right mb-3 pr-1">
-            חיות המחמד שלכם — לא נחסיר מהם ימי הולדת 🐾
+            {/* FIXED: updated pets section description text */}
+            הוסיפו את חיית המחמד שלכם כדי לעקוב אחרי כל המשימות והאירועים שלה
           </Text>
           <View className="bg-white rounded-3xl p-5 mb-4" style={shadows.soft}>
             {petMembers.length === 0 && !isAddingNewPet ? (
@@ -561,7 +508,7 @@ export default function FamilyProfileScreen() {
       <AddPersonBottomSheet
         visible={isBottomSheetOpen}
         onClose={() => setIsBottomSheetOpen(false)}
-        onFromContacts={handleFromContacts}
+        onContactSelected={handleContactSelected}
         onManual={startManualAddPerson}
       />
     </SafeAreaView>

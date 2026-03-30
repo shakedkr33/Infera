@@ -2,7 +2,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { colors, shadows } from '../../constants/theme';
 import type { FamilyMember } from '../../contexts/OnboardingContext';
-import { ColorPicker } from './ColorPicker';
+import { ColorPicker, TakenColor } from './ColorPicker';
 
 interface DisplayCardProps {
   member: FamilyMember;
@@ -67,8 +67,9 @@ interface EditCardProps {
   onConfirm: () => void;
   onCancel: () => void;
   label?: string;
-  /** Colors already taken by other family members — blocks selection + shows message */
-  takenColors?: string[];
+  // FIXED: taken colors now show owner initials and are non-tappable
+  /** Colors already taken by other family members — shown with initials, non-tappable */
+  takenColors?: TakenColor[];
   /** Color palette to display; defaults to people palette inside ColorPicker */
   palette?: readonly string[];
 }

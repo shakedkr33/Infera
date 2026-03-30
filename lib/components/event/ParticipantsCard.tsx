@@ -15,6 +15,14 @@ import {
   View,
 } from 'react-native';
 import type { Participant } from '@/lib/types/event';
+// SHARED: phone selection logic for contact import
+// FIXED: updated phone label filter to mobile-capable labels only
+import {
+  getMobilePhones,
+  getPhoneLabel,
+  getPrimaryPhone,
+  normalizePhone,
+} from '@/lib/utils/contactPhone';
 
 const PRIMARY = '#36a9e2';
 const TINT = '#e8f5fd';
@@ -23,24 +31,6 @@ const TINT = '#e8f5fd';
 const CIRCLE_BG = '#e8f5fd';
 const CIRCLE_BORDER = '#36a9e2';
 const CIRCLE_TEXT = '#36a9e2';
-
-// ─── Phone helpers ────────────────────────────────────────────────────────────
-
-/** Strip all non-digit characters for stable comparison */
-function normalizePhone(phone: string): string {
-  return phone.replace(/\D/g, '');
-}
-
-/** Prefer mobile/נייד label; otherwise first available number */
-function getPrimaryPhone(contact: Contacts.Contact): string {
-  const phones = contact.phoneNumbers ?? [];
-  if (phones.length === 0) return '';
-  const mobileLabels = ['mobile', 'iphone', 'cell', 'נייד'];
-  const mobile = phones.find((p) =>
-    mobileLabels.some((lbl) => (p.label ?? '').toLowerCase().includes(lbl))
-  );
-  return (mobile ?? phones[0])?.number ?? '';
-}
 
 /** Stable key for a contact: prefer contact.id, fallback to normalised phone */
 function contactKey(contact: Contacts.Contact): string {
@@ -69,15 +59,18 @@ export function ParticipantsCard({
   participants,
   onChange,
 }: ParticipantsCardProps): React.JSX.Element {
-  // 'main' = contacts button + email input; 'contacts' = contact list
+  // 'main' = contacts button + email input; 'contacts' = contact list; 'phone-disambig' = multi-phone resolution
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [sheetView, setSheetView] = useState<'main' | 'contacts'>('main');
+  const [sheetView, setSheetView] = useState<'main' | 'contacts' | 'phone-disambig'>('main');
   const [emailText, setEmailText] = useState('');
   const [contacts, setContacts] = useState<Contacts.Contact[]>([]);
   const [contactSearch, setContactSearch] = useState('');
   const [loadingContacts, setLoadingContacts] = useState(false);
   /** Temporarily selected contact keys (stable id or normalised phone) */
   const [draftContactIds, setDraftContactIds] = useState<string[]>([]);
+  // EVENT FLOW: multi-select contact import with deferred phone disambiguation
+  const [disambigContacts, setDisambigContacts] = useState<Contacts.Contact[]>([]);
+  const [disambigSelections, setDisambigSelections] = useState<Record<string, string>>({});
   // "הצג הכל" list modal
   const [listOpen, setListOpen] = useState(false);
 
@@ -94,6 +87,8 @@ export function ParticipantsCard({
     setContacts([]);
     setSheetView('main');
     setDraftContactIds([]);
+    setDisambigContacts([]);
+    setDisambigSelections({});
   }, []);
 
   // ── Add participants from email textarea ──────────────────────────────────
@@ -134,9 +129,10 @@ export function ParticipantsCard({
         fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
         sort: Contacts.SortTypes.FirstName,
       });
-      // Only contacts that have a name AND at least one phone number
+      // FIXED: updated phone label filter to mobile-capable labels only
+      // Only contacts that have a name AND at least one mobile-capable number
       const withPhone = (result.data ?? []).filter(
-        (c) => c.name && (c.phoneNumbers?.length ?? 0) > 0
+        (c) => c.name && getMobilePhones(c).length > 0
       );
       setContacts(withPhone);
       setContactSearch('');
@@ -170,27 +166,73 @@ export function ParticipantsCard({
     );
   };
 
-  // ── Commit all drafted contacts at once ───────────────────────────────────
+  // ── Commit all drafted contacts — defers to disambiguation if needed ───────
   const saveContactsDraft = (): void => {
     if (draftContactIds.length === 0) {
       closeSheet();
       return;
     }
-    const newOnes: Participant[] = draftContactIds
+    const drafted = draftContactIds
       .map((key) => contacts.find((c) => contactKey(c) === key))
-      .filter((c): c is Contacts.Contact => c != null)
-      .map((c, i) => {
-        const phone = getPrimaryPhone(c);
+      .filter((c): c is Contacts.Contact => c != null);
+
+    // EVENT FLOW: multi-select contact import with deferred phone disambiguation
+    // FIXED: updated phone label filter to mobile-capable labels only
+    // Disambiguation is only needed when a contact has > 1 mobile-capable number
+    const needsDisambig = drafted.filter(
+      (c) => getMobilePhones(c).length > 1
+    );
+
+    if (needsDisambig.length === 0) {
+      // All contacts have 0 or 1 phone number — add directly
+      const newOnes: Participant[] = drafted.map((c, i) => {
+        const phone = normalizePhone(getPrimaryPhone(c)) || undefined;
         const localDisplayName = c.name?.trim() || undefined;
         // TODO: for shared event view, resolve sharedDisplayName via user lookup by phone before rendering to non-creator participants
         return {
           id: `contact-${Date.now()}-${i}`,
-          name: localDisplayName ?? phone,
+          name: localDisplayName ?? phone ?? '',
           phone,
           localDisplayName,
           color: CIRCLE_BG,
         };
       });
+      onChange([...participants, ...newOnes]);
+      closeSheet();
+    } else {
+      // Some contacts have multiple mobile phones — open disambiguation sheet
+      // FIXED: updated phone label filter to mobile-capable labels only
+      const preselected: Record<string, string> = {};
+      for (const c of needsDisambig) {
+        // Preselect first mobile-capable number
+        preselected[contactKey(c)] = getMobilePhones(c)[0]?.number ?? getPrimaryPhone(c);
+      }
+      setDisambigContacts(needsDisambig);
+      setDisambigSelections(preselected);
+      setSheetView('phone-disambig');
+    }
+  };
+
+  // ── Finalize after all phone selections are confirmed ─────────────────────
+  const confirmDisambig = (): void => {
+    const allDrafted = draftContactIds
+      .map((key) => contacts.find((c) => contactKey(c) === key))
+      .filter((c): c is Contacts.Contact => c != null);
+
+    const newOnes: Participant[] = allDrafted.map((c, i) => {
+      const key = contactKey(c);
+      // Use disambig selection if available, otherwise fall back to primary phone
+      const rawPhone = disambigSelections[key] ?? getPrimaryPhone(c);
+      const phone = normalizePhone(rawPhone) || undefined;
+      const localDisplayName = c.name?.trim() || undefined;
+      return {
+        id: `contact-${Date.now()}-${i}`,
+        name: localDisplayName ?? phone ?? '',
+        phone,
+        localDisplayName,
+        color: CIRCLE_BG,
+      };
+    });
     onChange([...participants, ...newOnes]);
     closeSheet();
   };
@@ -273,9 +315,117 @@ export function ParticipantsCard({
             <Pressable style={StyleSheet.absoluteFill} onPress={closeSheet} />
             <View style={s.modalSheetWrapper}>
             <View
-              style={[s.sheet, sheetView === 'contacts' && s.sheetContacts]}
+              style={[s.sheet, (sheetView === 'contacts' || sheetView === 'phone-disambig') && s.sheetContacts]}
             >
               <View style={s.handle} />
+
+              {/* ── Phone disambiguation view — only ambiguous contacts, deferred after "שמור" ── */}
+              {sheetView === 'phone-disambig' && (
+                <View style={s.contactsViewContainer}>
+                  <View style={s.sheetHeaderRow}>
+                    <Pressable
+                      onPress={() => {
+                        setSheetView('contacts');
+                        setDisambigContacts([]);
+                        setDisambigSelections({});
+                      }}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel="חזרה"
+                    >
+                      <Ionicons name="chevron-forward" size={22} color="#334155" />
+                    </Pressable>
+                    <Text style={s.sheetTitle}>בחירת מספרי טלפון</Text>
+                    <View style={{ width: 42 }} />
+                  </View>
+
+                  {/* Helper text */}
+                  <Text style={s.phoneDisambigHint}>בחר/י מספר אחד לכל איש קשר</Text>
+
+                  {/* Per-contact phone radio lists */}
+                  <FlatList
+                    data={disambigContacts}
+                    keyExtractor={(c) => contactKey(c)}
+                    style={s.contactList}
+                    contentContainerStyle={{ paddingBottom: 4 }}
+                    keyboardShouldPersistTaps="handled"
+                    scrollEnabled
+                    nestedScrollEnabled
+                    renderItem={({ item: contact }) => {
+                      const key = contactKey(contact);
+                      return (
+                        <View>
+                          {/* Contact name header */}
+                          <Text style={s.disambigContactName}>
+                            {contact.name?.trim() || key}
+                          </Text>
+                          {/* FIXED: updated phone label filter to mobile-capable labels only
+                              Show ONLY mobile-capable numbers in disambiguation picker */}
+                          {getMobilePhones(contact).map((phone, idx) => {
+                            const isSelected =
+                              disambigSelections[key] === phone.number;
+                            return (
+                              <Pressable
+                                key={`${key}-${idx}`}
+                                style={[
+                                  s.contactRow,
+                                  isSelected && s.contactRowSelected,
+                                ]}
+                                onPress={() =>
+                                  setDisambigSelections((prev) => ({
+                                    ...prev,
+                                    [key]: phone.number ?? '',
+                                  }))
+                                }
+                                accessible={true}
+                                accessibilityRole="radio"
+                                accessibilityState={{ checked: isSelected }}
+                                accessibilityLabel={`${getPhoneLabel(phone.label)} ${phone.number ?? ''}`}
+                              >
+                                {/* Label + number — RTL right side */}
+                                <View style={s.contactRowInfo}>
+                                  <Text style={s.contactName}>
+                                    {getPhoneLabel(phone.label)}
+                                  </Text>
+                                  <Text style={s.contactPhone}>
+                                    {phone.number}
+                                  </Text>
+                                </View>
+                                {/* Radio circle — visual left (logical end in RTL) */}
+                                <View
+                                  style={[
+                                    s.contactCheck,
+                                    isSelected && s.contactCheckSelected,
+                                  ]}
+                                >
+                                  {isSelected && (
+                                    <Ionicons
+                                      name="checkmark"
+                                      size={14}
+                                      color="#fff"
+                                    />
+                                  )}
+                                </View>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      );
+                    }}
+                  />
+
+                  {/* "המשך" CTA — always enabled (all contacts are preselected) */}
+                  <Pressable
+                    style={s.saveBtn}
+                    onPress={confirmDisambig}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel="המשך"
+                  >
+                    <Text style={s.saveBtnText}>המשך</Text>
+                  </Pressable>
+                </View>
+              )}
 
               {/* ── Contacts view ── */}
               {sheetView === 'contacts' && (
@@ -853,6 +1003,23 @@ const s = StyleSheet.create({
     color: '#9ca3af',
     textAlign: 'center',
     paddingVertical: 24,
+  },
+  // ── Phone disambiguation view ─────────────────────────────────────────────
+  phoneDisambigHint: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: 'right',
+    marginBottom: 10,
+  },
+  disambigContactName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'right',
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e5e7eb',
+    marginBottom: 4,
   },
   // ── "הצג הכל" list modal rows ─────────────────────────────────────────────
   listRow: {

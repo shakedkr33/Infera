@@ -11,10 +11,11 @@ export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const isNavigating = useRef(false);
 
+  // FIXED: onboarding now precedes authentication — CTA enters onboarding flow first
   const goToSignIn = () => {
     if (isNavigating.current) return;
     isNavigating.current = true;
-    router.replace('/(auth)/sign-in');
+    router.replace('/onboarding-step1');
   };
 
   return (

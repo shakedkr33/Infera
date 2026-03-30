@@ -25,6 +25,8 @@ export default defineSchema({
     // MVP additions
     onboardingCompleted: v.optional(v.boolean()),
     defaultSpaceId: v.optional(v.id('spaces')),
+    // FIXED: family profile persistence — stores onboarding family contacts as JSON blob
+    familyContacts: v.optional(v.any()),
   })
     .index('by_email', ['email'])
     .index('by_phone', ['phone'])

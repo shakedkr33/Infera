@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import { useConvexAuth, useQuery } from 'convex/react';
+import { useConvexAuth, useMutation, useQuery } from 'convex/react';
 import { Redirect, Tabs, useRootNavigationState, useRouter } from 'expo-router';
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import { ActionSheetContext } from '@/contexts/ActionSheetContext';
+import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
 
@@ -168,6 +169,15 @@ function ActionButton({
 export default function AuthenticatedLayout() {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const { isPremium, isLoading: isRevenueCatLoading } = useRevenueCat();
+  // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition
+  // hasLocalOnboardingData lets a just-registered user through while Convex
+  // propagates the finishOnboarding mutation result (avoids redirect loop).
+  const { data: onboardingData, updateData, hydrateFromServer } = useOnboarding();
+  const hasLocalOnboardingData = !!onboardingData.spaceType;
+  const finishOnboarding = useMutation(api.onboarding.finishOnboarding);
+  // Ref guard prevents a second mutation call if a render occurs while the first is in-flight.
+  const savingRef = useRef(false);
+
   const navigationState = useRootNavigationState();
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
 
@@ -178,14 +188,106 @@ export default function AuthenticatedLayout() {
     isAuthenticated ? {} : 'skip'
   );
 
+  // FIXED: context now rehydrates from Convex on authenticated app start.
+  // Fetches fullName, profileColor, spaceType for the current user.
+  // Skip when not authenticated to avoid a needless round-trip.
+  const myProfile = useQuery(
+    api.users.getMyProfile,
+    isAuthenticated ? {} : 'skip'
+  );
+  // Guard: only hydrate once per session.
+  const hydratedRef = useRef(false);
+
+  useEffect(() => {
+    // Only hydrate for confirmed returning users (onboardingComplete on server)
+    // whose context is still empty (app was restarted). The !onboardingData.onboardingCompleted
+    // guard ensures a just-completed onboarding session is never overwritten.
+    if (
+      !isAuthenticated ||
+      !userStatus?.onboardingComplete ||
+      onboardingData.onboardingCompleted ||
+      !myProfile ||
+      hydratedRef.current
+    ) return;
+
+    hydratedRef.current = true;
+    hydrateFromServer(myProfile);
+  }, [
+    isAuthenticated,
+    userStatus,
+    myProfile,
+    onboardingData.onboardingCompleted,
+    hydrateFromServer,
+  ]);
+
+  // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition.
+  // Called once after the Convex session is confirmed active (userStatus has resolved),
+  // so the server never sees an unauthenticated finishOnboarding call.
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      userStatus === undefined ||
+      userStatus.onboardingComplete ||
+      !hasLocalOnboardingData ||
+      onboardingData.onboardingCompleted ||
+      savingRef.current
+    ) return;
+
+    savingRef.current = true;
+    finishOnboarding({
+      fullName:
+        [onboardingData.firstName, onboardingData.lastName]
+          .filter(Boolean)
+          .join(' ') ||
+        onboardingData.firstName ||
+        'משתמש',
+      profileColor: onboardingData.personalColor ?? '#36a9e2',
+      spaceType: onboardingData.spaceType ?? 'personal',
+      challenges: onboardingData.challenges ?? [],
+      sources: onboardingData.sources ?? [],
+      childCount: onboardingData.childCount,
+      familyContacts: onboardingData.familyData?.familyMembers,
+    })
+      .catch((err: unknown) =>
+        console.warn('[Onboarding] finishOnboarding failed:', err)
+      )
+      .finally(() => updateData({ onboardingCompleted: true }));
+  }, [
+    isAuthenticated,
+    userStatus,
+    hasLocalOnboardingData,
+    onboardingData.onboardingCompleted,
+    onboardingData.firstName,
+    onboardingData.lastName,
+    onboardingData.personalColor,
+    onboardingData.spaceType,
+    onboardingData.challenges,
+    onboardingData.sources,
+    onboardingData.childCount,
+    onboardingData.familyData,
+    finishOnboarding,
+    updateData,
+  ]);
+
   // Wait for: navigation tree, auth state, RevenueCat, and user profile to resolve
   const isUserStatusLoading = isAuthenticated && userStatus === undefined;
+  // FIXED: family profile persistence — for returning users, hold the spinner until hydrateFromServer
+  // has actually run (onboardingCompleted flips true). Without this gate, tabs render with empty
+  // OnboardingContext before the hydration effect fires, causing a flash of personal-only state in
+  // profile.tsx and stale-init of useFamilyProfileEditor's useState in family-profile.tsx.
+  // myProfile !== null guard prevents an infinite spinner if the user record is missing (edge case).
+  const needsHydration =
+    isAuthenticated &&
+    userStatus?.onboardingComplete === true &&
+    !onboardingData.onboardingCompleted &&
+    myProfile !== null;
 
   if (
     !navigationState?.key ||
     isLoading ||
     isRevenueCatLoading ||
-    isUserStatusLoading
+    isUserStatusLoading ||
+    needsHydration
   ) {
     return (
       <View className="flex-1 bg-white items-center justify-center">
@@ -198,8 +300,10 @@ export default function AuthenticatedLayout() {
     return <Redirect href="/(auth)/sign-in" />;
   }
 
-  // Route to onboarding if the user has never completed it (new user or profile missing)
-  if (!userStatus?.onboardingComplete) {
+  // Route to onboarding if the user has never completed it (new user or profile missing).
+  // Bypass if the user just completed onboarding this session — finishOnboarding may not
+  // have propagated to Convex yet, but local context confirms they finished the flow.
+  if (!userStatus?.onboardingComplete && !hasLocalOnboardingData) {
     return <Redirect href="/onboarding-hero" />;
   }
 

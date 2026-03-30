@@ -1,5 +1,4 @@
 import { useMutation } from 'convex/react';
-import * as Contacts from 'expo-contacts';
 import { useRef, useState } from 'react';
 import { Keyboard } from 'react-native';
 import { api } from '@/convex/_generated/api';
@@ -8,6 +7,7 @@ import {
   PET_COLORS,
   PROFILE_COLORS,
 } from '../components/onboarding/ColorPicker';
+import type { SelectedContactData } from '../components/onboarding/AddPersonBottomSheet';
 import type { FamilyMember } from '../contexts/OnboardingContext';
 import { useOnboarding } from '../contexts/OnboardingContext';
 
@@ -23,18 +23,6 @@ export interface PendingMember {
   email?: string;
 }
 
-const MOBILE_LABELS = new Set(['mobile', 'iphone', 'cell', 'נייד', 'cellular']);
-
-function getBestPhone(
-  phoneNumbers?: Contacts.PhoneNumber[]
-): string | undefined {
-  if (!phoneNumbers?.length) return undefined;
-  const mobile = phoneNumbers.find((p) =>
-    MOBILE_LABELS.has((p.label ?? '').toLowerCase())
-  );
-  return (mobile ?? phoneNumbers[0]).number ?? undefined;
-}
-
 /**
  * Shared state + handler logic for the family profile editor.
  *
@@ -47,8 +35,10 @@ export function useFamilyProfileEditor(
 ) {
   const { data, updateData } = useOnboarding();
   const finishOnboarding = useMutation(api.onboarding.finishOnboarding);
+  const updateMyProfile = useMutation(api.users.updateMyProfile);
 
   // ── Core profile state ────────────────────────────────────────────────────
+  // FIXED: added owner personal field hydration — reads firstName/lastName/nickname/personalColor from context
   const [firstName, setFirstName] = useState(data.firstName || '');
   const [lastName, setLastName] = useState(data.lastName || '');
   const [nickname, setNickname] = useState(data.nickname || '');
@@ -73,9 +63,6 @@ export function useFamilyProfileEditor(
   const personalSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
-
-  // ── Contact picker guard ──────────────────────────────────────────────────
-  const isPickingContactRef = useRef(false);
 
   // ── Bottom sheet + inline edit ────────────────────────────────────────────
   const [isBottomSheetOpen, setIsBottomSheetOpen] = useState(false);
@@ -112,13 +99,22 @@ export function useFamilyProfileEditor(
     return (PET_COLORS.find((c) => !taken.has(c)) as string) ?? PET_COLORS[0];
   };
 
-  const getTakenColorsForPerson = (excludeId?: string): string[] => [
-    personalColor,
-    ...personMembers.filter((m) => m.id !== excludeId).map((m) => m.color),
-  ];
+  // FIXED: taken colors now return { color, name } so initials can be rendered in swatches
+  const getTakenColorsForPerson = (excludeId?: string) => {
+    const ownerName =
+      [firstName.trim(), lastName.trim()].filter(Boolean).join(' ') || 'אני';
+    return [
+      { color: personalColor, name: ownerName },
+      ...personMembers
+        .filter((m) => m.id !== excludeId)
+        .map((m) => ({ color: m.color, name: m.name })),
+    ];
+  };
 
-  const getTakenColorsForPet = (excludeId?: string): string[] =>
-    petMembers.filter((m) => m.id !== excludeId).map((m) => m.color);
+  const getTakenColorsForPet = (excludeId?: string) =>
+    petMembers
+      .filter((m) => m.id !== excludeId)
+      .map((m) => ({ color: m.color, name: m.name }));
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -135,40 +131,15 @@ export function useFamilyProfileEditor(
     setPendingMember({ name: '', color: getAvailablePetColor(), type: 'pet' });
   };
 
-  const pickContact = async () => {
-    if (isPickingContactRef.current) return;
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') return;
-
-    isPickingContactRef.current = true;
-    try {
-      const contact = await Contacts.presentContactPickerAsync();
-      if (contact) {
-        const phone = getBestPhone(contact.phoneNumbers);
-        const email = contact.emails?.[0]?.email;
-        const rawName = contact.name?.trim();
-        const combinedName = [
-          contact.firstName?.trim(),
-          contact.lastName?.trim(),
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .trim();
-        const name = rawName || combinedName || 'איש קשר';
-        setPendingMember({
-          name,
-          color: getAvailablePersonColor(),
-          type: 'person',
-          contactId: contact.id,
-          phone,
-          email,
-        });
-      }
-    } catch {
-      // user cancelled or native picker error — do nothing
-    } finally {
-      isPickingContactRef.current = false;
-    }
+  const handleContactSelected = (data: SelectedContactData) => {
+    setPendingMember({
+      name: data.name,
+      color: getAvailablePersonColor(),
+      type: 'person',
+      contactId: data.contactId,
+      phone: data.phone,
+      email: data.email,
+    });
   };
 
   const startManualAddPerson = () => {
@@ -259,9 +230,31 @@ export function useFamilyProfileEditor(
     ownerSavedTimerRef.current = setTimeout(() => setOwnerSaved(false), 1500);
   };
 
-  /** Delay allows the bottom sheet animation to finish before the native picker opens. */
-  const handleFromContacts = () => {
-    setTimeout(() => pickContact(), 350);
+  /**
+   * Sync the current profile to OnboardingContext only — no Convex write.
+   * // FIXED: removed premature saveAll() — deferred to post-OTP
+   * Call this from onboarding step 4 before navigating to OTP.
+   */
+  const syncToContext = () => {
+    const splitName = [firstName.trim(), lastName.trim()]
+      .filter(Boolean)
+      .join(' ');
+    const nameSource = splitName || ownerFullName.trim() || 'משתמש';
+
+    updateData({
+      firstName: firstName.trim() || nameSource,
+      lastName: lastName.trim() || undefined,
+      nickname: nickname.trim() || undefined,
+      personalColor,
+      familyData: {
+        owner: {
+          firstName: firstName.trim() || nameSource,
+          lastName: lastName.trim() || undefined,
+          color: personalColor,
+        },
+        familyMembers,
+      },
+    });
   };
 
   /**
@@ -292,6 +285,7 @@ export function useFamilyProfileEditor(
     });
 
     // Persist to Convex — sets onboardingCompleted: true on the user record
+    // Only called for new users from the authenticated layout; returning users use saveProfile()
     return finishOnboarding({
       fullName: nameSource,
       profileColor: personalColor,
@@ -299,6 +293,38 @@ export function useFamilyProfileEditor(
       challenges: data.challenges ?? [],
       sources: data.sources ?? [],
       childCount: data.childCount,
+    });
+  };
+
+  /**
+   * Persist profile updates to Convex for returning users (no new space created).
+   * // FIXED: family profile persistence — use this instead of saveAll() in family-profile.tsx
+   */
+  const saveProfile = (): Promise<void> => {
+    const splitName = [firstName.trim(), lastName.trim()]
+      .filter(Boolean)
+      .join(' ');
+    const nameSource = splitName || ownerFullName.trim() || 'משתמש';
+
+    updateData({
+      firstName: firstName.trim() || nameSource,
+      lastName: lastName.trim() || undefined,
+      nickname: nickname.trim() || undefined,
+      personalColor,
+      familyData: {
+        owner: {
+          firstName: firstName.trim() || nameSource,
+          lastName: lastName.trim() || undefined,
+          color: personalColor,
+        },
+        familyMembers,
+      },
+    });
+
+    return updateMyProfile({
+      fullName: nameSource,
+      profileColor: personalColor,
+      familyContacts: familyMembers,
     });
   };
 
@@ -334,9 +360,14 @@ export function useFamilyProfileEditor(
     getAvailablePetColor,
     getTakenColorsForPerson,
     getTakenColorsForPet,
+    // save helpers
+    syncToContext,
+    saveAll,
+    saveProfile,
     // handlers
     openAddPersonSheet,
     handleAddPet,
+    handleContactSelected,
     startManualAddPerson,
     confirmPendingMember,
     cancelPending,
@@ -344,7 +375,5 @@ export function useFamilyProfileEditor(
     removeMember,
     handleSavePersonalName,
     handleSaveOwnerName,
-    handleFromContacts,
-    saveAll,
   };
 }

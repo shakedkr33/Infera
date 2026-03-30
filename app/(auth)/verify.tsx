@@ -18,15 +18,20 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
 
+// FIXED: handle OTP verification failure gracefully with inline Hebrew error
 // Maps @convex-dev/auth error messages to human Hebrew copy
 function mapAuthError(err: unknown): string {
-  const msg = err instanceof Error ? err.message.toLowerCase() : '';
+  const msg =
+    err instanceof Error
+      ? err.message.toLowerCase()
+      : String(err).toLowerCase();
   if (
+    msg.includes('could not verify') ||
     msg.includes('invalid') ||
     msg.includes('incorrect') ||
     msg.includes('wrong')
   ) {
-    return 'הקוד שגוי. בדקי ונסי שוב.';
+    return 'הקוד שהזנת שגוי. בדקי שוב ונסי מחדש.';
   }
   if (msg.includes('expired')) {
     return 'הקוד פג תוקף. לחצי על "שלח קוד חדש".';
@@ -89,11 +94,12 @@ export default function VerifyScreen() {
 
       try {
         await signIn('phone', { phone, code: digits });
-        // Navigate to onboarding so new users always start the onboarding flow.
-        // router.replace prevents going back to the verify screen.
-        router.replace('/onboarding-step1');
+        // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition
+        // finishOnboarding is called in (authenticated)/_layout.tsx once the Convex session is confirmed.
+        router.replace('/(authenticated)');
       } catch (err) {
-        console.error('[Auth] OTP verify failed:', err);
+        // FIXED: downgraded to warn so Expo dev overlay does not appear on expected auth errors
+        console.warn('[Auth] OTP verify failed:', err);
         setError(mapAuthError(err));
         // Clear the entered code so user can try again cleanly
         setCode('');

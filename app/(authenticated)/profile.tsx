@@ -42,13 +42,21 @@ export default function ProfileScreen() {
   const [isDebugOpen, setIsDebugOpen] = useState(false);
 
   const { data: onboardingData } = useOnboarding();
+  // FIXED: unified profile screen — single screen with two states based on actual family data
   const familyMembers = onboardingData.familyData?.familyMembers ?? [];
-  const isPersonalOnly =
-    onboardingData.spaceType === 'personal' && familyMembers.length === 0;
-  const profileRowTitle = isPersonalOnly
-    ? 'ניהול פרופיל אישי'
-    : 'ניהול פרופיל משפחתי';
   const profileMemberCount = familyMembers.length;
+  const hasFamilyMembers = profileMemberCount > 0;
+
+  // FIXED: replaced hardcoded user data with OnboardingContext
+  const rawFirstName = onboardingData.firstName ?? '';
+  const rawLastName = onboardingData.lastName ?? '';
+  const rawNickname = onboardingData.nickname ?? '';
+  const displayName =
+    rawNickname.trim() ||
+    [rawFirstName, rawLastName].filter(Boolean).join(' ').trim() ||
+    'המשתמש שלי';
+  const avatarInitial = displayName.charAt(0) || 'מ';
+  const avatarColor = onboardingData.personalColor || '#36a9e2';
 
   // ============================================================================
   // פעולות
@@ -165,18 +173,40 @@ export default function ProfileScreen() {
             <MaterialIcons name="chevron-left" size={22} color="#9ca3af" />
             {/* Text stack in the middle */}
             <View style={styles.profileTexts}>
-              {/* TODO: replace with real user name */}
-              <Text style={styles.profileName}>שקד קריכלי</Text>
+              <Text style={styles.profileName}>{displayName}</Text>
               <Text style={styles.profileSubtitle}>
                 {isPremium ? 'מנוי פרימיום 👑' : 'מנוי חינמי'}
               </Text>
             </View>
             {/* Avatar on the right */}
-            <View style={styles.avatar}>
-              <Text style={styles.avatarInitial}>ש</Text>
+            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+              <Text style={styles.avatarInitial}>{avatarInitial}</Text>
             </View>
           </View>
         </TouchableOpacity>
+
+        {/* FIXED: added family upgrade CTA to personal-only profile state */}
+        {/* Only shown when the user has no family members yet — disappears once they add one */}
+        {!hasFamilyMembers && (
+          <TouchableOpacity
+            style={[styles.card, styles.familyCta]}
+            onPress={() => router.push('/(authenticated)/family-profile')}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="הוספת בני משפחה"
+          >
+            <View style={styles.familyCtaRow}>
+              <MaterialIcons name="chevron-left" size={20} color="#36a9e2" />
+              <View style={styles.familyCtaTexts}>
+                <Text style={styles.familyCtaTitle}>הוספת בני משפחה</Text>
+                <Text style={styles.familyCtaSubtitle}>
+                  אפשר להוסיף בן/בת זוג, ילדים או אנשים קבועים בבית בכל שלב
+                </Text>
+              </View>
+              <MaterialIcons name="group-add" size={22} color="#36a9e2" />
+            </View>
+          </TouchableOpacity>
+        )}
 
         {/* Invite card */}
         <TouchableOpacity
@@ -207,7 +237,7 @@ export default function ProfileScreen() {
         <View style={[styles.card, styles.settingsCard]}>
           <SettingsRow
             iconName="people-outline"
-            label={profileRowTitle}
+            label="ניהול פרופיל"
             note={
               profileMemberCount > 0
                 ? `${profileMemberCount} מחוברים`
@@ -525,6 +555,36 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     textAlign: 'right',
     marginTop: 2,
+  },
+
+  // ── Family upgrade CTA ────────────────────────────────────────────────────
+  familyCta: {
+    borderWidth: 1,
+    borderColor: 'rgba(54,169,226,0.25)',
+    backgroundColor: 'rgba(54,169,226,0.06)',
+  },
+  familyCtaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    gap: 12,
+  },
+  familyCtaTexts: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  familyCtaTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1e293b',
+    textAlign: 'right',
+  },
+  familyCtaSubtitle: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: 'right',
+    marginTop: 2,
+    lineHeight: 18,
   },
 
   // ── Invite card ────────────────────────────────────────────────────────────
