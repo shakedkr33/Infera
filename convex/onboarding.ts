@@ -2,6 +2,26 @@ import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import { mutation } from './_generated/server';
 
+// ── Phone normalization ───────────────────────────────────────────────────────
+// FIXED: retroactive phone-based family member matching on initial onboarding save
+// Mirrors lib/phoneUtils.ts normalizeIsraeliPhone — duplicated here because
+// Convex backend cannot import from the client lib/ folder.
+function normalizeToE164(phone: string): string | null {
+  const stripped = phone.replace(/[\s\-()]/g, '');
+  if (stripped.startsWith('+972')) return stripped;
+  if (stripped.startsWith('972')) return `+${stripped}`;
+  if (stripped.startsWith('0')) return `+972${stripped.slice(1)}`;
+  if (stripped.startsWith('5')) return `+972${stripped}`;
+  return null;
+}
+
+type FamilyContactEntry = {
+  id: string;
+  selectedPhoneNumber?: string;
+  matchedUserId?: string;
+  [key: string]: unknown;
+};
+
 /**
  * פונקציה זו נקראת בסוף תהליך האונבורדינג.
  * היא מעדכנת את פרטי המשתמש ויוצרת עבורו את ה-Space (מרחב העבודה) הראשון.
@@ -29,10 +49,31 @@ export const finishOnboarding = mutation({
     if (!user) throw new Error('משתמש לא נמצא');
 
     // 3. עדכון פרטי המשתמש
+    // FIXED: retroactive phone-based family member matching on initial onboarding save
+    // Resolve matchedUserId for any family member whose selectedPhoneNumber already
+    // exists as a registered Convex user (invited person signed up before being added).
+    let resolvedFamilyContacts = args.familyContacts;
+    if (args.familyContacts && Array.isArray(args.familyContacts)) {
+      resolvedFamilyContacts = await Promise.all(
+        (args.familyContacts as FamilyContactEntry[]).map(async (entry) => {
+          if (entry.matchedUserId) return entry;
+          if (!entry.selectedPhoneNumber) return entry;
+          const normalizedPhone = normalizeToE164(entry.selectedPhoneNumber);
+          if (!normalizedPhone) return entry;
+          const matchedUser = await ctx.db
+            .query('users')
+            .withIndex('by_phone', (q) => q.eq('phone', normalizedPhone))
+            .unique();
+          if (matchedUser) return { ...entry, matchedUserId: matchedUser._id };
+          return entry;
+        })
+      );
+    }
+
     await ctx.db.patch(userId, {
       fullName: args.fullName,
       profileColor: args.profileColor,
-      familyContacts: args.familyContacts,
+      familyContacts: resolvedFamilyContacts,
       isActive: true,
       updatedAt: Date.now(),
     });

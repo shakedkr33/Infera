@@ -17,7 +17,9 @@ import {
 import type { Participant } from '@/lib/types/event';
 // SHARED: phone selection logic for contact import
 // FIXED: updated phone label filter to mobile-capable labels only
+// FIXED: event flow now requires explicit number selection for contacts with 2+ mobile numbers
 import {
+  getDefaultPhoneNumber,
   getMobilePhones,
   getPhoneLabel,
   getPrimaryPhone,
@@ -179,6 +181,16 @@ export function ParticipantsCard({
     // EVENT FLOW: multi-select contact import with deferred phone disambiguation
     // FIXED: updated phone label filter to mobile-capable labels only
     // Disambiguation is only needed when a contact has > 1 mobile-capable number
+    // DEBUG: remove after confirming fix
+    for (const c of drafted) {
+      const mp = getMobilePhones(c);
+      console.log('[DEBUG event] contact:', c.name,
+        '| all phones:', JSON.stringify(c.phoneNumbers?.map(p => ({ label: p.label, number: p.number }))),
+        '| mobile phones:', JSON.stringify(mp.map(p => ({ label: p.label, number: p.number }))),
+        '| length:', mp.length,
+        '| → needs disambig:', mp.length > 1,
+      );
+    }
     const needsDisambig = drafted.filter(
       (c) => getMobilePhones(c).length > 1
     );
@@ -200,12 +212,12 @@ export function ParticipantsCard({
       onChange([...participants, ...newOnes]);
       closeSheet();
     } else {
-      // Some contacts have multiple mobile phones — open disambiguation sheet
-      // FIXED: updated phone label filter to mobile-capable labels only
+      // FIXED: event flow now requires explicit number selection for contacts with 2+ mobile numbers
+      // Preselect isPrimary phone (from contacts API) or first mobile for each contact
+      // so "המשך" is usable immediately; user can still tap a different number before confirming.
       const preselected: Record<string, string> = {};
       for (const c of needsDisambig) {
-        // Preselect first mobile-capable number
-        preselected[contactKey(c)] = getMobilePhones(c)[0]?.number ?? getPrimaryPhone(c);
+        preselected[contactKey(c)] = getDefaultPhoneNumber(getMobilePhones(c));
       }
       setDisambigContacts(needsDisambig);
       setDisambigSelections(preselected);
@@ -414,16 +426,26 @@ export function ParticipantsCard({
                     }}
                   />
 
-                  {/* "המשך" CTA — always enabled (all contacts are preselected) */}
-                  <Pressable
-                    style={s.saveBtn}
-                    onPress={confirmDisambig}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="המשך"
-                  >
-                    <Text style={s.saveBtnText}>המשך</Text>
-                  </Pressable>
+                  {/* "המשך" CTA — enabled only after user has explicitly chosen
+                      a number for every ambiguous contact (no preselection). */}
+                  {(() => {
+                    const allSelected = disambigContacts.every(
+                      (c) => !!disambigSelections[contactKey(c)]
+                    );
+                    return (
+                      <Pressable
+                        style={[s.saveBtn, !allSelected && s.saveBtnDisabled]}
+                        onPress={confirmDisambig}
+                        disabled={!allSelected}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="המשך"
+                        accessibilityState={{ disabled: !allSelected }}
+                      >
+                        <Text style={s.saveBtnText}>המשך</Text>
+                      </Pressable>
+                    );
+                  })()}
                 </View>
               )}
 

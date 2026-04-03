@@ -9,6 +9,12 @@ export interface FamilyMember {
   contactId?: string;
   phone?: string;
   email?: string;
+  // FIXED: added family-member status fields — additive only
+  sourceType?: 'contact' | 'manual';
+  selectedPhoneNumber?: string;
+  maskedPhone?: string;
+  inviteStatus?: 'none' | 'invited' | 'joined';
+  matchedUserId?: string;
 }
 
 export interface FamilyData {

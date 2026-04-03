@@ -20,11 +20,9 @@ import {
 } from 'react-native';
 import { colors, shadows } from '../../constants/theme';
 // SHARED: phone selection logic for contact import
-// FIXED: updated phone label filter to mobile-capable labels only
+// FIXED: removed label filtering — branching now based on total phone count
 import {
-  getMobilePhones,
   getPhoneLabel,
-  getPrimaryPhone,
   normalizePhone,
 } from '../../lib/utils/contactPhone';
 
@@ -44,6 +42,8 @@ interface AddPersonBottomSheetProps {
   // FIXED: selected contact data passed into family-member editor
   onContactSelected: (data: SelectedContactData) => void;
   onManual: () => void;
+  // FIXED: "הוספה מאנשי קשר" now opens contact picker directly, skipping intermediate sheet
+  openContactsDirectly?: boolean;
 }
 
 export function AddPersonBottomSheet({
@@ -51,6 +51,7 @@ export function AddPersonBottomSheet({
   onClose,
   onContactSelected,
   onManual,
+  openContactsDirectly = false,
 }: AddPersonBottomSheetProps) {
   const slideAnim = useRef(new Animated.Value(300)).current;
 
@@ -67,8 +68,10 @@ export function AddPersonBottomSheet({
   // ── Animation + state reset ────────────────────────────────────────────────
   useEffect(() => {
     if (visible) {
-      // Reset all internal state on each open
-      setView('main');
+      // FIXED: "הוספה מאנשי קשר" bypasses intermediate sheet entirely — no flash
+      // Start directly in 'contacts' view when openContactsDirectly is true,
+      // so the 'main' ("איך תרצי להוסיף אדם?") view is never rendered.
+      setView(openContactsDirectly ? 'contacts' : 'main');
       setContacts([]);
       setSearch('');
       setLoadingContacts(false);
@@ -89,7 +92,17 @@ export function AddPersonBottomSheet({
         useNativeDriver: true,
       }).start();
     }
-  }, [visible, slideAnim]);
+  }, [visible, slideAnim, openContactsDirectly]);
+
+  // FIXED: "הוספה מאנשי קשר" now opens contact picker directly, skipping intermediate sheet
+  // When openContactsDirectly is true, skip the 'main' view and go straight to contacts.
+  useEffect(() => {
+    if (visible && openContactsDirectly) {
+      openContactsPicker();
+    }
+    // openContactsPicker is defined below but stable in behaviour; visible/openContactsDirectly drive this
+    // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — openContactsPicker is stable
+  }, [visible, openContactsDirectly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load contacts ──────────────────────────────────────────────────────────
   const openContactsPicker = async () => {
@@ -113,10 +126,9 @@ export function AddPersonBottomSheet({
         ],
         sort: Contacts.SortTypes.FirstName,
       });
-      // FIXED: updated phone label filter to mobile-capable labels only
-      // Only show contacts that have at least one mobile-capable number
+      // FIXED: removed label filtering — show all contacts that have at least one phone number
       const withPhone = (result.data ?? []).filter(
-        (c) => c.name && getMobilePhones(c).length > 0
+        (c) => c.name && (c.phoneNumbers?.length ?? 0) > 0
       );
       setContacts(withPhone);
       setSearch('');
@@ -145,30 +157,28 @@ export function AddPersonBottomSheet({
   });
 
   // ── Confirm selection (contacts view → phone check) ────────────────────────
-  // FIXED: updated phone label filter to mobile-capable labels only
+  // FIXED: removed label filtering — branching now based on total phone count
+  // FIXED: sheet now opens for any contact with 2+ numbers regardless of label
   const confirmSelection = () => {
     if (!selectedKey) return;
-    const contact = contacts.find(
-      (c) => ((c as { id?: string }).id ?? getPrimaryPhone(c)) === selectedKey
-    );
+    const contact = contacts.find((c) => contactKey(c) === selectedKey);
     if (!contact) return;
 
-    // FAMILY FLOW: single-select contact import with phone disambiguation
-    const mobilePhones = getMobilePhones(contact);
+    const allPhones = contact.phoneNumbers ?? [];
 
-    if (mobilePhones.length === 0) {
-      // No mobile-capable numbers — show help state instead of all-number fallback
+    if (allPhones.length === 0) {
+      // No phone numbers at all — show help state
       setDisambigContact(contact);
       setView('no-mobile');
-    } else if (mobilePhones.length > 1) {
-      // Multiple mobile numbers — open disambiguation picker (mobile only)
+    } else if (allPhones.length >= 2) {
+      // 2+ numbers regardless of label → require explicit selection
       setDisambigContact(contact);
-      setSelectedPhone(mobilePhones[0]?.number ?? ''); // preselect first mobile
+      setSelectedPhone(allPhones[0]?.number ?? ''); // preselect first
       setView('phone-picker');
     } else {
-      // Exactly one mobile number — continue directly to family-member editor
+      // Exactly 1 number → auto-continue, no sheet
       const { name, email, contactId } = resolveContactFields(contact);
-      const phone = normalizePhone(mobilePhones[0]?.number ?? '') || undefined;
+      const phone = normalizePhone(allPhones[0]?.number ?? '') || undefined;
       onContactSelected({ name, phone, email, contactId });
       onClose();
     }
@@ -183,17 +193,19 @@ export function AddPersonBottomSheet({
     onClose();
   };
 
+  // Stable key: prefer contacts API id, fall back to first phone number
+  const contactKey = (c: Contacts.Contact) =>
+    (c as { id?: string }).id ?? (c.phoneNumbers?.[0]?.number ?? '');
+
   const filteredContacts = contacts.filter((c) => {
     const q = search.toLowerCase();
     if (!q) return true;
+    const allNumbers = (c.phoneNumbers ?? []).map((p) => p.number ?? '').join(' ');
     return (
       (c.name ?? '').toLowerCase().includes(q) ||
-      (getPrimaryPhone(c) ?? '').includes(q)
+      allNumbers.includes(q)
     );
   });
-
-  const contactKey = (c: Contacts.Contact) =>
-    (c as { id?: string }).id ?? getPrimaryPhone(c);
 
   return (
     <Modal
@@ -317,13 +329,11 @@ export function AddPersonBottomSheet({
 
                 {/* Helper text */}
                 <Text style={s.phonePickerHelper}>
-                  באיזה מספר נשתמש עבור{' '}
-                  {disambigContact.name?.trim() || 'בן המשפחה'}?
+                  בחרי את מספר הנייד של איש הקשר
                 </Text>
 
-                {/* FIXED: updated phone label filter to mobile-capable labels only
-                    Show ONLY mobile-capable numbers — no landline/fax fallback */}
-                {getMobilePhones(disambigContact).map((phone, idx) => {
+                {/* FIXED: sheet shows all numbers regardless of label */}
+                {(disambigContact.phoneNumbers ?? []).map((phone, idx) => {
                   const isSelected = selectedPhone === phone.number;
                   return (
                     <Pressable
@@ -379,8 +389,8 @@ export function AddPersonBottomSheet({
               </View>
             )}
 
-            {/* ── No-mobile view — shown when contact has no mobile-capable numbers ── */}
-            {/* FIXED: updated phone label filter to mobile-capable labels only */}
+            {/* ── No-phone view — shown when contact has zero phone numbers ── */}
+            {/* FIXED: removed label filtering — branching now based on total phone count */}
             {view === 'no-mobile' && disambigContact && (
               <View style={s.contactsContainer}>
                 {/* Back header */}
@@ -404,10 +414,10 @@ export function AddPersonBottomSheet({
                 <View style={s.noMobileBox}>
                   <MaterialIcons name="phone-disabled" size={36} color="#cbd5e1" />
                   <Text style={s.noMobileText}>
-                    לא נמצא מספר נייד לאיש קשר זה
+                    לא נמצא מספר טלפון לאיש קשר זה
                   </Text>
                   <Text style={s.noMobileSubText}>
-                    {disambigContact.name?.trim() || 'איש הקשר'} אינו כולל מספר נייד בפנקס הטלפונים.
+                    {disambigContact.name?.trim() || 'איש הקשר'} אינו כולל מספר טלפון בפנקס הטלפונים.
                   </Text>
                 </View>
 
@@ -448,8 +458,15 @@ export function AddPersonBottomSheet({
                 <View style={s.contactsHeader}>
                   <Pressable
                     onPress={() => {
-                      setView('main');
                       setSelectedKey(null);
+                      // FIXED: intermediate sheet now closes before contact picker opens
+                      // When opened directly (skipping 'main'), back closes the sheet entirely
+                      // instead of revealing the intermediate "איך תרצי להוסיף אדם?" view.
+                      if (openContactsDirectly) {
+                        onClose();
+                      } else {
+                        setView('main');
+                      }
                     }}
                     accessible={true}
                     accessibilityRole="button"
@@ -489,7 +506,8 @@ export function AddPersonBottomSheet({
                   renderItem={({ item }) => {
                     const key = contactKey(item);
                     const isSelected = selectedKey === key;
-                    const phone = getPrimaryPhone(item);
+                    // FIXED: show first available phone regardless of label
+                    const phone = item.phoneNumbers?.[0]?.number ?? '';
                     const displayName = item.name?.trim() || phone;
                     return (
                       <Pressable

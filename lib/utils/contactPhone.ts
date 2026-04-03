@@ -15,6 +15,11 @@ export function isMobileCapable(label?: string | null): boolean {
     .trim()
     .replace(/[_-]+/g, ' ');
 
+  // FIXED: phone-selection sheet now correctly opens when contact has 2+ mobile numbers
+  // 'iphone' now has an includes() check alongside its exact-match check,
+  // matching the symmetric pattern used for 'mobile', 'cell', and 'נייד'.
+  // Previously "my iPhone", "iPhone 2", "personal iphone" etc. were silently
+  // excluded, making getMobilePhones() return length 1 and auto-adding the contact.
   return (
     normalized === 'mobile' ||
     normalized === 'cell' ||
@@ -22,6 +27,7 @@ export function isMobileCapable(label?: string | null): boolean {
     normalized === 'נייד' ||
     normalized.includes('mobile') ||
     normalized.includes('cell') ||
+    normalized.includes('iphone') || // was missing — caused silent exclusion of "my iPhone" etc.
     normalized.includes('נייד')
   );
 }
@@ -48,6 +54,35 @@ export function normalizePhone(phone: string): string {
 export function getPrimaryPhone(contact: Contacts.Contact): string {
   const mobilePhones = getMobilePhones(contact);
   return mobilePhones[0]?.number ?? '';
+}
+
+// FIXED: family flow and event flow now preselect default phone when picker opens
+/**
+ * Returns the best default number string to preselect in the phone-picker.
+ * Prefers a number marked isPrimary by the contacts API; falls back to
+ * the first mobile-capable entry in the list.
+ * Returns '' when the list is empty.
+ */
+export function getDefaultPhoneNumber(
+  mobilePhones: NonNullable<Contacts.Contact['phoneNumbers']>
+): string {
+  if (mobilePhones.length === 0) return '';
+  const primary = mobilePhones.find((p) => p.isPrimary);
+  return (primary ?? mobilePhones[0])?.number ?? '';
+}
+
+// FIXED: implemented maskPhone for family-member card secondary identifying line
+/**
+ * Masks a phone number for display, showing only first 3 and last 3 digits.
+ * Example: "0541234567" → "054-XXXX567"
+ */
+export function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 4) return phone;
+  const prefix = digits.slice(0, 3);
+  const suffix = digits.slice(-3);
+  const midLen = Math.max(0, digits.length - 6);
+  return `${prefix}-${'X'.repeat(midLen)}${suffix}`;
 }
 
 /** Human-readable Hebrew label for a phone number entry's label field */

@@ -10,6 +10,8 @@ import {
 import type { SelectedContactData } from '../components/onboarding/AddPersonBottomSheet';
 import type { FamilyMember } from '../contexts/OnboardingContext';
 import { useOnboarding } from '../contexts/OnboardingContext';
+// FIXED: added family-member status fields — maskPhone used when setting selectedPhoneNumber
+import { maskPhone } from '../lib/utils/contactPhone';
 
 export const MAX_PEOPLE = 5;
 export const MAX_PETS = 5;
@@ -21,6 +23,12 @@ export interface PendingMember {
   contactId?: string;
   phone?: string;
   email?: string;
+  // FIXED: added family-member status fields — additive only
+  sourceType?: 'contact' | 'manual';
+  selectedPhoneNumber?: string;
+  maskedPhone?: string;
+  inviteStatus?: 'none' | 'invited' | 'joined';
+  matchedUserId?: string;
 }
 
 /**
@@ -70,6 +78,11 @@ export function useFamilyProfileEditor(
     null
   );
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // FIXED: wired correct actions per family-member status
+  // Tracks which existing member is being converted to a contact-linked record.
+  // Null when adding a new member via the normal flow.
+  const [convertingToContactId, setConvertingToContactId] = useState<string | null>(null);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const personMembers = familyMembers.filter((m) => m.type !== 'pet');
@@ -132,21 +145,29 @@ export function useFamilyProfileEditor(
   };
 
   const handleContactSelected = (data: SelectedContactData) => {
+    // FIXED: added family-member status fields — contact-sourced members get sourceType + phone details
+    const selectedPhone = data.phone ?? '';
     setPendingMember({
       name: data.name,
       color: getAvailablePersonColor(),
       type: 'person',
       contactId: data.contactId,
-      phone: data.phone,
+      phone: selectedPhone,
       email: data.email,
+      sourceType: 'contact',
+      selectedPhoneNumber: selectedPhone || undefined,
+      maskedPhone: selectedPhone ? maskPhone(selectedPhone) : undefined,
+      inviteStatus: 'none',
     });
   };
 
   const startManualAddPerson = () => {
+    // FIXED: added family-member status fields — manual members get sourceType: 'manual'
     setPendingMember({
       name: '',
       color: getAvailablePersonColor(),
       type: 'person',
+      sourceType: 'manual',
     });
   };
 
@@ -170,6 +191,12 @@ export function useFamilyProfileEditor(
       contactId: pendingMember.contactId,
       phone: pendingMember.phone,
       email: pendingMember.email,
+      // FIXED: preserve status fields through confirm
+      sourceType: pendingMember.sourceType,
+      selectedPhoneNumber: pendingMember.selectedPhoneNumber,
+      maskedPhone: pendingMember.maskedPhone,
+      inviteStatus: pendingMember.inviteStatus,
+      matchedUserId: pendingMember.matchedUserId,
     };
     if (editingId) {
       setFamilyMembers((prev) =>
@@ -196,11 +223,62 @@ export function useFamilyProfileEditor(
       contactId: member.contactId,
       phone: member.phone,
       email: member.email,
+      // FIXED: preserve status fields through edit
+      sourceType: member.sourceType,
+      selectedPhoneNumber: member.selectedPhoneNumber,
+      maskedPhone: member.maskedPhone,
+      inviteStatus: member.inviteStatus,
+      matchedUserId: member.matchedUserId,
     });
   };
 
   const removeMember = (id: string) => {
     setFamilyMembers((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  // FIXED: share-sheet invitation — marks inviteStatus as 'invited' after share is initiated.
+  // Changes visible status from "שלח הזמנה" → "שלח שוב".
+  const markMemberInvited = (id: string) => {
+    setFamilyMembers((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, inviteStatus: 'invited' as const } : m))
+    );
+  };
+
+  // FIXED: "הפוך לאיש קשר" — opens the contact sheet targeting an existing member.
+  // Opens the sheet in contacts mode; the caller also sets openSheetToContacts.
+  const startConvertToContact = (member: FamilyMember) => {
+    setConvertingToContactId(member.id);
+    setEditingId(null);
+    setPendingMember(null);
+    setIsBottomSheetOpen(true);
+  };
+
+  // FIXED: "הפוך לאיש קשר" updates existing record in place, preserves existing fields.
+  // Called instead of handleContactSelected when convertingToContactId is set.
+  const handleContactForConversion = (data: SelectedContactData) => {
+    if (!convertingToContactId) return;
+    const selectedPhone = data.phone ?? '';
+    setFamilyMembers((prev) =>
+      prev.map((m) => {
+        if (m.id !== convertingToContactId) return m;
+        // Preserved: id, name, color, type, matchedUserId, and any other existing fields.
+        // Updated: contact-link fields only.
+        return {
+          ...m,
+          contactId: data.contactId,
+          phone: selectedPhone,
+          sourceType: 'contact' as const,
+          selectedPhoneNumber: selectedPhone || undefined,
+          maskedPhone: selectedPhone ? maskPhone(selectedPhone) : undefined,
+          inviteStatus: 'none' as const,
+        };
+      })
+    );
+    setConvertingToContactId(null);
+  };
+
+  const cancelConversion = () => {
+    setConvertingToContactId(null);
   };
 
   const handleSavePersonalName = () => {
@@ -375,5 +453,11 @@ export function useFamilyProfileEditor(
     removeMember,
     handleSavePersonalName,
     handleSaveOwnerName,
+    // FIXED: wired correct actions per family-member status
+    convertingToContactId,
+    markMemberInvited,
+    startConvertToContact,
+    handleContactForConversion,
+    cancelConversion,
   };
 }

@@ -2,6 +2,26 @@ import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 
+// ── Phone normalization ───────────────────────────────────────────────────────
+// FIXED: retroactive phone-based family member matching when contacts are saved
+// Mirrors lib/phoneUtils.ts normalizeIsraeliPhone — duplicated here because
+// Convex backend cannot import from the client lib/ folder.
+function normalizeToE164(phone: string): string | null {
+  const stripped = phone.replace(/[\s\-()]/g, '');
+  if (stripped.startsWith('+972')) return stripped;
+  if (stripped.startsWith('972')) return `+${stripped}`;
+  if (stripped.startsWith('0')) return `+972${stripped.slice(1)}`;
+  if (stripped.startsWith('5')) return `+972${stripped}`;
+  return null;
+}
+
+type FamilyContactEntry = {
+  id: string;
+  selectedPhoneNumber?: string;
+  matchedUserId?: string;
+  [key: string]: unknown;
+};
+
 // שליפת המשתמש הנוכחי המחובר
 // מחזיר null אם המשתמש לא מחובר
 export const getCurrentUser = query({
@@ -246,6 +266,7 @@ export const getMyProfile = query({
 
 // עדכון פרופיל המשתמש הנוכחי (לשימוש חוזר לאחר אונבורדינג)
 // FIXED: family profile persistence — use this instead of finishOnboarding for returning users
+// FIXED: retroactive phone-based family member matching when contacts are saved
 export const updateMyProfile = mutation({
   args: {
     fullName: v.optional(v.string()),
@@ -259,7 +280,31 @@ export const updateMyProfile = mutation({
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.fullName !== undefined) patch.fullName = args.fullName;
     if (args.profileColor !== undefined) patch.profileColor = args.profileColor;
-    if (args.familyContacts !== undefined) patch.familyContacts = args.familyContacts;
+
+    // FIXED: retroactive phone-based family member matching when contacts are saved
+    // Handles the case where the invited user already had a Convex account when added.
+    // Uses by_phone index — O(1) per family member, no table scan needed here.
+    if (args.familyContacts !== undefined) {
+      if (Array.isArray(args.familyContacts)) {
+        const resolved = await Promise.all(
+          (args.familyContacts as FamilyContactEntry[]).map(async (entry) => {
+            if (entry.matchedUserId) return entry; // already matched — do not overwrite
+            if (!entry.selectedPhoneNumber) return entry;
+            const normalizedPhone = normalizeToE164(entry.selectedPhoneNumber);
+            if (!normalizedPhone) return entry;
+            const matchedUser = await ctx.db
+              .query('users')
+              .withIndex('by_phone', (q) => q.eq('phone', normalizedPhone))
+              .unique();
+            if (matchedUser) return { ...entry, matchedUserId: matchedUser._id };
+            return entry;
+          })
+        );
+        patch.familyContacts = resolved;
+      } else {
+        patch.familyContacts = args.familyContacts;
+      }
+    }
 
     await ctx.db.patch(userId, patch);
   },
