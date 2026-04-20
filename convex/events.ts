@@ -227,6 +227,7 @@ export const update = mutation({
 
 // ─────────────────────────────────────────────────────────────
 // ביטול אירוע (מאומת — רק יוצר האירוע, לא מוחק)
+// FIXED: also patches all linkedEvents sourceStatus → 'cancelled'
 // ─────────────────────────────────────────────────────────────
 export const cancelEvent = mutation({
   args: {
@@ -245,6 +246,17 @@ export const cancelEvent = mutation({
       cancelledAt: Date.now(),
       cancelReason,
     });
+
+    // Propagate cancellation to all linked events saved by recipients
+    const linked = await ctx.db
+      .query('linkedEvents')
+      .withIndex('by_source', (q) => q.eq('sourceEventId', eventId))
+      .collect();
+    for (const row of linked) {
+      if (row.sourceStatus !== 'cancelled') {
+        await ctx.db.patch(row._id, { sourceStatus: 'cancelled' });
+      }
+    }
 
     // TODO push notification:
     // notify all participants that the event was cancelled
@@ -279,6 +291,8 @@ export const deleteCancelledEventsPastGracePeriod = mutation({
 
 // ─────────────────────────────────────────────────────────────
 // מחיקת אירוע (מאומת — רק יוצר האירוע)
+// FIXED: patches all linkedEvents sourceStatus → 'deleted' before deleting
+//        so recipients see a tombstone with last-known snapshot data
 // ─────────────────────────────────────────────────────────────
 export const deleteEvent = mutation({
   args: { eventId: v.id('events') },
@@ -288,6 +302,16 @@ export const deleteEvent = mutation({
     const event = await ctx.db.get(eventId);
     if (!event) throw new Error('אירוע לא נמצא');
     if (event.createdBy !== userId) throw new Error('אין הרשאה');
+
+    // Patch linked events before deleting — recipients will fall back to snapshot
+    const linked = await ctx.db
+      .query('linkedEvents')
+      .withIndex('by_source', (q) => q.eq('sourceEventId', eventId))
+      .collect();
+    for (const row of linked) {
+      await ctx.db.patch(row._id, { sourceStatus: 'deleted' });
+    }
+
     await ctx.db.delete(eventId);
   },
 });

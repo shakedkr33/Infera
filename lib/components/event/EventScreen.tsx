@@ -1,16 +1,19 @@
 // FIXED: added EventAttachmentsSection between LocationCard and RecurrenceRow
+// FIXED: post-save success/share sheet for personal events
 import { MaterialIcons } from '@expo/vector-icons';
+import { useMutation, useQuery } from 'convex/react';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useQuery } from 'convex/react';
-import { api } from '@/convex/_generated/api';
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -18,23 +21,32 @@ import {
 } from 'react-native';
 // Alert is still used for save errors
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
 import {
-  DateTimeCard,
   applyDuration,
+  DateTimeCard,
   fmt2,
   roundToNextHour,
 } from '@/lib/components/event/DateTimeCard';
+import { EventAttachmentsSection } from '@/lib/components/event/EventAttachmentsSection';
 // applyDuration is used in makeEmptyEvent to set a sensible default end time
 import {
   LocationCard,
   type LocationUpdate,
 } from '@/lib/components/event/LocationCard';
 import { NotesCard } from '@/lib/components/event/NotesCard';
-import { ParticipantsCard, type FamilyMemberChip } from '@/lib/components/event/ParticipantsCard';
-import { EventAttachmentsSection } from '@/lib/components/event/EventAttachmentsSection';
+import {
+  type FamilyMemberChip,
+  ParticipantsCard,
+} from '@/lib/components/event/ParticipantsCard';
 import { RelatedTasksSection } from '@/lib/components/event/RelatedTasksSection';
 import { RemindersCard } from '@/lib/components/event/RemindersCard';
-import type { EventAttachmentDraft, EventData, RecurrenceType } from '@/lib/types/event';
+import type {
+  EventAttachmentDraft,
+  EventData,
+  RecurrenceType,
+} from '@/lib/types/event';
 import { makeReminder } from '@/lib/types/event';
 
 const PRIMARY = '#36a9e2';
@@ -111,7 +123,12 @@ function isValidDateRange(event: EventData): boolean {
   const [sh, sm] = event.startTime.split(':').map(Number);
   const [eh, em] = event.endTime.split(':').map(Number);
   const startMs = new Date(event.date).setHours(sh ?? 0, sm ?? 0, 0, 0);
-  const endMs = new Date(event.endDate ?? event.date).setHours(eh ?? 0, em ?? 0, 0, 0);
+  const endMs = new Date(event.endDate ?? event.date).setHours(
+    eh ?? 0,
+    em ?? 0,
+    0,
+    0
+  );
   return startMs < endMs;
 }
 
@@ -120,8 +137,11 @@ interface EventScreenProps {
   eventId?: string;
   /** Pre-selected date (midnight Unix ms) when opened from a calendar day tap. */
   selectedDate?: number;
-  /** Called when the user confirms save. Should call the Convex mutation. */
-  onSave?: (data: EventData) => Promise<void>;
+  /**
+   * Called when the user confirms save. Should call the Convex mutation.
+   * Returns the new event ID so the success sheet can generate a share link.
+   */
+  onSave?: (data: EventData) => Promise<string>;
 }
 
 export default function EventScreen({
@@ -141,15 +161,28 @@ export default function EventScreen({
   // so the creator is never shown (they are always implicitly included).
   const serverFamilyContacts = useQuery(api.members.listMyFamilyContacts);
   useEffect(() => {
-    console.log('[DEBUG chips] serverFamilyContacts:', JSON.stringify(serverFamilyContacts));
+    console.log(
+      '[DEBUG chips] serverFamilyContacts:',
+      JSON.stringify(serverFamilyContacts)
+    );
   }, [serverFamilyContacts]);
-  const familyMembers: FamilyMemberChip[] = (serverFamilyContacts?.members ?? [])
+  const familyMembers: FamilyMemberChip[] = (
+    serverFamilyContacts?.members ?? []
+  )
     .filter((m) => m._id !== serverFamilyContacts?.selfEntityId)
     .map((m) => ({ _id: m._id, displayName: m.displayName, color: m.color }));
   const [titleError, setTitleError] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
-  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  );
+
+  // FIXED: success sheet shown after personal event save
+  const [savedEvent, setSavedEvent] = useState<EventData | null>(null);
+  const [savedEventId, setSavedEventId] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const createShareLink = useMutation(api.shareLinks.createShareLink);
 
   const autosave = useCallback(
     (_data: EventData) => {
@@ -191,21 +224,86 @@ export default function EventScreen({
     setIsSaving(true);
     try {
       if (onSave) {
-        await onSave(event);
-      }
-      // Reset form so reopening shows a clean slate
-      setEvent(makeEmptyEvent(selectedDate));
-      // Return to wherever the user came from (calendar, home, etc.)
-      if (router.canGoBack()) {
-        router.back();
+        const newEventId = await onSave(event);
+        // FIXED: show success/share sheet instead of navigating away immediately
+        setSavedEvent({ ...event });
+        setSavedEventId(newEventId);
+        setEvent(makeEmptyEvent(selectedDate));
       } else {
-        router.replace('/(authenticated)');
+        // Details mode without onSave — just go back
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace('/(authenticated)');
+        }
       }
     } catch {
       Alert.alert('שגיאה', 'לא ניתן לשמור. נסה שוב.');
     } finally {
-      // Always unblock the save button — whether nav succeeded, failed, or threw
       setIsSaving(false);
+    }
+  };
+
+  const handleSuccessDone = () => {
+    setSavedEvent(null);
+    setSavedEventId(null);
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(authenticated)');
+    }
+  };
+
+  const handleSuccessShare = async () => {
+    if (!savedEventId || isSharing) return;
+    setIsSharing(true);
+    try {
+      const { token } = await createShareLink({
+        eventId: savedEventId as Id<'events'>,
+      });
+
+      const lines: string[] = [];
+      if (savedEvent?.title) lines.push(savedEvent.title);
+
+      if (savedEvent?.date) {
+        const d = new Date(savedEvent.date);
+        let dateLine = d.toLocaleDateString('he-IL', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+        });
+        if (savedEvent.startTime && !savedEvent.isAllDay) {
+          dateLine += ` · ${savedEvent.startTime}`;
+          if (savedEvent.endTime) dateLine += `–${savedEvent.endTime}`;
+        }
+        lines.push(dateLine);
+      }
+      if (savedEvent?.location) lines.push(`📍 ${savedEvent.location}`);
+
+      const shareText = lines.join('\n');
+
+      // WhatsApp direct link: bypasses iOS Share Sheet so the full text
+      // + https:// link is preserved (Share Sheet strips text around URLs).
+      const webUrl = `https://inyomi.app/shared/${token}`;
+      const whatsappMessage = `${shareText}\n${webUrl}`;
+      const whatsappUrl = `whatsapp://send?text=${encodeURIComponent(whatsappMessage)}`;
+
+      const canOpenWhatsApp = await Linking.canOpenURL('whatsapp://send?text=test');
+      if (canOpenWhatsApp) {
+        await Linking.openURL(whatsappUrl);
+        return;
+      }
+
+      // Fallback for all other apps via Share Sheet.
+      // inyomi:/// is used here because https:// in Share Sheet causes
+      // WhatsApp (if chosen) to strip surrounding text.
+      const deepLinkUrl = `inyomi:///shared/${token}`;
+      const fallbackMessage = `${shareText}\n${deepLinkUrl}`;
+      await Share.share({ message: fallbackMessage });
+    } catch {
+      Alert.alert('שגיאה', 'לא ניתן לשתף כעת. נסה שוב.');
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -311,10 +409,14 @@ export default function EventScreen({
                 isAllDay={event.isAllDay}
                 onChange={(updates) => {
                   const patch: Partial<EventData> = {};
-                  if (updates.startDate !== undefined) patch.date = updates.startDate;
-                  if (updates.startTime !== undefined) patch.startTime = updates.startTime;
-                  if (updates.endDate !== undefined) patch.endDate = updates.endDate;
-                  if (updates.endTime !== undefined) patch.endTime = updates.endTime;
+                  if (updates.startDate !== undefined)
+                    patch.date = updates.startDate;
+                  if (updates.startTime !== undefined)
+                    patch.startTime = updates.startTime;
+                  if (updates.endDate !== undefined)
+                    patch.endDate = updates.endDate;
+                  if (updates.endTime !== undefined)
+                    patch.endTime = updates.endTime;
                   if (updates.isAllDay !== undefined) {
                     patch.isAllDay = updates.isAllDay;
                     if (updates.isAllDay) {
@@ -349,20 +451,21 @@ export default function EventScreen({
                       : event.tasks;
 
                   // FIXED: removing a family member from participants also deselects them in family section
-                  const removedFamilyIds = [...removedIds].filter(
-                    (id) => familyMembers.some((fm) => fm._id === id)
+                  const removedFamilyIds = [...removedIds].filter((id) =>
+                    familyMembers.some((fm) => fm._id === id)
                   );
 
                   if (removedFamilyIds.length > 0) {
-                    const newFamilyIds = (event.sharedWithFamilyMemberIds ?? []).filter(
-                      (id) => !removedFamilyIds.includes(id)
-                    );
+                    const newFamilyIds = (
+                      event.sharedWithFamilyMemberIds ?? []
+                    ).filter((id) => !removedFamilyIds.includes(id));
                     updateEvent({
                       participants: p,
                       tasks,
                       // If "כולם" was on and a member is removed, turn it off
                       allFamily: event.allFamily ? undefined : event.allFamily,
-                      sharedWithFamilyMemberIds: newFamilyIds.length > 0 ? newFamilyIds : undefined,
+                      sharedWithFamilyMemberIds:
+                        newFamilyIds.length > 0 ? newFamilyIds : undefined,
                     });
                   } else {
                     updateEvent({ participants: p, tasks });
@@ -466,7 +569,9 @@ export default function EventScreen({
                 showAllTasksToAll={event.showAllTasksToAll}
                 showToggle={hasMultipleAssignees}
                 onChange={(tasks) => updateEvent({ tasks })}
-                onToggleVisibility={(val) => updateEvent({ showAllTasksToAll: val })}
+                onToggleVisibility={(val) =>
+                  updateEvent({ showAllTasksToAll: val })
+                }
                 onAddParticipants={() => {}}
               />
 
@@ -479,14 +584,23 @@ export default function EventScreen({
         {isCreate && (
           <View style={s.footer}>
             <Pressable
-              style={[s.footerSaveBtn, (!event.title.trim() || isSaving) && s.footerSaveBtnDisabled]}
+              style={[
+                s.footerSaveBtn,
+                (!event.title.trim() || isSaving) && s.footerSaveBtnDisabled,
+              ]}
               onPress={handleSave}
               disabled={!event.title.trim() || isSaving}
               accessible={true}
               accessibilityRole="button"
               accessibilityLabel={isSaving ? 'שומר...' : 'שמור אירוע'}
             >
-              <Text style={[s.footerSaveBtnText, (!event.title.trim() || isSaving) && s.footerSaveBtnTextDisabled]}>
+              <Text
+                style={[
+                  s.footerSaveBtnText,
+                  (!event.title.trim() || isSaving) &&
+                    s.footerSaveBtnTextDisabled,
+                ]}
+              >
                 {isSaving ? 'שומר...' : 'שמור אירוע'}
               </Text>
             </Pressable>
@@ -547,6 +661,98 @@ export default function EventScreen({
             </View>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* FIXED: success/share sheet — shown after personal event is saved */}
+      <Modal
+        visible={savedEvent !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={handleSuccessDone}
+      >
+        <View style={s.successOverlay}>
+          <View style={s.successSheet}>
+            {/* Grabber */}
+            <View style={s.successGrabber} />
+
+            {/* Checkmark + headline */}
+            <View style={s.successHeader}>
+              <View style={s.successCheckCircle}>
+                <MaterialIcons name="check" size={28} color="#fff" />
+              </View>
+              <Text style={s.successHeadline}>האירוע נשמר!</Text>
+            </View>
+
+            {/* Event summary */}
+            {savedEvent && (
+              <View style={s.successCard}>
+                <Text style={s.successEventTitle} numberOfLines={2}>
+                  {savedEvent.title}
+                </Text>
+                <View style={s.successDetailRow}>
+                  <MaterialIcons
+                    name="calendar-today"
+                    size={15}
+                    color={PRIMARY}
+                  />
+                  <Text style={s.successDetailText}>
+                    {new Date(savedEvent.date).toLocaleDateString('he-IL', {
+                      weekday: 'long',
+                      day: 'numeric',
+                      month: 'long',
+                    })}
+                  </Text>
+                </View>
+                {!savedEvent.isAllDay && savedEvent.startTime && (
+                  <View style={s.successDetailRow}>
+                    <MaterialIcons name="schedule" size={15} color={PRIMARY} />
+                    <Text style={s.successDetailText}>
+                      {savedEvent.startTime}
+                      {savedEvent.endTime ? ` — ${savedEvent.endTime}` : ''}
+                    </Text>
+                  </View>
+                )}
+                {savedEvent.location ? (
+                  <View style={s.successDetailRow}>
+                    <MaterialIcons name="place" size={15} color={PRIMARY} />
+                    <Text style={s.successDetailText} numberOfLines={1}>
+                      {savedEvent.location}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            )}
+
+            {/* CTA buttons */}
+            <Pressable
+              style={s.successShareBtn}
+              onPress={handleSuccessShare}
+              disabled={isSharing}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="שיתוף האירוע"
+            >
+              {isSharing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <MaterialIcons name="share" size={20} color="#fff" />
+                  <Text style={s.successShareBtnText}>שיתוף האירוע</Text>
+                </>
+              )}
+            </Pressable>
+
+            <Pressable
+              style={s.successDoneBtn}
+              onPress={handleSuccessDone}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="סיום"
+            >
+              <Text style={s.successDoneBtnText}>סיום</Text>
+            </Pressable>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -832,5 +1038,99 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: PRIMARY,
     textAlign: 'center',
+  },
+
+  // ── Success / share sheet (FIXED) ──────────────────────────────────────────
+  successOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(15,23,42,0.30)',
+  },
+  successSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 24,
+    paddingBottom: 40,
+    paddingTop: 12,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 16,
+    gap: 16,
+  },
+  successGrabber: {
+    width: 48,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#d7dee8',
+    alignSelf: 'center',
+    marginBottom: 4,
+  },
+  successHeader: {
+    alignItems: 'center',
+    gap: 10,
+  },
+  successCheckCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successHeadline: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: 'center',
+  },
+  successCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 16,
+    gap: 10,
+  },
+  successEventTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+  },
+  successDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    justifyContent: 'flex-end',
+  },
+  successDetailText: {
+    fontSize: 13,
+    color: '#374151',
+    textAlign: 'right',
+  },
+  successShareBtn: {
+    backgroundColor: PRIMARY,
+    borderRadius: 16,
+    height: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  successShareBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  successDoneBtn: {
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successDoneBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#6b7280',
   },
 });

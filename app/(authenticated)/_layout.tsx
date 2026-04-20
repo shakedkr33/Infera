@@ -1,7 +1,12 @@
 import { MaterialIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useConvexAuth, useMutation, useQuery } from 'convex/react';
 import { Redirect, Tabs, useRootNavigationState, useRouter } from 'expo-router';
 import { useContext, useEffect, useRef, useState } from 'react';
+
+// Same key exported from app/shared/[token].tsx — kept here as a literal to avoid
+// dynamic-segment import issues in the module resolver.
+const PENDING_SHARE_TOKEN_KEY = 'pendingShareToken';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -179,6 +184,7 @@ export default function AuthenticatedLayout() {
   const savingRef = useRef(false);
 
   const navigationState = useRootNavigationState();
+  const router = useRouter();
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
 
   // Fetch onboarding status — skip the query while not yet authenticated to avoid
@@ -268,6 +274,24 @@ export default function AuthenticatedLayout() {
     finishOnboarding,
     updateData,
   ]);
+
+  // FIXED: restore pending share intent after successful authentication
+  // If user was redirected to sign-in from a shared event preview screen,
+  // the token is stored in AsyncStorage and we navigate back to the preview after login.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    AsyncStorage.getItem(PENDING_SHARE_TOKEN_KEY)
+      .then((pendingToken) => {
+        if (!pendingToken) return;
+        return AsyncStorage.removeItem(PENDING_SHARE_TOKEN_KEY).then(() => {
+          router.push({
+            pathname: '/shared/[token]',
+            params: { token: pendingToken },
+          });
+        });
+      })
+      .catch(() => {});
+  }, [isAuthenticated, router]);
 
   // Wait for: navigation tree, auth state, RevenueCat, and user profile to resolve
   const isUserStatusLoading = isAuthenticated && userStatus === undefined;
@@ -411,6 +435,8 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="community-members/[id]" options={{ href: null }} />
           <Tabs.Screen name="community/[id]" options={{ href: null }} />
           <Tabs.Screen name="community-reminder/new" options={{ href: null }} />
+          {/* FIXED: linked-event detail screen — hidden from tab bar */}
+          <Tabs.Screen name="linked-event/[id]" options={{ href: null }} />
         </Tabs>
 
         <ActionSheetModal

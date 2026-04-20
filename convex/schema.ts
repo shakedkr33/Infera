@@ -308,4 +308,52 @@ export default defineSchema({
     .index('by_community', ['communityId'])
     .index('by_user', ['userId'])
     .index('by_community_user', ['communityId', 'userId']),
+
+  // ═══════════════════════════════════════════════════════
+  // שיתוף אירועים אישיים — קישורי שיתוף
+  // FIXED: one active link per event (enforced in createShareLink mutation)
+  // ═══════════════════════════════════════════════════════
+  shareLinks: defineTable({
+    eventId:   v.id('events'),
+    token:     v.string(),       // random 24-char alphanumeric — same pattern as communities.inviteCode
+    createdBy: v.id('users'),    // event owner
+    revoked:   v.boolean(),
+    createdAt: v.number(),
+  })
+    .index('by_token',   ['token'])
+    .index('by_event',   ['eventId'])
+    .index('by_creator', ['createdBy']),
+
+  // ═══════════════════════════════════════════════════════
+  // שיתוף אירועים אישיים — אירועים מקושרים (ביומן הנמען)
+  // FIXED: snapshot used only for sourceStatus='deleted'; live data read from source otherwise
+  // ═══════════════════════════════════════════════════════
+  linkedEvents: defineTable({
+    sourceEventId:  v.id('events'),
+    shareToken:     v.string(),
+    savedByUserId:  v.id('users'),    // recipient — internal only, never exposed to owner
+    ownerUserId:    v.id('users'),    // event owner — stamped at save time
+    spaceId:        v.id('spaces'),   // recipient's own space
+
+    // patched by deleteEvent / cancelEvent mutations
+    sourceStatus: v.union(
+      v.literal('active'),
+      v.literal('deleted'),
+      v.literal('cancelled'),
+    ),
+
+    // snapshot — populated at save time
+    // used ONLY when sourceStatus = 'deleted' (tombstone fallback)
+    // when active or cancelled, display data is read live from the source event
+    snapshotTitle:     v.string(),
+    snapshotStartTime: v.number(),
+    snapshotEndTime:   v.number(),
+    snapshotLocation:  v.optional(v.string()),
+
+    savedAt: v.number(),
+  })
+    .index('by_recipient',            ['savedByUserId'])
+    .index('by_recipient_and_source', ['savedByUserId', 'sourceEventId'])
+    .index('by_source',               ['sourceEventId'])
+    .index('by_space',                ['spaceId']),
 });

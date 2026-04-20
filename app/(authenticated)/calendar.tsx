@@ -486,13 +486,20 @@ export default function CalendarScreen(): React.JSX.Element {
       spaceId ? { spaceId: spaceId as Id<'spaces'>, from: monthRange.from, to: monthRange.to } : 'skip'
     ) ?? [];
 
+  // FIXED: linked (shared) events for the displayed month — shown as dots alongside personal events
+  const linkedEvents =
+    useQuery(
+      api.linkedEvents.getLinkedEventsForSpace,
+      spaceId ? { spaceId: spaceId as Id<'spaces'>, from: monthRange.from, to: monthRange.to } : 'skip'
+    ) ?? [];
+
   // === Calendar grid data ===
   const grid = useMemo(() => {
     if (isFiltered) {
       // Community filter active — suppress personal event dots
       return generateCalendarGrid(displayYear, displayMonth, {});
     }
-    if (personalEvents.length === 0) {
+    if (personalEvents.length === 0 && linkedEvents.length === 0) {
       // No personal events (or still loading) — fall back to empty dots
       return generateCalendarGrid(displayYear, displayMonth, {});
     }
@@ -514,8 +521,26 @@ export default function CalendarScreen(): React.JSX.Element {
         assigneeColors: [],
       });
     }
+    // FIXED: add linked event dots with a distinct teal-blue shade
+    for (const ev of linkedEvents) {
+      const d = new Date(ev.startTime);
+      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth) continue;
+      const day = d.getDate();
+      if (!eventsByDay[day]) eventsByDay[day] = [];
+      eventsByDay[day].push({
+        id: ev._id,
+        title: ev.title,
+        time: ev.allDay
+          ? ''
+          : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+        category: 'משותף',
+        categoryColor: '#0284c7',
+        assigneeColors: [],
+        cancelled: ev.sourceStatus === 'cancelled',
+      });
+    }
     return generateCalendarGrid(displayYear, displayMonth, eventsByDay);
-  }, [displayYear, displayMonth, isFiltered, personalEvents]);
+  }, [displayYear, displayMonth, isFiltered, personalEvents, linkedEvents]);
 
   // === Dynamic panel heights based on number of weeks ===
   const compactPanelHeight =

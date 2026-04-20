@@ -118,20 +118,39 @@ function OverflowMenu({
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
+// FIXED: guard against non-Convex route params (e.g. mock item ids like "1", "2")
+// Convex IDs are base62-encoded strings; a length < 8 is never a valid Id<'events'>.
+function isValidConvexId(value: string | undefined): boolean {
+  return typeof value === 'string' && value.length >= 8;
+}
+
 export default function EventDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const eventId = id as Id<'events'>;
+  // Guard: only cast to Id<'events'> when the param looks like a real Convex ID.
+  // If the guard fails we skip all queries (pass 'skip') and show the not-found state.
+  const eventId = isValidConvexId(id) ? (id as Id<'events'>) : null;
 
-  const event = useQuery(api.events.getById, { eventId });
-  const rsvps = useQuery(api.eventRsvps.listByEvent, { eventId });
-  const eventTasks = useQuery(api.eventTasks.listByEvent, { eventId });
+  const event = useQuery(
+    api.events.getById,
+    eventId ? { eventId } : 'skip'
+  );
+  const rsvps = useQuery(
+    api.eventRsvps.listByEvent,
+    eventId ? { eventId } : 'skip'
+  );
+  const eventTasks = useQuery(
+    api.eventTasks.listByEvent,
+    eventId ? { eventId } : 'skip'
+  );
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
 
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const removeEventTask = useMutation(api.eventTasks.remove);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
+  // FIXED: link-based sharing for personal events (no communityId)
+  const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
 
   const communityMembersData = useQuery(
     api.communities.getCommunityMembers,
@@ -165,6 +184,7 @@ export default function EventDetailScreen() {
 
   const handleRsvp = useCallback(
     (status: RsvpStatus) => {
+      if (!eventId) return;
       upsertRsvp({ eventId, status }).catch(() =>
         Alert.alert('שגיאה', 'לא ניתן לשמור תגובה')
       );
@@ -173,7 +193,7 @@ export default function EventDetailScreen() {
   );
 
   const handleCancelEvent = useCallback(async () => {
-    if (!event) return;
+    if (!event || !eventId) return;
     setShowCancelDialog(false);
     try {
       await cancelEventMutation({
@@ -196,21 +216,64 @@ export default function EventDetailScreen() {
     }
   }, [event, eventId, cancelEventMutation, cancelReason, router]);
 
+  // FIXED: always embed URL inside message — never use the separate `url` field.
+  // Passing `url` as a second Share.share argument causes iOS UIActivityViewController
+  // to treat it as an attachment object; WhatsApp then shows only the URL card and
+  // silently drops the message text. Embedding the https:// link directly inside
+  // `message` is reliable on both iOS and Android: messaging apps auto-linkify it.
   const handleShare = useCallback(() => {
     if (!event) return;
-    let message = event.title;
-    message += `\n${formatFullDate(event.startTime)}`;
-    if (!event.allDay) message += ` • ${formatTime(event.startTime)}`;
-    if (event.location) message += `\n📍 ${event.location}`;
-    // Delay so ⋯ menu modal has fully dismissed before system Share sheet opens
-    setTimeout(async () => {
+    const isPersonalEvent = !event.communityId;
+
+    const doShare = async () => {
+      // Build the human-readable text block (title + date + location)
+      const lines: string[] = [event.title];
+      let dateLine = formatFullDate(event.startTime);
+      if (!event.allDay) dateLine += ` · ${formatTime(event.startTime)}`;
+      lines.push(dateLine);
+      if (event.location) lines.push(`📍 ${event.location}`);
+      const shareText = lines.join('\n');
+
+      if (isPersonalEvent && eventId) {
+        try {
+          const { token } = await createShareLinkMutation({ eventId });
+
+          // WhatsApp direct link: bypasses iOS Share Sheet so the full text
+          // + https:// link is preserved (Share Sheet strips text around URLs).
+          const webUrl = `https://inyomi.app/shared/${token}`;
+          const whatsappMessage = `${shareText}\n${webUrl}`;
+          const whatsappUrl = `whatsapp://send?text=${encodeURIComponent(whatsappMessage)}`;
+
+          const canOpenWhatsApp = await Linking.canOpenURL('whatsapp://send?text=test');
+          console.log('CAN OPEN WHATSAPP:', canOpenWhatsApp);
+          if (canOpenWhatsApp) {
+            await Linking.openURL(whatsappUrl);
+            return;
+          }
+
+          // Fallback for all other apps via Share Sheet.
+          // inyomi:/// is used here because https:// in Share Sheet causes
+          // WhatsApp (if chosen) to strip surrounding text.
+          const deepLinkUrl = `inyomi:///shared/${token}`;
+          const fallbackMessage = `${shareText}\n${deepLinkUrl}`;
+          await Share.share({ message: fallbackMessage });
+          return;
+        } catch {
+          // Fall back to text-only share if link generation fails
+        }
+      }
+
+      // Community events or fallback: text-only share
       try {
-        await Share.share({ message });
+        await Share.share({ message: shareText });
       } catch (e) {
         console.error('Share failed:', e);
       }
-    }, 300);
-  }, [event]);
+    };
+
+    // Delay so ⋯ menu modal has fully dismissed before system Share sheet opens
+    setTimeout(() => { doShare(); }, 300);
+  }, [event, eventId, createShareLinkMutation]);
 
   const overflowItems = useMemo<OverflowItem[]>(() => {
     const items: OverflowItem[] = [
@@ -240,6 +303,27 @@ export default function EventDetailScreen() {
     }
     return items;
   }, [handleShare, event?.status, eventId, router]);
+
+  // ── Invalid route param (e.g. mock item ids like "1", "2")
+  if (!eventId) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.centered}>
+          <Ionicons name="alert-circle-outline" size={48} color="#d1d5db" />
+          <Text style={styles.notFoundText}>אירוע לא נמצא</Text>
+          <TouchableOpacity
+            style={styles.errorBackBtn}
+            onPress={() => router.replace('/(authenticated)' as Parameters<typeof router.replace>[0])}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="חזור"
+          >
+            <Text style={styles.errorBackBtnText}>חזור</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   // ── Loading
   if (event === undefined) {

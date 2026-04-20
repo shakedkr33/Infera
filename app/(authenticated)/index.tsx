@@ -75,6 +75,8 @@ type Item = {
   rsvpStatus?: 'none' | 'yes' | 'no' | 'maybe';
   communityId?: string; // set only for community events — used to route to event detail
   personalTaskSummary?: string; // set when current user has assigned tasks in this event
+  // FIXED: linkedEventId set on linked shared events → routes to linked-event/[id] detail
+  linkedEventId?: string;
 };
 
 type UndatedTask = {
@@ -273,49 +275,11 @@ export default function HomeScreen() {
     calendarDays.push(new Date(year, month, d));
   for (let d = 1; d <= 7; d++) calendarDays.push(new Date(year, month + 1, d));
 
-  // ── Items ──────────────────────────────────────────────────────────────────
-  const [items, setItems] = useState<Item[]>([
-    {
-      id: '1',
-      time: '13:30',
-      title: 'איסוף מהגן',
-      location: 'גן שושנים',
-      type: 'event',
-      icon: 'child-care',
-      iconBg: '#FFF4E6',
-      iconColor: '#FF922B',
-      assigneeColor: '#36a9e2',
-      completed: false,
-      groupName: 'ילדים',
-    },
-    {
-      id: '2',
-      time: '16:00',
-      title: 'לקנות חלב ולחם',
-      location: 'סופר שכונתי',
-      type: 'task',
-      completed: false,
-      icon: 'shopping-cart',
-      iconBg: '#E7F5FF',
-      iconColor: '#228BE6',
-      assigneeColor: '#FFD1DC',
-    },
-    {
-      id: '3',
-      time: '17:30',
-      title: 'חוג כדורגל (בן 6)',
-      location: 'מגרש ספורט קהילתי',
-      type: 'event',
-      icon: 'fitness-center',
-      iconBg: '#F3F0FF',
-      iconColor: '#7950F2',
-      assigneeColor: '#FFD1DC',
-      completed: false,
-      pending: true,
-      rsvpStatus: 'none',
-      groupName: 'ספורט',
-    },
-  ]);
+  // FIXED: removed hardcoded mock items (id:'1','2','3') that caused
+  // ArgumentValidationError when users tapped them and pressed "עריכה" —
+  // the mock IDs were passed as Id<'events'> to Convex which rejected them.
+  // Real data from Convex now fills the timeline; no placeholder needed.
+  const [items, setItems] = useState<Item[]>([]);
 
   // ── Community: date range for selectedDate ────────────────────────────────
   const { from, to } = useMemo(() => {
@@ -333,6 +297,13 @@ export default function HomeScreen() {
   const personalEventData =
     useQuery(
       api.events.listByDateRange,
+      spaceId ? { spaceId: spaceId as Id<'spaces'>, from, to } : 'skip'
+    ) ?? [];
+
+  // FIXED: linked (shared) events for selected date — merged into timeline
+  const linkedEventData =
+    useQuery(
+      api.linkedEvents.getLinkedEventsForSpace,
       spaceId ? { spaceId: spaceId as Id<'spaces'>, from, to } : 'skip'
     ) ?? [];
 
@@ -476,6 +447,44 @@ export default function HomeScreen() {
     [personalEventData]
   );
 
+  // FIXED: linked (shared) events mapped to Item shape
+  const linkedEventItems: Item[] = useMemo(
+    () =>
+      linkedEventData.map((ev) => {
+        const isCancelled = ev.sourceStatus === 'cancelled';
+        const isDeleted = ev.sourceStatus === 'deleted';
+        return {
+          id: ev._id,
+          time: ev.allDay
+            ? ''
+            : new Date(ev.startTime).toLocaleTimeString('he-IL', {
+                hour: '2-digit',
+                minute: '2-digit',
+              }),
+          endTime:
+            !ev.allDay && ev.endTime != null
+              ? new Date(ev.endTime).toLocaleTimeString('he-IL', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : undefined,
+          title: ev.title,
+          location: ev.location ?? '',
+          type: 'event' as const,
+          icon: 'link',
+          iconBg: isCancelled || isDeleted ? '#f3f4f6' : '#eff8ff',
+          iconColor: isCancelled || isDeleted ? '#9ca3af' : '#0284c7',
+          assigneeColor: '#0284c7',
+          completed: false,
+          allDay: ev.allDay,
+          // Small status label in the groupName slot
+          groupName: isDeleted ? 'נמחק' : isCancelled ? 'בוטל' : 'משותף',
+          linkedEventId: ev._id, // routes to linked-event/[id] on tap
+        };
+      }),
+    [linkedEventData]
+  );
+
   // ── All-day section: community + personal all-day events ──────────────────
   const allDayEvents = useMemo(() => {
     const communityAllDay = communityEventItems
@@ -484,8 +493,12 @@ export default function HomeScreen() {
     const personalAllDay = personalEventItems
       .filter((i) => i.allDay)
       .map((i) => ({ id: i.id, title: i.title, iconColor: i.iconColor, groupName: undefined }));
-    return [...communityAllDay, ...personalAllDay];
-  }, [communityEventItems, personalEventItems]);
+    // FIXED: include linked all-day events in all-day strip
+    const linkedAllDay = linkedEventItems
+      .filter((i) => i.allDay)
+      .map((i) => ({ id: i.id, title: i.title, iconColor: i.iconColor, groupName: i.groupName }));
+    return [...communityAllDay, ...personalAllDay, ...linkedAllDay];
+  }, [communityEventItems, personalEventItems, linkedEventItems]);
 
   // allItems = personal events + tasks (today) + mock items + community events + assigned tasks
   const allItems = useMemo(() => {
@@ -495,12 +508,15 @@ export default function HomeScreen() {
     // communityEventItems uses event._id; assignedTaskItems uses task._id — no collision.
     // Deduplicate by id as a conservative guard.
     const timedAssignedTasks = assignedTaskItems.filter((i) => !i.allDay);
+    // FIXED: linked events merged into timeline (timed only; all-day handled separately)
+    const timedLinkedEvents = linkedEventItems.filter((i) => !i.allDay);
     const seen = new Set<string>();
     const deduped: Item[] = [];
     for (const item of [
       ...todayTasks,
       ...items,
       ...timedPersonalEvents,
+      ...timedLinkedEvents,
       ...timedCommunityEvents,
       ...timedAssignedTasks,
     ]) {
@@ -519,7 +535,7 @@ export default function HomeScreen() {
       if (!b.time) return -1;
       return toMinutes(a.time) - toMinutes(b.time);
     });
-  }, [todayTasks, items, personalEventItems, communityEventItems, assignedTaskItems]);
+  }, [todayTasks, items, personalEventItems, linkedEventItems, communityEventItems, assignedTaskItems]);
 
   // ── Convex: undated tasks ──────────────────────────────────────────────────
   const convexUndatedTasks = useQuery(
@@ -624,6 +640,12 @@ export default function HomeScreen() {
       router.push({
         pathname: '/(authenticated)/event/[id]',
         params: { id: item.id },
+      });
+    } else if (item.linkedEventId) {
+      // FIXED: linked (shared) events → navigate to read-only linked-event detail
+      router.push({
+        pathname: '/(authenticated)/linked-event/[id]',
+        params: { id: item.linkedEventId },
       });
     } else {
       // Personal events → open generic bottom sheet

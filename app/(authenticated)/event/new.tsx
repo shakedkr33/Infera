@@ -829,7 +829,7 @@ export default function NewEventScreen(): React.JSX.Element {
   const selectedDate = selectedDateParam ? Number(selectedDateParam) : undefined;
 
   const handlePersonalSave = useCallback(
-    async (data: EventData): Promise<void> => {
+    async (data: EventData): Promise<string> => {
       // Block save if spaceId hasn't resolved — an event without spaceId
       // is invisible to listByDateRange and will never appear in the calendar.
       if (spaceId === undefined) {
@@ -878,7 +878,8 @@ export default function NewEventScreen(): React.JSX.Element {
 
       // FIXED: family sharing saved to event on creation
       // Let any Convex errors propagate — EventScreen.handleSave catches them
-      await createEvent({
+      // FIXED: return eventId so EventScreen can show the post-save success/share sheet
+      const newEventId = await createEvent({
         title: data.title,
         startTime: startMs,
         endTime: endMs,
@@ -894,6 +895,7 @@ export default function NewEventScreen(): React.JSX.Element {
         attachments:
           resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
       });
+      return newEventId;
     },
     [createEvent, generateUploadUrl, spaceId]
   );

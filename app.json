@@ -19,15 +19,38 @@
       "infoPlist": {
         "ExpoLocalization_supportsRTL": true,
         "ExpoLocalization_forcesRTL": true,
-        "ITSAppUsesNonExemptEncryption": false
-      }
+        "ITSAppUsesNonExemptEncryption": false,
+        "LSApplicationQueriesSchemes": ["whatsapp"]
+      },
+      "associatedDomains": [
+        "applinks:inyomi.app"
+      ]
     },
     "android": {
       "package": "com.shakedkr.inyomi",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
-      }
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "inyomi.app",
+              "pathPrefix": "/shared/"
+            },
+            {
+              "scheme": "https",
+              "host": "inyomi.app",
+              "pathPrefix": "/join/"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
       "favicon": "./assets/images/favicon.png"
