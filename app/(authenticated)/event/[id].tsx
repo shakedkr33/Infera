@@ -238,25 +238,10 @@ export default function EventDetailScreen() {
         try {
           const { token } = await createShareLinkMutation({ eventId });
 
-          // WhatsApp direct link: bypasses iOS Share Sheet so the full text
-          // + https:// link is preserved (Share Sheet strips text around URLs).
-          const webUrl = `https://inyomi.app/shared/${token}`;
-          const whatsappMessage = `${shareText}\n${webUrl}`;
-          const whatsappUrl = `whatsapp://send?text=${encodeURIComponent(whatsappMessage)}`;
-
-          const canOpenWhatsApp = await Linking.canOpenURL('whatsapp://send?text=test');
-          console.log('CAN OPEN WHATSAPP:', canOpenWhatsApp);
-          if (canOpenWhatsApp) {
-            await Linking.openURL(whatsappUrl);
-            return;
-          }
-
-          // Fallback for all other apps via Share Sheet.
-          // inyomi:/// is used here because https:// in Share Sheet causes
-          // WhatsApp (if chosen) to strip surrounding text.
-          const deepLinkUrl = `inyomi:///shared/${token}`;
-          const fallbackMessage = `${shareText}\n${deepLinkUrl}`;
-          await Share.share({ message: fallbackMessage });
+          // FIXED: clickable HTTPS share link
+          const shareUrl = `https://inyomi.com/shared/${token}`;
+          const finalMessage = `${shareText}\n\n${shareUrl}`;
+          await Share.share({ message: finalMessage });
           return;
         } catch {
           // Fall back to text-only share if link generation fails
