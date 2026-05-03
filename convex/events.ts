@@ -1,6 +1,8 @@
 // FIXED: added generateUploadUrl, getAttachmentUrl, and attachment support to create + update
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
+import type { Id } from './_generated/dataModel';
+import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 
 // ─── Attachment arg validator ──────────────────────────────────────────────────
@@ -13,6 +15,53 @@ const attachmentObject = v.object({
   mimeType: v.string(),
   sizeBytes: v.number(),
 });
+
+async function getCommunityMembership(
+  ctx: MutationCtx | QueryCtx,
+  communityId: Id<'communities'>,
+  userId: Id<'users'>
+) {
+  return await ctx.db
+    .query('communityMembers')
+    .withIndex('by_community_user', (q) =>
+      q.eq('communityId', communityId).eq('userId', userId)
+    )
+    .unique();
+}
+
+/** Creator, community owner, or admin always see community events on home/calendar aggregates. */
+function isCommunityEventPrivilegedForCalendar(
+  eventCreatedBy: Id<'users'>,
+  viewerUserId: Id<'users'>,
+  membershipRole: 'owner' | 'admin' | 'member'
+): boolean {
+  if (eventCreatedBy === viewerUserId) return true;
+  if (membershipRole === 'owner' || membershipRole === 'admin') return true;
+  return false;
+}
+
+/**
+ * Regular members only see a community event on personal home/calendar lists when RSVP is yes.
+ * Uses existing eventRsvps rows; membership is active unless status === "left".
+ */
+function shouldIncludeCommunityEventForPersonalAggregates(args: {
+  eventCreatedBy: Id<'users'>;
+  viewerUserId: Id<'users'>;
+  membershipRole: 'owner' | 'admin' | 'member';
+  rsvpStatus: 'yes' | 'no' | 'maybe' | 'none' | undefined;
+}): boolean {
+  const { eventCreatedBy, viewerUserId, membershipRole, rsvpStatus } = args;
+  if (
+    isCommunityEventPrivilegedForCalendar(
+      eventCreatedBy,
+      viewerUserId,
+      membershipRole
+    )
+  ) {
+    return true;
+  }
+  return rsvpStatus === 'yes';
+}
 
 // ─────────────────────────────────────────────────────────────
 // יצירת URL להעלאת קובץ ל-Convex Storage
@@ -42,7 +91,20 @@ export const getAttachmentUrl = query({
 export const getById = query({
   args: { eventId: v.id('events') },
   handler: async (ctx, { eventId }) => {
-    return await ctx.db.get(eventId);
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const event = await ctx.db.get(eventId);
+    if (!event) return null;
+
+    if (event.communityId) {
+      const membership = await getCommunityMembership(ctx, event.communityId, userId);
+      if (!membership || membership.status === 'left') return null;
+      return event;
+    }
+
+    if (event.createdBy !== userId) return null;
+    return event;
   },
 });
 
@@ -58,6 +120,16 @@ export const listByCommunityPaged = query({
     toTime: v.optional(v.number()),
   },
   handler: async (ctx, { communityId, cursor, numItems, fromTime, toTime }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return { page: [], isDone: true, continueCursor: '' };
+    }
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!membership || membership.status === 'left') {
+      return { page: [], isDone: true, continueCursor: '' };
+    }
+
     const from = fromTime ?? 0;
     const to = toTime ?? 9_999_999_999_999; // far future
     return await ctx.db
@@ -78,12 +150,35 @@ export const listByCommunityPaged = query({
 export const listByCommunity = query({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
-    return await ctx.db
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!membership || membership.status === 'left') return [];
+
+    const userRsvps = await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const rsvpByEventId = new Map(
+      userRsvps.map((r) => [r.eventId as string, r.status])
+    );
+
+    const events = await ctx.db
       .query('events')
       .withIndex('by_community_date', (q) => q.eq('communityId', communityId))
       .filter((q) => q.neq(q.field('status'), 'cancelled'))
       .order('asc')
       .collect();
+
+    return events.filter((ev) =>
+      shouldIncludeCommunityEventForPersonalAggregates({
+        eventCreatedBy: ev.createdBy,
+        viewerUserId: userId,
+        membershipRole: membership.role,
+        rsvpStatus: rsvpByEventId.get(ev._id),
+      })
+    );
   },
 });
 
@@ -131,6 +226,7 @@ export const create = mutation({
     participants: v.optional(v.array(v.string())),
     sharedWithUserIds: v.optional(v.array(v.id('users'))),
     communityId: v.optional(v.id('communities')),
+    tasksVisibleToParticipants: v.optional(v.boolean()),
     requiresRsvp: v.optional(v.boolean()),
     // FIXED: added family sharing fields to create mutation
     allFamily: v.optional(v.boolean()),
@@ -143,6 +239,28 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
+
+    if (args.communityId) {
+      const community = await ctx.db.get(args.communityId);
+      if (!community || community.archived) {
+        throw new Error('קהילה לא נמצאה');
+      }
+      const membership = await getCommunityMembership(
+        ctx,
+        args.communityId,
+        userId
+      );
+      const isOwnerByCommunityRecord = community.ownerId === userId;
+      const isOwnerOrAdminMembership =
+        membership &&
+        membership.status !== 'left' &&
+        (membership.role === 'owner' || membership.role === 'admin');
+      const canCreateCommunityEvent =
+        isOwnerByCommunityRecord || Boolean(isOwnerOrAdminMembership);
+      if (!canCreateCommunityEvent) {
+        throw new Error('רק בעלים או מנהלי קהילה יכולים ליצור אירוע קהילתי');
+      }
+    }
 
     if (args.attachments && args.attachments.length > 2) {
       throw new Error('לא ניתן לצרף יותר מ-2 קבצים לאירוע');
@@ -159,6 +277,7 @@ export const create = mutation({
     return await ctx.db.insert('events', {
       ...args,
       attachments: stamped,
+      tasksVisibleToParticipants: args.tasksVisibleToParticipants ?? false,
       isAiGenerated: false,
       createdBy: userId,
       createdAt: now,
@@ -189,6 +308,7 @@ export const update = mutation({
     sharedWithUserIds: v.optional(v.array(v.id('users'))),
     allFamily: v.optional(v.boolean()),
     sharedWithFamilyMemberIds: v.optional(v.array(v.string())),
+    tasksVisibleToParticipants: v.optional(v.boolean()),
     requiresRsvp: v.optional(v.boolean()),
     // FIXED: file attachments (max 2; backend diffs and deletes removed files from storage)
     attachments: v.optional(v.array(attachmentObject)),
@@ -201,8 +321,24 @@ export const update = mutation({
 
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('אירוע לא נמצא');
-    if (existing.createdBy !== userId)
+    if (existing.communityId) {
+      const membership = await getCommunityMembership(
+        ctx,
+        existing.communityId,
+        userId
+      );
+      if (!membership || membership.status === 'left') {
+        throw new Error('אין הרשאה לערוך את האירוע');
+      }
+      const isCreator = existing.createdBy === userId;
+      const isOwnerOrAdmin =
+        membership.role === 'owner' || membership.role === 'admin';
+      if (!isCreator && !isOwnerOrAdmin) {
+        throw new Error('אין הרשאה לערוך את האירוע');
+      }
+    } else if (existing.createdBy !== userId) {
       throw new Error('אין הרשאה לערוך את האירוע');
+    }
 
     let stampedAttachments: typeof existing.attachments | undefined;
     if (attachments !== undefined) {
@@ -258,7 +394,18 @@ export const cancelEvent = mutation({
     if (!userId) throw new Error('לא מחובר');
     const event = await ctx.db.get(eventId);
     if (!event) throw new Error('אירוע לא נמצא');
-    if (event.createdBy !== userId) throw new Error('אין הרשאה');
+    if (event.communityId) {
+      const membership = await getCommunityMembership(ctx, event.communityId, userId);
+      if (!membership || membership.status === 'left') {
+        throw new Error('אין הרשאה');
+      }
+      const isCreator = event.createdBy === userId;
+      const isOwnerOrAdmin =
+        membership.role === 'owner' || membership.role === 'admin';
+      if (!isCreator && !isOwnerOrAdmin) throw new Error('אין הרשאה');
+    } else if (event.createdBy !== userId) {
+      throw new Error('אין הרשאה');
+    }
 
     await ctx.db.patch(eventId, {
       status: 'cancelled',
@@ -321,7 +468,18 @@ export const deleteEvent = mutation({
     if (!userId) throw new Error('לא מחובר');
     const event = await ctx.db.get(eventId);
     if (!event) throw new Error('אירוע לא נמצא');
-    if (event.createdBy !== userId) throw new Error('אין הרשאה');
+    if (event.communityId) {
+      const membership = await getCommunityMembership(ctx, event.communityId, userId);
+      if (!membership || membership.status === 'left') {
+        throw new Error('אין הרשאה');
+      }
+      const isCreator = event.createdBy === userId;
+      const isOwnerOrAdmin =
+        membership.role === 'owner' || membership.role === 'admin';
+      if (!isCreator && !isOwnerOrAdmin) throw new Error('אין הרשאה');
+    } else if (event.createdBy !== userId) {
+      throw new Error('אין הרשאה');
+    }
 
     // Patch linked events before deleting — recipients will fall back to snapshot
     const linked = await ctx.db
@@ -371,8 +529,16 @@ export const listCommunityEventsForDate = query({
 
     const activeMembers = memberships.filter((m) => m.status !== 'left');
 
+    const userRsvps = await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const rsvpByEventId = new Map(
+      userRsvps.map((r) => [r.eventId as string, r.status])
+    );
+
     const results = await Promise.all(
-      activeMembers.map(async ({ communityId }) => {
+      activeMembers.map(async ({ communityId, role }) => {
         const community = await ctx.db.get(communityId);
         if (!community || community.archived) return [];
 
@@ -388,6 +554,14 @@ export const listCommunityEventsForDate = query({
 
         return events
           .filter((ev) => ev.status !== 'cancelled')
+          .filter((ev) =>
+            shouldIncludeCommunityEventForPersonalAggregates({
+              eventCreatedBy: ev.createdBy,
+              viewerUserId: userId,
+              membershipRole: role,
+              rsvpStatus: rsvpByEventId.get(ev._id),
+            })
+          )
           .map((ev) => ({
             _id: ev._id,
             title: ev.title,

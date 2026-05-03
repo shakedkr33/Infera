@@ -2,7 +2,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,60 @@ import type { Id } from '@/convex/_generated/dataModel';
 
 const { height: screenHeight } = Dimensions.get('window');
 const SHEET_HEIGHT = screenHeight * 0.9;
+const RSVP_DETAIL_MODAL_MAX_HEIGHT = screenHeight * 0.62;
+const RSVP_DETAIL_SCROLL_MAX_HEIGHT = RSVP_DETAIL_MODAL_MAX_HEIGHT - 160;
+
+/** RSVP — strong fills + borders so controls read as real buttons on light cards */
+const MEMBER_RSVP_OPTIONS = [
+  {
+    status: 'yes' as const,
+    label: 'כן',
+    selectedBg: '#dcfce7',
+    selectedBorder: '#16a34a',
+    selectedText: '#14532d',
+  },
+  {
+    status: 'maybe' as const,
+    label: 'אולי',
+    selectedBg: '#fef3c7',
+    selectedBorder: '#d97706',
+    selectedText: '#92400e',
+  },
+  {
+    status: 'no' as const,
+    label: 'לא',
+    selectedBg: '#fee2e2',
+    selectedBorder: '#dc2626',
+    selectedText: '#991b1b',
+  },
+] as const;
+
+const RSVP_BTN_BORDER_IDLE = '#475569';
+/** Must contrast with sectionCard (#f8fafc) — white alone reads as “text only” */
+const RSVP_BTN_BG_IDLE = '#eef2f7';
+
+function getBottomSheetRsvpHelperText(
+  status: 'yes' | 'no' | 'maybe' | 'none'
+): string | null {
+  if (status === 'yes') {
+    return 'אישרת הגעה';
+  }
+  if (status === 'maybe') {
+    return 'סימנת אולי';
+  }
+  if (status === 'no') {
+    return 'סימנת שלא תגיע/י';
+  }
+  return null;
+}
+
+function rsvpRowDisplayName(row: {
+  displayName?: string;
+  userId: string;
+}): string {
+  const trimmed = row.displayName?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : 'משתמש';
+}
 
 export interface EventItem {
   id: string;
@@ -77,6 +131,8 @@ export function EventDetailsBottomSheet({
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [navPickerOpen, setNavPickerOpen] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [participantRsvpDetailsOpen, setParticipantRsvpDetailsOpen] =
+    useState(false);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
   const isClosingRef = useRef(false);
   const [isClosingState, setIsClosingState] = useState(false);
@@ -130,6 +186,12 @@ export function EventDetailsBottomSheet({
     }
   }, [visible]);
 
+  useEffect(() => {
+    if (!visible) {
+      setParticipantRsvpDetailsOpen(false);
+    }
+  }, [visible]);
+
   const handleRequestClose = (): void => {
     if (isClosingRef.current) return;
     onClose();
@@ -140,6 +202,17 @@ export function EventDetailsBottomSheet({
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const deleteEventMutation = useMutation(api.events.deleteEvent);
   const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
+  const upsertRsvpMutation = useMutation(api.eventRsvps.upsertRsvp);
+
+  const handleRsvp = useCallback(
+    (status: 'yes' | 'no' | 'maybe') => {
+      if (!convexEventId) return;
+      upsertRsvpMutation({ eventId: convexEventId, status }).catch(() =>
+        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה')
+      );
+    },
+    [convexEventId, upsertRsvpMutation]
+  );
   const eventDoc = useQuery(
     api.events.getById,
     convexEventId ? { eventId: convexEventId } : 'skip'
@@ -153,6 +226,12 @@ export function EventDetailsBottomSheet({
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
+
+  const permCommunityId = eventDoc?.communityId;
+  const communityMembersResult = useQuery(
+    api.communities.getCommunityMembers,
+    permCommunityId ? { communityId: permCommunityId } : 'skip'
+  );
 
   const displayEvent =
     eventDoc && eventDoc !== null
@@ -219,7 +298,12 @@ export function EventDetailsBottomSheet({
     onClose();
     router.push({
       pathname: '/(authenticated)/event-edit/[id]',
-      params: { id: displayEvent.id, returnTo: 'home' },
+      params: {
+        id: displayEvent.id,
+        ...(displayEvent.communityId
+          ? { returnCommunityId: displayEvent.communityId as string }
+          : {}),
+      },
     });
   };
 
@@ -343,27 +427,78 @@ export function EventDetailsBottomSheet({
   const yesCount = rsvpRows.filter((r) => r.status === 'yes').length;
   const maybeCount = rsvpRows.filter((r) => r.status === 'maybe').length;
   const noCount = rsvpRows.filter((r) => r.status === 'no').length;
-  const shouldShowParticipants =
-    Boolean(displayEvent?.requiresRsvp) ||
-    rsvpRows.length > 0 ||
-    (displayEvent?.participants?.length ?? 0) > 0;
-  const canEdit = Boolean(convexEventId || event?.canEdit !== false);
-  const canCancel = Boolean(
-    convexEventId &&
-      displayEvent?.createdBy &&
-      currentUserId &&
-      displayEvent.createdBy === currentUserId &&
-      displayEvent.status !== 'cancelled'
+  const hasCommunityResponseSummary = Boolean(
+    displayEvent?.requiresRsvp || rsvpRows.length > 0
   );
+  const hasManualParticipantNames =
+    (displayEvent?.participants?.length ?? 0) > 0;
+
+  const myMembership = communityMembersResult?.members?.find(
+    (m) => m.userId === currentUserId
+  );
+  const isEventCreator =
+    Boolean(displayEvent?.createdBy && currentUserId) &&
+    displayEvent?.createdBy === currentUserId;
+  const isCommunityOwnerOrAdmin =
+    myMembership?.role === 'owner' || myMembership?.role === 'admin';
+  const canManageCommunityEvent =
+    Boolean(displayEvent?.communityId) &&
+    (isEventCreator || isCommunityOwnerOrAdmin);
+
+  const canEdit = displayEvent?.communityId
+    ? canManageCommunityEvent
+    : Boolean(
+        convexEventId &&
+          displayEvent?.createdBy &&
+          currentUserId &&
+          displayEvent.createdBy === currentUserId
+      );
+
+  const canCancel = displayEvent?.communityId
+    ? Boolean(
+        convexEventId &&
+          canManageCommunityEvent &&
+          displayEvent.status !== 'cancelled'
+      )
+    : Boolean(
+        convexEventId &&
+          isEventCreator &&
+          displayEvent?.status !== 'cancelled'
+      );
+
   const canDelete = Boolean(
     convexEventId &&
-      displayEvent?.communityId &&
-      displayEvent?.createdBy &&
-      currentUserId &&
-      displayEvent.createdBy === currentUserId &&
-      displayEvent.status === 'cancelled' &&
+      displayEvent?.status === 'cancelled' &&
       displayEvent.cancelledAt !== undefined &&
-      Date.now() - (displayEvent.cancelledAt as number) < 24 * 60 * 60 * 1000
+      Date.now() - (displayEvent.cancelledAt as number) < 24 * 60 * 60 * 1000 &&
+      (displayEvent.communityId
+        ? canManageCommunityEvent
+        : isEventCreator)
+  );
+
+  /** Owner/admin/creator: no RSVP prompt on community events — mirror event/[id].tsx */
+  const skipCommunityRsvpPrompt =
+    isEventCreator ||
+    (Boolean(displayEvent?.communityId) && isCommunityOwnerOrAdmin);
+
+  const myRsvpRow = rsvpRows.find((r) => r.userId === currentUserId);
+  const rawRsvp = myRsvpRow?.status;
+  const currentRsvpStatus: 'yes' | 'no' | 'maybe' | 'none' =
+    rawRsvp === 'yes' || rawRsvp === 'maybe' || rawRsvp === 'no'
+      ? rawRsvp
+      : 'none';
+
+  const rsvpHelperText = getBottomSheetRsvpHelperText(currentRsvpStatus);
+
+  const showMemberRsvp = Boolean(
+    !skipCommunityRsvpPrompt && displayEvent?.communityId
+  );
+
+  const showRsvpUnifiedCard = Boolean(
+    convexEventId &&
+      (showMemberRsvp ||
+        hasCommunityResponseSummary ||
+        hasManualParticipantNames)
   );
 
   return (
@@ -405,6 +540,7 @@ export function EventDetailsBottomSheet({
           <>
             <ScrollView
               contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="always"
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
               style={styles.scrollArea}
@@ -521,6 +657,171 @@ export function EventDetailsBottomSheet({
                 ) : null}
               </View>
 
+              {showRsvpUnifiedCard ? (
+                <View style={[styles.sectionCard, styles.rsvpMemberCard]}>
+                  {showMemberRsvp ? (
+                    <>
+                      <Text style={styles.rsvpMemberTitle}>האם תשתתף/י?</Text>
+                      <View style={styles.rsvpMemberButtonRow}>
+                        {MEMBER_RSVP_OPTIONS.map((opt) => {
+                          const isActive = currentRsvpStatus === opt.status;
+                          const rsvpDisabled =
+                            displayEvent.status === 'cancelled';
+                          return (
+                            <View
+                              key={opt.status}
+                              collapsable={false}
+                              style={[
+                                styles.rsvpMemberBtnShell,
+                                isActive && styles.rsvpMemberBtnShellSelected,
+                                {
+                                  backgroundColor: isActive
+                                    ? opt.selectedBg
+                                    : RSVP_BTN_BG_IDLE,
+                                  borderColor: isActive
+                                    ? opt.selectedBorder
+                                    : RSVP_BTN_BORDER_IDLE,
+                                  borderWidth: isActive ? 3 : 2,
+                                  elevation: isActive ? 5 : 3,
+                                  shadowOpacity: isActive ? 0.16 : 0.12,
+                                  opacity: rsvpDisabled ? 0.48 : 1,
+                                },
+                              ]}
+                            >
+                              <Pressable
+                                accessibilityHint={
+                                  rsvpDisabled
+                                    ? undefined
+                                    : 'מגדיר את תגובת ההגעה שלך לאירוע'
+                                }
+                                accessibilityLabel={opt.label}
+                                accessibilityRole="button"
+                                accessibilityState={{
+                                  disabled: rsvpDisabled,
+                                  selected: isActive,
+                                }}
+                                accessible={true}
+                                disabled={rsvpDisabled}
+                                hitSlop={{
+                                  top: 6,
+                                  bottom: 6,
+                                  left: 6,
+                                  right: 6,
+                                }}
+                                onPress={() => handleRsvp(opt.status)}
+                                style={({ pressed }) => [
+                                  styles.rsvpMemberBtnPressable,
+                                  pressed &&
+                                    !rsvpDisabled && {
+                                      backgroundColor: isActive
+                                        ? 'rgba(0,0,0,0.06)'
+                                        : 'rgba(15,23,42,0.08)',
+                                    },
+                                ]}
+                              >
+                                <View
+                                  pointerEvents="none"
+                                  style={styles.rsvpMemberBtnContent}
+                                >
+                                  <Text
+                                    pointerEvents="none"
+                                    style={[
+                                      styles.rsvpMemberBtnText,
+                                      isActive &&
+                                        styles.rsvpMemberBtnTextSelected,
+                                      isActive && { color: opt.selectedText },
+                                    ]}
+                                  >
+                                    {opt.label}
+                                  </Text>
+                                  {isActive ? (
+                                    <MaterialIcons
+                                      accessibilityElementsHidden={true}
+                                      color={opt.selectedText}
+                                      importantForAccessibility="no-hide-descendants"
+                                      name="check"
+                                      pointerEvents="none"
+                                      size={18}
+                                    />
+                                  ) : null}
+                                </View>
+                              </Pressable>
+                            </View>
+                          );
+                        })}
+                      </View>
+                      {rsvpHelperText ? (
+                        <Text style={styles.rsvpMemberHelper}>
+                          {rsvpHelperText}
+                        </Text>
+                      ) : currentRsvpStatus === 'none' &&
+                        displayEvent.status !== 'cancelled' ? (
+                        <Text style={styles.rsvpMemberHint}>בחר/י את תגובתך</Text>
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {showMemberRsvp &&
+                  (hasCommunityResponseSummary || hasManualParticipantNames) ? (
+                    <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {hasCommunityResponseSummary ? (
+                    <Pressable
+                      accessibilityHint="פותח רשימת משתתפים לפי סוג תגובה"
+                      accessibilityLabel={`תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}. צפייה`}
+                      accessibilityRole="button"
+                      accessible={true}
+                      onPress={() => setParticipantRsvpDetailsOpen(true)}
+                      style={({ pressed }) => [
+                        styles.rsvpCommunitySummaryBtn,
+                        pressed && styles.rsvpCommunitySummaryBtnPressed,
+                      ]}
+                    >
+                      <Text style={styles.rsvpCommunitySummarySectionTitle}>
+                        תגובות משתתפים
+                      </Text>
+                      <View style={styles.rsvpCommunitySummaryRow}>
+                        <Text style={styles.rsvpCommunitySummaryCounts}>
+                          {`כן ${yesCount} · אולי ${maybeCount} · לא ${noCount}`}
+                        </Text>
+                        <MaterialIcons
+                          color="#94a3b8"
+                          name="chevron-left"
+                          size={22}
+                        />
+                      </View>
+                      <Text style={styles.rsvpCommunitySummaryViewHint}>צפייה</Text>
+                    </Pressable>
+                  ) : null}
+
+                  {hasCommunityResponseSummary && hasManualParticipantNames ? (
+                    <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {!hasCommunityResponseSummary &&
+                  showMemberRsvp &&
+                  hasManualParticipantNames ? (
+                    <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {hasManualParticipantNames ? (
+                    <View style={styles.rsvpManualParticipantsBlock}>
+                      <Text style={styles.rsvpManualParticipantsTitle}>
+                        מוזמנים (מהאירוע)
+                      </Text>
+                      <View style={styles.participantsWrap}>
+                        {displayEvent.participants.map((name) => (
+                          <View key={name} style={styles.participantPill}>
+                            <Text style={styles.participantPillText}>{name}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
               <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>תזמון</Text>
                 <View style={styles.scheduleRow}>
@@ -599,42 +900,6 @@ export function EventDetailsBottomSheet({
                       לא נוספו משימות לאירוע הזה
                     </Text>
                   )}
-                </View>
-              ) : null}
-
-              {shouldShowParticipants ? (
-                <View style={styles.sectionCard}>
-                  <Text style={styles.sectionTitle}>משתתפים</Text>
-                  {displayEvent.requiresRsvp ? (
-                    <View style={styles.rsvpSummaryRow}>
-                      <View style={[styles.rsvpChip, styles.rsvpYes]}>
-                        <Text style={styles.rsvpChipText}>
-                          {`כן ${yesCount}`}
-                        </Text>
-                      </View>
-                      <View style={[styles.rsvpChip, styles.rsvpMaybe]}>
-                        <Text style={styles.rsvpChipText}>
-                          {`אולי ${maybeCount}`}
-                        </Text>
-                      </View>
-                      <View style={[styles.rsvpChip, styles.rsvpNo]}>
-                        <Text
-                          style={styles.rsvpChipText}
-                        >{`לא ${noCount}`}</Text>
-                      </View>
-                    </View>
-                  ) : null}
-                  {displayEvent.participants.length > 0 ? (
-                    <View style={styles.participantsWrap}>
-                      {displayEvent.participants.map((name) => (
-                        <View key={name} style={styles.participantPill}>
-                          <Text style={styles.participantPillText}>{name}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : rsvpRows.length === 0 ? (
-                    <Text style={styles.mutedText}>אין משתתפים להצגה</Text>
-                  ) : null}
                 </View>
               ) : null}
 
@@ -754,6 +1019,90 @@ export function EventDetailsBottomSheet({
             style={styles.previewCloseBtn}
           >
             <Text style={styles.previewCloseText}>סגירה</Text>
+          </Pressable>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setParticipantRsvpDetailsOpen(false)}
+        transparent
+        visible={participantRsvpDetailsOpen}
+      >
+        <Pressable
+          accessibilityLabel="סגור"
+          accessibilityRole="button"
+          accessible={true}
+          onPress={() => setParticipantRsvpDetailsOpen(false)}
+          style={styles.rsvpDetailModalBackdrop}
+        />
+        <View
+          style={[
+            styles.rsvpDetailModalSheet,
+            { maxHeight: RSVP_DETAIL_MODAL_MAX_HEIGHT },
+          ]}
+        >
+          <Text style={styles.rsvpDetailModalTitle}>תגובות משתתפים</Text>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            style={[
+              styles.rsvpDetailScroll,
+              { maxHeight: RSVP_DETAIL_SCROLL_MAX_HEIGHT },
+            ]}
+            contentContainerStyle={styles.rsvpDetailScrollContent}
+          >
+            <View style={styles.rsvpDetailGroup}>
+              <Text style={styles.rsvpDetailGroupTitle}>{`כן (${yesCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'yes').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'yes')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+            <View style={styles.rsvpDetailGroup}>
+              <Text style={styles.rsvpDetailGroupTitle}>{`אולי (${maybeCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'maybe').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'maybe')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+            <View style={styles.rsvpDetailGroup}>
+              <Text style={styles.rsvpDetailGroupTitle}>{`לא (${noCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'no').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'no')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+          </ScrollView>
+          <Pressable
+            accessibilityLabel="סגירת רשימת משתתפים"
+            accessibilityRole="button"
+            accessible={true}
+            onPress={() => setParticipantRsvpDetailsOpen(false)}
+            style={styles.rsvpDetailCloseBtn}
+          >
+            <Text style={styles.rsvpDetailCloseBtnText}>סגירה</Text>
           </Pressable>
         </View>
       </Modal>
@@ -1111,6 +1460,208 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: '600',
   },
+  rsvpMemberCard: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+    gap: 12,
+  },
+  rsvpMemberTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: 'right',
+  },
+  rsvpMemberButtonRow: {
+    flexDirection: 'row-reverse',
+    gap: 8,
+    alignItems: 'stretch',
+    alignSelf: 'stretch',
+  },
+  /**
+   * View draws border/bg/shadow (reliable on Android). Pressable is a transparent flex fill;
+   * no android_ripple here — ripple was hiding the visible fill on some devices.
+   */
+  rsvpMemberBtnShell: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    minHeight: 48,
+    borderRadius: 12,
+    borderStyle: 'solid',
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 4,
+  },
+  rsvpMemberBtnShellSelected: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+  },
+  rsvpMemberBtnPressable: {
+    flex: 1,
+    alignSelf: 'stretch',
+    minHeight: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+  },
+  rsvpMemberBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1e293b',
+    textAlign: 'center',
+    includeFontPadding: false,
+    letterSpacing: 0.12,
+  },
+  rsvpMemberBtnTextSelected: {
+    fontWeight: '800',
+  },
+  rsvpMemberHelper: {
+    marginTop: 2,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: '#64748b',
+    textAlign: 'right',
+  },
+  rsvpMemberBtnContent: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 4,
+  },
+  rsvpMemberHint: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textAlign: 'right',
+  },
+  rsvpUnifiedDivider: {
+    height: StyleSheet.hairlineWidth * 2,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 4,
+  },
+  rsvpCommunitySummaryBtn: {
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  rsvpCommunitySummaryBtnPressed: {
+    backgroundColor: '#e8f0f6',
+  },
+  rsvpCommunitySummarySectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+    textAlign: 'right',
+    marginBottom: 4,
+  },
+  rsvpCommunitySummaryRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rsvpCommunitySummaryCounts: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#334155',
+    textAlign: 'right',
+  },
+  rsvpCommunitySummaryViewHint: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#36a9e2',
+    textAlign: 'right',
+    marginTop: 6,
+  },
+  rsvpManualParticipantsBlock: {
+    gap: 8,
+  },
+  rsvpManualParticipantsTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+    textAlign: 'right',
+  },
+  rsvpDetailModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.32)',
+  },
+  rsvpDetailModalSheet: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
+    bottom: 26,
+    backgroundColor: '#fff',
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    gap: 10,
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+  },
+  rsvpDetailModalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: 'right',
+  },
+  rsvpDetailScroll: {
+    flexGrow: 0,
+  },
+  rsvpDetailScrollContent: {
+    gap: 18,
+    paddingBottom: 8,
+  },
+  rsvpDetailGroup: {
+    gap: 6,
+  },
+  rsvpDetailGroupTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: 'right',
+  },
+  rsvpDetailName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: 'right',
+    paddingVertical: 2,
+  },
+  rsvpDetailEmpty: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textAlign: 'right',
+  },
+  rsvpDetailCloseBtn: {
+    minHeight: 44,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rsvpDetailCloseBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#475569',
+  },
   sectionTitle: {
     fontSize: 15,
     fontWeight: '700',
@@ -1186,30 +1737,6 @@ const styles = StyleSheet.create({
     color: '#36a9e2',
     fontWeight: '700',
     fontSize: 13,
-  },
-  rsvpSummaryRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 8,
-  },
-  rsvpChip: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  rsvpYes: {
-    backgroundColor: '#dcfce7',
-  },
-  rsvpMaybe: {
-    backgroundColor: '#fef3c7',
-  },
-  rsvpNo: {
-    backgroundColor: '#fee2e2',
-  },
-  rsvpChipText: {
-    fontSize: 12,
-    color: '#374151',
-    fontWeight: '700',
   },
   participantsWrap: {
     flexDirection: 'row-reverse',

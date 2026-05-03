@@ -1,7 +1,7 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
-import type { QueryCtx } from './_generated/server';
+import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 
 // ─────────────────────────────────────────────────────────────
@@ -36,18 +36,17 @@ export const getTaskCountsByCommunity = query({
   },
 });
 
-async function isCommunityMember(
-  ctx: QueryCtx,
+async function getCommunityMembership(
+  ctx: QueryCtx | MutationCtx,
   communityId: Id<'communities'>,
   userId: Id<'users'>
-): Promise<boolean> {
-  const m = await ctx.db
+) {
+  return await ctx.db
     .query('communityMembers')
     .withIndex('by_community_user', (q) =>
       q.eq('communityId', communityId).eq('userId', userId)
     )
     .unique();
-  return m !== null;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -56,6 +55,31 @@ async function isCommunityMember(
 export const listByEvent = query({
   args: { eventId: v.id('events') },
   handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const event = await ctx.db.get(eventId);
+    if (!event) return [];
+
+    if (event.communityId) {
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      if (!membership || membership.status === 'left') return [];
+
+      const canManageTasks =
+        event.createdBy === userId ||
+        membership.role === 'owner' ||
+        membership.role === 'admin';
+
+      if (!canManageTasks && event.tasksVisibleToParticipants !== true)
+        return [];
+    } else if (event.createdBy !== userId) {
+      return [];
+    }
+
     const tasks = await ctx.db
       .query('eventTasks')
       .withIndex('by_event', (q) => q.eq('eventId', eventId))
@@ -224,18 +248,28 @@ export const setAssignee = mutation({
     const hasUserId = !!task.assignedToUserId;
     const hasManual = !!task.assignedToManual?.trim();
     const isAssigned = hasUserId || hasManual;
-    const isCreator = event.createdBy === userId;
+    let canManageAssignments = event.createdBy === userId;
     const isAssignedUser = task.assignedToUserId === userId;
 
     if (event.communityId) {
-      const isMember = await isCommunityMember(ctx, event.communityId, userId);
-      if (!isMember) throw new Error('רק חברי הקהילה יכולים להקצות משימות');
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      if (!membership || membership.status === 'left') {
+        throw new Error('רק חברי קהילה פעילים יכולים להקצות משימות');
+      }
+      canManageAssignments =
+        canManageAssignments ||
+        membership.role === 'owner' ||
+        membership.role === 'admin';
     }
 
     if (assignee === null) {
-      if (!isCreator && !isAssignedUser)
+      if (!canManageAssignments && !isAssignedUser)
         throw new Error('רק הממונה או יוצר האירוע יכולים לבטל הקצאה');
-      if (hasManual && !isCreator)
+      if (hasManual && !canManageAssignments)
         throw new Error('רק יוצר האירוע יכול לשנות הקצאה ידנית');
       await ctx.db.patch(id, {
         assignedToUserId: undefined,
@@ -245,7 +279,8 @@ export const setAssignee = mutation({
     }
 
     if (assignee.type === 'manual') {
-      if (!isCreator) throw new Error('רק יוצר האירוע יכול להקצות שם ידני');
+      if (!canManageAssignments)
+        throw new Error('רק מנהלי האירוע יכולים להקצות שם ידני');
       await ctx.db.patch(id, {
         assignedToUserId: undefined,
         assignedToManual: assignee.name.trim() || undefined,
@@ -254,15 +289,132 @@ export const setAssignee = mutation({
     }
 
     if (assignee.type === 'user') {
-      if (!isCreator && isAssigned)
+      if (!canManageAssignments && isAssigned)
         throw new Error('רק יוצר האירוע או הממונה הנוכחי יכולים לשנות הקצאה');
-      if (!isCreator && !isAssigned && assignee.userId !== userId)
+      if (!canManageAssignments && !isAssigned && assignee.userId !== userId)
         throw new Error('משימה לא מוקצית – ניתן להקצות רק את עצמך');
       await ctx.db.patch(id, {
         assignedToUserId: assignee.userId,
         assignedToManual: undefined,
       });
     }
+  },
+});
+
+export const updateEventTaskVisibility = mutation({
+  args: {
+    eventId: v.id('events'),
+    tasksVisibleToParticipants: v.boolean(),
+  },
+  handler: async (ctx, { eventId, tasksVisibleToParticipants }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+
+    if (!event.communityId) {
+      if (event.createdBy !== userId)
+        throw new Error('אין הרשאה לעדכן נראות משימות');
+    } else {
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      const canManage =
+        event.createdBy === userId ||
+        membership?.role === 'owner' ||
+        membership?.role === 'admin';
+      if (!membership || membership.status !== 'active' || !canManage) {
+        throw new Error('אין הרשאה לעדכן נראות משימות');
+      }
+    }
+
+    await ctx.db.patch(eventId, { tasksVisibleToParticipants });
+  },
+});
+
+export const claimEventTask = mutation({
+  args: { id: v.id('eventTasks') },
+  handler: async (ctx, { id }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(id);
+    if (!task) throw new Error('משימה לא נמצאה');
+    const event = await ctx.db.get(task.eventId);
+    if (!event || !event.communityId)
+      throw new Error('פעולה זו זמינה רק באירוע קהילתי');
+
+    const membership = await getCommunityMembership(
+      ctx,
+      event.communityId,
+      userId
+    );
+    if (!membership || membership.status !== 'active') {
+      throw new Error('רק חברי קהילה פעילים יכולים להשתבץ למשימה');
+    }
+
+    const canManage =
+      event.createdBy === userId ||
+      membership.role === 'owner' ||
+      membership.role === 'admin';
+
+    if (!canManage && event.tasksVisibleToParticipants !== true) {
+      throw new Error('המשימות אינן גלויות למשתתפים');
+    }
+
+    const isAssigned =
+      !!task.assignedToUserId || !!task.assignedToManual?.trim();
+    if (isAssigned) throw new Error('המשימה כבר הוקצתה');
+
+    await ctx.db.patch(id, {
+      assignedToUserId: userId,
+      assignedToManual: undefined,
+    });
+  },
+});
+
+export const unclaimEventTask = mutation({
+  args: { id: v.id('eventTasks') },
+  handler: async (ctx, { id }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(id);
+    if (!task) throw new Error('משימה לא נמצאה');
+    const event = await ctx.db.get(task.eventId);
+    if (!event || !event.communityId)
+      throw new Error('פעולה זו זמינה רק באירוע קהילתי');
+
+    const membership = await getCommunityMembership(
+      ctx,
+      event.communityId,
+      userId
+    );
+    if (!membership || membership.status !== 'active') {
+      throw new Error('רק חברי קהילה פעילים יכולים להסיר הקצאה');
+    }
+
+    const canManage =
+      event.createdBy === userId ||
+      membership.role === 'owner' ||
+      membership.role === 'admin';
+
+    if (!canManage && event.tasksVisibleToParticipants !== true) {
+      throw new Error('המשימות אינן גלויות למשתתפים');
+    }
+
+    if (!task.assignedToUserId) throw new Error('המשימה אינה מוקצית למשתמש');
+    if (!canManage && task.assignedToUserId !== userId) {
+      throw new Error('ניתן להסיר רק הקצאה של עצמך');
+    }
+
+    await ctx.db.patch(id, {
+      assignedToUserId: undefined,
+      assignedToManual: undefined,
+    });
   },
 });
 

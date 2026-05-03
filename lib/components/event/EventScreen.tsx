@@ -3,7 +3,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -87,6 +87,7 @@ function makeEmptyEvent(selectedDateMs?: number): EventData {
     reminders: [makeReminder('hour_before')],
     participants: [],
     tasks: [],
+    tasksVisibleToParticipants: false,
     showAllTasksToAll: false,
     createdAt: Date.now(),
   };
@@ -113,6 +114,7 @@ const MOCK_EVENT: EventData = {
     { id: '1', title: 'לקנות יין אדום', completed: true, colorDot: '#ef4444' },
     { id: '2', title: 'להכין קינוח', completed: false, assigneeId: '1' },
   ],
+  tasksVisibleToParticipants: false,
   showAllTasksToAll: true,
   createdAt: Date.now(),
 };
@@ -157,6 +159,8 @@ interface EventScreenProps {
    * Returns the new event ID so the success sheet can generate a share link.
    */
   onSave?: (data: EventData) => Promise<string>;
+  /** When set, back / discard use this instead of router.back() (e.g. return to community). */
+  onDismiss?: () => void;
 }
 
 export default function EventScreen({
@@ -173,6 +177,7 @@ export default function EventScreen({
   initialData,
   customHeaderTitle,
   onSave,
+  onDismiss,
 }: EventScreenProps): React.JSX.Element {
   const isCreate = mode === 'create';
   const defaultHeaderTitle =
@@ -189,12 +194,6 @@ export default function EventScreen({
   // selfEntityId is the signed-in user's own entity row — excluded from the chips
   // so the creator is never shown (they are always implicitly included).
   const serverFamilyContacts = useQuery(api.members.listMyFamilyContacts);
-  useEffect(() => {
-    console.log(
-      '[DEBUG chips] serverFamilyContacts:',
-      JSON.stringify(serverFamilyContacts)
-    );
-  }, [serverFamilyContacts]);
   const familyMembers: FamilyMemberChip[] = (
     serverFamilyContacts?.members ?? []
   )
@@ -339,6 +338,10 @@ export default function EventScreen({
     (event.attachments?.length ?? 0) > 0;
 
   const goBack = (): void => {
+    if (onDismiss) {
+      onDismiss();
+      return;
+    }
     if (router.canGoBack()) {
       router.back();
     } else {
@@ -375,6 +378,9 @@ export default function EventScreen({
   const isCommunityEvent = context === 'community';
   const shouldShowRecurrence = !isCommunityEvent;
   const shouldShowReminders = true;
+  const taskVisibilityOffHelperText = isCommunityEvent
+    ? 'רק את ומנהלות האירוע רואות את המשימות'
+    : 'רק את רואה את המשימות';
 
   return (
     <SafeAreaView style={s.safeArea} edges={['top', 'bottom']}>
@@ -606,12 +612,13 @@ export default function EventScreen({
                 tasks={event.tasks}
                 participants={taskParticipants ?? event.participants}
                 completedCount={completedTasks}
-                showAllTasksToAll={event.showAllTasksToAll}
-                showToggle={hasMultipleAssignees}
+                tasksVisibleToParticipants={event.tasksVisibleToParticipants}
+                showToggle={true}
                 onChange={(tasks) => updateEvent({ tasks })}
                 onToggleVisibility={(val) =>
-                  updateEvent({ showAllTasksToAll: val })
+                  updateEvent({ tasksVisibleToParticipants: val })
                 }
+                visibilityOffHelperText={taskVisibilityOffHelperText}
                 onAddParticipants={() => {}}
               />
 

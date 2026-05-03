@@ -7,25 +7,18 @@ import { mutation, query } from './_generated/server';
 // Helpers
 // ─────────────────────────────────────────────────────────────
 
-/** מייצר קוד הזמנה ייחודי בן 8 תווים (A-Z, 0-9), עם בדיקת ייחודיות */
+/** מייצר קוד הזמנה ייחודי בן 6 ספרות, עם בדיקת ייחודיות */
 async function generateUniqueInviteCode(ctx: MutationCtx): Promise<string> {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const code = Array.from(
-      { length: 8 },
-      () => chars[Math.floor(Math.random() * chars.length)]
-    ).join('');
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
     const existing = await ctx.db
       .query('communities')
       .withIndex('by_invite_code', (q) => q.eq('inviteCode', code))
       .unique();
     if (!existing) return code;
   }
-  // Fallback: timestamp suffix
-  return (
-    Math.random().toString(36).slice(2, 6).toUpperCase() +
-    Date.now().toString(36).toUpperCase().slice(-4)
-  );
+  // Fallback with timestamp tail, still numeric and human-friendly
+  return String(Date.now()).slice(-6);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -123,6 +116,7 @@ export const listMyCommunities = query({
           community,
           role: m.role,
           pinned: m.pinned,
+          notificationsEnabled: m.notificationsEnabled,
         };
       })
     );
@@ -199,7 +193,7 @@ export const joinCommunityByCode = mutation({
       .unique();
 
     if (!community || community.archived) {
-      throw new Error('קהילה לא קיימת');
+      return { status: 'invalid_code' as const };
     }
 
     // בדיקה אם כבר חבר
@@ -427,6 +421,96 @@ export const removeMember = mutation({
     }
 
     await ctx.db.delete(targetMembership._id);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// קידום חבר רגיל למנהל קהילה (owner בלבד)
+// ─────────────────────────────────────────────────────────────
+export const promoteMemberToAdmin = mutation({
+  args: {
+    communityId: v.id('communities'),
+    targetUserId: v.id('users'),
+  },
+  handler: async (ctx, { communityId, targetUserId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const callerMembership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', userId)
+      )
+      .unique();
+
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new Error('רק בעל הקהילה יכול לקדם מנהלים');
+    }
+
+    const targetMembership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', targetUserId)
+      )
+      .unique();
+
+    if (!targetMembership) {
+      throw new Error('החבר אינו נמצא בקהילה זו');
+    }
+    if (targetMembership.role === 'owner') {
+      throw new Error('לא ניתן לשנות את תפקיד בעל הקהילה');
+    }
+    if (targetMembership.role === 'admin') {
+      return { role: 'admin' as const };
+    }
+
+    await ctx.db.patch(targetMembership._id, { role: 'admin' });
+    return { role: 'admin' as const };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// הורדת מנהל קהילה לחבר רגיל (owner בלבד)
+// ─────────────────────────────────────────────────────────────
+export const demoteAdminToMember = mutation({
+  args: {
+    communityId: v.id('communities'),
+    targetUserId: v.id('users'),
+  },
+  handler: async (ctx, { communityId, targetUserId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const callerMembership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', userId)
+      )
+      .unique();
+
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new Error('רק בעל הקהילה יכול להסיר מנהלים');
+    }
+
+    const targetMembership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', targetUserId)
+      )
+      .unique();
+
+    if (!targetMembership) {
+      throw new Error('החבר אינו נמצא בקהילה זו');
+    }
+    if (targetMembership.role === 'owner') {
+      throw new Error('לא ניתן לשנות את תפקיד בעל הקהילה');
+    }
+    if (targetMembership.role === 'member') {
+      return { role: 'member' as const };
+    }
+
+    await ctx.db.patch(targetMembership._id, { role: 'member' });
+    return { role: 'member' as const };
   },
 });
 

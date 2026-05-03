@@ -242,6 +242,7 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
         onlineUrl: data.onlineUrl?.trim() || undefined,
         spaceId: (spaceId as Id<'spaces'> | null) ?? undefined,
         communityId: communityId as Id<'communities'>,
+        tasksVisibleToParticipants: data.tasksVisibleToParticipants,
         requiresRsvp: rsvpRequired,
         attachments:
           resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
@@ -1019,6 +1020,7 @@ export default function NewEventScreen(): React.JSX.Element {
         spaceId: resolvedSpaceId,
         location: data.location?.trim() || undefined,
         onlineUrl: data.onlineUrl?.trim() || undefined,
+        tasksVisibleToParticipants: data.tasksVisibleToParticipants,
         participants:
           data.participants.length > 0
             ? data.participants

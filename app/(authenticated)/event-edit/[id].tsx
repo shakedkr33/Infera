@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -183,6 +183,7 @@ function convexEventToEventData(
     reminders,
     participants,
     tasks: eventTasks,
+    tasksVisibleToParticipants: event.tasksVisibleToParticipants ?? false,
     showAllTasksToAll: false,
     createdAt: event._creationTime ?? Date.now(),
     attachments,
@@ -192,12 +193,20 @@ function convexEventToEventData(
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function EditEventScreen(): React.JSX.Element {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, returnCommunityId } = useLocalSearchParams<{
+    id: string;
+    returnCommunityId?: string;
+  }>();
   const router = useRouter();
   const eventId = id as Id<'events'>;
 
   const event = useQuery(api.events.getById, { eventId });
   const eventTasks = useQuery(api.eventTasks.listByEvent, { eventId });
+  const currentUserId = useQuery(api.users.getMyId);
+  const communityMembersPack = useQuery(
+    api.communities.getCommunityMembers,
+    event?.communityId ? { communityId: event.communityId } : 'skip'
+  );
 
   const updateEventMutation = useMutation(api.events.update);
   const generateUploadUrl = useMutation(api.events.generateUploadUrl);
@@ -207,6 +216,40 @@ export default function EditEventScreen(): React.JSX.Element {
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
 
   const isCommunityEvent = Boolean(event?.communityId);
+
+  const mayEditCommunityEvent = useMemo(() => {
+    if (!event?.communityId || !currentUserId) return true;
+    if (communityMembersPack === undefined || communityMembersPack === null) {
+      return true;
+    }
+    const m = communityMembersPack.members?.find(
+      (x) => x.userId === currentUserId
+    );
+    const isCreator = event.createdBy === currentUserId;
+    const elevated = m?.role === 'owner' || m?.role === 'admin';
+    return isCreator || elevated;
+  }, [event, communityMembersPack, currentUserId]);
+
+  useEffect(() => {
+    if (event === undefined || event === null) return;
+    if (!event.communityId || currentUserId === undefined) return;
+    if (communityMembersPack === undefined || communityMembersPack === null) {
+      return;
+    }
+    if (!mayEditCommunityEvent) {
+      router.replace({
+        pathname: '/(authenticated)/event/[id]',
+        params: { id: eventId as string },
+      });
+    }
+  }, [
+    event,
+    communityMembersPack,
+    currentUserId,
+    mayEditCommunityEvent,
+    router,
+    eventId,
+  ]);
 
   const [rsvpRequired, setRsvpRequired] = useState(
     event?.requiresRsvp ?? false
@@ -251,6 +294,7 @@ export default function EditEventScreen(): React.JSX.Element {
           ? undefined
           : data.location?.trim() || undefined,
         onlineUrl: data.onlineUrl?.trim() || undefined,
+        tasksVisibleToParticipants: data.tasksVisibleToParticipants,
         requiresRsvp: rsvpRequired,
         participants:
           data.participants.length > 0
@@ -311,7 +355,14 @@ export default function EditEventScreen(): React.JSX.Element {
         }
       }
 
-      router.back();
+      if (returnCommunityId) {
+        router.replace({
+          pathname: '/(authenticated)/community/[id]',
+          params: { id: returnCommunityId },
+        });
+      } else {
+        router.back();
+      }
       return eventId;
     },
     [
@@ -326,8 +377,20 @@ export default function EditEventScreen(): React.JSX.Element {
       removeEventTask,
       setTaskAssignee,
       router,
+      returnCommunityId,
     ]
   );
+
+  const handleDismissEdit = useCallback(() => {
+    if (returnCommunityId) {
+      router.replace({
+        pathname: '/(authenticated)/community/[id]',
+        params: { id: returnCommunityId },
+      });
+    } else {
+      router.back();
+    }
+  }, [router, returnCommunityId]);
 
   // useMemo ensures initialData is stable and computed as a hook (before any early
   // returns). This prevents the useState lazy initializer in EventScreen from
@@ -366,6 +429,7 @@ export default function EditEventScreen(): React.JSX.Element {
       onRsvpRequiredChange={setRsvpRequired}
       showSuccessSheet={false}
       onSave={handleSave}
+      onDismiss={handleDismissEdit}
     />
   );
 }

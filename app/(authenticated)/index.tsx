@@ -537,7 +537,17 @@ export default function HomeScreen() {
         isRecurring: undefined,
         recurringPattern: undefined,
       }));
-    return [...communityAllDay, ...personalAllDay, ...linkedAllDay];
+    // Same event can appear in more than one source (e.g. community + personal lists); dedupe by id.
+    const merged = [...communityAllDay, ...personalAllDay, ...linkedAllDay];
+    const seenIds = new Set<string>();
+    const deduped: typeof merged = [];
+    for (const ev of merged) {
+      if (!seenIds.has(ev.id)) {
+        seenIds.add(ev.id);
+        deduped.push(ev);
+      }
+    }
+    return deduped;
   }, [communityEventItems, personalEventItems, linkedEventItems]);
 
   // allItems = personal events + tasks (today) + mock items + community events + assigned tasks

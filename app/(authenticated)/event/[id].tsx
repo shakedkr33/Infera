@@ -170,10 +170,7 @@ export default function EventDetailScreen() {
   // If the guard fails we skip all queries (pass 'skip') and show the not-found state.
   const eventId = isValidConvexId(id) ? (id as Id<'events'>) : null;
 
-  const event = useQuery(
-    api.events.getById,
-    eventId ? { eventId } : 'skip'
-  );
+  const event = useQuery(api.events.getById, eventId ? { eventId } : 'skip');
   const rsvps = useQuery(
     api.eventRsvps.listByEvent,
     eventId ? { eventId } : 'skip'
@@ -188,6 +185,11 @@ export default function EventDetailScreen() {
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const removeEventTask = useMutation(api.eventTasks.remove);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
+  const updateEventTaskVisibility = useMutation(
+    api.eventTasks.updateEventTaskVisibility
+  );
+  const claimEventTask = useMutation(api.eventTasks.claimEventTask);
+  const unclaimEventTask = useMutation(api.eventTasks.unclaimEventTask);
   // FIXED: link-based sharing for personal events (no communityId)
   const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
 
@@ -296,7 +298,9 @@ export default function EventDetailScreen() {
     };
 
     // Delay so ⋯ menu modal has fully dismissed before system Share sheet opens
-    setTimeout(() => { doShare(); }, 300);
+    setTimeout(() => {
+      doShare();
+    }, 300);
   }, [event, eventId, createShareLinkMutation]);
 
   // FIXED: make saved event addresses tappable without changing stored data.
@@ -326,7 +330,12 @@ export default function EventDetailScreen() {
         onPress: () => {
           router.push({
             pathname: '/(authenticated)/event-edit/[id]',
-            params: { id: eventId },
+            params: {
+              id: eventId as string,
+              ...(event?.communityId
+                ? { returnCommunityId: event.communityId as string }
+                : {}),
+            },
           });
         },
       },
@@ -345,7 +354,7 @@ export default function EventDetailScreen() {
       });
     }
     return items;
-  }, [handleShare, event?.status, eventId, router]);
+  }, [handleShare, event?.communityId, event?.status, eventId, router]);
 
   // ── Invalid route param (e.g. mock item ids like "1", "2")
   if (!eventId) {
@@ -356,7 +365,11 @@ export default function EventDetailScreen() {
           <Text style={styles.notFoundText}>אירוע לא נמצא</Text>
           <TouchableOpacity
             style={styles.errorBackBtn}
-            onPress={() => router.replace('/(authenticated)' as Parameters<typeof router.replace>[0])}
+            onPress={() =>
+              router.replace(
+                '/(authenticated)' as Parameters<typeof router.replace>[0]
+              )
+            }
             accessible
             accessibilityRole="button"
             accessibilityLabel="חזור"
@@ -412,6 +425,27 @@ export default function EventDetailScreen() {
   const myRsvp = rsvps?.find((r) => r.userId === currentUserId);
   const currentStatus: RsvpStatus = (myRsvp?.status as RsvpStatus) ?? 'none';
   const members = communityMembersData?.members ?? [];
+  const myCommunityMembership = members.find((m) => m.userId === currentUserId);
+  const isCommunityOwnerOrAdmin =
+    myCommunityMembership?.role === 'owner' ||
+    myCommunityMembership?.role === 'admin';
+  const canManageCommunityEvent =
+    Boolean(event.communityId) && (isCreator || isCommunityOwnerOrAdmin);
+  /** Owner/admin/creator: no RSVP prompt on community events */
+  const skipCommunityRsvpPrompt =
+    isCreator ||
+    (Boolean(event.communityId) && isCommunityOwnerOrAdmin);
+  const canOpenEventOverflowMenu = event.communityId
+    ? canManageCommunityEvent
+    : isCreator;
+  const canManageTasks = isCreator || isCommunityOwnerOrAdmin;
+  const participantsCanSeeTasks = event.tasksVisibleToParticipants === true;
+  const canRegularMemberSeeTasks = Boolean(
+    event.communityId && myCommunityMembership && participantsCanSeeTasks
+  );
+  const canSeeTasksSection = event.communityId
+    ? canManageTasks || canRegularMemberSeeTasks
+    : isCreator;
 
   const assignedCount =
     eventTasks?.filter(
@@ -487,7 +521,7 @@ export default function EventDetailScreen() {
 
         {/* Last child → left in RTL: ⋯ for creator */}
         <View ref={menuBtnRef} style={styles.headerIconBtn}>
-          {isCreator && (
+          {canOpenEventOverflowMenu && (
             <TouchableOpacity
               onPress={handleMenuPress}
               style={styles.headerIconBtn}
@@ -505,6 +539,7 @@ export default function EventDetailScreen() {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         {/* ── Cancelled banner */}
@@ -621,10 +656,7 @@ export default function EventDetailScreen() {
               {event.attachments.map((attachment) => {
                 const sizeLabel = formatFileSize(attachment.sizeBytes);
                 return (
-                  <View
-                    key={attachment.storageId}
-                    style={styles.attachmentRow}
-                  >
+                  <View key={attachment.storageId} style={styles.attachmentRow}>
                     <Ionicons
                       name={
                         attachment.mimeType.startsWith('image/')
@@ -653,11 +685,12 @@ export default function EventDetailScreen() {
 
         {/* ── Section 2: RSVP / passive state */}
         {
-          !isCreator && event.requiresRsvp === true ? (
-            /* Case A: requiresRsvp + non-creator */
+          !skipCommunityRsvpPrompt && event.requiresRsvp === true ? (
+            /* Case A: requiresRsvp + participant */
             <View
               style={[
                 styles.card,
+                styles.rsvpCardElevated,
                 event.status === 'cancelled' && styles.rsvpDisabled,
               ]}
             >
@@ -665,25 +698,28 @@ export default function EventDetailScreen() {
               <View style={styles.rsvpRow}>
                 {RSVP_OPTIONS.map((opt) => {
                   const isActive = currentStatus === opt.status;
-                  const disabled = event.status === 'cancelled';
+                  const rsvpDisabled = event.status === 'cancelled';
                   return (
-                    <TouchableOpacity
+                    <Pressable
                       key={opt.status}
-                      style={[
+                      disabled={rsvpDisabled}
+                      style={({ pressed }) => [
                         styles.rsvpBtn,
                         {
                           backgroundColor: isActive
                             ? opt.activeColor
                             : '#f3f4f6',
+                          opacity: rsvpDisabled ? 0.45 : pressed ? 0.88 : 1,
                         },
                       ]}
-                      onPress={
-                        disabled ? undefined : () => handleRsvp(opt.status)
-                      }
+                      onPress={() => handleRsvp(opt.status)}
                       accessible
                       accessibilityRole="button"
                       accessibilityLabel={opt.label}
-                      accessibilityState={{ selected: isActive, disabled }}
+                      accessibilityState={{
+                        selected: isActive,
+                        disabled: rsvpDisabled,
+                      }}
                     >
                       <Text
                         style={[
@@ -693,13 +729,13 @@ export default function EventDetailScreen() {
                       >
                         {opt.label}
                       </Text>
-                    </TouchableOpacity>
+                    </Pressable>
                   );
                 })}
               </View>
             </View>
-          ) : !isCreator ? (
-            /* Case B: no requiresRsvp + non-creator */
+          ) : !skipCommunityRsvpPrompt ? (
+            /* Case B: no requiresRsvp + participant */
             <View style={styles.card}>
               <View style={styles.passiveRow}>
                 <Ionicons name="calendar-outline" size={18} color={PRIMARY} />
@@ -713,7 +749,7 @@ export default function EventDetailScreen() {
         }
 
         {/* ── Section 3: משימות לאירוע */}
-        {eventTasks !== undefined && (
+        {eventTasks !== undefined && canSeeTasksSection && (
           <View style={styles.card}>
             {/* Header: title + assignment summary */}
             <View style={styles.taskSectionHeader}>
@@ -732,6 +768,52 @@ export default function EventDetailScreen() {
               <Text style={styles.sectionTitle}>משימות לאירוע</Text>
             </View>
 
+            {canManageTasks ? (
+              <View style={styles.taskVisibilitySection}>
+                <View style={styles.taskVisibilityTextBlock}>
+                  <Text style={styles.taskVisibilityTitle}>
+                    משימות גלויות למשתתפים
+                  </Text>
+                  <Text style={styles.taskVisibilityHelper}>
+                    {participantsCanSeeTasks
+                      ? 'משתתפים יכולים לראות ולהשתבץ למשימות פנויות'
+                      : 'רק את ומנהלות האירוע רואות את המשימות'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.taskVisibilityToggleTouch}
+                  onPress={() => {
+                    updateEventTaskVisibility({
+                      eventId,
+                      tasksVisibleToParticipants: !participantsCanSeeTasks,
+                    }).catch(() =>
+                      Alert.alert('שגיאה', 'לא ניתן לעדכן נראות משימות')
+                    );
+                  }}
+                  accessible
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: participantsCanSeeTasks }}
+                  accessibilityLabel="משימות גלויות למשתתפים"
+                >
+                  <View
+                    style={[
+                      styles.taskVisibilityToggleTrack,
+                      participantsCanSeeTasks &&
+                        styles.taskVisibilityToggleTrackOn,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.taskVisibilityToggleThumb,
+                        participantsCanSeeTasks &&
+                          styles.taskVisibilityToggleThumbOn,
+                      ]}
+                    />
+                  </View>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
             {eventTasks.length === 0 ? (
               <View style={styles.emptyParticipants}>
                 <Ionicons name="list-outline" size={32} color="#d1d5db" />
@@ -746,10 +828,17 @@ export default function EventDetailScreen() {
                     task as { assigneeDisplay?: string }
                   ).assigneeDisplay?.trim();
                   const isAssigned = !!assigneeDisplay;
+                  const isAssignedToCurrentUser =
+                    task.assignedToUserId === currentUserId;
+                  const assignmentLabel = !isAssigned
+                    ? 'לא הוקצה'
+                    : isAssignedToCurrentUser
+                      ? 'הוקצה אליי'
+                      : `הוקצה ל־${assigneeDisplay}`;
                   return (
                     <View key={task._id} style={styles.taskRow}>
                       {/* Actions — left side in RTL (creator only) */}
-                      {isCreator && (
+                      {canManageTasks && (
                         <View style={styles.taskActions}>
                           <TouchableOpacity
                             onPress={() => {
@@ -808,17 +897,73 @@ export default function EventDetailScreen() {
                         <Text style={styles.taskTitle} numberOfLines={2}>
                           {task.title}
                         </Text>
-                        {isAssigned ? (
+                        {canManageTasks ? (
                           <Text
-                            style={styles.taskAssignedLabel}
+                            style={
+                              isAssigned
+                                ? styles.taskAssignedLabel
+                                : styles.taskUnassignedLabel
+                            }
                             numberOfLines={1}
                           >
-                            {`הוקצה ל־${assigneeDisplay}`}
+                            {assignmentLabel}
                           </Text>
                         ) : (
-                          <Text style={styles.taskUnassignedLabel}>
-                            לא הוקצה
-                          </Text>
+                          <TouchableOpacity
+                            style={styles.taskAssignmentAction}
+                            disabled={isAssigned && !isAssignedToCurrentUser}
+                            onPress={() => {
+                              if (!isAssigned) {
+                                Alert.alert('להשתבץ למשימה הזו?', '', [
+                                  { text: 'ביטול', style: 'cancel' },
+                                  {
+                                    text: 'כן, אני אקח את זה',
+                                    onPress: () =>
+                                      claimEventTask({ id: task._id }).catch(
+                                        () =>
+                                          Alert.alert(
+                                            'שגיאה',
+                                            'לא ניתן להשתבץ למשימה כרגע'
+                                          )
+                                      ),
+                                  },
+                                ]);
+                                return;
+                              }
+                              if (isAssignedToCurrentUser) {
+                                Alert.alert('להסיר אותך מהמשימה?', '', [
+                                  { text: 'ביטול', style: 'cancel' },
+                                  {
+                                    text: 'כן, להסיר אותי',
+                                    onPress: () =>
+                                      unclaimEventTask({ id: task._id }).catch(
+                                        () =>
+                                          Alert.alert(
+                                            'שגיאה',
+                                            'לא ניתן להסיר הקצאה כרגע'
+                                          )
+                                      ),
+                                  },
+                                ]);
+                              }
+                            }}
+                            accessible
+                            accessibilityRole="button"
+                            accessibilityLabel={assignmentLabel}
+                          >
+                            <Text
+                              style={
+                                isAssignedToCurrentUser
+                                  ? styles.taskAssignedLabel
+                                  : isAssigned
+                                    ? styles.taskAssignedOtherLabel
+                                    : styles.taskUnassignedLabel
+                              }
+                              numberOfLines={1}
+                            >
+                              {assignmentLabel}
+                            </Text>
+                          </TouchableOpacity>
                         )}
                       </View>
                     </View>
@@ -895,7 +1040,7 @@ export default function EventDetailScreen() {
         currentAssignee={currentAssigneeForSheet}
         members={members}
         currentUserId={currentUserId}
-        isCreator={isCreator}
+        isCreator={canManageTasks}
         manualName={manualAssigneeName}
         onManualNameChange={setManualAssigneeName}
         onSelectUser={(userId: Id<'users'>) => {
@@ -1143,6 +1288,10 @@ const styles = StyleSheet.create({
   },
 
   // ── RSVP
+  rsvpCardElevated: {
+    zIndex: 2,
+    elevation: 4,
+  },
   rsvpTitle: {
     fontSize: 16,
     fontWeight: '700',
@@ -1334,6 +1483,59 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  taskVisibilitySection: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f3f4f6',
+    marginBottom: 4,
+  },
+  taskVisibilityTextBlock: {
+    flex: 1,
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  taskVisibilityTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+  },
+  taskVisibilityHelper: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: 'right',
+  },
+  taskVisibilityToggleTouch: {
+    minWidth: 52,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskVisibilityToggleTrack: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#d1d5db',
+    padding: 3,
+    justifyContent: 'center',
+  },
+  taskVisibilityToggleTrackOn: {
+    backgroundColor: PRIMARY,
+  },
+  taskVisibilityToggleThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    alignSelf: 'flex-start',
+  },
+  taskVisibilityToggleThumbOn: {
+    alignSelf: 'flex-end',
+  },
   taskSummary: {
     fontSize: 13,
     color: '#9ca3af',
@@ -1364,10 +1566,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'right',
   },
+  taskAssignedOtherLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '600',
+    textAlign: 'right',
+  },
   taskUnassignedLabel: {
     fontSize: 12,
     color: '#9ca3af',
     textAlign: 'right',
+  },
+  taskAssignmentAction: {
+    minHeight: 44,
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
   },
   taskActions: {
     flexDirection: 'row',

@@ -19,10 +19,11 @@ interface RelatedTasksSectionProps {
   tasks: EventTask[];
   participants: Participant[];
   completedCount: number;
-  showAllTasksToAll: boolean;
+  tasksVisibleToParticipants: boolean;
   showToggle: boolean;
   onChange: (tasks: EventTask[]) => void;
   onToggleVisibility: (val: boolean) => void;
+  visibilityOffHelperText: string;
   /** Called when user taps "הוסף" in the no-participants state of the assign sheet */
   onAddParticipants?: () => void;
 }
@@ -31,10 +32,11 @@ export function RelatedTasksSection({
   tasks,
   participants,
   completedCount,
-  showAllTasksToAll,
+  tasksVisibleToParticipants,
   showToggle,
   onChange,
   onToggleVisibility,
+  visibilityOffHelperText,
   onAddParticipants,
 }: RelatedTasksSectionProps): React.JSX.Element {
   // ── Assign sheet state ────────────────────────────────────────────────────
@@ -220,14 +222,21 @@ export function RelatedTasksSection({
       {/* ── Visibility Toggle ── */}
       {showToggle && (
         <View style={s.visibilityRow}>
-          <Text style={s.visibilityText}>הצג את כל המשימות לכל המשתתפים</Text>
+          <View style={s.visibilityTextWrap}>
+            <Text style={s.visibilityTitle}>משימות גלויות למשתתפים</Text>
+            <Text style={s.visibilityText}>
+              {tasksVisibleToParticipants
+                ? 'משתתפים יכולים לראות ולהשתבץ למשימות פנויות'
+                : visibilityOffHelperText}
+            </Text>
+          </View>
           <Switch
-            value={showAllTasksToAll}
+            value={tasksVisibleToParticipants}
             onValueChange={onToggleVisibility}
             trackColor={{ true: PRIMARY, false: '#e2e8f0' }}
             thumbColor="#fff"
             accessible={true}
-            accessibilityLabel="הצג משימות לכולם"
+            accessibilityLabel="משימות גלויות למשתתפים"
           />
         </View>
       )}
@@ -503,7 +512,7 @@ const s = StyleSheet.create({
 
   // ── Visibility toggle ─────────────────────────────────────────────────────
   visibilityRow: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 14,
@@ -511,12 +520,22 @@ const s = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#f1f5f9',
   },
-  visibilityText: {
-    fontSize: 13,
-    color: '#64748b',
+  visibilityTextWrap: {
     flex: 1,
+    alignItems: 'flex-end',
+    marginLeft: 8,
+  },
+  visibilityTitle: {
+    fontSize: 13,
+    color: '#111827',
+    fontWeight: '700',
     textAlign: 'right',
-    marginRight: 8,
+    marginBottom: 2,
+  },
+  visibilityText: {
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'right',
   },
 
   // ── Assign bottom sheet ───────────────────────────────────────────────────

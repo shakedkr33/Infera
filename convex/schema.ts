@@ -105,6 +105,7 @@ export default defineSchema({
     allFamily: v.optional(v.boolean()), // true → shared with all family members
     sharedWithFamilyMemberIds: v.optional(v.array(v.string())), // entity row IDs of selected family members
     communityId: v.optional(v.id('communities')),
+    tasksVisibleToParticipants: v.optional(v.boolean()),
     requiresRsvp: v.optional(v.boolean()), // האם האירוע דורש אישור השתתפות
     status: v.optional(v.union(v.literal('active'), v.literal('cancelled'))),
     cancelledAt: v.optional(v.number()),

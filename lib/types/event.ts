@@ -110,6 +110,7 @@ export interface EventData {
   reminders: Reminder[];
   participants: Participant[];
   tasks: EventTask[];
+  tasksVisibleToParticipants: boolean;
   showAllTasksToAll: boolean;
   createdAt: number;
   // FIXED: added family sharing fields to EventData
