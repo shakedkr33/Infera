@@ -51,6 +51,11 @@ export interface EventTask {
   colorDot?: string;
 }
 
+export interface ImportantItem {
+  id: string;
+  title: string;
+}
+
 export type RecurrenceType = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 // ─── Reminders ────────────────────────────────────────────────────────────────
@@ -122,4 +127,5 @@ export interface EventData {
   sharedWithFamilyMemberIds?: string[];
   // FIXED: file attachments (max 2, frontend draft — localUri stripped before saving)
   attachments?: EventAttachmentDraft[];
+  importantItems?: ImportantItem[];
 }

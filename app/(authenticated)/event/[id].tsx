@@ -27,7 +27,9 @@ import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
 } from '@/lib/openCommunityCalendarUi';
+import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { getFlexDirection, getTextAlign } from '@/lib/rtl';
+import { getConvexErrorCode } from '@/lib/utils/convexError';
 
 const HEB_TEXT_ALIGN = getTextAlign() ?? 'right';
 const HEB_ROW = getFlexDirection();
@@ -35,6 +37,9 @@ const HEB_ROW = getFlexDirection();
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRIMARY = '#36a9e2';
+const IMPORTANT_ITEMS_SECTION_TITLE = 'חשוב לזכור';
+const IMPORTANT_ITEMS_COPY_DEFAULT = 'הוסף למשימות שלי';
+const IMPORTANT_ITEMS_COPY_SUCCESS = 'נוסף למשימות שלך ✓';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -183,13 +188,24 @@ export default function EventDetailScreen() {
     api.eventRsvps.listByEvent,
     eventId ? { eventId } : 'skip'
   );
+  const myAssignedEventTasksState = useQuery(
+    api.eventRsvps.hasMyAssignedEventTasksForEvent,
+    eventId ? { eventId } : 'skip'
+  );
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
+    eventId ? { eventId } : 'skip'
+  );
+  const importantItemsCopyState = useQuery(
+    api.tasks.hasUserCopiedAllImportantItemsFromEvent,
     eventId ? { eventId } : 'skip'
   );
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
 
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
+  const setRsvpNoAndUnclaimMyEventTasks = useMutation(
+    api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
+  );
   const addCommunityEventToMyCalendar = useMutation(
     api.communityEventCalendar.addCommunityEventToMyCalendar
   );
@@ -204,8 +220,19 @@ export default function EventDetailScreen() {
   );
   const claimEventTask = useMutation(api.eventTasks.claimEventTask);
   const unclaimEventTask = useMutation(api.eventTasks.unclaimEventTask);
+  const addEventImportantItemsToMyTasks = useMutation(
+    api.tasks.addEventImportantItemsToMyTasks
+  );
   // FIXED: link-based sharing for personal events (no communityId)
   const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
+
+  const showRsvpNoBlockedDialog = useCallback(
+    (count: number): void => {
+      if (!eventId) return;
+      setBlockedRsvpTaskCount(count);
+    },
+    [eventId]
+  );
 
   const communityMembersData = useQuery(
     api.communities.getCommunityMembers,
@@ -227,6 +254,13 @@ export default function EventDetailScreen() {
   const menuBtnRef = useRef<View>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [isCopyingImportantItems, setIsCopyingImportantItems] = useState(false);
+  const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<number | null>(
+    null
+  );
+  const [importantItemsCopyError, setImportantItemsCopyError] = useState<
+    string | null
+  >(null);
 
   const handleMenuPress = useCallback(() => {
     if (!menuBtnRef.current) {
@@ -245,11 +279,35 @@ export default function EventDetailScreen() {
   const handleRsvp = useCallback(
     (status: RsvpStatus) => {
       if (!eventId) return;
-      upsertRsvp({ eventId, status }).catch(() =>
-        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה')
-      );
+      const localAssignedCount = (eventTasks ?? []).filter(
+        (task) => task.assignedToUserId === currentUserId
+      ).length;
+      const assignedCount =
+        myAssignedEventTasksState?.count ?? localAssignedCount;
+      if (status === 'no' && assignedCount > 0) {
+        showRsvpNoBlockedDialog(assignedCount);
+        return;
+      }
+      upsertRsvp({ eventId, status }).catch((error) => {
+        if (
+          status === 'no' &&
+          getConvexErrorCode(error) === 'RSVP_NO_BLOCKED_BY_ACTIVE_TASK'
+        ) {
+          showRsvpNoBlockedDialog(assignedCount > 0 ? assignedCount : 1);
+          return;
+        }
+        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה');
+      });
     },
-    [eventId, upsertRsvp]
+    [
+      currentUserId,
+      eventId,
+      eventTasks,
+      myAssignedEventTasksState,
+      setRsvpNoAndUnclaimMyEventTasks,
+      showRsvpNoBlockedDialog,
+      upsertRsvp,
+    ]
   );
 
   const handleOpenCalendarToggle = useCallback(() => {
@@ -267,6 +325,19 @@ export default function EventDetailScreen() {
     addCommunityEventToMyCalendar,
     removeCommunityEventFromMyCalendar,
   ]);
+
+  const handleCopyImportantItems = useCallback(async () => {
+    if (!eventId || isCopyingImportantItems) return;
+    setIsCopyingImportantItems(true);
+    setImportantItemsCopyError(null);
+    try {
+      await addEventImportantItemsToMyTasks({ eventId });
+    } catch {
+      setImportantItemsCopyError('לא ניתן להוסיף למשימות כרגע');
+    } finally {
+      setIsCopyingImportantItems(false);
+    }
+  }, [eventId, isCopyingImportantItems, addEventImportantItemsToMyTasks]);
 
   const handleCancelEvent = useCallback(async () => {
     if (!event || !eventId) return;
@@ -499,6 +570,18 @@ export default function EventDetailScreen() {
       ? formatRecurrenceLabel(event.recurringPattern)
       : 'ללא';
   const reminderLabels = getReminderLabels(event);
+  const importantItems = event.importantItems ?? [];
+  const hasImportantItems = importantItems.length > 0;
+  const importantItemsCopyLoading = importantItemsCopyState === undefined;
+  const allImportantItemsCopied =
+    importantItemsCopyState?.allCopied === true && hasImportantItems;
+  const importantItemsButtonDisabled =
+    importantItemsCopyLoading ||
+    isCopyingImportantItems ||
+    allImportantItemsCopied;
+  const importantItemsButtonLabel = allImportantItemsCopied
+    ? IMPORTANT_ITEMS_COPY_SUCCESS
+    : IMPORTANT_ITEMS_COPY_DEFAULT;
 
   const openCommunityCalendarInfoReady =
     !event.communityId ||
@@ -734,6 +817,56 @@ export default function EventDetailScreen() {
                 );
               })}
             </View>
+          </View>
+        ) : null}
+
+        {hasImportantItems ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>
+              {IMPORTANT_ITEMS_SECTION_TITLE}
+            </Text>
+            <View style={styles.importantItemsList}>
+              {importantItems.map((item) => (
+                <View key={item.id} style={styles.importantItemRow}>
+                  <Text style={styles.importantItemBullet}>•</Text>
+                  <Text style={styles.importantItemText}>{item.title}</Text>
+                </View>
+              ))}
+            </View>
+            <Pressable
+              accessibilityLabel={importantItemsButtonLabel}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: importantItemsButtonDisabled }}
+              accessible={true}
+              disabled={importantItemsButtonDisabled}
+              onPress={handleCopyImportantItems}
+              style={({ pressed }) => [
+                allImportantItemsCopied
+                  ? styles.importantItemsCopiedBtn
+                  : styles.importantItemsCopyBtn,
+                pressed && !importantItemsButtonDisabled
+                  ? styles.importantItemsCopyBtnPressed
+                  : null,
+                importantItemsButtonDisabled && !allImportantItemsCopied
+                  ? styles.importantItemsCopyBtnDisabled
+                  : null,
+              ]}
+            >
+              <Text
+                style={
+                  allImportantItemsCopied
+                    ? styles.importantItemsCopiedBtnText
+                    : styles.importantItemsCopyBtnText
+                }
+              >
+                {importantItemsButtonLabel}
+              </Text>
+            </Pressable>
+            {importantItemsCopyError ? (
+              <Text style={styles.importantItemsCopyError}>
+                {importantItemsCopyError}
+              </Text>
+            ) : null}
           </View>
         ) : null}
 
@@ -1206,6 +1339,18 @@ export default function EventDetailScreen() {
           </View>
         </View>
       </Modal>
+      <RsvpBlockedByTaskDialog
+        assignedTaskCount={blockedRsvpTaskCount ?? 1}
+        onClose={() => setBlockedRsvpTaskCount(null)}
+        onConfirm={() => {
+          if (!eventId) return;
+          setBlockedRsvpTaskCount(null);
+          setRsvpNoAndUnclaimMyEventTasks({ eventId }).catch(() =>
+            Alert.alert('שגיאה', 'לא ניתן לעדכן אישור הגעה')
+          );
+        }}
+        visible={blockedRsvpTaskCount !== null}
+      />
     </SafeAreaView>
   );
 }
@@ -1539,6 +1684,73 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     textAlign: 'center',
+  },
+
+  // ── Important items
+  importantItemsList: {
+    gap: 8,
+  },
+  importantItemRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'flex-start',
+    gap: 8,
+    width: '100%',
+  },
+  importantItemBullet: {
+    fontSize: 16,
+    color: PRIMARY,
+    lineHeight: 22,
+  },
+  importantItemText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#374151',
+    textAlign: HEB_TEXT_ALIGN,
+    lineHeight: 22,
+    fontWeight: '500',
+  },
+  importantItemsCopyBtn: {
+    marginTop: 4,
+    backgroundColor: PRIMARY,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  importantItemsCopiedBtn: {
+    marginTop: 4,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  importantItemsCopyBtnPressed: {
+    opacity: 0.9,
+  },
+  importantItemsCopyBtnDisabled: {
+    opacity: 0.55,
+  },
+  importantItemsCopyBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  importantItemsCopiedBtnText: {
+    color: '#64748b',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  importantItemsCopyError: {
+    fontSize: 13,
+    color: '#ef4444',
+    textAlign: HEB_TEXT_ALIGN,
   },
 
   // ── Participants

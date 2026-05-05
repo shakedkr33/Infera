@@ -24,6 +24,21 @@ const attachmentObject = v.object({
   sizeBytes: v.number(),
 });
 
+const importantItemObject = v.object({
+  id: v.string(),
+  title: v.string(),
+});
+
+function sanitizeImportantItems(
+  items: Array<{ id: string; title: string }> | undefined
+): Array<{ id: string; title: string }> | undefined {
+  if (!items) return undefined;
+  const sanitized = items
+    .map((item) => ({ id: item.id, title: item.title.trim() }))
+    .filter((item) => item.title.length > 0);
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
 async function getCommunityMembership(
   ctx: MutationCtx | QueryCtx,
   communityId: Id<'communities'>,
@@ -363,10 +378,12 @@ export const create = mutation({
     attachments: v.optional(v.array(attachmentObject)),
     // Reminder offsets in minutes before event start
     reminders: v.optional(v.array(v.number())),
+    importantItems: v.optional(v.array(importantItemObject)),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
+    const importantItems = sanitizeImportantItems(args.importantItems);
 
     if (args.communityId) {
       const community = await ctx.db.get(args.communityId);
@@ -405,6 +422,7 @@ export const create = mutation({
     const eventId = await ctx.db.insert('events', {
       ...args,
       attachments: stamped,
+      importantItems,
       tasksVisibleToParticipants: args.tasksVisibleToParticipants ?? false,
       isAiGenerated: false,
       createdBy: userId,
@@ -465,8 +483,9 @@ export const update = mutation({
     attachments: v.optional(v.array(attachmentObject)),
     // Reminder offsets in minutes before event start
     reminders: v.optional(v.array(v.number())),
+    importantItems: v.optional(v.array(importantItemObject)),
   },
-  handler: async (ctx, { id, attachments, ...fields }) => {
+  handler: async (ctx, { id, attachments, importantItems, ...fields }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
 
@@ -521,10 +540,14 @@ export const update = mutation({
       });
     }
 
+    const sanitizedImportantItems = sanitizeImportantItems(importantItems);
     await ctx.db.patch(id, {
       ...fields,
       ...(stampedAttachments !== undefined
         ? { attachments: stampedAttachments }
+        : {}),
+      ...(importantItems !== undefined
+        ? { importantItems: sanitizedImportantItems }
         : {}),
     });
   },

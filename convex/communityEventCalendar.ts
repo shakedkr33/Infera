@@ -1,8 +1,12 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
-import { v } from 'convex/values';
+import { ConvexError, v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx } from './_generated/server';
 import { mutation } from './_generated/server';
+import {
+  removeCommunityEventFromPersonalCalendar,
+  saveCommunityEventToPersonalCalendar,
+} from './communityEventCalendarHelpers';
 import { isActiveCommunityMember } from './communityMemberUtils';
 
 async function getCommunityMembership(
@@ -16,6 +20,18 @@ async function getCommunityMembership(
       q.eq('communityId', communityId).eq('userId', userId)
     )
     .unique();
+}
+
+async function getMyAssignedEventTasks(
+  ctx: MutationCtx,
+  eventId: Id<'events'>,
+  userId: Id<'users'>
+) {
+  const tasks = await ctx.db
+    .query('eventTasks')
+    .withIndex('by_event', (q) => q.eq('eventId', eventId))
+    .collect();
+  return tasks.filter((task) => task.assignedToUserId === userId);
 }
 
 export const addCommunityEventToMyCalendar = mutation({
@@ -41,14 +57,6 @@ export const addCommunityEventToMyCalendar = mutation({
       throw new Error('אין הרשאה');
     }
 
-    const optOut = await ctx.db
-      .query('communityEventPersonalCalendarOptOuts')
-      .withIndex('by_user_event', (q) =>
-        q.eq('userId', userId).eq('eventId', eventId)
-      )
-      .unique();
-    if (optOut) await ctx.db.delete(optOut._id);
-
     const rsvpRow = await ctx.db
       .query('eventRsvps')
       .withIndex('by_event_user', (q) =>
@@ -59,26 +67,10 @@ export const addCommunityEventToMyCalendar = mutation({
       return { success: true as const };
     }
 
-    const now = Date.now();
-    const existing = await ctx.db
-      .query('savedCommunityEvents')
-      .withIndex('by_user_event', (q) =>
-        q.eq('userId', userId).eq('eventId', eventId)
-      )
-      .unique();
-
-    if (existing) {
-      if (existing.removedAt !== undefined) {
-        await ctx.db.patch(existing._id, { removedAt: undefined });
-      }
-      return { success: true as const };
-    }
-
-    await ctx.db.insert('savedCommunityEvents', {
+    await saveCommunityEventToPersonalCalendar(ctx, {
       userId,
       eventId,
       communityId: event.communityId,
-      createdAt: now,
     });
     return { success: true as const };
   },
@@ -102,37 +94,55 @@ export const removeCommunityEventFromMyCalendar = mutation({
       throw new Error('אין הרשאה');
     }
 
-    const saveRow = await ctx.db
-      .query('savedCommunityEvents')
-      .withIndex('by_user_event', (q) =>
-        q.eq('userId', userId).eq('eventId', eventId)
-      )
-      .unique();
-    const activeSave = saveRow && saveRow.removedAt === undefined;
-    if (activeSave) {
-      await ctx.db.patch(saveRow._id, { removedAt: Date.now() });
+    const assignedTasks = await getMyAssignedEventTasks(ctx, eventId, userId);
+    if (assignedTasks.length > 0) {
+      throw new ConvexError({
+        code: 'CALENDAR_REMOVE_BLOCKED_BY_ACTIVE_TASK',
+        message: 'לא ניתן להסיר מהיומן בזמן שיש לך משימה באירוע',
+      });
     }
 
-    if (event.requiresRsvp === false) {
-      // Always create an opt-out for open events so that privileged users
-      // (event creators, community owners / admins) are also excluded from
-      // personal home/calendar aggregates after explicit removal.
-      // addCommunityEventToMyCalendar deletes the opt-out on re-add.
-      const existingOpt = await ctx.db
-        .query('communityEventPersonalCalendarOptOuts')
-        .withIndex('by_user_event', (q) =>
-          q.eq('userId', userId).eq('eventId', eventId)
-        )
-        .unique();
-      if (!existingOpt) {
-        await ctx.db.insert('communityEventPersonalCalendarOptOuts', {
-          userId,
-          eventId,
-          createdAt: Date.now(),
-        });
-      }
-    }
-
+    await removeCommunityEventFromPersonalCalendar(ctx, {
+      userId,
+      eventId,
+      requiresRsvp: event.requiresRsvp,
+    });
     return { success: true as const };
+  },
+});
+
+export const removeEventFromCalendarAndUnclaim = mutation({
+  args: { eventId: v.id('events') },
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const event = await ctx.db.get(eventId);
+    if (!event?.communityId) throw new Error('אירוע לא נמצא');
+
+    const membership = await getCommunityMembership(
+      ctx,
+      event.communityId,
+      userId
+    );
+    if (!isActiveCommunityMember(membership)) {
+      throw new Error('אין הרשאה');
+    }
+
+    const assignedTasks = await getMyAssignedEventTasks(ctx, eventId, userId);
+    for (const task of assignedTasks) {
+      await ctx.db.patch(task._id, {
+        assignedToUserId: undefined,
+        assignedToManual: undefined,
+      });
+    }
+
+    await removeCommunityEventFromPersonalCalendar(ctx, {
+      userId,
+      eventId,
+      requiresRsvp: event.requiresRsvp,
+    });
+
+    return { success: true as const, unclaimedCount: assignedTasks.length };
   },
 });

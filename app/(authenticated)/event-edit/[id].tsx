@@ -187,6 +187,7 @@ function convexEventToEventData(
     showAllTasksToAll: false,
     createdAt: event._creationTime ?? Date.now(),
     attachments,
+    importantItems: event.importantItems ?? [],
   };
 }
 
@@ -206,6 +207,16 @@ export default function EditEventScreen(): React.JSX.Element {
   const communityMembersPack = useQuery(
     api.communities.getCommunityMembers,
     event?.communityId ? { communityId: event.communityId } : 'skip'
+  );
+  const communityTaskParticipants = useMemo(
+    () =>
+      (communityMembersPack?.members ?? []).map((member) => ({
+        id: member.userId,
+        name: member.fullName,
+        email: member.email,
+        color: '#36a9e2',
+      })),
+    [communityMembersPack]
   );
 
   const updateEventMutation = useMutation(api.events.update);
@@ -310,6 +321,10 @@ export default function EditEventScreen(): React.JSX.Element {
         reminders: data.remindersEnabled
           ? data.reminders.map((r) => r.offsetMinutes)
           : [],
+        importantItems:
+          data.importantItems && data.importantItems.length > 0
+            ? data.importantItems
+            : undefined,
       });
 
       // ── Task diff ────────────────────────────────────────────────────────────
@@ -333,6 +348,16 @@ export default function EditEventScreen(): React.JSX.Element {
           if (!taskId) continue;
           const assignedPid =
             task.assignedParticipantIds?.[0] ?? task.assigneeId;
+          if (assignedPid && isCommunityEvent) {
+            await setTaskAssignee({
+              id: taskId as Id<'eventTasks'>,
+              assignee: {
+                type: 'user',
+                userId: assignedPid as Id<'users'>,
+              },
+            }).catch(() => {});
+            continue;
+          }
           const assignedName = data.participants
             .find((p) => p.id === assignedPid)
             ?.name?.trim();
@@ -348,11 +373,48 @@ export default function EditEventScreen(): React.JSX.Element {
       for (const task of currentTasks) {
         if (!originalIds.has(task.id)) continue;
         const orig = (eventTasks ?? []).find((t) => t._id === task.id);
-        if (!orig || orig.title === task.title.trim()) continue;
-        await updateEventTask({
-          id: task.id as Id<'eventTasks'>,
-          title: task.title.trim(),
-        });
+        if (!orig) continue;
+        if (orig.title !== task.title.trim()) {
+          await updateEventTask({
+            id: task.id as Id<'eventTasks'>,
+            title: task.title.trim(),
+          });
+        }
+
+        const assignedPid =
+          task.assignedParticipantIds?.[0] ?? task.assigneeId;
+        const originalUserId = orig.assignedToUserId as string | undefined;
+        const originalManualName = orig.assignedToManual?.trim();
+        if (isCommunityEvent) {
+          const assignmentChanged =
+            assignedPid !== originalUserId || Boolean(originalManualName);
+          if (assignmentChanged) {
+            await setTaskAssignee({
+              id: task.id as Id<'eventTasks'>,
+              assignee: assignedPid
+                ? {
+                    type: 'user',
+                    userId: assignedPid as Id<'users'>,
+                  }
+                : null,
+            }).catch(() => {});
+          }
+          continue;
+        }
+
+        const assignedName = data.participants
+          .find((p) => p.id === assignedPid)
+          ?.name?.trim();
+        const assignmentChanged =
+          assignedName !== originalManualName || Boolean(originalUserId);
+        if (assignmentChanged) {
+          await setTaskAssignee({
+            id: task.id as Id<'eventTasks'>,
+            assignee: assignedName
+              ? { type: 'manual', name: assignedName }
+              : null,
+          }).catch(() => {});
+        }
       }
 
       for (const orig of eventTasks ?? []) {
@@ -430,6 +492,7 @@ export default function EditEventScreen(): React.JSX.Element {
       customHeaderTitle={headerTitle}
       context={isCommunityEvent ? 'community' : 'personal'}
       showParticipants={!isCommunityEvent}
+      taskParticipants={isCommunityEvent ? communityTaskParticipants : undefined}
       showRsvpSection={isCommunityEvent}
       rsvpRequired={rsvpRequired}
       onRsvpRequiredChange={setRsvpRequired}

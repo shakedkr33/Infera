@@ -26,6 +26,10 @@ interface RelatedTasksSectionProps {
   visibilityOffHelperText: string;
   /** Called when user taps "הוסף" in the no-participants state of the assign sheet */
   onAddParticipants?: () => void;
+  assignmentTitle?: string;
+  assignmentEmptyText?: string;
+  assignmentSectionLabel?: string;
+  showAddParticipantsEmptyAction?: boolean;
 }
 
 export function RelatedTasksSection({
@@ -38,28 +42,30 @@ export function RelatedTasksSection({
   onToggleVisibility,
   visibilityOffHelperText,
   onAddParticipants,
+  assignmentTitle = 'הקצאת משימה',
+  assignmentEmptyText = 'לא צורפו משתתפים לצורך הקצאת המשימה',
+  assignmentSectionLabel = 'משתתפים',
+  showAddParticipantsEmptyAction = true,
 }: RelatedTasksSectionProps): React.JSX.Element {
   // ── Assign sheet state ────────────────────────────────────────────────────
   const [assigningTaskId, setAssigningTaskId] = useState<string | null>(null);
   const [draftSelected, setDraftSelected] = useState<string[]>([]);
 
   const openAssignSheet = (task: EventTask): void => {
-    setDraftSelected(task.assignedParticipantIds ?? []);
+    setDraftSelected((task.assignedParticipantIds ?? []).slice(0, 1));
     setAssigningTaskId(task.id);
   };
 
   const closeAssignSheet = (): void => setAssigningTaskId(null);
 
   const toggleParticipantDraft = (pid: string): void => {
-    setDraftSelected((prev) =>
-      prev.includes(pid) ? prev.filter((id) => id !== pid) : [...prev, pid]
-    );
+    setDraftSelected((prev) => (prev.includes(pid) ? [] : [pid]));
   };
 
   const saveAssignment = (): void => {
     const updated = tasks.map((t) =>
       t.id === assigningTaskId
-        ? { ...t, assignedParticipantIds: draftSelected }
+        ? { ...t, assignedParticipantIds: draftSelected.slice(0, 1) }
         : t
     );
     onChange(updated);
@@ -256,32 +262,34 @@ export function RelatedTasksSection({
             <View style={s.sheetHandle} />
 
             {/* Title */}
-            <Text style={s.sheetTitle}>הקצאת משימה</Text>
+            <Text style={s.sheetTitle}>{assignmentTitle}</Text>
 
             {participants.length === 0 ? (
               /* ── No-participants state ── */
               <View style={s.noParticipantsBox}>
                 <MaterialIcons name="group-off" size={32} color="#cbd5e1" />
                 <Text style={s.noParticipantsText}>
-                  לא צורפו משתתפים לצורך הקצאת המשימה
+                  {assignmentEmptyText}
                 </Text>
-                <Pressable
-                  style={s.addParticipantsBtn}
-                  onPress={() => {
-                    closeAssignSheet();
-                    onAddParticipants?.();
-                  }}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel="הוסף משתתפים"
-                >
-                  <Text style={s.addParticipantsBtnText}>הוסף משתתפים</Text>
-                </Pressable>
+                {showAddParticipantsEmptyAction ? (
+                  <Pressable
+                    style={s.addParticipantsBtn}
+                    onPress={() => {
+                      closeAssignSheet();
+                      onAddParticipants?.();
+                    }}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel="הוסף משתתפים"
+                  >
+                    <Text style={s.addParticipantsBtnText}>הוסף משתתפים</Text>
+                  </Pressable>
+                ) : null}
               </View>
             ) : (
               /* ── Participant list ── */
               <>
-                <Text style={s.sheetSectionLabel}>משתתפים</Text>
+                <Text style={s.sheetSectionLabel}>{assignmentSectionLabel}</Text>
                 <ScrollView
                   style={s.participantList}
                   keyboardShouldPersistTaps="handled"

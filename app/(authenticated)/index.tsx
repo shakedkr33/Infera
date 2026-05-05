@@ -443,7 +443,7 @@ export default function HomeScreen() {
       assignedEventTasks.map((t) => ({
         id: t._id,
         time: t.eventAllDay
-          ? ''
+          ? '00:00'
           : new Date(t.eventStartTime).toLocaleTimeString('he-IL', {
               hour: '2-digit',
               minute: '2-digit',
@@ -455,8 +455,8 @@ export default function HomeScreen() {
         iconBg: '#F0FDF4',
         iconColor: '#16a34a',
         assigneeColor: '#16a34a',
-        completed: false,
-        allDay: t.eventAllDay,
+        completed: t.completed ?? false,
+        allDay: false,
         groupName: t.communityName,
         communityId: t.communityId as string,
       })),

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation, useQuery } from 'convex/react';
+import { useConvex, useMutation, useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -21,12 +21,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
 } from '@/lib/openCommunityCalendarUi';
+import { getConvexErrorCode } from '@/lib/utils/convexError';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -68,6 +70,7 @@ interface EventDoc {
   cancelReason?: string;
   /** Open community events: personal calendar / "הסר מהיומן" (from Convex) */
   isSavedToMyCalendar?: boolean;
+  importantItems?: Array<{ id: string; title: string }>;
 }
 
 interface TaskDoc {
@@ -409,6 +412,8 @@ function CommunityEventFlyerCard({
   const dateLabel = formatFlyerDate(event.startTime);
   const timeLabel = formatFlyerTime(event);
   const locationLabel = event.location?.trim() || 'מיקום יתעדכן בהמשך';
+  const importantItemsCount = event.importantItems?.length ?? 0;
+  const showImportantItemsChip = importantItemsCount > 0;
   const rsvpMeta = isOpenCommunityEvent
     ? 'פתוח לחברי הקהילה'
     : rsvpStatus === 'yes'
@@ -475,6 +480,15 @@ function CommunityEventFlyerCard({
         <Text style={styles.flyerTitle} numberOfLines={2}>
           {event.title}
         </Text>
+        <View style={styles.flyerImportantItemsSlot}>
+          {showImportantItemsChip ? (
+            <View style={styles.flyerImportantItemsChip}>
+              <Text style={styles.flyerImportantItemsChipText}>
+                {`📌 חשוב לזכור · ${importantItemsCount}`}
+              </Text>
+            </View>
+          ) : null}
+        </View>
         <View style={styles.flyerDividerRow}>
           <View
             style={[
@@ -1854,6 +1868,7 @@ function TabActivity() {
 export default function CommunityDetailScreen() {
   const { id, tab } = useLocalSearchParams<{ id: string; tab?: string }>();
   const router = useRouter();
+  const convex = useConvex();
   const communityId = id as Id<'communities'>;
 
   // ── Queries
@@ -1865,6 +1880,9 @@ export default function CommunityDetailScreen() {
 
   // ── Mutations
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
+  const setRsvpNoAndUnclaimMyEventTasks = useMutation(
+    api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
+  );
   const toggleCompleted = useMutation(api.tasks.toggleCompleted);
   const deleteCommunity = useMutation(api.communities.deleteCommunity);
   const toggleNotifications = useMutation(api.communities.toggleNotifications);
@@ -1887,6 +1905,10 @@ export default function CommunityDetailScreen() {
   const [selectedEventId, setSelectedEventId] = useState<Id<'events'> | null>(
     null
   );
+  const [blockedRsvpDialog, setBlockedRsvpDialog] = useState<{
+    eventId: Id<'events'>;
+    count: number;
+  } | null>(null);
   const lastDragCloseTime = useRef<number>(0);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionCanExpand, setDescriptionCanExpand] = useState(false);
@@ -1939,23 +1961,64 @@ export default function CommunityDetailScreen() {
   }, [myRsvps]);
 
   // ── Handlers
-  const handleRsvpSelect = useCallback(
-    (status: RsvpStatus) => {
-      if (!rsvpSheet) return;
-      upsertRsvp({ eventId: rsvpSheet, status }).catch(() =>
-        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה')
-      );
+  const handleBlockedRsvpNo = useCallback(
+    (eventId: Id<'events'>, count: number) => {
+      setBlockedRsvpDialog({ eventId, count });
     },
-    [rsvpSheet, upsertRsvp]
+    []
+  );
+
+  const handleRsvpSelect = useCallback(
+    async (status: RsvpStatus) => {
+      if (!rsvpSheet) return;
+      if (status === 'no') {
+        const assignedState = await convex.query(
+          api.eventRsvps.hasMyAssignedEventTasksForEvent,
+          { eventId: rsvpSheet }
+        );
+        if (assignedState.hasAssignedTasks) {
+          handleBlockedRsvpNo(rsvpSheet, assignedState.count);
+          return;
+        }
+      }
+      upsertRsvp({ eventId: rsvpSheet, status }).catch((error) => {
+        if (
+          status === 'no' &&
+          getConvexErrorCode(error) === 'RSVP_NO_BLOCKED_BY_ACTIVE_TASK'
+        ) {
+          handleBlockedRsvpNo(rsvpSheet, 1);
+          return;
+        }
+        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה');
+      });
+    },
+    [convex, handleBlockedRsvpNo, rsvpSheet, upsertRsvp]
   );
 
   const handleInlineRsvp = useCallback(
     async (eventId: Id<'events'>, status: RsvpStatus) => {
-      await upsertRsvp({ eventId, status }).catch(() => {
+      if (status === 'no') {
+        const assignedState = await convex.query(
+          api.eventRsvps.hasMyAssignedEventTasksForEvent,
+          { eventId }
+        );
+        if (assignedState.hasAssignedTasks) {
+          handleBlockedRsvpNo(eventId, assignedState.count);
+          return;
+        }
+      }
+      await upsertRsvp({ eventId, status }).catch((error) => {
+        if (
+          status === 'no' &&
+          getConvexErrorCode(error) === 'RSVP_NO_BLOCKED_BY_ACTIVE_TASK'
+        ) {
+          handleBlockedRsvpNo(eventId, 1);
+          return;
+        }
         Alert.alert('שגיאה', 'לא ניתן לעדכן אישור הגעה');
       });
     },
-    [upsertRsvp]
+    [convex, handleBlockedRsvpNo, upsertRsvp]
   );
 
   const handleOpenEventDetails = useCallback((eventId: Id<'events'>) => {
@@ -2404,6 +2467,19 @@ export default function CommunityDetailScreen() {
         onChange={setSearchQuery}
         onClose={() => setSearchOpen(false)}
       />
+      <RsvpBlockedByTaskDialog
+        assignedTaskCount={blockedRsvpDialog?.count ?? 1}
+        onClose={() => setBlockedRsvpDialog(null)}
+        onConfirm={() => {
+          if (!blockedRsvpDialog) return;
+          const eventId = blockedRsvpDialog.eventId;
+          setBlockedRsvpDialog(null);
+          setRsvpNoAndUnclaimMyEventTasks({ eventId }).catch(() =>
+            Alert.alert('שגיאה', 'לא ניתן לעדכן אישור הגעה')
+          );
+        }}
+        visible={blockedRsvpDialog !== null}
+      />
     </SafeAreaView>
   );
 }
@@ -2582,6 +2658,27 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     marginBottom: 8,
     minHeight: 48,
+  },
+  flyerImportantItemsChip: {
+    alignSelf: 'center',
+    backgroundColor: '#E6F4FB',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#BAE6FD',
+  },
+  flyerImportantItemsSlot: {
+    height: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  flyerImportantItemsChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0369a1',
+    textAlign: 'center',
   },
   flyerDividerRow: {
     flexDirection: 'row',

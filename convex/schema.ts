@@ -129,6 +129,14 @@ export default defineSchema({
         })
       )
     ),
+    importantItems: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          title: v.string(),
+        })
+      )
+    ),
   })
     .index('by_space_and_time', ['spaceId', 'startTime'])
     .index('by_creator', ['createdBy'])
@@ -151,11 +159,15 @@ export default defineSchema({
     createdAt: v.number(),
     communityId: v.optional(v.id('communities')), // קהילה שאליה שייכת המשימה
     completedAt: v.optional(v.number()), // חותמת זמן השלמה (לצורך היסטוריה)
+    sourceType: v.optional(v.literal('community_event_important_item')),
+    sourceEventId: v.optional(v.id('events')),
+    sourceImportantItemId: v.optional(v.string()),
   })
     .index('by_space_completed', ['spaceId', 'completed'])
     .index('by_assigned', ['assignedTo'])
     .index('by_space', ['spaceId'])
-    .index('by_community', ['communityId']),
+    .index('by_community', ['communityId'])
+    .index('by_assigned_source_event', ['assignedTo', 'sourceEventId']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת ימי הולדת

@@ -89,6 +89,10 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
         reminders: data.remindersEnabled
           ? data.reminders.map((r) => r.offsetMinutes)
           : [],
+        importantItems:
+          data.importantItems && data.importantItems.length > 0
+            ? data.importantItems
+            : undefined,
       });
 
       const tasksToCreate = data.tasks.filter(

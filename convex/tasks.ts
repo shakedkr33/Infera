@@ -1,6 +1,7 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
+import { isActiveCommunityMember } from './communityMemberUtils';
 
 // ─────────────────────────────────────────────────────────────
 // שליפת תזכורות שהושלמו לאחרונה לקהילה (עד 30 יום)
@@ -187,5 +188,152 @@ export const remove = mutation({
     if (!existing) throw new Error('משימה לא נמצאה');
 
     await ctx.db.delete(id);
+  },
+});
+
+export const addEventImportantItemsToMyTasks = mutation({
+  args: { eventId: v.id('events') },
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('האירוע לא נמצא');
+
+    if (event.communityId) {
+      const communityId = event.communityId;
+      const membership = await ctx.db
+        .query('communityMembers')
+        .withIndex('by_community_user', (q) =>
+          q.eq('communityId', communityId).eq('userId', userId)
+        )
+        .unique();
+      if (!isActiveCommunityMember(membership)) {
+        throw new Error('אין הרשאה לצפות באירוע');
+      }
+    } else if (event.createdBy !== userId) {
+      throw new Error('אין הרשאה לצפות באירוע');
+    }
+
+    const importantItems = event.importantItems ?? [];
+    if (importantItems.length === 0) {
+      return { created: 0, alreadyExisted: 0 };
+    }
+
+    const membership = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .first();
+    const user = membership?.spaceId ? null : await ctx.db.get(userId);
+    const spaceId = membership?.spaceId ?? user?.defaultSpaceId;
+
+    const now = Date.now();
+    const eventStart = event.startTime;
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    let dueDate: number | undefined;
+    if (eventStart < now) {
+      dueDate = undefined;
+    } else if (eventStart - oneDayMs > now) {
+      dueDate = eventStart - oneDayMs;
+    } else {
+      dueDate = now;
+    }
+
+    const existingTasks = await ctx.db
+      .query('tasks')
+      .withIndex('by_assigned_source_event', (q) =>
+        q.eq('assignedTo', userId).eq('sourceEventId', eventId)
+      )
+      .collect();
+    const existingItemIds = new Set(
+      existingTasks
+        .map((task) => task.sourceImportantItemId)
+        .filter((id): id is string => typeof id === 'string')
+    );
+
+    let created = 0;
+    let alreadyExisted = 0;
+
+    for (const item of importantItems) {
+      if (existingItemIds.has(item.id)) {
+        alreadyExisted++;
+        continue;
+      }
+
+      await ctx.db.insert('tasks', {
+        title: item.title,
+        completed: false,
+        spaceId,
+        assignedTo: userId,
+        communityId: event.communityId,
+        dueDate,
+        isAiGenerated: false,
+        createdBy: userId,
+        createdAt: Date.now(),
+        sourceType: 'community_event_important_item',
+        sourceEventId: eventId,
+        sourceImportantItemId: item.id,
+      });
+      created++;
+      existingItemIds.add(item.id);
+    }
+
+    return { created, alreadyExisted };
+  },
+});
+
+export const hasUserCopiedAllImportantItemsFromEvent = query({
+  args: { eventId: v.id('events') },
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return { totalItems: 0, copiedItems: 0, allCopied: false };
+    }
+
+    const event = await ctx.db.get(eventId);
+    if (!event) {
+      return { totalItems: 0, copiedItems: 0, allCopied: false };
+    }
+
+    if (event.communityId) {
+      const communityId = event.communityId;
+      const membership = await ctx.db
+        .query('communityMembers')
+        .withIndex('by_community_user', (q) =>
+          q.eq('communityId', communityId).eq('userId', userId)
+        )
+        .unique();
+      if (!isActiveCommunityMember(membership)) {
+        return { totalItems: 0, copiedItems: 0, allCopied: false };
+      }
+    } else if (event.createdBy !== userId) {
+      return { totalItems: 0, copiedItems: 0, allCopied: false };
+    }
+
+    const totalItems = event.importantItems?.length ?? 0;
+    if (totalItems === 0) {
+      return { totalItems: 0, copiedItems: 0, allCopied: false };
+    }
+
+    const existingTasks = await ctx.db
+      .query('tasks')
+      .withIndex('by_assigned_source_event', (q) =>
+        q.eq('assignedTo', userId).eq('sourceEventId', eventId)
+      )
+      .collect();
+    const existingItemIds = new Set(
+      existingTasks
+        .map((task) => task.sourceImportantItemId)
+        .filter((id): id is string => typeof id === 'string')
+    );
+
+    const copiedItems = (event.importantItems ?? []).filter((item) =>
+      existingItemIds.has(item.id)
+    ).length;
+    return {
+      totalItems,
+      copiedItems,
+      allCopied: totalItems > 0 && copiedItems === totalItems,
+    };
   },
 });

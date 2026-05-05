@@ -45,11 +45,21 @@ import { RemindersCard } from '@/lib/components/event/RemindersCard';
 import type {
   EventAttachmentDraft,
   EventData,
+  ImportantItem,
   RecurrenceType,
 } from '@/lib/types/event';
 import { makeReminder } from '@/lib/types/event';
 
 const PRIMARY = '#36a9e2';
+
+const IMPORTANT_ITEMS_SECTION_TITLE = 'חשוב לזכור';
+const IMPORTANT_ITEMS_PLACEHOLDER =
+  'למשל: חולצה לבנה, פרי חתוך, בקבוק מים...';
+const IMPORTANT_ITEMS_ADD_LABEL = 'הוסף';
+
+function createImportantItemId(): string {
+  return Math.random().toString(36).slice(2);
+}
 
 /**
  * Build smart default start/end for a new event.
@@ -87,6 +97,7 @@ function makeEmptyEvent(selectedDateMs?: number): EventData {
     reminders: [makeReminder('hour_before')],
     participants: [],
     tasks: [],
+    importantItems: [],
     tasksVisibleToParticipants: false,
     showAllTasksToAll: false,
     createdAt: Date.now(),
@@ -116,6 +127,7 @@ const MOCK_EVENT: EventData = {
   ],
   tasksVisibleToParticipants: false,
   showAllTasksToAll: true,
+  importantItems: [],
   createdAt: Date.now(),
 };
 
@@ -204,6 +216,7 @@ export default function EventScreen({
   const [titleError, setTitleError] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [importantItemDraft, setImportantItemDraft] = useState('');
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
@@ -332,6 +345,7 @@ export default function EventScreen({
     event.title.trim().length > 0 ||
     event.participants.length > 0 ||
     event.tasks.length > 0 ||
+    (event.importantItems?.length ?? 0) > 0 ||
     !!event.location ||
     !!event.onlineUrl ||
     !!event.notes ||
@@ -384,6 +398,28 @@ export default function EventScreen({
   const taskVisibilityOffHelperText = isCommunityEvent
     ? 'רק את ומנהלות האירוע רואות את המשימות'
     : 'רק את רואה את המשימות';
+
+  const handleAddImportantItem = (): void => {
+    const title = importantItemDraft.trim();
+    if (!title) return;
+    const nextItem: ImportantItem = {
+      id: createImportantItemId(),
+      title,
+    };
+    updateEvent({
+      importantItems: [...(event.importantItems ?? []), nextItem],
+    });
+    setImportantItemDraft('');
+  };
+
+  const handleRemoveImportantItem = (itemId: string): void => {
+    const nextItems = (event.importantItems ?? []).filter(
+      (item) => item.id !== itemId
+    );
+    updateEvent({
+      importantItems: nextItems.length > 0 ? nextItems : [],
+    });
+  };
 
   return (
     <SafeAreaView style={s.safeArea} edges={['top', 'bottom']}>
@@ -626,7 +662,74 @@ export default function EventScreen({
                 }
                 visibilityOffHelperText={taskVisibilityOffHelperText}
                 onAddParticipants={() => {}}
+                assignmentTitle={
+                  isCommunityEvent
+                    ? 'הקצאת משימה לחבר קהילה'
+                    : 'הקצאת משימה'
+                }
+                assignmentEmptyText={
+                  isCommunityEvent
+                    ? 'אין עדיין חברים פעילים בקהילה'
+                    : 'לא צורפו משתתפים לצורך הקצאת המשימה'
+                }
+                assignmentSectionLabel={
+                  isCommunityEvent ? 'חברי קהילה' : 'משתתפים'
+                }
+                showAddParticipantsEmptyAction={!isCommunityEvent}
               />
+
+              {isCommunityEvent ? (
+                <View style={s.importantItemsSection}>
+                  <Text style={s.importantItemsTitle}>
+                    {IMPORTANT_ITEMS_SECTION_TITLE}
+                  </Text>
+                  <View style={s.importantItemsInputRow}>
+                    <Pressable
+                      style={s.importantItemsAddBtn}
+                      onPress={handleAddImportantItem}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel={IMPORTANT_ITEMS_ADD_LABEL}
+                    >
+                      <Text style={s.importantItemsAddText}>
+                        {IMPORTANT_ITEMS_ADD_LABEL}
+                      </Text>
+                    </Pressable>
+                    <TextInput
+                      style={s.importantItemsInput}
+                      value={importantItemDraft}
+                      onChangeText={setImportantItemDraft}
+                      placeholder={IMPORTANT_ITEMS_PLACEHOLDER}
+                      placeholderTextColor="#94a3b8"
+                      textAlign="right"
+                      returnKeyType="done"
+                      onSubmitEditing={handleAddImportantItem}
+                      accessible={true}
+                      accessibilityLabel={IMPORTANT_ITEMS_SECTION_TITLE}
+                    />
+                  </View>
+                  {(event.importantItems ?? []).length > 0 ? (
+                    <View style={s.importantItemsList}>
+                      {(event.importantItems ?? []).map((item) => (
+                        <View key={item.id} style={s.importantItemsRow}>
+                          <Pressable
+                            style={s.importantItemsRemoveBtn}
+                            onPress={() => handleRemoveImportantItem(item.id)}
+                            accessible={true}
+                            accessibilityRole="button"
+                            accessibilityLabel="הסר"
+                          >
+                            <Text style={s.importantItemsRemoveText}>×</Text>
+                          </Pressable>
+                          <Text style={s.importantItemsBulletText}>
+                            {item.title}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
 
               {showRsvpSection ? (
                 <View style={s.rsvpSection}>
@@ -1073,6 +1176,86 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: '#111827',
     textAlign: 'right',
+  },
+  importantItemsSection: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
+    gap: 12,
+  },
+  importantItemsTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+  },
+  importantItemsInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  importantItemsInput: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#111827',
+    textAlign: 'right',
+  },
+  importantItemsAddBtn: {
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: PRIMARY,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importantItemsAddText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  importantItemsList: {
+    gap: 8,
+  },
+  importantItemsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  importantItemsBulletText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#374151',
+    textAlign: 'right',
+    lineHeight: 20,
+  },
+  importantItemsRemoveBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importantItemsRemoveText: {
+    fontSize: 22,
+    color: '#94a3b8',
+    lineHeight: 24,
+    fontWeight: '500',
   },
   recurrenceRow: {
     flexDirection: 'row',
