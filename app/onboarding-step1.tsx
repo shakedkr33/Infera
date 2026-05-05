@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
@@ -10,7 +10,11 @@ import { useOnboarding } from '../contexts/OnboardingContext';
 export default function OnboardingStep1() {
   const router = useRouter();
   const { data, updateData } = useOnboarding();
-  const [selected, setSelected] = useState(data.spaceType || '');
+  const [selected, setSelected] = useState<
+    '' | 'personal' | 'couple' | 'family' | 'business'
+  >(
+    (data.spaceType ?? '') as '' | 'personal' | 'couple' | 'family' | 'business'
+  );
 
   const handleContinue = async () => {
     if (selected) {
@@ -42,13 +46,13 @@ export default function OnboardingStep1() {
             />
           </Pressable>
           <Text style={{ color: colors.slate }} className="text-sm font-medium">
-            שלב 1 מתוך 4
+            שלב 1 מתוך 3
           </Text>
           <View className="w-10" />
         </View>
         <View className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
           <View
-            className="h-full w-1/4 rounded-full"
+            className="h-full w-1/3 rounded-full"
             style={{ backgroundColor: colors.sage }}
           />
         </View>

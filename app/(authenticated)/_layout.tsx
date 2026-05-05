@@ -233,6 +233,7 @@ export default function AuthenticatedLayout() {
     if (
       !isAuthenticated ||
       userStatus === undefined ||
+      userStatus === null ||
       userStatus.onboardingComplete ||
       !hasLocalOnboardingData ||
       onboardingData.onboardingCompleted ||
@@ -428,6 +429,8 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="import-calendar" options={{ href: null }} />
           <Tabs.Screen name="import-holidays" options={{ href: null }} />
           <Tabs.Screen name="family-profile" options={{ href: null }} />
+          <Tabs.Screen name="family-profile-setup" options={{ href: null }} />
+          <Tabs.Screen name="family-bootstrap" options={{ href: null }} />
           <Tabs.Screen name="community-create" options={{ href: null }} />
           <Tabs.Screen name="community-edit/[id]" options={{ href: null }} />
           <Tabs.Screen name="event-edit/[id]" options={{ href: null }} />

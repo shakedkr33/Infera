@@ -94,9 +94,8 @@ export default function VerifyScreen() {
 
       try {
         await signIn('phone', { phone, code: digits });
-        // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition
-        // finishOnboarding is called in (authenticated)/_layout.tsx once the Convex session is confirmed.
-        router.replace('/(authenticated)');
+        // finishOnboarding runs in (authenticated)/_layout.tsx; then family-bootstrap routes to Home or optional family setup.
+        router.replace('/(authenticated)/family-bootstrap');
       } catch (err) {
         // FIXED: downgraded to warn so Expo dev overlay does not appear on expected auth errors
         console.warn('[Auth] OTP verify failed:', err);
@@ -184,7 +183,7 @@ export default function VerifyScreen() {
             </Text>
             {__DEV__ && (
               <Text style={styles.devHint}>
-                DEV: קוד מופיע ב-Convex Dashboard logs
+                DEV: הקוד מודפס בטרמינל שבו רץ npx convex dev (לא בחלון Expo).
               </Text>
             )}
           </View>

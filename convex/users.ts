@@ -3,7 +3,7 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import { mutation, query } from './_generated/server';
 // FIXED: updateMyProfile and listMyFamilyContacts now use identical spaceId resolution
-import { resolveMySpaceId } from './members';
+import { resolveKind, resolveMySpaceId } from './members';
 
 // ── Phone normalization ───────────────────────────────────────────────────────
 // FIXED: retroactive phone-based family member matching when contacts are saved
@@ -302,7 +302,8 @@ export const updateMyProfile = mutation({
               .query('users')
               .withIndex('by_phone', (q) => q.eq('phone', normalizedPhone))
               .unique();
-            if (matchedUser) return { ...entry, matchedUserId: matchedUser._id };
+            if (matchedUser)
+              return { ...entry, matchedUserId: matchedUser._id };
             return entry;
           })
         );
@@ -328,7 +329,12 @@ export const updateMyProfile = mutation({
       // Previously used defaultSpaceId which resolved a different space than the one
       // listMyFamilyContacts reads from, causing entity rows to land in the wrong space.
       const spaceId = await resolveMySpaceId(ctx, userId);
-      console.log('[PROFILE SYNC] resolveMySpaceId result:', spaceId, 'contacts count:', resolvedContacts.length);
+      console.log(
+        '[PROFILE SYNC] resolveMySpaceId result:',
+        spaceId,
+        'contacts count:',
+        resolvedContacts.length
+      );
       if (spaceId) {
         // Fetch all current members rows for this space to detect existing phone entries
         const existingMembers = await ctx.db
@@ -344,14 +350,22 @@ export const updateMyProfile = mutation({
 
         for (const contact of resolvedContacts) {
           const isManual = !contact.selectedPhoneNumber;
-          console.log('[PROFILE SYNC] processing contact:', contact.name, 'isManual:', isManual);
+          console.log(
+            '[PROFILE SYNC] processing contact:',
+            contact.name,
+            'isManual:',
+            isManual
+          );
 
           if (isManual) {
             // Manual member — no phone, dedup by displayName within this space.
             const existing = existingMembers.find(
               (m) => !m.selectedPhoneNumber && m.displayName === contact.name
             );
-            console.log('[PROFILE SYNC] manual member existing row:', existing?._id ?? 'none');
+            console.log(
+              '[PROFILE SYNC] manual member existing row:',
+              existing?._id ?? 'none'
+            );
             if (existing) {
               await ctx.db.patch(existing._id, {
                 kind: 'entity', // stamp kind on pre-existing rows opportunistically
@@ -379,7 +393,9 @@ export const updateMyProfile = mutation({
           // A manual member (no phone) converted to contact-sourced has the same displayName
           // but no selectedPhoneNumber. Without the displayName fallback, the phone search
           // misses it and ctx.db.insert creates a second row.
-          const normalizedPhone = normalizeToE164(contact.selectedPhoneNumber as string);
+          const normalizedPhone = normalizeToE164(
+            contact.selectedPhoneNumber as string
+          );
           if (!normalizedPhone) continue;
           const matchedId = contact.matchedUserId as Id<'users'> | undefined;
 
@@ -390,7 +406,8 @@ export const updateMyProfile = mutation({
           const existingByName = !existingByPhone
             ? existingMembers.find(
                 (m) =>
-                  (m.kind === 'entity' || (m.kind === undefined && m.displayName)) &&
+                  (m.kind === 'entity' ||
+                    (m.kind === undefined && m.displayName)) &&
                   !m.selectedPhoneNumber &&
                   m.displayName === contact.name
               )
@@ -430,13 +447,75 @@ export const updateMyProfile = mutation({
         for (const m of existingMembers) {
           const isEntityRow =
             m.kind === 'entity' ||
-            (m.kind === undefined && m.role === 'member' && Boolean(m.displayName));
+            (m.kind === undefined &&
+              m.role === 'member' &&
+              Boolean(m.displayName));
           if (isEntityRow && !touchedEntityIds.has(m._id)) {
             await ctx.db.delete(m._id);
           }
         }
       }
     }
+  },
+});
+
+/** Post-auth routing: family entities, invite join, or skip flag */
+export const getFamilyBootstrapStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const user = await ctx.db.get(userId);
+    if (!user) return null;
+
+    const onboardingComplete = user.onboardingCompleted === true;
+    const familySetupSkippedAt = user.familySetupSkippedAt ?? null;
+
+    const contactsBlob = user.familyContacts;
+    const hasContactsBlob =
+      Array.isArray(contactsBlob) && contactsBlob.length > 0;
+
+    const spaceId = await resolveMySpaceId(ctx, userId);
+    if (!spaceId) {
+      return {
+        onboardingComplete,
+        familySetupSkippedAt,
+        hasConfiguredFamily: hasContactsBlob,
+        joinedExistingSpace: false,
+      };
+    }
+
+    const space = await ctx.db.get(spaceId);
+    const joinedExistingSpace = space !== null && space.ownerId !== userId;
+
+    const rows = await ctx.db
+      .query('members')
+      .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
+      .collect();
+    const entityCount = rows.filter((r) => resolveKind(r) === 'entity').length;
+
+    const hasConfiguredFamily = entityCount > 0 || hasContactsBlob;
+
+    return {
+      onboardingComplete,
+      familySetupSkippedAt,
+      hasConfiguredFamily,
+      joinedExistingSpace,
+    };
+  },
+});
+
+export const markFamilySetupSkipped = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+
+    await ctx.db.patch(userId, {
+      familySetupSkippedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
   },
 });
 

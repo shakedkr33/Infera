@@ -1,13 +1,12 @@
-import { useMutation } from 'convex/react';
-import { useRef, useState } from 'react';
+import { useConvexAuth, useMutation } from 'convex/react';
+import { useCallback, useRef, useState } from 'react';
 import { Keyboard } from 'react-native';
 import { api } from '@/convex/_generated/api';
-
+import type { SelectedContactData } from '../components/onboarding/AddPersonBottomSheet';
 import {
   PET_COLORS,
   PROFILE_COLORS,
 } from '../components/onboarding/ColorPicker';
-import type { SelectedContactData } from '../components/onboarding/AddPersonBottomSheet';
 import type { FamilyMember } from '../contexts/OnboardingContext';
 import { useOnboarding } from '../contexts/OnboardingContext';
 // FIXED: added family-member status fields — maskPhone used when setting selectedPhoneNumber
@@ -35,15 +34,61 @@ export interface PendingMember {
  * Shared state + handler logic for the family profile editor.
  *
  * Used by:
- *  - app/onboarding-step4.tsx  (starts with empty familyMembers)
  *  - app/(authenticated)/family-profile.tsx  (initialised from saved context data)
  */
 export function useFamilyProfileEditor(
   initialFamilyMembers: FamilyMember[] = []
 ) {
+  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const { data, updateData } = useOnboarding();
   const finishOnboarding = useMutation(api.onboarding.finishOnboarding);
   const updateMyProfile = useMutation(api.users.updateMyProfile);
+
+  /**
+   * Pre-auth onboarding screens run before OTP — skip Convex writes until authenticated;
+   * profile is kept in OnboardingContext and persisted via finishOnboarding after sign-in.
+   * When authenticated, retries handle brief "לא מחובר" after WebSocket reconnect.
+   */
+  const authGateRef = useRef({ isAuthenticated, authLoading });
+  authGateRef.current = { isAuthenticated, authLoading };
+
+  const updateMyProfileReliable = useCallback(
+    async (args: {
+      fullName?: string;
+      profileColor?: string;
+      familyContacts?: FamilyMember[];
+    }) => {
+      if (!authGateRef.current.isAuthenticated) {
+        return;
+      }
+      if (authGateRef.current.authLoading) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      }
+      const maxAttempts = 6;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          await updateMyProfile(args);
+          return;
+        } catch (e) {
+          lastError = e;
+          const msg = e instanceof Error ? e.message : String(e);
+          const retryable =
+            msg.includes('לא מחובר') ||
+            msg.includes('Not authenticated') ||
+            msg.includes('Unauthenticated');
+          if (!retryable || attempt === maxAttempts - 1) {
+            throw e;
+          }
+          await new Promise<void>((resolve) =>
+            setTimeout(resolve, 280 * 2 ** attempt)
+          );
+        }
+      }
+      throw lastError;
+    },
+    [updateMyProfile]
+  );
   // FIXED: removeMember now deletes from Convex members table, propagates to all devices
   const removeEntityMember = useMutation(api.members.removeEntityMember);
 
@@ -88,7 +133,9 @@ export function useFamilyProfileEditor(
   // FIXED: wired correct actions per family-member status
   // Tracks which existing member is being converted to a contact-linked record.
   // Null when adding a new member via the normal flow.
-  const [convertingToContactId, setConvertingToContactId] = useState<string | null>(null);
+  const [convertingToContactId, setConvertingToContactId] = useState<
+    string | null
+  >(null);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const personMembers = familyMembers.filter((m) => m.type !== 'pet');
@@ -207,14 +254,26 @@ export function useFamilyProfileEditor(
     if (editingId) {
       setFamilyMembers((prev) => {
         const updated = prev.map((m) => (m.id === editingId ? newMember : m));
-        updateMyProfile({ familyContacts: updated }).catch((e) => console.error('[CONFIRM] updateMyProfile error:', e));
+        updateMyProfileReliable({ familyContacts: updated }).catch((e) =>
+          console.error('[CONFIRM] updateMyProfile error:', e)
+        );
         return updated;
       });
     } else {
       setFamilyMembers((prev) => {
         const updated = [...prev, newMember];
-        console.log('[CONFIRM] calling updateMyProfile with', updated.length, 'contacts:', JSON.stringify(updated.map(m => ({ name: (m as any).name, selectedPhoneNumber: (m as any).selectedPhoneNumber }))));
-        updateMyProfile({ familyContacts: updated })
+        console.log(
+          '[CONFIRM] calling updateMyProfile with',
+          updated.length,
+          'contacts:',
+          JSON.stringify(
+            updated.map((m) => ({
+              name: (m as any).name,
+              selectedPhoneNumber: (m as any).selectedPhoneNumber,
+            }))
+          )
+        );
+        updateMyProfileReliable({ familyContacts: updated })
           .then(() => console.log('[CONFIRM] updateMyProfile success'))
           .catch((e) => console.error('[CONFIRM] updateMyProfile error:', e));
         return updated;
@@ -261,12 +320,22 @@ export function useFamilyProfileEditor(
     const updated = familyMembers.filter((m) => m.id !== id);
     setFamilyMembers(updated);
     // Prefer the explicit convexEntityId; fall back to id if it looks like a Convex ID
-    const entityIdToDelete = convexEntityId ?? (!/^\d+$/.test(id) ? id : undefined);
-    console.log('[REMOVE] calling removeEntityMember?', !!entityIdToDelete, 'id:', entityIdToDelete);
-    if (entityIdToDelete) {
-      removeEntityMember({ memberId: entityIdToDelete as any }).catch((e) => console.error('[REMOVE] removeEntityMember error:', e));
+    const entityIdToDelete =
+      convexEntityId ?? (!/^\d+$/.test(id) ? id : undefined);
+    console.log(
+      '[REMOVE] calling removeEntityMember?',
+      !!entityIdToDelete,
+      'id:',
+      entityIdToDelete
+    );
+    if (entityIdToDelete && authGateRef.current.isAuthenticated) {
+      removeEntityMember({ memberId: entityIdToDelete as never }).catch((e) =>
+        console.error('[REMOVE] removeEntityMember error:', e)
+      );
     }
-    updateMyProfile({ familyContacts: updated }).catch((e) => console.error('[REMOVE] updateMyProfile error:', e));
+    updateMyProfileReliable({ familyContacts: updated }).catch((e) =>
+      console.error('[REMOVE] updateMyProfile error:', e)
+    );
   };
 
   // FIXED: markMemberInvited now persists inviteStatus=invited to Convex immediately
@@ -277,7 +346,7 @@ export function useFamilyProfileEditor(
       m.id === id ? { ...m, inviteStatus: 'invited' as const } : m
     );
     setFamilyMembers(updated);
-    updateMyProfile({ familyContacts: updated }).catch(() => {});
+    updateMyProfileReliable({ familyContacts: updated }).catch(() => {});
   };
 
   // FIXED: "הפוך לאיש קשר" — opens the contact sheet targeting an existing member.
@@ -347,7 +416,7 @@ export function useFamilyProfileEditor(
   /**
    * Sync the current profile to OnboardingContext only — no Convex write.
    * // FIXED: removed premature saveAll() — deferred to post-OTP
-   * Call this from onboarding step 4 before navigating to OTP.
+   * Legacy helper for flows that navigate to OTP after collecting profile data locally.
    */
   const syncToContext = () => {
     const splitName = [firstName.trim(), lastName.trim()]
@@ -439,7 +508,7 @@ export function useFamilyProfileEditor(
     const deduped = familyMembers.filter(
       (m, i, arr) => arr.findIndex((x) => x.id === m.id) === i
     );
-    return updateMyProfile({
+    return updateMyProfileReliable({
       fullName: nameSource,
       profileColor: personalColor,
       familyContacts: deduped,
