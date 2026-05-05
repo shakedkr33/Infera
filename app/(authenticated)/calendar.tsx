@@ -7,6 +7,7 @@ import {
   Alert,
   Animated,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,6 +22,7 @@ import ReAnimated, {
   withSpring,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { useNotifications } from '@/contexts/NotificationsContext';
@@ -28,7 +30,14 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
-import { rtl } from '@/lib/rtl';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+/**
+ * Android: root View uses `direction: 'rtl'` (`app/_layout.tsx`). Yoga lays out `flexDirection: 'row'`
+ * with inline-start on the physical RIGHT — so JSX order must be reversed vs iOS for the same visuals.
+ * (`direction: 'ltr'` on nested Views is unreliable on Android.)
+ */
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 // ===== Constants =====
 const PRIMARY_BLUE = '#36a9e2';
@@ -82,6 +91,10 @@ interface CalendarEvent {
   cancelled?: boolean;
   assigneeColors?: string[];
   sourceType?: 'event' | 'linked';
+  /** Disambiguates list keys when same id appears from multiple sources */
+  listKey?: string;
+  /** Community events shown outside community screen — real name from Convex */
+  communityName?: string;
 }
 
 interface BirthdayInfo {
@@ -185,6 +198,7 @@ const MOCK_TIMELINE_DATA = [
 type MockTimelineEvent = (typeof MOCK_TIMELINE_DATA)[number]['events'][number];
 type TimelineEventRow = MockTimelineEvent & {
   sourceType?: 'event' | 'linked';
+  communityName?: string;
 };
 
 const MOCK_MONTHLY_EVENTS: Record<number, CalendarEvent[]> = {
@@ -522,30 +536,45 @@ export default function CalendarScreen(): React.JSX.Element {
   // === Personal events for the displayed month ===
   const monthRange = useMemo(() => {
     const from = new Date(displayYear, displayMonth, 1).setHours(0, 0, 0, 0);
-    const to = new Date(displayYear, displayMonth + 1, 0).setHours(23, 59, 59, 999);
+    const to = new Date(displayYear, displayMonth + 1, 0).setHours(
+      23,
+      59,
+      59,
+      999
+    );
     return { from, to };
   }, [displayYear, displayMonth]);
 
   const personalEvents =
     useQuery(
       api.events.listByDateRange,
-      spaceId ? { spaceId: spaceId as Id<'spaces'>, from: monthRange.from, to: monthRange.to } : 'skip'
+      spaceId
+        ? {
+            spaceId: spaceId as Id<'spaces'>,
+            from: monthRange.from,
+            to: monthRange.to,
+          }
+        : 'skip'
     ) ?? [];
 
   /** Community events (RSVP yes for members; creators/admins unchanged) — merged into unfiltered month + timeline */
   const aggregateCommunityEvents =
     useQuery(
       api.events.listCommunityEventsForDate,
-      !isFiltered
-        ? { from: monthRange.from, to: monthRange.to }
-        : 'skip'
+      !isFiltered ? { from: monthRange.from, to: monthRange.to } : 'skip'
     ) ?? [];
 
   // FIXED: linked (shared) events for the displayed month — shown as dots alongside personal events
   const linkedEvents =
     useQuery(
       api.linkedEvents.getLinkedEventsForSpace,
-      spaceId ? { spaceId: spaceId as Id<'spaces'>, from: monthRange.from, to: monthRange.to } : 'skip'
+      spaceId
+        ? {
+            spaceId: spaceId as Id<'spaces'>,
+            from: monthRange.from,
+            to: monthRange.to,
+          }
+        : 'skip'
     ) ?? [];
 
   // === Calendar grid data ===
@@ -566,29 +595,38 @@ export default function CalendarScreen(): React.JSX.Element {
     const eventsByDay: Record<number, CalendarEvent[]> = {};
     for (const ev of personalEvents) {
       const d = new Date(ev.startTime);
-      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth) continue;
+      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth)
+        continue;
       const day = d.getDate();
       if (!eventsByDay[day]) eventsByDay[day] = [];
-      eventsByDay[day].push({
+      const isSavedCommunityInSpace = Boolean(ev.communityId);
+      const personalRow = {
         id: ev._id,
+        listKey: `${ev._id}-personal`,
         title: ev.title,
         time: ev.allDay
           ? ''
           : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
-        category: 'אישי',
-        categoryColor: PRIMARY_BLUE,
+        category: isSavedCommunityInSpace ? 'קהילה' : 'אישי',
+        categoryColor: isSavedCommunityInSpace ? '#36a9e2' : PRIMARY_BLUE,
         assigneeColors: [],
-        sourceType: 'event',
-      });
+        sourceType: 'event' as const,
+        communityName: ev.communityName,
+      };
+      if (!eventsByDay[day].some((e) => e.id === personalRow.id)) {
+        eventsByDay[day].push(personalRow);
+      }
     }
     // FIXED: add linked event dots with a distinct teal-blue shade
     for (const ev of linkedEvents) {
       const d = new Date(ev.startTime);
-      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth) continue;
+      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth)
+        continue;
       const day = d.getDate();
       if (!eventsByDay[day]) eventsByDay[day] = [];
-      eventsByDay[day].push({
+      const linkedRow = {
         id: ev._id,
+        listKey: `${ev._id}-linked`,
         title: ev.title,
         time: ev.allDay
           ? ''
@@ -597,16 +635,21 @@ export default function CalendarScreen(): React.JSX.Element {
         categoryColor: '#0284c7',
         assigneeColors: [],
         cancelled: ev.sourceStatus === 'cancelled',
-        sourceType: 'linked',
-      });
+        sourceType: 'linked' as const,
+      };
+      if (!eventsByDay[day].some((e) => e.id === linkedRow.id)) {
+        eventsByDay[day].push(linkedRow);
+      }
     }
     for (const ev of aggregateCommunityEvents) {
       const d = new Date(ev.startTime);
-      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth) continue;
+      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth)
+        continue;
       const day = d.getDate();
       if (!eventsByDay[day]) eventsByDay[day] = [];
-      eventsByDay[day].push({
+      const communityRow = {
         id: ev._id,
+        listKey: `${ev._id}-community`,
         title: ev.title,
         time: ev.allDay
           ? ''
@@ -614,8 +657,12 @@ export default function CalendarScreen(): React.JSX.Element {
         category: 'קהילה',
         categoryColor: '#36a9e2',
         assigneeColors: [],
-        sourceType: 'event',
-      });
+        sourceType: 'event' as const,
+        communityName: ev.communityName,
+      };
+      if (!eventsByDay[day].some((e) => e.id === communityRow.id)) {
+        eventsByDay[day].push(communityRow);
+      }
     }
     return generateCalendarGrid(displayYear, displayMonth, eventsByDay);
   }, [
@@ -831,8 +878,7 @@ export default function CalendarScreen(): React.JSX.Element {
       // Immediately snap — no animation delay since this is initialization
       slideAnim.setValue(1);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [communityId]); // slideAnim is stable (useState), excluded to avoid re-run
+  }, [communityId, slideAnim]);
 
   // ── Build timeline data: use real events when filtering by community
   const timelineData = useMemo(() => {
@@ -883,16 +929,23 @@ export default function CalendarScreen(): React.JSX.Element {
           ? ''
           : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
+        // Same event id can appear only once per day (mirrors grid dedupe vs community merge)
+        if (grouped[key].events.some((e) => e.id === event._id)) {
+          continue;
+        }
+
+        const isSavedCommunityInSpace = Boolean(event.communityId);
         grouped[key].events.push({
           id: event._id,
-          category: 'אישי',
-          categoryColor: PRIMARY_BLUE,
+          category: isSavedCommunityInSpace ? 'קהילה' : 'אישי',
+          categoryColor: isSavedCommunityInSpace ? '#36a9e2' : PRIMARY_BLUE,
           title: event.title,
           time: timeStr,
           location: event.location ?? '',
           icon: 'event',
           cancelled: event.status === 'cancelled',
           sourceType: 'event',
+          communityName: event.communityName,
         });
       }
 
@@ -922,6 +975,11 @@ export default function CalendarScreen(): React.JSX.Element {
           ? ''
           : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
+        // Skip if already added from personal list or duplicate community row
+        if (grouped[key].events.some((e) => e.id === event._id)) {
+          continue;
+        }
+
         grouped[key].events.push({
           id: event._id,
           category: 'קהילה',
@@ -932,6 +990,7 @@ export default function CalendarScreen(): React.JSX.Element {
           icon: 'event',
           cancelled: false,
           sourceType: 'event',
+          communityName: event.communityName,
         });
       }
 
@@ -975,6 +1034,9 @@ export default function CalendarScreen(): React.JSX.Element {
           sortKey: event.startTime,
         };
       }
+      if (grouped[key].events.some((e) => e.id === event._id)) {
+        continue;
+      }
       grouped[key].events.push({
         id: event._id,
         category: 'קהילה',
@@ -988,15 +1050,27 @@ export default function CalendarScreen(): React.JSX.Element {
         icon: 'event',
         cancelled: event.status === 'cancelled',
         sourceType: 'event',
+        communityName: communityData?.name,
       });
     }
 
     // Sort ascending by actual timestamp (upcoming first)
     return Object.values(grouped).sort((a, b) => a.sortKey - b.sortKey);
-  }, [isFiltered, communityEvents, personalEvents, aggregateCommunityEvents]);
+  }, [
+    isFiltered,
+    communityEvents,
+    personalEvents,
+    aggregateCommunityEvents,
+    communityData?.name,
+  ]);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView
+      style={[
+        styles.safeArea,
+        ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,
+      ]}
+    >
       <View style={styles.container}>
         {/* Community filter banner */}
         {communityId ? (
@@ -1019,97 +1093,189 @@ export default function CalendarScreen(): React.JSX.Element {
           </View>
         ) : null}
 
-        {/* Header */}
+        {/* Header — Android RTL row: JS order is mirrored; reorder children to match iOS (bell left, avatar right). */}
         <View style={styles.header}>
-          {/* Top Row: Bell (left) + Title (center) + Profile (right) */}
           <View style={styles.headerTop}>
-            {/* Bell — left */}
-            <Pressable
-              style={styles.bellButton}
-              onPress={handleBellPress}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel={
-                unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
-              }
-            >
-              <MaterialIcons
-                name={unseenCount > 0 ? 'notifications' : 'notifications-none'}
-                size={24}
-                color="#111517"
-              />
-              {unseenCount > 0 && (
-                <View style={styles.bellBadge}>
-                  <Text style={styles.bellBadgeText}>
-                    {unseenCount > 9 ? '9+' : unseenCount}
-                  </Text>
-                </View>
-              )}
-            </Pressable>
+            {ANDROID_MATCH_IOS_LAYOUT ? (
+              <>
+                <Pressable
+                  onPress={() => router.push('/(authenticated)/profile')}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="פתח פרופיל"
+                >
+                  <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>
+                      {userFirstName ? userFirstName[0].toUpperCase() : '?'}
+                    </Text>
+                  </View>
+                </Pressable>
 
-            {/* Month Title with optional navigation — center */}
-            <View style={styles.monthNavRow}>
-              {viewMode === 'monthly' ? (
-                <>
-                  <Pressable
-                    onPress={goToNextMonth}
-                    hitSlop={12}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="חודש הבא"
-                  >
-                    <MaterialIcons
-                      name="chevron-left"
-                      size={28}
-                      color="#647b87"
-                    />
-                  </Pressable>
-                  <Pressable
-                    onPress={goToToday}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel={`לחץ לחזור להיום, ${headerMonth}`}
-                  >
+                <View style={styles.monthNavRow}>
+                  {viewMode === 'monthly' ? (
+                    <>
+                      <Pressable
+                        onPress={goToPrevMonth}
+                        hitSlop={12}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="חודש קודם"
+                      >
+                        <MaterialIcons
+                          name="chevron-right"
+                          size={28}
+                          color="#647b87"
+                        />
+                      </Pressable>
+                      <Pressable
+                        onPress={goToToday}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel={`לחץ לחזור להיום, ${headerMonth}`}
+                      >
+                        <Text style={styles.monthYear}>{headerMonth}</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={goToNextMonth}
+                        hitSlop={12}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="חודש הבא"
+                      >
+                        <MaterialIcons
+                          name="chevron-left"
+                          size={28}
+                          color="#647b87"
+                        />
+                      </Pressable>
+                    </>
+                  ) : (
                     <Text style={styles.monthYear}>{headerMonth}</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={goToPrevMonth}
-                    hitSlop={12}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="חודש קודם"
-                  >
-                    <MaterialIcons
-                      name="chevron-right"
-                      size={28}
-                      color="#647b87"
-                    />
-                  </Pressable>
-                </>
-              ) : (
-                <Text style={styles.monthYear}>{headerMonth}</Text>
-              )}
-            </View>
+                  )}
+                </View>
 
-            {/* Profile / settings — right, matches Home screen avatar exactly */}
-            <Pressable
-              onPress={() => router.push('/(authenticated)/profile')}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="פתח פרופיל"
-            >
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>
-                  {userFirstName ? userFirstName[0].toUpperCase() : '?'}
-                </Text>
-              </View>
-            </Pressable>
+                <Pressable
+                  style={styles.bellButton}
+                  onPress={handleBellPress}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
+                  }
+                >
+                  <MaterialIcons
+                    name={
+                      unseenCount > 0 ? 'notifications' : 'notifications-none'
+                    }
+                    size={24}
+                    color="#111517"
+                  />
+                  {unseenCount > 0 && (
+                    <View style={styles.bellBadge}>
+                      <Text style={styles.bellBadgeText}>
+                        {unseenCount > 9 ? '9+' : unseenCount}
+                      </Text>
+                    </View>
+                  )}
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Pressable
+                  style={styles.bellButton}
+                  onPress={handleBellPress}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
+                  }
+                >
+                  <MaterialIcons
+                    name={
+                      unseenCount > 0 ? 'notifications' : 'notifications-none'
+                    }
+                    size={24}
+                    color="#111517"
+                  />
+                  {unseenCount > 0 && (
+                    <View style={styles.bellBadge}>
+                      <Text style={styles.bellBadgeText}>
+                        {unseenCount > 9 ? '9+' : unseenCount}
+                      </Text>
+                    </View>
+                  )}
+                </Pressable>
+
+                <View style={styles.monthNavRow}>
+                  {viewMode === 'monthly' ? (
+                    <>
+                      <Pressable
+                        onPress={goToNextMonth}
+                        hitSlop={12}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="חודש הבא"
+                      >
+                        <MaterialIcons
+                          name="chevron-left"
+                          size={28}
+                          color="#647b87"
+                        />
+                      </Pressable>
+                      <Pressable
+                        onPress={goToToday}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel={`לחץ לחזור להיום, ${headerMonth}`}
+                      >
+                        <Text style={styles.monthYear}>{headerMonth}</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={goToPrevMonth}
+                        hitSlop={12}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="חודש קודם"
+                      >
+                        <MaterialIcons
+                          name="chevron-right"
+                          size={28}
+                          color="#647b87"
+                        />
+                      </Pressable>
+                    </>
+                  ) : (
+                    <Text style={styles.monthYear}>{headerMonth}</Text>
+                  )}
+                </View>
+
+                <Pressable
+                  onPress={() => router.push('/(authenticated)/profile')}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="פתח פרופיל"
+                >
+                  <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>
+                      {userFirstName ? userFirstName[0].toUpperCase() : '?'}
+                    </Text>
+                  </View>
+                </Pressable>
+              </>
+            )}
           </View>
 
-          {/* View Toggle — RTL order: חודשי on right, ציר זמן on left */}
+          {/* View Toggle — iOS: rtl.flexDirection. Android: LTR track so pill translateX matches segments (חודשי right). */}
           <View
-            style={[styles.segmentedControl, { flexDirection: rtl.flexDirection }]}
-            onLayout={(e) => setSegmentContainerWidth(e.nativeEvent.layout.width)}
+            style={[
+              styles.segmentedControl,
+              ANDROID_MATCH_IOS_LAYOUT
+                ? styles.segmentedControlAndroidTrack
+                : { flexDirection: rtl.flexDirection },
+            ]}
+            onLayout={(e) =>
+              setSegmentContainerWidth(e.nativeEvent.layout.width)
+            }
           >
             {pillWidth > 0 && (
               <Animated.View
@@ -1121,8 +1287,6 @@ export default function CalendarScreen(): React.JSX.Element {
                       {
                         translateX: slideAnim.interpolate({
                           inputRange: [0, 1],
-                          // 0 = monthly → pill at right (over חודשי, translateX 0)
-                          // 1 = timeline → pill moves exactly one pill-width to the left
                           outputRange: [0, -pillWidth],
                         }),
                       },
@@ -1131,44 +1295,89 @@ export default function CalendarScreen(): React.JSX.Element {
                 ]}
               />
             )}
-            {/* חודשי — first child = right side in row-reverse */}
-            <Pressable
-              style={styles.segmentButton}
-              onPress={() => handleViewModeChange('monthly')}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel={
-                isFiltered ? 'תצוגה חודשית (לא זמינה בסינון קהילה)' : 'תצוגה חודשית'
-              }
-              accessibilityState={{ disabled: isFiltered }}
-            >
-              <Text
-                style={[
-                  styles.segmentText,
-                  viewMode === 'monthly' && styles.segmentTextActive,
-                  isFiltered && styles.segmentTextDisabled,
-                ]}
-              >
-                חודשי
-              </Text>
-            </Pressable>
-            {/* ציר זמן — second child = left side in row-reverse */}
-            <Pressable
-              style={styles.segmentButton}
-              onPress={() => handleViewModeChange('timeline')}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="תצוגת ציר זמן"
-            >
-              <Text
-                style={[
-                  styles.segmentText,
-                  viewMode === 'timeline' && styles.segmentTextActive,
-                ]}
-              >
-                ציר זמן
-              </Text>
-            </Pressable>
+            {ANDROID_MATCH_IOS_LAYOUT ? (
+              <>
+                <Pressable
+                  style={styles.segmentButton}
+                  onPress={() => handleViewModeChange('timeline')}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="תצוגת ציר זמן"
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      viewMode === 'timeline' && styles.segmentTextActive,
+                    ]}
+                  >
+                    ציר זמן
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={styles.segmentButton}
+                  onPress={() => handleViewModeChange('monthly')}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    isFiltered
+                      ? 'תצוגה חודשית (לא זמינה בסינון קהילה)'
+                      : 'תצוגה חודשית'
+                  }
+                  accessibilityState={{ disabled: isFiltered }}
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      viewMode === 'monthly' && styles.segmentTextActive,
+                      isFiltered && styles.segmentTextDisabled,
+                    ]}
+                  >
+                    חודשי
+                  </Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Pressable
+                  style={styles.segmentButton}
+                  onPress={() => handleViewModeChange('monthly')}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    isFiltered
+                      ? 'תצוגה חודשית (לא זמינה בסינון קהילה)'
+                      : 'תצוגה חודשית'
+                  }
+                  accessibilityState={{ disabled: isFiltered }}
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      viewMode === 'monthly' && styles.segmentTextActive,
+                      isFiltered && styles.segmentTextDisabled,
+                    ]}
+                  >
+                    חודשי
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={styles.segmentButton}
+                  onPress={() => handleViewModeChange('timeline')}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="תצוגת ציר זמן"
+                >
+                  <Text
+                    style={[
+                      styles.segmentText,
+                      viewMode === 'timeline' && styles.segmentTextActive,
+                    ]}
+                  >
+                    ציר זמן
+                  </Text>
+                </Pressable>
+              </>
+            )}
           </View>
         </View>
 
@@ -1500,27 +1709,67 @@ function DayEventsList({
         },
       ]}
     >
-      {/* Header */}
+      {/* Header — Android RTL: first item is physical right; close right / add left matches iOS */}
       <View style={dStyles.header}>
-        <Pressable
-          style={dStyles.addBtn}
-          onPress={() => router.push('/(authenticated)/event/new' as never)}
-          accessible={true}
-          accessibilityLabel="הוסף אירוע חדש"
-        >
-          <Text style={dStyles.addBtnText}>+ הוסף אירוע</Text>
-        </Pressable>
-        <Text style={dStyles.headerTitle}>{dayLabel}</Text>
-        <Pressable
-          onPress={onClose}
-          hitSlop={12}
-          style={dStyles.closeBtn}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="סגור רשימת אירועים"
-        >
-          <MaterialIcons name="close" size={20} color="#647b87" />
-        </Pressable>
+        {ANDROID_MATCH_IOS_LAYOUT ? (
+          <>
+            <Pressable
+              onPress={onClose}
+              hitSlop={12}
+              style={dStyles.closeBtn}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="סגור רשימת אירועים"
+            >
+              <MaterialIcons name="close" size={20} color="#647b87" />
+            </Pressable>
+            <Text
+              style={[
+                dStyles.headerTitle,
+                { textAlign: rtl.textAlign ?? 'right' },
+              ]}
+            >
+              {dayLabel}
+            </Text>
+            <Pressable
+              style={dStyles.addBtn}
+              onPress={() => router.push('/(authenticated)/event/new' as never)}
+              accessible={true}
+              accessibilityLabel="הוסף אירוע חדש"
+            >
+              <Text style={dStyles.addBtnText}>+ הוסף אירוע</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <Pressable
+              style={dStyles.addBtn}
+              onPress={() => router.push('/(authenticated)/event/new' as never)}
+              accessible={true}
+              accessibilityLabel="הוסף אירוע חדש"
+            >
+              <Text style={dStyles.addBtnText}>+ הוסף אירוע</Text>
+            </Pressable>
+            <Text
+              style={[
+                dStyles.headerTitle,
+                { textAlign: rtl.textAlign ?? 'right' },
+              ]}
+            >
+              {dayLabel}
+            </Text>
+            <Pressable
+              onPress={onClose}
+              hitSlop={12}
+              style={dStyles.closeBtn}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="סגור רשימת אירועים"
+            >
+              <MaterialIcons name="close" size={20} color="#647b87" />
+            </Pressable>
+          </>
+        )}
       </View>
 
       {/* Birthday Card */}
@@ -1556,61 +1805,118 @@ function DayEventsList({
         const iconName = getCategoryIcon(event.category);
         return (
           <Pressable
-            key={event.id}
+            key={event.listKey ?? event.id}
             style={dStyles.card}
             onPress={() => onEventPress(event)}
             accessible={true}
             accessibilityRole="button"
             accessibilityLabel={`${event.title}, ${event.time}, ${duration} דקות`}
           >
-            {/* Time */}
-            <View style={dStyles.timeCol}>
-              <Text style={dStyles.timeText}>{event.time}</Text>
-              <Text style={dStyles.durationText}>{duration} דק׳</Text>
-            </View>
-
-            {/* Divider */}
-            <View
-              style={[
-                dStyles.divider,
-                { backgroundColor: `${event.categoryColor}50` },
-              ]}
-            />
-
-            {/* Content */}
-            <View style={dStyles.content}>
-              <Text style={dStyles.eventTitle}>{event.title}</Text>
-              {event.location != null && event.location !== '' && (
-                <View style={dStyles.locationRow}>
-                  <View style={dStyles.locationDot} />
-                  <Text style={dStyles.locationText}>{event.location}</Text>
+            {ANDROID_MATCH_IOS_LAYOUT ? (
+              <>
+                <View
+                  style={[
+                    dStyles.iconBox,
+                    { backgroundColor: `${event.categoryColor}20` },
+                  ]}
+                >
+                  <MaterialIcons
+                    name={iconName as 'event'}
+                    size={20}
+                    color={event.categoryColor}
+                  />
                 </View>
-              )}
-              {(event.assigneeColors?.length ?? 0) > 0 && (
-                <View style={dStyles.assigneeDots}>
-                  {event.assigneeColors?.slice(0, 4).map((color) => (
-                    <View
-                      key={color}
-                      style={[dStyles.assigneeDot, { backgroundColor: color }]}
-                    />
-                  ))}
+                <View style={dStyles.content}>
+                  {event.communityName ? (
+                    <View style={{ marginBottom: 4 }}>
+                      <CommunityEventNameTag name={event.communityName} />
+                    </View>
+                  ) : null}
+                  <Text style={dStyles.eventTitle}>{event.title}</Text>
+                  {event.location != null && event.location !== '' && (
+                    <View style={dStyles.locationRow}>
+                      <View style={dStyles.locationDot} />
+                      <Text style={dStyles.locationText}>{event.location}</Text>
+                    </View>
+                  )}
+                  {(event.assigneeColors?.length ?? 0) > 0 && (
+                    <View style={dStyles.assigneeDots}>
+                      {event.assigneeColors?.slice(0, 4).map((color) => (
+                        <View
+                          key={color}
+                          style={[
+                            dStyles.assigneeDot,
+                            { backgroundColor: color },
+                          ]}
+                        />
+                      ))}
+                    </View>
+                  )}
                 </View>
-              )}
-            </View>
-
-            {/* Icon */}
-            <View
-              style={[
-                dStyles.iconBox,
-                { backgroundColor: `${event.categoryColor}20` },
-              ]}
-            >
-              <MaterialIcons
-                name={iconName as 'event'}
-                size={20}
-                color={event.categoryColor}
-              />
-            </View>
+                <View
+                  style={[
+                    dStyles.divider,
+                    { backgroundColor: `${event.categoryColor}50` },
+                  ]}
+                />
+                <View style={dStyles.timeCol}>
+                  <Text style={dStyles.timeText}>{event.time}</Text>
+                  <Text style={dStyles.durationText}>{duration} דק׳</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={dStyles.timeCol}>
+                  <Text style={dStyles.timeText}>{event.time}</Text>
+                  <Text style={dStyles.durationText}>{duration} דק׳</Text>
+                </View>
+                <View
+                  style={[
+                    dStyles.divider,
+                    { backgroundColor: `${event.categoryColor}50` },
+                  ]}
+                />
+                <View style={dStyles.content}>
+                  {event.communityName ? (
+                    <View style={{ marginBottom: 4 }}>
+                      <CommunityEventNameTag name={event.communityName} />
+                    </View>
+                  ) : null}
+                  <Text style={dStyles.eventTitle}>{event.title}</Text>
+                  {event.location != null && event.location !== '' && (
+                    <View style={dStyles.locationRow}>
+                      <View style={dStyles.locationDot} />
+                      <Text style={dStyles.locationText}>{event.location}</Text>
+                    </View>
+                  )}
+                  {(event.assigneeColors?.length ?? 0) > 0 && (
+                    <View style={dStyles.assigneeDots}>
+                      {event.assigneeColors?.slice(0, 4).map((color) => (
+                        <View
+                          key={color}
+                          style={[
+                            dStyles.assigneeDot,
+                            { backgroundColor: color },
+                          ]}
+                        />
+                      ))}
+                    </View>
+                  )}
+                </View>
+                <View
+                  style={[
+                    dStyles.iconBox,
+                    { backgroundColor: `${event.categoryColor}20` },
+                  ]}
+                >
+                  <MaterialIcons
+                    name={iconName as 'event'}
+                    size={20}
+                    color={event.categoryColor}
+                  />
+                </View>
+              </>
+            )}
           </Pressable>
         );
       })}
@@ -1692,7 +1998,7 @@ function TimelineView({
 
             {/* Events */}
             <View style={styles.eventsWrapper}>
-              {dayGroup.events.map((event) => (
+              {dayGroup.events.map((event: TimelineEventRow) => (
                 <View key={event.id} style={styles.eventRow}>
                   {/* Color Dot */}
                   <View
@@ -1751,6 +2057,14 @@ function TimelineView({
                       </View>
                     </View>
 
+                    {event.communityName ? (
+                      <View
+                        style={{ marginTop: 4, marginBottom: 6, width: '100%' }}
+                      >
+                        <CommunityEventNameTag name={event.communityName} />
+                      </View>
+                    ) : null}
+
                     {/* Event Title */}
                     <Text
                       style={[
@@ -1796,6 +2110,10 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: BG_COLOR,
+  },
+  /** Ensures RTL Yoga layout for this screen if a navigator strips root `direction` inheritance (Android). */
+  safeAreaRtl: {
+    direction: 'rtl',
   },
   container: {
     flex: 1,
@@ -1901,11 +2219,15 @@ const styles = StyleSheet.create({
     position: 'relative',
     height: 40,
   },
+  /** Android: LTR row → ציר זמן left, חודשי right; matches pill anchored `right: 4` + translateX for monthly/timeline. */
+  segmentedControlAndroidTrack: {
+    direction: 'ltr',
+    flexDirection: 'row',
+  },
   segmentedSlider: {
     position: 'absolute',
     top: 4,
     right: 4,
-    width: 157,
     height: 32,
     backgroundColor: '#ffffff',
     borderRadius: 10,
@@ -2298,7 +2620,6 @@ const dStyles = StyleSheet.create({
     fontWeight: '700',
     color: '#111517',
     flex: 1,
-    textAlign: 'right',
     marginHorizontal: 12,
   },
   addBtn: {

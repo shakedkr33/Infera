@@ -3,6 +3,7 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import { isActiveCommunityMember } from './communityMemberUtils';
 
 // ─────────────────────────────────────────────────────────────
 // סיכום משימות לפי קהילה (לתצוגת כרטיסי אירועים — ללא N+1)
@@ -67,7 +68,7 @@ export const listByEvent = query({
         event.communityId,
         userId
       );
-      if (!membership || membership.status === 'left') return [];
+      if (!isActiveCommunityMember(membership)) return [];
 
       const canManageTasks =
         event.createdBy === userId ||
@@ -257,7 +258,7 @@ export const setAssignee = mutation({
         event.communityId,
         userId
       );
-      if (!membership || membership.status === 'left') {
+      if (!isActiveCommunityMember(membership)) {
         throw new Error('רק חברי קהילה פעילים יכולים להקצות משימות');
       }
       canManageAssignments =
@@ -432,7 +433,7 @@ export const listMyAssignedEventTasksForDate = query({
       .withIndex('by_user', (q) => q.eq('userId', userId))
       .collect();
 
-    const activeMembers = memberships.filter((m) => m.status !== 'left');
+    const activeMembers = memberships.filter((m) => isActiveCommunityMember(m));
 
     const results = await Promise.all(
       activeMembers.map(async ({ communityId }) => {

@@ -54,7 +54,9 @@ function circleColors(color: string | undefined): { bg: string; text: string } {
 
 /** Stable key for a contact: prefer contact.id, fallback to normalised phone */
 function contactKey(contact: Contacts.Contact): string {
-  return (contact as { id?: string }).id ?? normalizePhone(getPrimaryPhone(contact));
+  return (
+    (contact as { id?: string }).id ?? normalizePhone(getPrimaryPhone(contact))
+  );
 }
 
 // ─── Email parsing ────────────────────────────────────────────────────────────
@@ -76,6 +78,8 @@ interface ParticipantsCardProps {
   allFamily?: boolean;
   sharedWithFamilyMemberIds?: string[];
   onFamilyChange?: (allFamily: boolean, selectedIds: string[]) => void;
+  /** When family list is empty, show CTA to configure profile (personal events) */
+  onConfigureFamilyProfile?: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -87,10 +91,13 @@ export function ParticipantsCard({
   allFamily = false,
   sharedWithFamilyMemberIds = [],
   onFamilyChange,
+  onConfigureFamilyProfile,
 }: ParticipantsCardProps): React.JSX.Element {
   // 'main' = contacts button + email input; 'contacts' = contact list; 'phone-disambig' = multi-phone resolution
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [sheetView, setSheetView] = useState<'main' | 'contacts' | 'phone-disambig'>('main');
+  const [sheetView, setSheetView] = useState<
+    'main' | 'contacts' | 'phone-disambig'
+  >('main');
   const [emailText, setEmailText] = useState('');
   const [contacts, setContacts] = useState<Contacts.Contact[]>([]);
   const [contactSearch, setContactSearch] = useState('');
@@ -98,8 +105,12 @@ export function ParticipantsCard({
   /** Temporarily selected contact keys (stable id or normalised phone) */
   const [draftContactIds, setDraftContactIds] = useState<string[]>([]);
   // EVENT FLOW: multi-select contact import with deferred phone disambiguation
-  const [disambigContacts, setDisambigContacts] = useState<Contacts.Contact[]>([]);
-  const [disambigSelections, setDisambigSelections] = useState<Record<string, string>>({});
+  const [disambigContacts, setDisambigContacts] = useState<Contacts.Contact[]>(
+    []
+  );
+  const [disambigSelections, setDisambigSelections] = useState<
+    Record<string, string>
+  >({});
   // "הצג הכל" list modal
   const [listOpen, setListOpen] = useState(false);
 
@@ -211,16 +222,22 @@ export function ParticipantsCard({
     // DEBUG: remove after confirming fix
     for (const c of drafted) {
       const mp = getMobilePhones(c);
-      console.log('[DEBUG event] contact:', c.name,
-        '| all phones:', JSON.stringify(c.phoneNumbers?.map(p => ({ label: p.label, number: p.number }))),
-        '| mobile phones:', JSON.stringify(mp.map(p => ({ label: p.label, number: p.number }))),
-        '| length:', mp.length,
-        '| → needs disambig:', mp.length > 1,
+      console.log(
+        '[DEBUG event] contact:',
+        c.name,
+        '| all phones:',
+        JSON.stringify(
+          c.phoneNumbers?.map((p) => ({ label: p.label, number: p.number }))
+        ),
+        '| mobile phones:',
+        JSON.stringify(mp.map((p) => ({ label: p.label, number: p.number }))),
+        '| length:',
+        mp.length,
+        '| → needs disambig:',
+        mp.length > 1
       );
     }
-    const needsDisambig = drafted.filter(
-      (c) => getMobilePhones(c).length > 1
-    );
+    const needsDisambig = drafted.filter((c) => getMobilePhones(c).length > 1);
 
     if (needsDisambig.length === 0) {
       // All contacts have 0 or 1 phone number — add directly
@@ -320,13 +337,21 @@ export function ParticipantsCard({
             return (
               <Pressable
                 key={p.id}
-                style={[s.circle, { backgroundColor: cc.bg, borderColor: cc.bg === CIRCLE_BG ? CIRCLE_BORDER : cc.bg }]}
+                style={[
+                  s.circle,
+                  {
+                    backgroundColor: cc.bg,
+                    borderColor: cc.bg === CIRCLE_BG ? CIRCLE_BORDER : cc.bg,
+                  },
+                ]}
                 onLongPress={() => removeParticipant(p.id)}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel={`${p.name} — לחץ לחיצה ארוכה להסרה`}
               >
-                <Text style={[s.circleText, { color: cc.text }]}>{initial(p)}</Text>
+                <Text style={[s.circleText, { color: cc.text }]}>
+                  {initial(p)}
+                </Text>
               </Pressable>
             );
           })}
@@ -347,7 +372,12 @@ export function ParticipantsCard({
       {/* ══════════════════════════════════════════════════════════════════════
           Add-participant sheet
          ══════════════════════════════════════════════════════════════════════ */}
-      <Modal visible={sheetOpen} transparent animationType="slide" onRequestClose={closeSheet}>
+      <Modal
+        visible={sheetOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={closeSheet}
+      >
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -355,431 +385,545 @@ export function ParticipantsCard({
           <View style={{ flex: 1 }}>
             {/* Backdrop — separate from sheet so sheet gestures never reach it */}
             {/* FIXED: added dimmed backdrop behind participants bottom sheet */}
-            <Pressable style={[StyleSheet.absoluteFill, s.backdropDim]} onPress={closeSheet} />
+            <Pressable
+              style={[StyleSheet.absoluteFill, s.backdropDim]}
+              onPress={closeSheet}
+            />
             <View style={s.modalSheetWrapper}>
-            <View
-              style={[s.sheet, (sheetView === 'contacts' || sheetView === 'phone-disambig') && s.sheetContacts]}
-            >
-              <View style={s.handle} />
+              <View
+                style={[
+                  s.sheet,
+                  (sheetView === 'contacts' ||
+                    sheetView === 'phone-disambig') &&
+                    s.sheetContacts,
+                ]}
+              >
+                <View style={s.handle} />
 
-              {/* ── Phone disambiguation view — only ambiguous contacts, deferred after "שמור" ── */}
-              {sheetView === 'phone-disambig' && (
-                <View style={s.contactsViewContainer}>
-                  <View style={s.sheetHeaderRow}>
-                    <Pressable
-                      onPress={() => {
-                        setSheetView('contacts');
-                        setDisambigContacts([]);
-                        setDisambigSelections({});
-                      }}
-                      accessible={true}
-                      accessibilityRole="button"
-                      accessibilityLabel="חזרה"
-                    >
-                      <Ionicons name="chevron-forward" size={22} color="#334155" />
-                    </Pressable>
-                    <Text style={s.sheetTitle}>בחירת מספרי טלפון</Text>
-                    <View style={{ width: 42 }} />
-                  </View>
-
-                  {/* Helper text */}
-                  <Text style={s.phoneDisambigHint}>בחר/י מספר אחד לכל איש קשר</Text>
-
-                  {/* Per-contact phone radio lists */}
-                  <FlatList
-                    data={disambigContacts}
-                    keyExtractor={(c) => contactKey(c)}
-                    style={s.contactList}
-                    contentContainerStyle={{ paddingBottom: 4 }}
-                    keyboardShouldPersistTaps="handled"
-                    scrollEnabled
-                    nestedScrollEnabled
-                    renderItem={({ item: contact }) => {
-                      const key = contactKey(contact);
-                      return (
-                        <View>
-                          {/* Contact name header */}
-                          <Text style={s.disambigContactName}>
-                            {contact.name?.trim() || key}
-                          </Text>
-                          {/* FIXED: updated phone label filter to mobile-capable labels only
-                              Show ONLY mobile-capable numbers in disambiguation picker */}
-                          {getMobilePhones(contact).map((phone, idx) => {
-                            const isSelected =
-                              disambigSelections[key] === phone.number;
-                            return (
-                              <Pressable
-                                key={`${key}-${idx}`}
-                                style={[
-                                  s.contactRow,
-                                  isSelected && s.contactRowSelected,
-                                ]}
-                                onPress={() =>
-                                  setDisambigSelections((prev) => ({
-                                    ...prev,
-                                    [key]: phone.number ?? '',
-                                  }))
-                                }
-                                accessible={true}
-                                accessibilityRole="radio"
-                                accessibilityState={{ checked: isSelected }}
-                                accessibilityLabel={`${getPhoneLabel(phone.label)} ${phone.number ?? ''}`}
-                              >
-                                {/* Label + number — RTL right side */}
-                                <View style={s.contactRowInfo}>
-                                  <Text style={s.contactName}>
-                                    {getPhoneLabel(phone.label)}
-                                  </Text>
-                                  <Text style={s.contactPhone}>
-                                    {phone.number}
-                                  </Text>
-                                </View>
-                                {/* Radio circle — visual left (logical end in RTL) */}
-                                <View
-                                  style={[
-                                    s.contactCheck,
-                                    isSelected && s.contactCheckSelected,
-                                  ]}
-                                >
-                                  {isSelected && (
-                                    <Ionicons
-                                      name="checkmark"
-                                      size={14}
-                                      color="#fff"
-                                    />
-                                  )}
-                                </View>
-                              </Pressable>
-                            );
-                          })}
-                        </View>
-                      );
-                    }}
-                  />
-
-                  {/* "המשך" CTA — enabled only after user has explicitly chosen
-                      a number for every ambiguous contact (no preselection). */}
-                  {(() => {
-                    const allSelected = disambigContacts.every(
-                      (c) => !!disambigSelections[contactKey(c)]
-                    );
-                    return (
+                {/* ── Phone disambiguation view — only ambiguous contacts, deferred after "שמור" ── */}
+                {sheetView === 'phone-disambig' && (
+                  <View style={s.contactsViewContainer}>
+                    <View style={s.sheetHeaderRow}>
                       <Pressable
-                        style={[s.saveBtn, !allSelected && s.saveBtnDisabled]}
-                        onPress={confirmDisambig}
-                        disabled={!allSelected}
+                        onPress={() => {
+                          setSheetView('contacts');
+                          setDisambigContacts([]);
+                          setDisambigSelections({});
+                        }}
                         accessible={true}
                         accessibilityRole="button"
-                        accessibilityLabel="המשך"
-                        accessibilityState={{ disabled: !allSelected }}
+                        accessibilityLabel="חזרה"
                       >
-                        <Text style={s.saveBtnText}>המשך</Text>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={22}
+                          color="#334155"
+                        />
                       </Pressable>
-                    );
-                  })()}
-                </View>
-              )}
-
-              {/* ── Contacts view ── */}
-              {sheetView === 'contacts' && (
-                <View style={s.contactsViewContainer}>
-                  <View style={s.sheetHeaderRow}>
-                    <Pressable
-                      onPress={() => {
-                        setSheetView('main');
-                        setDraftContactIds([]);
-                      }}
-                      accessible={true}
-                      accessibilityRole="button"
-                      accessibilityLabel="חזרה"
-                    >
-                      <Ionicons name="chevron-forward" size={22} color="#334155" />
-                    </Pressable>
-                    <Text style={s.sheetTitle}>בחירה מאנשי קשר</Text>
-                    {/* Live counter */}
-                    {draftContactIds.length > 0 ? (
-                      <Text style={s.draftCounter}>נבחרו {draftContactIds.length}</Text>
-                    ) : (
+                      <Text style={s.sheetTitle}>בחירת מספרי טלפון</Text>
                       <View style={{ width: 42 }} />
-                    )}
-                  </View>
-
-                  {/* ── Selected-contact chips — above search, capped height ── */}
-                  {draftContactIds.length > 0 && (
-                    <View style={s.selectedSummaryBox}>
-                      <Text style={s.selectedSummaryLabel}>נבחרו</Text>
-                      <ScrollView
-                        scrollEnabled
-                        nestedScrollEnabled
-                        showsVerticalScrollIndicator
-                        scrollIndicatorInsets={{ right: 1 }}
-                        style={{ maxHeight: 96 }}
-                        keyboardShouldPersistTaps="handled"
-                      >
-                        <View style={s.chipWrap}>
-                          {draftContactIds.map((key) => {
-                            const c = contacts.find((ct) => contactKey(ct) === key);
-                            const phone = c ? getPrimaryPhone(c) : '';
-                            const label = c?.name?.trim() || phone || key;
-                            return (
-                              <View key={key} style={s.chip}>
-                                {/* ✕ on LEFT side (RTL logical end) */}
-                                <Pressable
-                                  onPress={() => {
-                                    setDraftContactIds((prev) =>
-                                      prev.filter((k) => k !== key)
-                                    );
-                                  }}
-                                  hitSlop={6}
-                                  accessible={true}
-                                  accessibilityRole="button"
-                                  accessibilityLabel={`הסר ${label}`}
-                                >
-                                  <Ionicons name="close" size={12} color={PRIMARY} />
-                                </Pressable>
-                                <Text style={s.chipText} numberOfLines={1}>
-                                  {label}
-                                </Text>
-                              </View>
-                            );
-                          })}
-                        </View>
-                      </ScrollView>
                     </View>
-                  )}
 
-                  <TextInput
-                    style={s.searchInput}
-                    value={contactSearch}
-                    onChangeText={setContactSearch}
-                    placeholder="חיפוש לפי שם או מספר..."
-                    placeholderTextColor="#9ca3af"
-                    textAlign="right"
-                    accessible={true}
-                    accessibilityLabel="חיפוש"
-                  />
+                    {/* Helper text */}
+                    <Text style={s.phoneDisambigHint}>
+                      בחר/י מספר אחד לכל איש קשר
+                    </Text>
 
-                  <FlatList
-                    data={filteredContacts}
-                    keyExtractor={(c, i) => contactKey(c) || `c-${i}`}
-                    style={s.contactList}
-                    contentContainerStyle={{ paddingBottom: 4 }}
-                    keyboardShouldPersistTaps="handled"
-                    scrollEnabled
-                    nestedScrollEnabled
-                    renderItem={({ item }) => {
-                      const alreadyAdded = isAlreadyAdded(item);
-                      const key = contactKey(item);
-                      const selected = !alreadyAdded && draftContactIds.includes(key);
-                      const phone = getPrimaryPhone(item);
-                      const displayName = item.name?.trim() || phone;
+                    {/* Per-contact phone radio lists */}
+                    <FlatList
+                      data={disambigContacts}
+                      keyExtractor={(c) => contactKey(c)}
+                      style={s.contactList}
+                      contentContainerStyle={{ paddingBottom: 4 }}
+                      keyboardShouldPersistTaps="handled"
+                      scrollEnabled
+                      nestedScrollEnabled
+                      renderItem={({ item: contact }) => {
+                        const key = contactKey(contact);
+                        return (
+                          <View>
+                            {/* Contact name header */}
+                            <Text style={s.disambigContactName}>
+                              {contact.name?.trim() || key}
+                            </Text>
+                            {/* FIXED: updated phone label filter to mobile-capable labels only
+                              Show ONLY mobile-capable numbers in disambiguation picker */}
+                            {getMobilePhones(contact).map((phone, idx) => {
+                              const isSelected =
+                                disambigSelections[key] === phone.number;
+                              return (
+                                <Pressable
+                                  key={`${key}-${idx}`}
+                                  style={[
+                                    s.contactRow,
+                                    isSelected && s.contactRowSelected,
+                                  ]}
+                                  onPress={() =>
+                                    setDisambigSelections((prev) => ({
+                                      ...prev,
+                                      [key]: phone.number ?? '',
+                                    }))
+                                  }
+                                  accessible={true}
+                                  accessibilityRole="radio"
+                                  accessibilityState={{ checked: isSelected }}
+                                  accessibilityLabel={`${getPhoneLabel(phone.label)} ${phone.number ?? ''}`}
+                                >
+                                  {/* Label + number — RTL right side */}
+                                  <View style={s.contactRowInfo}>
+                                    <Text style={s.contactName}>
+                                      {getPhoneLabel(phone.label)}
+                                    </Text>
+                                    <Text style={s.contactPhone}>
+                                      {phone.number}
+                                    </Text>
+                                  </View>
+                                  {/* Radio circle — visual left (logical end in RTL) */}
+                                  <View
+                                    style={[
+                                      s.contactCheck,
+                                      isSelected && s.contactCheckSelected,
+                                    ]}
+                                  >
+                                    {isSelected && (
+                                      <Ionicons
+                                        name="checkmark"
+                                        size={14}
+                                        color="#fff"
+                                      />
+                                    )}
+                                  </View>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                        );
+                      }}
+                    />
+
+                    {/* "המשך" CTA — enabled only after user has explicitly chosen
+                      a number for every ambiguous contact (no preselection). */}
+                    {(() => {
+                      const allSelected = disambigContacts.every(
+                        (c) => !!disambigSelections[contactKey(c)]
+                      );
                       return (
                         <Pressable
-                          style={[
-                            s.contactRow,
-                            selected && s.contactRowSelected,
-                            alreadyAdded && s.contactRowDisabled,
-                          ]}
-                          onPress={() => toggleContactDraft(item)}
-                          disabled={alreadyAdded}
-                          accessible={true}
-                          accessibilityRole="checkbox"
-                          accessibilityState={{ checked: selected, disabled: alreadyAdded }}
-                          accessibilityLabel={displayName}
-                        >
-                          {/* RTL: name+phone on the right, checkmark on the left */}
-                          <View style={s.contactRowInfo}>
-                            <Text style={s.contactName} numberOfLines={1}>
-                              {displayName}
-                            </Text>
-                            {phone.length > 0 && (
-                              <Text style={s.contactPhone} numberOfLines={1}>
-                                {phone}
-                              </Text>
-                            )}
-                          </View>
-                          {/* Checkmark on visual left (logical end in RTL) */}
-                          <View style={[s.contactCheck, selected && s.contactCheckSelected]}>
-                            {(selected || alreadyAdded) && (
-                              <Ionicons
-                                name="checkmark"
-                                size={14}
-                                color={alreadyAdded ? '#94a3b8' : '#fff'}
-                              />
-                            )}
-                          </View>
-                        </Pressable>
-                      );
-                    }}
-                    ListEmptyComponent={
-                      <Text style={s.emptyContacts}>
-                        {loadingContacts ? 'טוען...' : 'לא נמצאו אנשי קשר'}
-                      </Text>
-                    }
-                  />
-
-                  {/* Save button — pinned to bottom */}
-                  <Pressable
-                    style={[
-                      s.saveBtn,
-                      draftContactIds.length === 0 && s.saveBtnDisabled,
-                    ]}
-                    onPress={saveContactsDraft}
-                    disabled={draftContactIds.length === 0}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel={`שמור ${draftContactIds.length} אנשי קשר`}
-                  >
-                    <Text style={s.saveBtnText}>
-                      {draftContactIds.length > 0
-                        ? `שמור (${draftContactIds.length})`
-                        : 'שמור'}
-                    </Text>
-                  </Pressable>
-                </View>
-              )}
-
-              {/* ── Main view ── */}
-              {sheetView === 'main' && (
-                <>
-                  <Text style={s.sheetTitle}>הוסף משתתף</Text>
-
-                  {/* ── Family sharing section — hidden when no family members ── */}
-                  {familyMembers.length > 0 && onFamilyChange && (
-                    <>
-                      <Text style={s.familySectionTitle}>שיתוף עם המשפחה</Text>
-                      <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={s.familyChipsRow}
-                        style={{ direction: 'rtl' }}
-                      >
-                        {/* "כולם" chip */}
-                        <Pressable
-                          style={[s.allChip, allFamily && s.allChipSelected]}
-                          onPress={() => {
-                            if (allFamily) {
-                              // Deselect all
-                              onFamilyChange(false, []);
-                            } else {
-                              // Select all family
-                              onFamilyChange(true, familyMembers.map((m) => m._id));
-                            }
-                          }}
+                          style={[s.saveBtn, !allSelected && s.saveBtnDisabled]}
+                          onPress={confirmDisambig}
+                          disabled={!allSelected}
                           accessible={true}
                           accessibilityRole="button"
-                          accessibilityLabel="כולם"
-                          accessibilityState={{ selected: allFamily }}
+                          accessibilityLabel="המשך"
+                          accessibilityState={{ disabled: !allSelected }}
                         >
-                          <Text style={[s.allChipText, allFamily && s.allChipTextSelected]}>
-                            כולם
-                          </Text>
+                          <Text style={s.saveBtnText}>המשך</Text>
                         </Pressable>
-
-                        {/* Individual member chips */}
-                        {familyMembers.map((member) => {
-                          const isSelected = allFamily || sharedWithFamilyMemberIds.includes(member._id);
-                          const initials = (member.displayName ?? '?').trim().substring(0, 2);
-                          const color = member.color ?? PRIMARY;
-                          return (
-                            <Pressable
-                              key={member._id}
-                              style={s.memberChipWrap}
-                              onPress={() => {
-                                if (allFamily) {
-                                  // Deselect "כולם", keep others except this one
-                                  const rest = familyMembers
-                                    .map((m) => m._id)
-                                    .filter((id) => id !== member._id);
-                                  onFamilyChange(false, rest);
-                                } else {
-                                  const next = isSelected
-                                    ? sharedWithFamilyMemberIds.filter((id) => id !== member._id)
-                                    : [...sharedWithFamilyMemberIds, member._id];
-                                  onFamilyChange(false, next);
-                                }
-                              }}
-                              accessible={true}
-                              accessibilityRole="button"
-                              accessibilityLabel={member.displayName ?? 'חבר משפחה'}
-                              accessibilityState={{ selected: isSelected }}
-                            >
-                              <View style={[
-                                s.memberCircle,
-                                { backgroundColor: color },
-                                isSelected && { borderColor: color, borderWidth: 3, opacity: 1 },
-                                !isSelected && { opacity: 0.45 },
-                              ]}>
-                                <Text style={s.memberInitials}>{initials}</Text>
-                              </View>
-                              <Text style={s.memberName} numberOfLines={1}>
-                                {member.displayName ?? ''}
-                              </Text>
-                            </Pressable>
-                          );
-                        })}
-                      </ScrollView>
-                      <Text style={s.familyHelperText}>האירוע תמיד נשמר גם אצלך</Text>
-
-                      {/* Separator between family and external sections */}
-                      <View style={s.sectionDivider}>
-                        <View style={s.separatorLine} />
-                        <Text style={s.sectionDividerLabel}>או הוסף משתתפים חיצוניים</Text>
-                        <View style={s.separatorLine} />
-                      </View>
-                    </>
-                  )}
-
-                  <Pressable
-                    style={s.contactsBtn}
-                    onPress={openContactsPicker}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="בחירה מאנשי קשר"
-                  >
-                    <Ionicons name="person-circle-outline" size={20} color={PRIMARY} />
-                    <Text style={s.contactsBtnText}>
-                      {loadingContacts ? 'טוען...' : 'בחירה מאנשי קשר'}
-                    </Text>
-                  </Pressable>
-
-                  <View style={s.separatorRow}>
-                    <View style={s.separatorLine} />
-                    <Text style={s.separatorOr}>או הכנס ישירות</Text>
-                    <View style={s.separatorLine} />
+                      );
+                    })()}
                   </View>
+                )}
 
-                  <Text style={s.emailHint}>
-                    כתובות אימייל, מופרדות בפסיק, נקודה-פסיק או שורה חדשה
-                  </Text>
-                  <TextInput
-                    style={s.emailTextArea}
-                    value={emailText}
-                    onChangeText={setEmailText}
-                    placeholder={'user@example.com, another@example.com'}
-                    placeholderTextColor="#9ca3af"
-                    textAlign="right"
-                    multiline
-                    numberOfLines={3}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    accessible={true}
-                    accessibilityLabel="כתובות אימייל"
-                  />
+                {/* ── Contacts view ── */}
+                {sheetView === 'contacts' && (
+                  <View style={s.contactsViewContainer}>
+                    <View style={s.sheetHeaderRow}>
+                      <Pressable
+                        onPress={() => {
+                          setSheetView('main');
+                          setDraftContactIds([]);
+                        }}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="חזרה"
+                      >
+                        <Ionicons
+                          name="chevron-forward"
+                          size={22}
+                          color="#334155"
+                        />
+                      </Pressable>
+                      <Text style={s.sheetTitle}>בחירה מאנשי קשר</Text>
+                      {/* Live counter */}
+                      {draftContactIds.length > 0 ? (
+                        <Text style={s.draftCounter}>
+                          נבחרו {draftContactIds.length}
+                        </Text>
+                      ) : (
+                        <View style={{ width: 42 }} />
+                      )}
+                    </View>
 
-                  <Pressable
-                    style={s.saveBtn}
-                    onPress={confirmEmailInput}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="שמור"
-                  >
-                    <Text style={s.saveBtnText}>שמור</Text>
-                  </Pressable>
-                </>
-              )}
-            </View>
+                    {/* ── Selected-contact chips — above search, capped height ── */}
+                    {draftContactIds.length > 0 && (
+                      <View style={s.selectedSummaryBox}>
+                        <Text style={s.selectedSummaryLabel}>נבחרו</Text>
+                        <ScrollView
+                          scrollEnabled
+                          nestedScrollEnabled
+                          showsVerticalScrollIndicator
+                          scrollIndicatorInsets={{ right: 1 }}
+                          style={{ maxHeight: 96 }}
+                          keyboardShouldPersistTaps="handled"
+                        >
+                          <View style={s.chipWrap}>
+                            {draftContactIds.map((key) => {
+                              const c = contacts.find(
+                                (ct) => contactKey(ct) === key
+                              );
+                              const phone = c ? getPrimaryPhone(c) : '';
+                              const label = c?.name?.trim() || phone || key;
+                              return (
+                                <View key={key} style={s.chip}>
+                                  {/* ✕ on LEFT side (RTL logical end) */}
+                                  <Pressable
+                                    onPress={() => {
+                                      setDraftContactIds((prev) =>
+                                        prev.filter((k) => k !== key)
+                                      );
+                                    }}
+                                    hitSlop={6}
+                                    accessible={true}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`הסר ${label}`}
+                                  >
+                                    <Ionicons
+                                      name="close"
+                                      size={12}
+                                      color={PRIMARY}
+                                    />
+                                  </Pressable>
+                                  <Text style={s.chipText} numberOfLines={1}>
+                                    {label}
+                                  </Text>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        </ScrollView>
+                      </View>
+                    )}
+
+                    <TextInput
+                      style={s.searchInput}
+                      value={contactSearch}
+                      onChangeText={setContactSearch}
+                      placeholder="חיפוש לפי שם או מספר..."
+                      placeholderTextColor="#9ca3af"
+                      textAlign="right"
+                      accessible={true}
+                      accessibilityLabel="חיפוש"
+                    />
+
+                    <FlatList
+                      data={filteredContacts}
+                      keyExtractor={(c, i) => contactKey(c) || `c-${i}`}
+                      style={s.contactList}
+                      contentContainerStyle={{ paddingBottom: 4 }}
+                      keyboardShouldPersistTaps="handled"
+                      scrollEnabled
+                      nestedScrollEnabled
+                      renderItem={({ item }) => {
+                        const alreadyAdded = isAlreadyAdded(item);
+                        const key = contactKey(item);
+                        const selected =
+                          !alreadyAdded && draftContactIds.includes(key);
+                        const phone = getPrimaryPhone(item);
+                        const displayName = item.name?.trim() || phone;
+                        return (
+                          <Pressable
+                            style={[
+                              s.contactRow,
+                              selected && s.contactRowSelected,
+                              alreadyAdded && s.contactRowDisabled,
+                            ]}
+                            onPress={() => toggleContactDraft(item)}
+                            disabled={alreadyAdded}
+                            accessible={true}
+                            accessibilityRole="checkbox"
+                            accessibilityState={{
+                              checked: selected,
+                              disabled: alreadyAdded,
+                            }}
+                            accessibilityLabel={displayName}
+                          >
+                            {/* RTL: name+phone on the right, checkmark on the left */}
+                            <View style={s.contactRowInfo}>
+                              <Text style={s.contactName} numberOfLines={1}>
+                                {displayName}
+                              </Text>
+                              {phone.length > 0 && (
+                                <Text style={s.contactPhone} numberOfLines={1}>
+                                  {phone}
+                                </Text>
+                              )}
+                            </View>
+                            {/* Checkmark on visual left (logical end in RTL) */}
+                            <View
+                              style={[
+                                s.contactCheck,
+                                selected && s.contactCheckSelected,
+                              ]}
+                            >
+                              {(selected || alreadyAdded) && (
+                                <Ionicons
+                                  name="checkmark"
+                                  size={14}
+                                  color={alreadyAdded ? '#94a3b8' : '#fff'}
+                                />
+                              )}
+                            </View>
+                          </Pressable>
+                        );
+                      }}
+                      ListEmptyComponent={
+                        <Text style={s.emptyContacts}>
+                          {loadingContacts ? 'טוען...' : 'לא נמצאו אנשי קשר'}
+                        </Text>
+                      }
+                    />
+
+                    {/* Save button — pinned to bottom */}
+                    <Pressable
+                      style={[
+                        s.saveBtn,
+                        draftContactIds.length === 0 && s.saveBtnDisabled,
+                      ]}
+                      onPress={saveContactsDraft}
+                      disabled={draftContactIds.length === 0}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel={`שמור ${draftContactIds.length} אנשי קשר`}
+                    >
+                      <Text style={s.saveBtnText}>
+                        {draftContactIds.length > 0
+                          ? `שמור (${draftContactIds.length})`
+                          : 'שמור'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
+
+                {/* ── Main view ── */}
+                {sheetView === 'main' && (
+                  <>
+                    <Text style={s.sheetTitle}>הוסף משתתף</Text>
+
+                    {/* ── Family sharing — chips when members exist; empty-state CTA otherwise ── */}
+                    {onFamilyChange ? (
+                      <>
+                        {familyMembers.length > 0 ? (
+                          <>
+                            <Text style={s.familySectionTitle}>
+                              שיתוף עם המשפחה
+                            </Text>
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              contentContainerStyle={s.familyChipsRow}
+                              style={{ direction: 'rtl' }}
+                            >
+                              <Pressable
+                                style={[
+                                  s.allChip,
+                                  allFamily && s.allChipSelected,
+                                ]}
+                                onPress={() => {
+                                  if (allFamily) {
+                                    onFamilyChange(false, []);
+                                  } else {
+                                    onFamilyChange(
+                                      true,
+                                      familyMembers.map((m) => m._id)
+                                    );
+                                  }
+                                }}
+                                accessible={true}
+                                accessibilityRole="button"
+                                accessibilityLabel="כולם"
+                                accessibilityState={{ selected: allFamily }}
+                              >
+                                <Text
+                                  style={[
+                                    s.allChipText,
+                                    allFamily && s.allChipTextSelected,
+                                  ]}
+                                >
+                                  כולם
+                                </Text>
+                              </Pressable>
+
+                              {familyMembers.map((member) => {
+                                const isSelected =
+                                  allFamily ||
+                                  sharedWithFamilyMemberIds.includes(
+                                    member._id
+                                  );
+                                const initials = (member.displayName ?? '?')
+                                  .trim()
+                                  .substring(0, 2);
+                                const color = member.color ?? PRIMARY;
+                                return (
+                                  <Pressable
+                                    key={member._id}
+                                    style={s.memberChipWrap}
+                                    onPress={() => {
+                                      if (allFamily) {
+                                        const rest = familyMembers
+                                          .map((m) => m._id)
+                                          .filter((id) => id !== member._id);
+                                        onFamilyChange(false, rest);
+                                      } else {
+                                        const next = isSelected
+                                          ? sharedWithFamilyMemberIds.filter(
+                                              (id) => id !== member._id
+                                            )
+                                          : [
+                                              ...sharedWithFamilyMemberIds,
+                                              member._id,
+                                            ];
+                                        onFamilyChange(false, next);
+                                      }
+                                    }}
+                                    accessible={true}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={
+                                      member.displayName ?? 'חבר משפחה'
+                                    }
+                                    accessibilityState={{
+                                      selected: isSelected,
+                                    }}
+                                  >
+                                    <View
+                                      style={[
+                                        s.memberCircle,
+                                        { backgroundColor: color },
+                                        isSelected && {
+                                          borderColor: color,
+                                          borderWidth: 3,
+                                          opacity: 1,
+                                        },
+                                        !isSelected && { opacity: 0.45 },
+                                      ]}
+                                    >
+                                      <Text style={s.memberInitials}>
+                                        {initials}
+                                      </Text>
+                                    </View>
+                                    <Text
+                                      style={s.memberName}
+                                      numberOfLines={1}
+                                    >
+                                      {member.displayName ?? ''}
+                                    </Text>
+                                  </Pressable>
+                                );
+                              })}
+                            </ScrollView>
+                            <Text style={s.familyHelperText}>
+                              האירוע תמיד נשמר גם אצלך
+                            </Text>
+
+                            <View style={s.sectionDivider}>
+                              <View style={s.separatorLine} />
+                              <Text style={s.sectionDividerLabel}>
+                                או הוסף משתתפים חיצוניים
+                              </Text>
+                              <View style={s.separatorLine} />
+                            </View>
+                          </>
+                        ) : onConfigureFamilyProfile ? (
+                          <>
+                            <Text style={s.familySectionTitle}>
+                              שיתוף עם המשפחה
+                            </Text>
+                            <View style={s.familyEmptyCard}>
+                              <Text style={s.familyEmptyTitle}>
+                                עדיין לא הוגדר פרופיל משפחתי
+                              </Text>
+                              <Text style={s.familyEmptyBody}>
+                                אחרי שתגדירי את בני המשפחה, תוכלי לשתף איתם
+                                אירועים ולבחור משתתפים בקלות.
+                              </Text>
+                              <Pressable
+                                style={s.familyEmptyCta}
+                                onPress={onConfigureFamilyProfile}
+                                accessible={true}
+                                accessibilityRole="button"
+                                accessibilityLabel="להגדרת הפרופיל המשפחתי"
+                              >
+                                <Text style={s.familyEmptyCtaText}>
+                                  להגדרת הפרופיל המשפחתי
+                                </Text>
+                              </Pressable>
+                            </View>
+
+                            <View style={s.sectionDivider}>
+                              <View style={s.separatorLine} />
+                              <Text style={s.sectionDividerLabel}>
+                                או הוסף משתתפים חיצוניים
+                              </Text>
+                              <View style={s.separatorLine} />
+                            </View>
+                          </>
+                        ) : null}
+                      </>
+                    ) : null}
+
+                    <Pressable
+                      style={s.contactsBtn}
+                      onPress={openContactsPicker}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel="בחירה מאנשי קשר"
+                    >
+                      <Ionicons
+                        name="person-circle-outline"
+                        size={20}
+                        color={PRIMARY}
+                      />
+                      <Text style={s.contactsBtnText}>
+                        {loadingContacts ? 'טוען...' : 'בחירה מאנשי קשר'}
+                      </Text>
+                    </Pressable>
+
+                    <View style={s.separatorRow}>
+                      <View style={s.separatorLine} />
+                      <Text style={s.separatorOr}>או הכנס ישירות</Text>
+                      <View style={s.separatorLine} />
+                    </View>
+
+                    <Text style={s.emailHint}>
+                      כתובות אימייל, מופרדות בפסיק, נקודה-פסיק או שורה חדשה
+                    </Text>
+                    <TextInput
+                      style={s.emailTextArea}
+                      value={emailText}
+                      onChangeText={setEmailText}
+                      placeholder={'user@example.com, another@example.com'}
+                      placeholderTextColor="#9ca3af"
+                      textAlign="right"
+                      multiline
+                      numberOfLines={3}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      accessible={true}
+                      accessibilityLabel="כתובות אימייל"
+                    />
+
+                    <Pressable
+                      style={s.saveBtn}
+                      onPress={confirmEmailInput}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel="שמור"
+                    >
+                      <Text style={s.saveBtnText}>שמור</Text>
+                    </Pressable>
+                  </>
+                )}
+              </View>
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -788,9 +932,17 @@ export function ParticipantsCard({
       {/* ══════════════════════════════════════════════════════════════════════
           "הצג הכל" list modal — shows full participant list
          ══════════════════════════════════════════════════════════════════════ */}
-      <Modal visible={listOpen} transparent animationType="slide" onRequestClose={() => setListOpen(false)}>
+      <Modal
+        visible={listOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setListOpen(false)}
+      >
         <Pressable style={s.modalOverlay} onPress={() => setListOpen(false)}>
-          <Pressable style={[s.sheet, { maxHeight: '70%' }]} onPress={() => undefined}>
+          <Pressable
+            style={[s.sheet, { maxHeight: '70%' }]}
+            onPress={() => undefined}
+          >
             <View style={s.handle} />
             <Text style={s.sheetTitle}>משתתפים באירוע</Text>
 
@@ -817,7 +969,9 @@ export function ParticipantsCard({
                       <Ionicons name="close-circle" size={18} color="#94a3b8" />
                     </Pressable>
                     <View style={{ flex: 1 }}>
-                      <Text style={s.listName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={s.listName} numberOfLines={1}>
+                        {item.name}
+                      </Text>
                       {(item.phone ?? item.email) ? (
                         <Text style={s.listSub} numberOfLines={1}>
                           {item.phone ?? item.email}
@@ -825,8 +979,19 @@ export function ParticipantsCard({
                       ) : null}
                     </View>
                     {/* FIXED: avatar uses participant's profile color */}
-                    <View style={[s.circle, { backgroundColor: cc.bg, borderColor: cc.bg === CIRCLE_BG ? CIRCLE_BORDER : cc.bg }]}>
-                      <Text style={[s.circleText, { color: cc.text }]}>{initial(item)}</Text>
+                    <View
+                      style={[
+                        s.circle,
+                        {
+                          backgroundColor: cc.bg,
+                          borderColor:
+                            cc.bg === CIRCLE_BG ? CIRCLE_BORDER : cc.bg,
+                        },
+                      ]}
+                    >
+                      <Text style={[s.circleText, { color: cc.text }]}>
+                        {initial(item)}
+                      </Text>
                     </View>
                   </View>
                 );
@@ -1166,6 +1331,40 @@ const s = StyleSheet.create({
     textAlign: 'right',
     marginBottom: 10,
     marginTop: 4,
+  },
+  familyEmptyCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 8,
+  },
+  familyEmptyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#334155',
+    textAlign: 'right',
+    marginBottom: 8,
+  },
+  familyEmptyBody: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'right',
+    lineHeight: 22,
+    marginBottom: 14,
+  },
+  familyEmptyCta: {
+    alignSelf: 'stretch',
+    backgroundColor: TINT,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  familyEmptyCtaText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: PRIMARY,
   },
   familyChipsRow: {
     flexDirection: 'row',

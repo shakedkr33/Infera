@@ -1,7 +1,32 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
-import type { MutationCtx } from './_generated/server';
+import type { Id } from './_generated/dataModel';
+import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import {
+  effectiveMemberStatus,
+  isActiveCommunityMember,
+} from './communityMemberUtils';
+
+async function requireOwnerOrAdminActive(
+  ctx: MutationCtx,
+  communityId: Id<'communities'>,
+  userId: Id<'users'>
+): Promise<void> {
+  const membership = await ctx.db
+    .query('communityMembers')
+    .withIndex('by_community_user', (q) =>
+      q.eq('communityId', communityId).eq('userId', userId)
+    )
+    .unique();
+  if (
+    !membership ||
+    !isActiveCommunityMember(membership) ||
+    (membership.role !== 'owner' && membership.role !== 'admin')
+  ) {
+    throw new Error('אין הרשאה');
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -19,6 +44,107 @@ async function generateUniqueInviteCode(ctx: MutationCtx): Promise<string> {
   }
   // Fallback with timestamp tail, still numeric and human-friendly
   return String(Date.now()).slice(-6);
+}
+
+const UPCOMING_EVENTS_SCAN_CAP = 48;
+
+/** Events table has createdAt; no updatedAt — use createdAt for "new since visit". */
+async function computeHasNewEventsSinceVisit(
+  ctx: QueryCtx,
+  communityId: Id<'communities'>,
+  lastViewedAt: number | undefined
+): Promise<boolean> {
+  if (lastViewedAt === undefined) return false;
+  const hit = await ctx.db
+    .query('events')
+    .withIndex('by_community_date', (q) => q.eq('communityId', communityId))
+    .filter((q) =>
+      q.and(
+        q.neq(q.field('status'), 'cancelled'),
+        q.gt(q.field('createdAt'), lastViewedAt)
+      )
+    )
+    .first();
+  return hit !== null;
+}
+
+async function getCommunityListExtras(
+  ctx: QueryCtx,
+  communityId: Id<'communities'>,
+  viewerNow: number | undefined,
+  lastViewedAt: number | undefined,
+  opts: {
+    /** Resolved viewer membership (legacy rows without status count as active). */
+    viewerMemberStatus: ReturnType<typeof effectiveMemberStatus>;
+    isManager: boolean;
+  }
+): Promise<{
+  membersCount: number;
+  nextActivity: {
+    id: Id<'events'>;
+    title: string;
+    startsAt: number;
+    status?: 'active' | 'cancelled';
+    allDay?: boolean;
+  } | null;
+  hasNewEvents: boolean;
+  pendingMembersCount: number;
+}> {
+  const allMembers = await ctx.db
+    .query('communityMembers')
+    .withIndex('by_community', (q) => q.eq('communityId', communityId))
+    .collect();
+
+  const membersCount = allMembers.filter((m) =>
+    isActiveCommunityMember(m)
+  ).length;
+
+  const pendingMembersCount = opts.isManager
+    ? allMembers.filter((m) => m.status === 'pending').length
+    : 0;
+
+  const viewerPending = opts.viewerMemberStatus === 'pending';
+
+  let nextActivity: {
+    id: Id<'events'>;
+    title: string;
+    startsAt: number;
+    status?: 'active' | 'cancelled';
+    allDay?: boolean;
+  } | null = null;
+
+  if (!viewerPending && viewerNow !== undefined && Number.isFinite(viewerNow)) {
+    const upcoming = await ctx.db
+      .query('events')
+      .withIndex('by_community_date', (q) =>
+        q.eq('communityId', communityId).gte('startTime', viewerNow)
+      )
+      .filter((q) => q.neq(q.field('status'), 'cancelled'))
+      .order('asc')
+      .take(UPCOMING_EVENTS_SCAN_CAP);
+
+    const next = upcoming[0] ?? null;
+    nextActivity = next
+      ? {
+          id: next._id,
+          title: next.title,
+          startsAt: next.startTime,
+          ...(next.status !== undefined ? { status: next.status } : {}),
+          ...(next.allDay === true ? { allDay: true as const } : {}),
+        }
+      : null;
+  }
+
+  const hasNewEvents = viewerPending
+    ? false
+    : await computeHasNewEventsSinceVisit(ctx, communityId, lastViewedAt);
+
+  return {
+    membersCount,
+    nextActivity,
+    hasNewEvents,
+    pendingMembersCount,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -48,6 +174,7 @@ export const createCommunity = mutation({
       createdAt: Date.now(),
       archived: false,
       pinnedByUserIds: [], // deprecated, kept for schema compat
+      joinApprovalMode: 'manual',
     });
 
     await ctx.db.insert('communityMembers', {
@@ -57,6 +184,7 @@ export const createCommunity = mutation({
       pinned: true,
       notificationsEnabled: true,
       joinedAt: Date.now(),
+      status: 'active',
     });
 
     const community = await ctx.db.get(communityId);
@@ -83,10 +211,18 @@ export const getCommunity = query({
 
     const membership = memberships.find((m) => m.userId === userId);
 
+    const approvedCount = memberships.filter((m) =>
+      isActiveCommunityMember(m)
+    ).length;
+
     return {
       ...community,
-      memberCount: memberships.length,
+      memberCount: approvedCount,
+      joinApprovalMode: community.joinApprovalMode ?? 'automatic',
       myRole: membership?.role ?? null,
+      myMembershipStatus: membership
+        ? effectiveMemberStatus(membership.status)
+        : null,
       myNotificationsEnabled: membership?.notificationsEnabled ?? true,
     };
   },
@@ -96,12 +232,18 @@ export const getCommunity = query({
 // שליפת הקהילות של המשתמש הנוכחי
 // ─────────────────────────────────────────────────────────────
 export const listMyCommunities = query({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    /** Clock from the client — do not use Date.now() in the query handler (Convex caching). Optional for backward compatibility. */
+    viewerNow: v.optional(v.number()),
+  },
+  handler: async (ctx, { viewerNow }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const user = await ctx.db.get(userId);
     if (!user) return [];
+
+    const includeSchedule =
+      viewerNow !== undefined && Number.isFinite(viewerNow);
 
     const memberships = await ctx.db
       .query('communityMembers')
@@ -112,11 +254,28 @@ export const listMyCommunities = query({
       memberships.map(async (m) => {
         const community = await ctx.db.get(m.communityId);
         if (!community || community.archived) return null;
+        const viewerStatus = effectiveMemberStatus(m.status);
+        const isManager = m.role === 'owner' || m.role === 'admin';
+        const extras = await getCommunityListExtras(
+          ctx,
+          community._id,
+          includeSchedule ? viewerNow : undefined,
+          m.lastViewedAt,
+          {
+            viewerMemberStatus: viewerStatus,
+            isManager,
+          }
+        );
         return {
           community,
           role: m.role,
           pinned: m.pinned,
           notificationsEnabled: m.notificationsEnabled,
+          membersCount: extras.membersCount,
+          nextActivity: extras.nextActivity,
+          hasNewEvents: extras.hasNewEvents,
+          pendingMembersCount: extras.pendingMembersCount,
+          membershipStatus: viewerStatus,
         };
       })
     );
@@ -161,7 +320,7 @@ export const getCommunityByInviteCode = query({
         .query('communityMembers')
         .withIndex('by_community', (q) => q.eq('communityId', community._id))
         .collect()
-    ).length;
+    ).filter((row) => isActiveCommunityMember(row)).length;
 
     return {
       name: community.name,
@@ -196,7 +355,8 @@ export const joinCommunityByCode = mutation({
       return { status: 'invalid_code' as const };
     }
 
-    // בדיקה אם כבר חבר
+    const mode = community.joinApprovalMode ?? 'automatic';
+
     const existing = await ctx.db
       .query('communityMembers')
       .withIndex('by_community_user', (q) =>
@@ -205,7 +365,49 @@ export const joinCommunityByCode = mutation({
       .unique();
 
     if (existing) {
-      return { status: 'already_member' as const, communityId: community._id };
+      const st = effectiveMemberStatus(existing.status);
+      if (st === 'active') {
+        return {
+          status: 'already_member' as const,
+          communityId: community._id,
+        };
+      }
+      if (st === 'pending') {
+        return {
+          status: 'pending_approval' as const,
+          communityId: community._id,
+        };
+      }
+      // left — allow re-request / re-join
+      const rowId = existing._id;
+      const basePatch = {
+        role: 'member' as const,
+        pinned: false,
+        notificationsEnabled: true,
+        joinedAt: Date.now(),
+      };
+      if (mode === 'automatic') {
+        await ctx.db.patch(rowId, { ...basePatch, status: 'active' });
+        return { status: 'joined' as const, communityId: community._id };
+      }
+      await ctx.db.patch(rowId, { ...basePatch, status: 'pending' });
+      return {
+        status: 'pending_approval' as const,
+        communityId: community._id,
+      };
+    }
+
+    if (mode === 'automatic') {
+      await ctx.db.insert('communityMembers', {
+        communityId: community._id,
+        userId: user._id,
+        role: 'member',
+        pinned: false,
+        notificationsEnabled: true,
+        joinedAt: Date.now(),
+        status: 'active',
+      });
+      return { status: 'joined' as const, communityId: community._id };
     }
 
     await ctx.db.insert('communityMembers', {
@@ -215,9 +417,12 @@ export const joinCommunityByCode = mutation({
       pinned: false,
       notificationsEnabled: true,
       joinedAt: Date.now(),
+      status: 'pending',
     });
-
-    return { status: 'joined' as const, communityId: community._id };
+    return {
+      status: 'pending_approval' as const,
+      communityId: community._id,
+    };
   },
 });
 
@@ -240,10 +445,37 @@ export const togglePinned = mutation({
       .unique();
 
     if (!membership) throw new Error('המשתמש אינו חבר בקהילה');
+    if (!isActiveCommunityMember(membership)) {
+      throw new Error('ההצטרפות ממתינה לאישור');
+    }
 
     const newPinned = !membership.pinned;
     await ctx.db.patch(membership._id, { pinned: newPinned });
     return newPinned;
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// סימון שהמשתמש נכנס למסך הקהילה (למעקב "אירועים חדשים" ברשימה)
+// ─────────────────────────────────────────────────────────────
+export const markCommunityViewed = mutation({
+  args: { communityId: v.id('communities') },
+  handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const membership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', userId)
+      )
+      .unique();
+
+    if (!membership || !isActiveCommunityMember(membership)) {
+      throw new Error('אין הרשאה');
+    }
+
+    await ctx.db.patch(membership._id, { lastViewedAt: Date.now() });
   },
 });
 
@@ -276,6 +508,7 @@ export const updateCommunity = mutation({
 
     if (
       !membership ||
+      !isActiveCommunityMember(membership) ||
       (membership.role !== 'owner' && membership.role !== 'admin')
     ) {
       throw new Error('אין הרשאה לעדכן את הקהילה');
@@ -296,6 +529,82 @@ export const updateCommunity = mutation({
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(communityId, patch);
     }
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// מצב אישור הצטרפות (owner / admin בלבד)
+// ─────────────────────────────────────────────────────────────
+export const updateCommunityJoinApprovalMode = mutation({
+  args: {
+    communityId: v.id('communities'),
+    joinApprovalMode: v.union(v.literal('manual'), v.literal('automatic')),
+  },
+  handler: async (ctx, { communityId, joinApprovalMode }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const community = await ctx.db.get(communityId);
+    if (!community) throw new Error('קהילה לא נמצאה');
+
+    await requireOwnerOrAdminActive(ctx, communityId, userId);
+
+    await ctx.db.patch(communityId, { joinApprovalMode });
+    return { success: true as const };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// אישור בקשת הצטרפות (owner / admin)
+// ─────────────────────────────────────────────────────────────
+export const approvePendingMember = mutation({
+  args: {
+    communityId: v.id('communities'),
+    memberId: v.id('communityMembers'),
+  },
+  handler: async (ctx, { communityId, memberId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    await requireOwnerOrAdminActive(ctx, communityId, userId);
+
+    const target = await ctx.db.get(memberId);
+    if (!target || target.communityId !== communityId) {
+      throw new Error('הבקשה לא נמצאה');
+    }
+    if (effectiveMemberStatus(target.status) !== 'pending') {
+      throw new Error('המשתמש אינו ממתין לאישור');
+    }
+
+    await ctx.db.patch(memberId, { status: 'active' });
+    return { success: true as const };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// דחיית בקשת הצטרפות (owner / admin)
+// ─────────────────────────────────────────────────────────────
+export const rejectPendingMember = mutation({
+  args: {
+    communityId: v.id('communities'),
+    memberId: v.id('communityMembers'),
+  },
+  handler: async (ctx, { communityId, memberId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    await requireOwnerOrAdminActive(ctx, communityId, userId);
+
+    const target = await ctx.db.get(memberId);
+    if (!target || target.communityId !== communityId) {
+      throw new Error('הבקשה לא נמצאה');
+    }
+    if (effectiveMemberStatus(target.status) !== 'pending') {
+      throw new Error('המשתמש אינו ממתין לאישור');
+    }
+
+    await ctx.db.delete(memberId);
+    return { success: true as const };
   },
 });
 
@@ -457,6 +766,9 @@ export const promoteMemberToAdmin = mutation({
     if (!targetMembership) {
       throw new Error('החבר אינו נמצא בקהילה זו');
     }
+    if (!isActiveCommunityMember(targetMembership)) {
+      throw new Error('לא ניתן לשנות תפקיד למשתמש הממתין לאישור');
+    }
     if (targetMembership.role === 'owner') {
       throw new Error('לא ניתן לשנות את תפקיד בעל הקהילה');
     }
@@ -502,6 +814,9 @@ export const demoteAdminToMember = mutation({
     if (!targetMembership) {
       throw new Error('החבר אינו נמצא בקהילה זו');
     }
+    if (!isActiveCommunityMember(targetMembership)) {
+      throw new Error('לא ניתן לשנות תפקיד למשתמש הממתין לאישור');
+    }
     if (targetMembership.role === 'owner') {
       throw new Error('לא ניתן לשנות את תפקיד בעל הקהילה');
     }
@@ -531,6 +846,9 @@ export const toggleNotifications = mutation({
       .unique();
 
     if (!membership) throw new Error('לא חבר בקהילה זו');
+    if (!isActiveCommunityMember(membership)) {
+      throw new Error('ההצטרפות ממתינה לאישור');
+    }
 
     const newValue = !membership.notificationsEnabled;
     await ctx.db.patch(membership._id, { notificationsEnabled: newValue });
@@ -555,27 +873,56 @@ export const getCommunityMembers = query({
       .withIndex('by_community', (q) => q.eq('communityId', communityId))
       .collect();
 
-    const activeMembers = memberships.filter((m) => m.status !== 'left');
+    const viewerMembership = memberships.find((m) => m.userId === userId);
+    if (!viewerMembership || !isActiveCommunityMember(viewerMembership)) {
+      return null;
+    }
+
+    const canManage =
+      viewerMembership.role === 'owner' || viewerMembership.role === 'admin';
+
+    const activeRows = memberships.filter((m) => isActiveCommunityMember(m));
+    const pendingRows = canManage
+      ? memberships.filter((m) => effectiveMemberStatus(m.status) === 'pending')
+      : [];
+
+    const mapMember = async (
+      m: (typeof memberships)[number]
+    ): Promise<{
+      membershipId: Id<'communityMembers'>;
+      userId: Id<'users'>;
+      role: 'owner' | 'admin' | 'member';
+      joinedAt: number;
+      fullName: string;
+      email: string;
+    }> => {
+      const user = await ctx.db.get(m.userId);
+      return {
+        membershipId: m._id,
+        userId: m.userId,
+        role: m.role,
+        joinedAt: m.joinedAt,
+        fullName: (user as { fullName?: string } | null)?.fullName ?? 'משתמש',
+        email: (user as { email?: string } | null)?.email ?? '',
+      };
+    };
 
     const membersWithInfo = await Promise.all(
-      activeMembers.map(async (m) => {
-        const user = await ctx.db.get(m.userId);
-        return {
-          userId: m.userId,
-          role: m.role as 'owner' | 'admin' | 'member',
-          joinedAt: m.joinedAt,
-          fullName: (user as { fullName?: string } | null)?.fullName ?? 'משתמש',
-          email: (user as { email?: string } | null)?.email ?? '',
-        };
-      })
+      activeRows.map((m) => mapMember(m))
+    );
+    const pendingWithInfo = await Promise.all(
+      pendingRows.map((m) => mapMember(m))
     );
 
     return {
       community: {
         name: community.name,
         inviteCode: community.inviteCode,
+        joinApprovalMode: community.joinApprovalMode ?? 'automatic',
       },
       members: membersWithInfo,
+      pendingMembers: pendingWithInfo,
+      canManage,
     };
   },
 });

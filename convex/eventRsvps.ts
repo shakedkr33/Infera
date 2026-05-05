@@ -3,6 +3,7 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import { isActiveCommunityMember } from './communityMemberUtils';
 
 async function getCommunityMembership(
   ctx: MutationCtx | QueryCtx,
@@ -43,7 +44,7 @@ export const upsertRsvp = mutation({
         event.communityId,
         userId
       );
-      if (!membership || membership.status === 'left') {
+      if (!isActiveCommunityMember(membership)) {
         throw new Error('אין הרשאה לעדכן אישור הגעה');
       }
     }
@@ -125,7 +126,7 @@ export const listByEvent = query({
         event.communityId,
         userId
       );
-      if (!membership || membership.status === 'left') {
+      if (!isActiveCommunityMember(membership)) {
         return [];
       }
     } else if (event.createdBy !== userId) {

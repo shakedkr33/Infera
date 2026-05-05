@@ -137,7 +137,7 @@ export default function TaskEditorScreen({
           title: draft.title.trim(),
           description: draft.notes || undefined,
           dueDate: resolveDueDate(),
-          spaceId,
+          spaceId: spaceId as Id<'spaces'>,
           // TODO: להוסיף assignedTo מ-AssigneesChips כשיחובר ל-Convex
         });
         router.back();

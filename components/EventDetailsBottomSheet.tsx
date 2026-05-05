@@ -12,6 +12,7 @@ import {
   Linking,
   Modal,
   PanResponder,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -19,9 +20,22 @@ import {
   Text,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import {
+  getOpenCommunityCalendarActionLabel,
+  isOpenCommunityCalendarActionVisible,
+  isOpenCommunityInformationalLabelVisible,
+} from '@/lib/openCommunityCalendarUi';
+import { getFlexDirection, getTextAlign } from '@/lib/rtl';
+
+/** Native RTL (iOS/Android) מפיל literal textAlign:'right' — ראה lib/rtl.ts */
+const HEB_TEXT_ALIGN = getTextAlign() ?? 'right';
+const HEB_ROW = getFlexDirection();
 
 const { height: screenHeight } = Dimensions.get('window');
 const SHEET_HEIGHT = screenHeight * 0.9;
@@ -97,6 +111,10 @@ export interface EventItem {
   recurringPattern?: string;
   reminders?: number[];
   canEdit?: boolean;
+  /** Convex community id when this row is a community (or saved community) event */
+  communityId?: string;
+  /** From listByDateRange / listCommunity… when known */
+  isSavedToMyCalendar?: boolean;
 }
 
 interface EventDetailsBottomSheetProps {
@@ -128,6 +146,7 @@ export function EventDetailsBottomSheet({
   onNavigate: _onNavigate,
 }: EventDetailsBottomSheetProps): React.JSX.Element | null {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [navPickerOpen, setNavPickerOpen] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
@@ -203,6 +222,12 @@ export function EventDetailsBottomSheet({
   const deleteEventMutation = useMutation(api.events.deleteEvent);
   const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
   const upsertRsvpMutation = useMutation(api.eventRsvps.upsertRsvp);
+  const addCommunityEventToMyCalendar = useMutation(
+    api.communityEventCalendar.addCommunityEventToMyCalendar
+  );
+  const removeCommunityEventFromMyCalendar = useMutation(
+    api.communityEventCalendar.removeCommunityEventFromMyCalendar
+  );
 
   const handleRsvp = useCallback(
     (status: 'yes' | 'no' | 'maybe') => {
@@ -213,10 +238,27 @@ export function EventDetailsBottomSheet({
     },
     [convexEventId, upsertRsvpMutation]
   );
+
   const eventDoc = useQuery(
     api.events.getById,
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
+
+  const handleOpenCalendarToggle = useCallback((): void => {
+    if (!convexEventId || eventDoc === undefined || eventDoc === null) return;
+    const isSaved = eventDoc.isSavedToMyCalendar === true;
+    const run = isSaved
+      ? removeCommunityEventFromMyCalendar
+      : addCommunityEventToMyCalendar;
+    run({ eventId: convexEventId }).catch(() =>
+      Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן')
+    );
+  }, [
+    convexEventId,
+    eventDoc,
+    addCommunityEventToMyCalendar,
+    removeCommunityEventFromMyCalendar,
+  ]);
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
     convexEventId ? { eventId: convexEventId } : 'skip'
@@ -228,6 +270,10 @@ export function EventDetailsBottomSheet({
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
 
   const permCommunityId = eventDoc?.communityId;
+  const communityRecord = useQuery(
+    api.communities.getById,
+    permCommunityId ? { communityId: permCommunityId } : 'skip'
+  );
   const communityMembersResult = useQuery(
     api.communities.getCommunityMembers,
     permCommunityId ? { communityId: permCommunityId } : 'skip'
@@ -264,6 +310,7 @@ export function EventDetailsBottomSheet({
           status: eventDoc.status,
           cancelledAt: eventDoc.cancelledAt,
           cancelReason: eventDoc.cancelReason,
+          isSavedToMyCalendar: eventDoc.isSavedToMyCalendar === true,
         }
       : event
         ? {
@@ -285,11 +332,12 @@ export function EventDetailsBottomSheet({
             requiresRsvp: false,
             startTime: undefined,
             allDay: event.allDay,
-            communityId: undefined,
+            communityId: event.communityId,
             createdBy: undefined,
             status: undefined,
             cancelledAt: undefined,
             cancelReason: undefined,
+            isSavedToMyCalendar: event.isSavedToMyCalendar === true,
           }
         : null;
 
@@ -427,8 +475,11 @@ export function EventDetailsBottomSheet({
   const yesCount = rsvpRows.filter((r) => r.status === 'yes').length;
   const maybeCount = rsvpRows.filter((r) => r.status === 'maybe').length;
   const noCount = rsvpRows.filter((r) => r.status === 'no').length;
+  const isOpenCommunityEvent =
+    Boolean(displayEvent?.communityId) && displayEvent?.requiresRsvp === false;
+
   const hasCommunityResponseSummary = Boolean(
-    displayEvent?.requiresRsvp || rsvpRows.length > 0
+    !isOpenCommunityEvent && (displayEvent?.requiresRsvp || rsvpRows.length > 0)
   );
   const hasManualParticipantNames =
     (displayEvent?.participants?.length ?? 0) > 0;
@@ -461,9 +512,7 @@ export function EventDetailsBottomSheet({
           displayEvent.status !== 'cancelled'
       )
     : Boolean(
-        convexEventId &&
-          isEventCreator &&
-          displayEvent?.status !== 'cancelled'
+        convexEventId && isEventCreator && displayEvent?.status !== 'cancelled'
       );
 
   const canDelete = Boolean(
@@ -471,9 +520,7 @@ export function EventDetailsBottomSheet({
       displayEvent?.status === 'cancelled' &&
       displayEvent.cancelledAt !== undefined &&
       Date.now() - (displayEvent.cancelledAt as number) < 24 * 60 * 60 * 1000 &&
-      (displayEvent.communityId
-        ? canManageCommunityEvent
-        : isEventCreator)
+      (displayEvent.communityId ? canManageCommunityEvent : isEventCreator)
   );
 
   /** Owner/admin/creator: no RSVP prompt on community events — mirror event/[id].tsx */
@@ -494,12 +541,63 @@ export function EventDetailsBottomSheet({
     !skipCommunityRsvpPrompt && displayEvent?.communityId
   );
 
+  const showMemberRsvpButtons = Boolean(
+    showMemberRsvp && !isOpenCommunityEvent
+  );
+
+  const openCommunityCalendarInfoReady =
+    !displayEvent?.communityId ||
+    (communityRecord !== undefined && communityMembersResult !== undefined);
+
+  const viewerIsActiveCommunityMemberForCalendar =
+    communityMembersResult !== undefined && communityMembersResult !== null;
+
+  /** Personal calendar toggle — same rules as community flyer; not gated on RSVP/banner/skip. */
+  const showOpenCalendarButton = Boolean(
+    openCommunityCalendarInfoReady &&
+      isOpenCommunityCalendarActionVisible({
+        event: {
+          communityId: displayEvent?.communityId ?? null,
+          requiresRsvp: displayEvent?.requiresRsvp,
+          status: displayEvent?.status,
+        },
+        hasValidConvexEventId: Boolean(convexEventId),
+        communityArchived: communityRecord?.archived === true,
+        viewerIsActiveMember: viewerIsActiveCommunityMemberForCalendar,
+      })
+  );
+
+  /** Event mode label — all active members including creator/admin (not gated on RSVP skip). */
+  const showOpenCommunityLabel = Boolean(
+    openCommunityCalendarInfoReady &&
+      displayEvent &&
+      isOpenCommunityInformationalLabelVisible({
+        event: {
+          communityId: displayEvent.communityId ?? null,
+          requiresRsvp: displayEvent.requiresRsvp,
+          status: displayEvent.status,
+        },
+        communityArchived: communityRecord?.archived === true,
+        viewerIsActiveMember: viewerIsActiveCommunityMemberForCalendar,
+      })
+  );
+
   const showRsvpUnifiedCard = Boolean(
     convexEventId &&
-      (showMemberRsvp ||
+      (showMemberRsvpButtons ||
         hasCommunityResponseSummary ||
         hasManualParticipantNames)
   );
+
+  /**
+   * Footer state must track Convex `eventDoc` when loaded — avoids mismatched
+   * Pressable vs Text styles during query refresh (white-on-white) and keeps
+   * label + colors in sync after add/remove mutations.
+   */
+  const openCalendarFooterSaved =
+    convexEventId && eventDoc !== undefined && eventDoc !== null
+      ? eventDoc.isSavedToMyCalendar === true
+      : displayEvent?.isSavedToMyCalendar === true;
 
   return (
     <Modal
@@ -527,6 +625,28 @@ export function EventDetailsBottomSheet({
           <View style={styles.handle} />
         </View>
 
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.sheetCloseBar,
+            { paddingLeft: insets.left + 14, paddingRight: 14 },
+          ]}
+        >
+          <Pressable
+            accessibilityLabel="סגירת פרטי האירוע"
+            accessibilityRole="button"
+            accessible={true}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            onPress={handleRequestClose}
+            style={({ pressed }) => [
+              styles.sheetCloseHit,
+              pressed && styles.sheetCloseHitPressed,
+            ]}
+          >
+            <MaterialIcons color="#64748b" name="close" size={24} />
+          </Pressable>
+        </View>
+
         {isLoading ? (
           <View style={styles.loadingState}>
             <ActivityIndicator color="#36a9e2" size="large" />
@@ -537,7 +657,7 @@ export function EventDetailsBottomSheet({
             <Text style={styles.emptyText}>אירוע לא נמצא</Text>
           </View>
         ) : (
-          <>
+          <View style={styles.sheetMainColumn}>
             <ScrollView
               contentContainerStyle={styles.scrollContent}
               keyboardShouldPersistTaps="always"
@@ -580,37 +700,48 @@ export function EventDetailsBottomSheet({
                 </View>
 
                 {hasLocation ? (
-                  <View style={styles.locationRow}>
-                    <View style={styles.locationTextWrap}>
-                      <MaterialIcons
-                        color="#94a3b8"
-                        name="location-on"
-                        size={17}
-                      />
-                      <Text numberOfLines={1} style={styles.locationText}>
-                        {displayEvent.location}
-                      </Text>
+                  <View style={styles.locationRowLtrShell}>
+                    <View style={styles.locationRow}>
+                      <Pressable
+                        accessibilityLabel={`נווט אל ${displayEvent.location}`}
+                        accessibilityRole="button"
+                        accessible={true}
+                        onPress={handleNavigate}
+                        style={styles.navigateBtn}
+                      >
+                        <MaterialIcons color="#fff" name="near-me" size={14} />
+                        <Text style={styles.navigateBtnText}>נווט</Text>
+                      </Pressable>
+                      <View style={styles.locationTextBlock}>
+                        <MaterialIcons
+                          color="#94a3b8"
+                          name="location-on"
+                          size={17}
+                        />
+                        <Text numberOfLines={1} style={styles.locationText}>
+                          {displayEvent.location}
+                        </Text>
+                      </View>
                     </View>
-                    <Pressable
-                      accessibilityLabel={`נווט אל ${displayEvent.location}`}
-                      accessibilityRole="button"
-                      accessible={true}
-                      onPress={handleNavigate}
-                      style={styles.navigateBtn}
-                    >
-                      <MaterialIcons color="#fff" name="near-me" size={14} />
-                      <Text style={styles.navigateBtnText}>נווט</Text>
-                    </Pressable>
                   </View>
                 ) : null}
 
-                <View style={styles.quickActionsRow}>
+                {showOpenCommunityLabel ? (
+                  <View style={styles.openCommunityHeroInfo}>
+                    <MaterialIcons color="#64748b" name="groups" size={18} />
+                    <Text style={styles.openCommunityHeroInfoText}>
+                      פתוח לחברי הקהילה
+                    </Text>
+                  </View>
+                ) : null}
+
+                <View style={styles.quickActionsLtrRow}>
                   <QuickAction
-                    color="#36a9e2"
-                    disabled={!canEdit}
-                    icon="edit"
-                    label="עריכה"
-                    onPress={handleEdit}
+                    color="#dc2626"
+                    disabled={!canCancel}
+                    icon="event-busy"
+                    label="ביטול"
+                    onPress={handleCancel}
                   />
                   <QuickAction
                     color="#2563eb"
@@ -620,11 +751,11 @@ export function EventDetailsBottomSheet({
                     onPress={handleShare}
                   />
                   <QuickAction
-                    color="#dc2626"
-                    disabled={!canCancel}
-                    icon="event-busy"
-                    label="ביטול"
-                    onPress={handleCancel}
+                    color="#36a9e2"
+                    disabled={!canEdit}
+                    icon="edit"
+                    label="עריכה"
+                    onPress={handleEdit}
                   />
                 </View>
 
@@ -659,7 +790,7 @@ export function EventDetailsBottomSheet({
 
               {showRsvpUnifiedCard ? (
                 <View style={[styles.sectionCard, styles.rsvpMemberCard]}>
-                  {showMemberRsvp ? (
+                  {showMemberRsvpButtons ? (
                     <>
                       <Text style={styles.rsvpMemberTitle}>האם תשתתף/י?</Text>
                       <View style={styles.rsvpMemberButtonRow}>
@@ -756,12 +887,14 @@ export function EventDetailsBottomSheet({
                         </Text>
                       ) : currentRsvpStatus === 'none' &&
                         displayEvent.status !== 'cancelled' ? (
-                        <Text style={styles.rsvpMemberHint}>בחר/י את תגובתך</Text>
+                        <Text style={styles.rsvpMemberHint}>
+                          בחר/י את תגובתך
+                        </Text>
                       ) : null}
                     </>
                   ) : null}
 
-                  {showMemberRsvp &&
+                  {showMemberRsvpButtons &&
                   (hasCommunityResponseSummary || hasManualParticipantNames) ? (
                     <View style={styles.rsvpUnifiedDivider} />
                   ) : null}
@@ -791,7 +924,9 @@ export function EventDetailsBottomSheet({
                           size={22}
                         />
                       </View>
-                      <Text style={styles.rsvpCommunitySummaryViewHint}>צפייה</Text>
+                      <Text style={styles.rsvpCommunitySummaryViewHint}>
+                        צפייה
+                      </Text>
                     </Pressable>
                   ) : null}
 
@@ -800,7 +935,7 @@ export function EventDetailsBottomSheet({
                   ) : null}
 
                   {!hasCommunityResponseSummary &&
-                  showMemberRsvp &&
+                  showMemberRsvpButtons &&
                   hasManualParticipantNames ? (
                     <View style={styles.rsvpUnifiedDivider} />
                   ) : null}
@@ -813,7 +948,9 @@ export function EventDetailsBottomSheet({
                       <View style={styles.participantsWrap}>
                         {displayEvent.participants.map((name) => (
                           <View key={name} style={styles.participantPill}>
-                            <Text style={styles.participantPillText}>{name}</Text>
+                            <Text style={styles.participantPillText}>
+                              {name}
+                            </Text>
                           </View>
                         ))}
                       </View>
@@ -919,21 +1056,60 @@ export function EventDetailsBottomSheet({
               ) : null}
             </ScrollView>
 
-            <View style={styles.bottomButtons}>
-              <Pressable
-                accessibilityLabel="סגירה"
-                accessibilityRole="button"
-                accessible={true}
-                onPress={handleRequestClose}
-                style={styles.closeBtn}
-              >
-                <Text style={styles.closeBtnText}>סגירה</Text>
-              </Pressable>
-            </View>
-          </>
+            <SafeAreaView edges={['bottom']} style={styles.sheetFooterSafe}>
+              {showOpenCalendarButton ? (
+                <View style={styles.openCalendarFooter}>
+                  <Pressable
+                    accessibilityHint="מוסיף או מסיר את האירוע מהיומן האישי שלך"
+                    accessibilityLabel={getOpenCommunityCalendarActionLabel(
+                      openCalendarFooterSaved
+                    )}
+                    accessibilityRole="button"
+                    accessible={true}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    onPress={handleOpenCalendarToggle}
+                    style={({ pressed }) => ({
+                      alignSelf: 'stretch' as const,
+                      opacity: pressed ? 0.9 : 1,
+                    })}
+                  >
+                    <View
+                      style={{
+                        alignSelf: 'stretch',
+                        minHeight: 48,
+                        paddingVertical: 14,
+                        paddingHorizontal: 16,
+                        borderRadius: 14,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: openCalendarFooterSaved
+                          ? '#ffffff'
+                          : '#36a9e2',
+                        borderWidth: openCalendarFooterSaved ? 2 : 0,
+                        borderColor: '#7dd3fc',
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 16,
+                          fontWeight: '700',
+                          textAlign: 'center',
+                          color: openCalendarFooterSaved
+                            ? '#0369a1'
+                            : '#ffffff',
+                        }}
+                      >
+                        {getOpenCommunityCalendarActionLabel(
+                          openCalendarFooterSaved
+                        )}
+                      </Text>
+                    </View>
+                  </Pressable>
+                </View>
+              ) : null}
+            </SafeAreaView>
+          </View>
         )}
-
-        <SafeAreaView edges={['bottom']} />
       </Animated.View>
 
       <Modal
@@ -1053,7 +1229,9 @@ export function EventDetailsBottomSheet({
             contentContainerStyle={styles.rsvpDetailScrollContent}
           >
             <View style={styles.rsvpDetailGroup}>
-              <Text style={styles.rsvpDetailGroupTitle}>{`כן (${yesCount})`}</Text>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`כן (${yesCount})`}</Text>
               {rsvpRows.filter((r) => r.status === 'yes').length === 0 ? (
                 <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
               ) : (
@@ -1067,7 +1245,9 @@ export function EventDetailsBottomSheet({
               )}
             </View>
             <View style={styles.rsvpDetailGroup}>
-              <Text style={styles.rsvpDetailGroupTitle}>{`אולי (${maybeCount})`}</Text>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`אולי (${maybeCount})`}</Text>
               {rsvpRows.filter((r) => r.status === 'maybe').length === 0 ? (
                 <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
               ) : (
@@ -1081,7 +1261,9 @@ export function EventDetailsBottomSheet({
               )}
             </View>
             <View style={styles.rsvpDetailGroup}>
-              <Text style={styles.rsvpDetailGroupTitle}>{`לא (${noCount})`}</Text>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`לא (${noCount})`}</Text>
               {rsvpRows.filter((r) => r.status === 'no').length === 0 ? (
                 <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
               ) : (
@@ -1255,6 +1437,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
+    ...Platform.select({
+      android: { direction: 'rtl' as const },
+      default: {},
+    }),
   },
   handle: {
     width: 40,
@@ -1268,7 +1454,31 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 32,
     marginTop: 10,
-    marginBottom: 6,
+    marginBottom: 2,
+  },
+  /**
+   * LTR קבוע — מאותת לקצה שמאלי פיזי גם כשהגיליון באנדרואיד ב־`direction: 'rtl'`.
+   * ללא position absolute — נשען על padding + שורה כדי שלא יגלוש מהמסך.
+   */
+  sheetCloseBar: {
+    width: '100%',
+    minHeight: 48,
+    direction: 'ltr',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  sheetCloseHit: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(148, 163, 184, 0.14)',
+  },
+  sheetCloseHitPressed: {
+    opacity: 0.88,
+    backgroundColor: 'rgba(148, 163, 184, 0.22)',
   },
   loadingState: {
     flex: 1,
@@ -1283,6 +1493,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
+  sheetMainColumn: {
+    flex: 1,
+  },
   scrollArea: {
     flex: 1,
     paddingHorizontal: 18,
@@ -1290,6 +1503,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 14,
     gap: 8,
+    alignItems: 'stretch',
   },
   cancelledBadge: {
     alignSelf: 'stretch',
@@ -1303,12 +1517,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: '#991b1b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   cancelReason: {
     fontSize: 13,
     color: '#7f1d1d',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   heroCard: {
     backgroundColor: '#f8fafc',
@@ -1322,17 +1536,17 @@ const styles = StyleSheet.create({
     fontSize: 23,
     fontWeight: '800',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   groupLabel: {
     fontSize: 13,
     color: '#64748b',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     marginTop: -3,
   },
   infoRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 7,
   },
@@ -1343,35 +1557,46 @@ const styles = StyleSheet.create({
   dateLine: {
     fontSize: 14,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '600',
   },
   timeText: {
     fontSize: 15,
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '800',
   },
   infoText: {
     fontSize: 15,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     flex: 1,
   },
+  /** מנע כפל RTL בתוך Modal — שומר נווט משמאל וטקסט מימין */
+  locationRowLtrShell: {
+    alignSelf: 'stretch',
+    width: '100%',
+    direction: 'ltr',
+  },
+  /** נווט משמאל, טקסט + אייקון מיקום מימין (אייקון בקצה ימין) */
   locationRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 10,
+    width: '100%',
   },
-  locationTextWrap: {
+  /** בתוך LTR: row-reverse + אייקון ואז טקסט → אייקון בקצה ימין, טקסט נצמד אליו */
+  locationTextBlock: {
+    flex: 1,
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 7,
-    flex: 1,
+    minWidth: 0,
   },
   locationText: {
     flex: 1,
+    minWidth: 0,
     fontSize: 14,
     color: '#334155',
     textAlign: 'right',
@@ -1382,7 +1607,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 4,
     minHeight: 36,
@@ -1392,14 +1617,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 13,
   },
-  quickActionsRow: {
-    flexDirection: 'row-reverse',
+  /** LTR קבוע: ביטול משמאל · שיתוף במרכז · עריכה מימין (לא תלוי בהיפוך iOS) */
+  quickActionsLtrRow: {
+    direction: 'ltr',
+    width: '100%',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingTop: 2,
   },
   deleteEventBtn: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
@@ -1415,6 +1643,7 @@ const styles = StyleSheet.create({
     color: '#dc2626',
     fontSize: 14,
     fontWeight: '600',
+    textAlign: HEB_TEXT_ALIGN,
   },
   quickAction: {
     alignItems: 'center',
@@ -1437,6 +1666,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#334155',
     fontWeight: '700',
+    textAlign: 'center',
   },
   disabledText: {
     color: '#cbd5e1',
@@ -1450,15 +1680,73 @@ const styles = StyleSheet.create({
   notesLabel: {
     fontSize: 12,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '800',
   },
   notesText: {
     fontSize: 14,
     color: '#334155',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     lineHeight: 20,
     fontWeight: '600',
+  },
+  openCommunityHeroInfo: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 4,
+  },
+  openCommunityHeroInfoText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: HEB_TEXT_ALIGN,
+  },
+  sheetFooterSafe: {
+    backgroundColor: '#fff',
+  },
+  openCalendarFooter: {
+    paddingHorizontal: 24,
+    paddingTop: 14,
+    paddingBottom: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e5e7eb',
+    backgroundColor: '#fff',
+  },
+  openCalendarFooterBtnPrimary: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#36a9e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openCalendarFooterBtnTextPrimary: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  openCalendarFooterBtnSecondary: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#7dd3fc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openCalendarFooterBtnTextSecondary: {
+    color: '#0369a1',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   rsvpMemberCard: {
     shadowColor: '#000',
@@ -1472,7 +1760,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpMemberButtonRow: {
     flexDirection: 'row-reverse',
@@ -1526,7 +1814,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '600',
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpMemberBtnContent: {
     flexDirection: 'row-reverse',
@@ -1541,7 +1829,7 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: '600',
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpUnifiedDivider: {
     height: StyleSheet.hairlineWidth * 2,
@@ -1563,7 +1851,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     marginBottom: 4,
   },
   rsvpCommunitySummaryRow: {
@@ -1576,13 +1864,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#334155',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpCommunitySummaryViewHint: {
     fontSize: 12,
     fontWeight: '600',
     color: '#36a9e2',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     marginTop: 6,
   },
   rsvpManualParticipantsBlock: {
@@ -1592,7 +1880,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpDetailModalBackdrop: {
     flex: 1,
@@ -1619,7 +1907,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '800',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpDetailScroll: {
     flexGrow: 0,
@@ -1635,20 +1923,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpDetailName: {
     fontSize: 14,
     fontWeight: '600',
     color: '#475569',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     paddingVertical: 2,
   },
   rsvpDetailEmpty: {
     fontSize: 13,
     fontWeight: '600',
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpDetailCloseBtn: {
     minHeight: 44,
@@ -1666,7 +1954,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   sectionCard: {
     backgroundColor: '#f8fafc',
@@ -1677,7 +1965,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   scheduleRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 8,
   },
@@ -1685,14 +1973,14 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '600',
   },
   reminderRows: {
     gap: 6,
   },
   reminderDisplayRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 8,
     paddingVertical: 3,
@@ -1701,14 +1989,14 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#334155',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '800',
   },
   compactList: {
     gap: 8,
   },
   detailListRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 8,
   },
@@ -1720,12 +2008,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#111827',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   mutedText: {
     fontSize: 13,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   showMoreBtn: {
     alignSelf: 'flex-end',
@@ -1795,24 +2083,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  bottomButtons: {
-    paddingHorizontal: 24,
-    paddingBottom: 18,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
-  },
-  closeBtn: {
-    alignSelf: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 18,
-    minHeight: 36,
-  },
-  closeBtnText: {
-    color: '#475569',
-    fontSize: 15,
-    fontWeight: '800',
-  },
   navPickerBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.28)',
@@ -1831,7 +2101,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     marginBottom: 2,
   },
   navOption: {
@@ -1852,7 +2122,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#334155',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   navCancel: {
     minHeight: 44,

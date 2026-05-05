@@ -252,8 +252,14 @@ export default function EditEventScreen(): React.JSX.Element {
   ]);
 
   const [rsvpRequired, setRsvpRequired] = useState(
-    event?.requiresRsvp ?? false
+    event?.requiresRsvp !== false
   );
+
+  useEffect(() => {
+    if (event) {
+      setRsvpRequired(event.requiresRsvp !== false);
+    }
+  }, [event?._id, event?.requiresRsvp]);
 
   const handleSave = useCallback(
     async (data: EventData): Promise<string> => {

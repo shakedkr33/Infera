@@ -53,11 +53,11 @@ export default function TasksScreen() {
   // ── Convex: tasks queries ────────────────────────────────────────────────
   const convexTasks = useQuery(
     api.tasks.listBySpace,
-    spaceId ? { spaceId } : 'skip'
+    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
   );
   const convexUndated = useQuery(
     api.tasks.listUndated,
-    spaceId ? { spaceId } : 'skip'
+    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
   );
 
   // ממיר נתוני Convex לפורמט Task המקומי

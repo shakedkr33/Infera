@@ -23,6 +23,14 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
+import {
+  getOpenCommunityCalendarActionLabel,
+  isOpenCommunityCalendarActionVisible,
+} from '@/lib/openCommunityCalendarUi';
+import { getFlexDirection, getTextAlign } from '@/lib/rtl';
+
+const HEB_TEXT_ALIGN = getTextAlign() ?? 'right';
+const HEB_ROW = getFlexDirection();
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -182,6 +190,12 @@ export default function EventDetailScreen() {
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
 
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
+  const addCommunityEventToMyCalendar = useMutation(
+    api.communityEventCalendar.addCommunityEventToMyCalendar
+  );
+  const removeCommunityEventFromMyCalendar = useMutation(
+    api.communityEventCalendar.removeCommunityEventFromMyCalendar
+  );
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const removeEventTask = useMutation(api.eventTasks.remove);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
@@ -195,6 +209,11 @@ export default function EventDetailScreen() {
 
   const communityMembersData = useQuery(
     api.communities.getCommunityMembers,
+    event?.communityId ? { communityId: event.communityId } : 'skip'
+  );
+
+  const communityRecord = useQuery(
+    api.communities.getById,
     event?.communityId ? { communityId: event.communityId } : 'skip'
   );
 
@@ -232,6 +251,22 @@ export default function EventDetailScreen() {
     },
     [eventId, upsertRsvp]
   );
+
+  const handleOpenCalendarToggle = useCallback(() => {
+    if (!eventId || !event) return;
+    const isSaved = event.isSavedToMyCalendar === true;
+    const run = isSaved
+      ? removeCommunityEventFromMyCalendar
+      : addCommunityEventToMyCalendar;
+    run({ eventId }).catch(() =>
+      Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן')
+    );
+  }, [
+    event,
+    eventId,
+    addCommunityEventToMyCalendar,
+    removeCommunityEventFromMyCalendar,
+  ]);
 
   const handleCancelEvent = useCallback(async () => {
     if (!event || !eventId) return;
@@ -433,8 +468,7 @@ export default function EventDetailScreen() {
     Boolean(event.communityId) && (isCreator || isCommunityOwnerOrAdmin);
   /** Owner/admin/creator: no RSVP prompt on community events */
   const skipCommunityRsvpPrompt =
-    isCreator ||
-    (Boolean(event.communityId) && isCommunityOwnerOrAdmin);
+    isCreator || (Boolean(event.communityId) && isCommunityOwnerOrAdmin);
   const canOpenEventOverflowMenu = event.communityId
     ? canManageCommunityEvent
     : isCreator;
@@ -465,6 +499,26 @@ export default function EventDetailScreen() {
       ? formatRecurrenceLabel(event.recurringPattern)
       : 'ללא';
   const reminderLabels = getReminderLabels(event);
+
+  const openCommunityCalendarInfoReady =
+    !event.communityId ||
+    (communityRecord !== undefined && communityMembersData !== undefined);
+
+  const viewerIsActiveCommunityMemberForCalendar =
+    communityMembersData !== undefined && communityMembersData !== null;
+
+  const showOpenCommunityCalendarAction =
+    openCommunityCalendarInfoReady &&
+    isOpenCommunityCalendarActionVisible({
+      event: {
+        communityId: event.communityId ?? null,
+        requiresRsvp: event.requiresRsvp,
+        status: event.status,
+      },
+      hasValidConvexEventId: true,
+      communityArchived: communityRecord?.archived === true,
+      viewerIsActiveMember: viewerIsActiveCommunityMemberForCalendar,
+    });
 
   // Local variable to satisfy TypeScript in closures (event.onlineUrl may be undefined)
   const onlineUrl = event.onlineUrl;
@@ -684,69 +738,90 @@ export default function EventDetailScreen() {
         ) : null}
 
         {/* ── Section 2: RSVP / passive state */}
-        {
-          !skipCommunityRsvpPrompt && event.requiresRsvp === true ? (
-            /* Case A: requiresRsvp + participant */
-            <View
-              style={[
-                styles.card,
-                styles.rsvpCardElevated,
-                event.status === 'cancelled' && styles.rsvpDisabled,
+        {!skipCommunityRsvpPrompt && event.requiresRsvp !== false ? (
+          /* RSVP required (true or legacy undefined) */
+          <View
+            style={[
+              styles.card,
+              styles.rsvpCardElevated,
+              event.status === 'cancelled' && styles.rsvpDisabled,
+            ]}
+          >
+            <Text style={styles.rsvpTitle}>האם תשתתף?</Text>
+            <View style={styles.rsvpRow}>
+              {RSVP_OPTIONS.map((opt) => {
+                const isActive = currentStatus === opt.status;
+                const rsvpDisabled = event.status === 'cancelled';
+                return (
+                  <Pressable
+                    key={opt.status}
+                    disabled={rsvpDisabled}
+                    style={({ pressed }) => [
+                      styles.rsvpBtn,
+                      {
+                        backgroundColor: isActive ? opt.activeColor : '#f3f4f6',
+                        opacity: rsvpDisabled ? 0.45 : pressed ? 0.88 : 1,
+                      },
+                    ]}
+                    onPress={() => handleRsvp(opt.status)}
+                    accessible
+                    accessibilityRole="button"
+                    accessibilityLabel={opt.label}
+                    accessibilityState={{
+                      selected: isActive,
+                      disabled: rsvpDisabled,
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.rsvpBtnText,
+                        isActive && styles.rsvpBtnTextActive,
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
+
+        {showOpenCommunityCalendarAction ? (
+          <View style={styles.card}>
+            <View style={styles.passiveRow}>
+              <Ionicons name="people-outline" size={18} color="#94a3b8" />
+              <Text style={styles.passiveText}>פתוח לחברי הקהילה</Text>
+            </View>
+            <Pressable
+              accessibilityHint="מוסיף או מסיר את האירוע מהיומן האישי שלך"
+              accessibilityLabel={getOpenCommunityCalendarActionLabel(
+                event.isSavedToMyCalendar === true
+              )}
+              accessibilityRole="button"
+              accessible={true}
+              onPress={handleOpenCalendarToggle}
+              style={({ pressed }) => [
+                event.isSavedToMyCalendar === true
+                  ? styles.openCalendarBtnSecondary
+                  : styles.openCalendarBtn,
+                pressed && styles.openCalendarBtnPressed,
               ]}
             >
-              <Text style={styles.rsvpTitle}>האם תשתתף?</Text>
-              <View style={styles.rsvpRow}>
-                {RSVP_OPTIONS.map((opt) => {
-                  const isActive = currentStatus === opt.status;
-                  const rsvpDisabled = event.status === 'cancelled';
-                  return (
-                    <Pressable
-                      key={opt.status}
-                      disabled={rsvpDisabled}
-                      style={({ pressed }) => [
-                        styles.rsvpBtn,
-                        {
-                          backgroundColor: isActive
-                            ? opt.activeColor
-                            : '#f3f4f6',
-                          opacity: rsvpDisabled ? 0.45 : pressed ? 0.88 : 1,
-                        },
-                      ]}
-                      onPress={() => handleRsvp(opt.status)}
-                      accessible
-                      accessibilityRole="button"
-                      accessibilityLabel={opt.label}
-                      accessibilityState={{
-                        selected: isActive,
-                        disabled: rsvpDisabled,
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.rsvpBtnText,
-                          isActive && styles.rsvpBtnTextActive,
-                        ]}
-                      >
-                        {opt.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          ) : !skipCommunityRsvpPrompt ? (
-            /* Case B: no requiresRsvp + participant */
-            <View style={styles.card}>
-              <View style={styles.passiveRow}>
-                <Ionicons name="calendar-outline" size={18} color={PRIMARY} />
-                <Text style={styles.passiveText}>
-                  אירוע זה אינו דורש אישור הגעה
-                </Text>
-              </View>
-              {/* TODO: add "הוסף ליומן" action when calendar integration is ready */}
-            </View>
-          ) : null /* Case C: creator — no RSVP section */
-        }
+              <Text
+                style={
+                  event.isSavedToMyCalendar === true
+                    ? styles.openCalendarBtnTextSecondary
+                    : styles.openCalendarBtnText
+                }
+              >
+                {getOpenCommunityCalendarActionLabel(
+                  event.isSavedToMyCalendar === true
+                )}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {/* ── Section 3: משימות לאירוע */}
         {eventTasks !== undefined && canSeeTasksSection && (
@@ -1138,7 +1213,14 @@ export default function EventDetailScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f6f7f8' },
+  container: {
+    flex: 1,
+    backgroundColor: '#f6f7f8',
+    ...Platform.select({
+      android: { direction: 'rtl' as const },
+      default: {},
+    }),
+  },
   centered: {
     flex: 1,
     alignItems: 'center',
@@ -1165,7 +1247,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   headerIconBtn: {
     width: 36,
@@ -1184,6 +1266,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     gap: 14,
+    alignItems: 'stretch',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
@@ -1191,23 +1274,23 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
 
-  // ── Detail rows
+  // ── Detail rows (אייקון בימין, טקסט מיושר ימינה — row-reverse עקבי באנדרואיד / iOS)
   detailRow: {
-    flexDirection: 'row',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 10,
-    justifyContent: 'flex-end',
+    width: '100%',
   },
   detailText: {
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     flex: 1,
   },
   linkText: {
     fontSize: 14,
     color: PRIMARY,
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     flex: 1,
   },
   separator: {
@@ -1217,32 +1300,33 @@ const styles = StyleSheet.create({
   descriptionText: {
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     lineHeight: 22,
   },
   descriptionLabel: {
     fontSize: 15,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   scheduleRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 10,
+    width: '100%',
   },
   scheduleText: {
     flex: 1,
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '600',
   },
   reminderRows: {
     gap: 8,
   },
   reminderDisplayRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#e8f5fd',
@@ -1254,7 +1338,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: PRIMARY,
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '600',
   },
 
@@ -1263,7 +1347,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   attachmentRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 10,
     borderRadius: 12,
@@ -1279,12 +1363,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   attachmentMeta: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
 
   // ── RSVP
@@ -1296,7 +1380,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   rsvpRow: {
     flexDirection: 'row',
@@ -1329,21 +1413,21 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   cancelledBannerRow: {
-    flexDirection: 'row',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 6,
-    justifyContent: 'flex-end',
+    width: '100%',
   },
   cancelledBannerTitle: {
     fontSize: 15,
     fontWeight: '700',
     color: '#dc2626',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   cancelledBannerReason: {
     fontSize: 13,
     color: '#dc2626',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
 
   // ── Cancel dialog
@@ -1360,14 +1444,14 @@ const styles = StyleSheet.create({
   cancelDialogTitle: {
     fontSize: 18,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     color: '#111827',
   },
   cancelDialogBody: {
     marginTop: 8,
     fontSize: 14,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   cancelDialogInput: {
     marginTop: 16,
@@ -1418,8 +1502,43 @@ const styles = StyleSheet.create({
   passiveText: {
     fontSize: 14,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     flex: 1,
+  },
+  openCalendarBtn: {
+    marginTop: 14,
+    backgroundColor: PRIMARY,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  openCalendarBtnSecondary: {
+    marginTop: 14,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderWidth: 2,
+    borderColor: '#7dd3fc',
+  },
+  openCalendarBtnPressed: {
+    opacity: 0.9,
+  },
+  openCalendarBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  openCalendarBtnTextSecondary: {
+    color: '#0369a1',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 
   // ── Participants
@@ -1427,7 +1546,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   pillsRow: {
     flexDirection: 'row',
@@ -1502,12 +1621,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   taskVisibilityHelper: {
     fontSize: 12,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   taskVisibilityToggleTouch: {
     minWidth: 52,
@@ -1558,24 +1677,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   taskAssignedLabel: {
     fontSize: 12,
     color: PRIMARY,
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   taskAssignedOtherLabel: {
     fontSize: 12,
     color: '#6b7280',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   taskUnassignedLabel: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   taskAssignmentAction: {
     minHeight: 44,
@@ -1640,6 +1759,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f3f4f6',
   },
-  popoverLabel: { fontSize: 15, color: '#374151', textAlign: 'right', flex: 1 },
+  popoverLabel: {
+    fontSize: 15,
+    color: '#374151',
+    textAlign: HEB_TEXT_ALIGN,
+    flex: 1,
+  },
   popoverDanger: { color: '#ef4444' },
 });

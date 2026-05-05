@@ -376,6 +376,9 @@ export default function EventScreen({
   const hasMultipleAssignees =
     new Set(event.tasks.map((t) => t.assigneeId).filter(Boolean)).size > 1;
   const isCommunityEvent = context === 'community';
+  const openFamilyProfileSetup = useCallback(() => {
+    router.push('/(authenticated)/family-profile-setup');
+  }, []);
   const shouldShowRecurrence = !isCommunityEvent;
   const shouldShowReminders = true;
   const taskVisibilityOffHelperText = isCommunityEvent
@@ -604,6 +607,9 @@ export default function EventScreen({
 
                     updateEvent(patch);
                   }}
+                  onConfigureFamilyProfile={
+                    isCommunityEvent ? undefined : openFamilyProfileSetup
+                  }
                 />
               ) : null}
 
@@ -626,7 +632,7 @@ export default function EventScreen({
                 <View style={s.rsvpSection}>
                   <View style={s.rsvpHeaderRow}>
                     <View style={s.rsvpTextBlock}>
-                      <Text style={s.rsvpTitle}>אישור הגעה</Text>
+                      <Text style={s.rsvpTitle}>נדרש אישור הגעה</Text>
                       <Text style={s.rsvpDescription}>
                         לבקש מחברי הקהילה לאשר הגעה לאירוע?
                       </Text>

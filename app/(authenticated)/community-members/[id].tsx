@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 import { useMutation, useQuery } from 'convex/react';
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -32,6 +32,7 @@ const ROLE_LABELS: Record<'owner' | 'admin' | 'member', string> = {
 // ─── Member Row ───────────────────────────────────────────────────────────────
 
 interface MemberInfo {
+  membershipId: Id<'communityMembers'>;
   userId: Id<'users'>;
   role: 'owner' | 'admin' | 'member';
   joinedAt: number;
@@ -134,8 +135,14 @@ export default function CommunityMembersScreen() {
 
   const leaveCommunity = useMutation(api.communities.leaveCommunity);
   const removeMember = useMutation(api.communities.removeMember);
-  const promoteMemberToAdmin = useMutation(api.communities.promoteMemberToAdmin);
+  const promoteMemberToAdmin = useMutation(
+    api.communities.promoteMemberToAdmin
+  );
   const demoteAdminToMember = useMutation(api.communities.demoteAdminToMember);
+  const approvePendingMember = useMutation(
+    api.communities.approvePendingMember
+  );
+  const rejectPendingMember = useMutation(api.communities.rejectPendingMember);
 
   const communityId = id as Id<'communities'>;
 
@@ -152,7 +159,54 @@ export default function CommunityMembersScreen() {
     ) ??
       false);
   const canInvite = isOwner || isAdmin;
+  const canManage = data?.canManage ?? false;
+  const pendingMembers = data?.pendingMembers ?? [];
   const [inviteCodeOpen, setInviteCodeOpen] = useState(false);
+
+  const handleApprovePending = (member: MemberInfo) => {
+    Alert.alert('אישור הצטרפות', `לאשר את ${member.fullName} לקהילה?`, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'אישור',
+        onPress: async () => {
+          try {
+            await approvePendingMember({
+              communityId,
+              memberId: member.membershipId,
+            });
+          } catch (err) {
+            Alert.alert(
+              'שגיאה',
+              err instanceof Error ? err.message : 'לא ניתן לאשר'
+            );
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleRejectPending = (member: MemberInfo) => {
+    Alert.alert('דחיית בקשה', `לדחות את בקשת ההצטרפות של ${member.fullName}?`, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'דחייה',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await rejectPendingMember({
+              communityId,
+              memberId: member.membershipId,
+            });
+          } catch (err) {
+            Alert.alert(
+              'שגיאה',
+              err instanceof Error ? err.message : 'לא ניתן לדחות'
+            );
+          }
+        },
+      },
+    ]);
+  };
 
   const handleShareInviteLink = () => {
     if (!data?.community.inviteCode) {
@@ -302,14 +356,6 @@ export default function CommunityMembersScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ── תת-כותרת */}
-      <View style={styles.subHeader}>
-        <Text style={styles.subHeaderText}>
-          {data ? `${data.members.length} חברים` : ''}
-        </Text>
-        <Text style={styles.subHeaderTitle}>חברי הקהילה</Text>
-      </View>
-
       {/* ── רשימת חברים */}
       {data === undefined ? (
         <View style={styles.loadingContainer}>
@@ -322,8 +368,64 @@ export default function CommunityMembersScreen() {
       ) : (
         <FlatList<MemberInfo>
           data={data.members}
-          keyExtractor={(m) => m.userId}
+          keyExtractor={(m) => m.membershipId}
           contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            <>
+              {canManage && pendingMembers.length > 0 ? (
+                <View style={styles.pendingSection}>
+                  <Text style={styles.pendingSectionTitle}>ממתינים לאישור</Text>
+                  {pendingMembers.map((m) => (
+                    <View key={m.membershipId} style={styles.pendingCard}>
+                      <View style={styles.memberRow}>
+                        <View style={styles.memberAvatar}>
+                          <Ionicons name="person" size={20} color={PRIMARY} />
+                        </View>
+                        <View style={styles.memberInfo}>
+                          <Text style={styles.memberName} numberOfLines={1}>
+                            {m.fullName}
+                          </Text>
+                          {m.email ? (
+                            <Text style={styles.memberEmail} numberOfLines={1}>
+                              {m.email}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+                      <View style={styles.pendingActions}>
+                        <TouchableOpacity
+                          style={styles.rejectPendingBtn}
+                          onPress={() => handleRejectPending(m)}
+                          accessible
+                          accessibilityRole="button"
+                          accessibilityLabel={`דחיית בקשת ${m.fullName}`}
+                        >
+                          <Text style={styles.rejectPendingBtnText}>דחייה</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.approvePendingBtn}
+                          onPress={() => handleApprovePending(m)}
+                          accessible
+                          accessibilityRole="button"
+                          accessibilityLabel={`אישור ${m.fullName}`}
+                        >
+                          <Text style={styles.approvePendingBtnText}>
+                            אישור
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              <View style={styles.subHeader}>
+                <Text style={styles.subHeaderText}>
+                  {`${data.members.length} חברים`}
+                </Text>
+                <Text style={styles.subHeaderTitle}>חברי הקהילה</Text>
+              </View>
+            </>
+          }
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           renderItem={({ item }) => (
             <MemberRow
@@ -403,7 +505,9 @@ export default function CommunityMembersScreen() {
             <Ionicons name="close" size={20} color="#6b7280" />
           </TouchableOpacity>
           <Text style={styles.codeTitle}>קוד ההצטרפות לקהילה</Text>
-          <Text style={styles.codeText}>{data?.community.inviteCode ?? '—'}</Text>
+          <Text style={styles.codeText}>
+            {data?.community.inviteCode ?? '—'}
+          </Text>
           <Text style={styles.codeHelper}>
             אפשר להזין את הקוד במסך הקהילות כדי להצטרף.
           </Text>
@@ -477,6 +581,61 @@ const styles = StyleSheet.create({
   subHeaderText: {
     fontSize: 13,
     color: '#9ca3af',
+  },
+  pendingSection: {
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: '#f8fafc',
+  },
+  pendingSectionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#64748b',
+    textAlign: 'right',
+    paddingHorizontal: 20,
+    marginBottom: 8,
+  },
+  pendingCard: {
+    backgroundColor: '#fff',
+    marginBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f1f5f9',
+  },
+  pendingActions: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+  },
+  approvePendingBtn: {
+    minHeight: 40,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    backgroundColor: PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  approvePendingBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  rejectPendingBtn: {
+    minHeight: 40,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  rejectPendingBtnText: {
+    color: '#64748b',
+    fontSize: 15,
+    fontWeight: '600',
   },
 
   // ── List

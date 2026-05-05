@@ -4,6 +4,14 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import {
+  computeIsSavedToMyCalendar,
+  enrichEventsWithCalendarFlags,
+  loadActiveSavedEventIds,
+  loadOptOutEventIds,
+  shouldIncludeInPersonalHomeCalendar,
+} from './communityCalendarState';
+import { isActiveCommunityMember } from './communityMemberUtils';
 
 // ─── Attachment arg validator ──────────────────────────────────────────────────
 // uploadedBy and uploadedAt are NOT accepted from the client — the handler
@@ -41,8 +49,8 @@ function isCommunityEventPrivilegedForCalendar(
 }
 
 /**
- * Regular members only see a community event on personal home/calendar lists when RSVP is yes.
- * Uses existing eventRsvps rows; membership is active unless status === "left".
+ * Community list (per community) for RSVP-gated events: same as home "yes" rule.
+ * Open events are shown to all members separately in listByCommunity.
  */
 function shouldIncludeCommunityEventForPersonalAggregates(args: {
   eventCreatedBy: Id<'users'>;
@@ -98,13 +106,48 @@ export const getById = query({
     if (!event) return null;
 
     if (event.communityId) {
-      const membership = await getCommunityMembership(ctx, event.communityId, userId);
-      if (!membership || membership.status === 'left') return null;
-      return event;
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) return null;
+
+      const rsvpRow = await ctx.db
+        .query('eventRsvps')
+        .withIndex('by_event_user', (q) =>
+          q.eq('eventId', eventId).eq('userId', userId)
+        )
+        .unique();
+      const saveRow = await ctx.db
+        .query('savedCommunityEvents')
+        .withIndex('by_user_event', (q) =>
+          q.eq('userId', userId).eq('eventId', eventId)
+        )
+        .unique();
+      const optOutRow = await ctx.db
+        .query('communityEventPersonalCalendarOptOuts')
+        .withIndex('by_user_event', (q) =>
+          q.eq('userId', userId).eq('eventId', eventId)
+        )
+        .unique();
+      const hasActiveSave = saveRow !== null && saveRow.removedAt === undefined;
+      const hasOptOut = optOutRow !== null;
+      const rsvpStatus = rsvpRow?.status;
+
+      return {
+        ...event,
+        isSavedToMyCalendar: computeIsSavedToMyCalendar({
+          requiresRsvp: event.requiresRsvp,
+          rsvpStatus,
+          hasActiveSave,
+          hasOptOut,
+        }),
+      };
     }
 
     if (event.createdBy !== userId) return null;
-    return event;
+    return { ...event, isSavedToMyCalendar: false };
   },
 });
 
@@ -126,13 +169,13 @@ export const listByCommunityPaged = query({
     }
 
     const membership = await getCommunityMembership(ctx, communityId, userId);
-    if (!membership || membership.status === 'left') {
+    if (!isActiveCommunityMember(membership)) {
       return { page: [], isDone: true, continueCursor: '' };
     }
 
     const from = fromTime ?? 0;
     const to = toTime ?? 9_999_999_999_999; // far future
-    return await ctx.db
+    const pageResult = await ctx.db
       .query('events')
       .withIndex('by_community_date', (q) =>
         q
@@ -141,6 +184,26 @@ export const listByCommunityPaged = query({
           .lte('startTime', to)
       )
       .paginate({ cursor, numItems: numItems ?? 20 });
+
+    const userRsvps = await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const rsvpByEventId = new Map(
+      userRsvps.map((r) => [r.eventId as string, r.status])
+    );
+
+    const enrichedPage = await enrichEventsWithCalendarFlags(
+      ctx,
+      userId,
+      pageResult.page,
+      rsvpByEventId
+    );
+
+    return {
+      ...pageResult,
+      page: enrichedPage,
+    };
   },
 });
 
@@ -154,7 +217,7 @@ export const listByCommunity = query({
     if (!userId) return [];
 
     const membership = await getCommunityMembership(ctx, communityId, userId);
-    if (!membership || membership.status === 'left') return [];
+    if (!isActiveCommunityMember(membership)) return [];
 
     const userRsvps = await ctx.db
       .query('eventRsvps')
@@ -171,14 +234,20 @@ export const listByCommunity = query({
       .order('asc')
       .collect();
 
-    return events.filter((ev) =>
-      shouldIncludeCommunityEventForPersonalAggregates({
+    const filtered = events.filter((ev) => {
+      /** Open to all members — everyone in the community sees it (calendar filtered by community). */
+      if (ev.requiresRsvp === false) {
+        return true;
+      }
+      return shouldIncludeCommunityEventForPersonalAggregates({
         eventCreatedBy: ev.createdBy,
         viewerUserId: userId,
         membershipRole: membership.role,
         rsvpStatus: rsvpByEventId.get(ev._id),
-      })
-    );
+      });
+    });
+
+    return enrichEventsWithCalendarFlags(ctx, userId, filtered, rsvpByEventId);
   },
 });
 
@@ -192,8 +261,12 @@ export const listByDateRange = query({
     to: v.number(), // Unix timestamp (ms) – סוף טווח
   },
   handler: async (ctx, { spaceId, from, to }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return [];
+    }
     // TODO: לחבר לאימות – לוודא שהמשתמש הנוכחי שייך ל-spaceId
-    return await ctx.db
+    const rows = await ctx.db
       .query('events')
       .withIndex('by_space_and_time', (q) =>
         q.eq('spaceId', spaceId).gte('startTime', from).lte('startTime', to)
@@ -201,6 +274,61 @@ export const listByDateRange = query({
       .filter((q) => q.neq(q.field('status'), 'cancelled'))
       .order('asc')
       .collect();
+
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const userRsvps = await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const rsvpByEventId = new Map(
+      userRsvps.map((r) => [r.eventId as string, r.status])
+    );
+    const savedIds = await loadActiveSavedEventIds(ctx, userId);
+    const optOutIds = await loadOptOutEventIds(ctx, userId);
+
+    const communityIdSet = new Set<string>();
+    for (const e of rows) {
+      if (e.communityId) {
+        communityIdSet.add(e.communityId as string);
+      }
+    }
+    const communityNameById = new Map<string, string>();
+    for (const cidStr of communityIdSet) {
+      const c = await ctx.db.get(cidStr as Id<'communities'>);
+      if (c) {
+        communityNameById.set(cidStr, c.name);
+      }
+    }
+
+    const result: Array<
+      (typeof rows)[0] & { communityName?: string; isSavedToMyCalendar: boolean }
+    > = [];
+    for (const ev of rows) {
+      const idStr = ev._id as string;
+      const rsvpStatus = rsvpByEventId.get(idStr);
+      let communityName: string | undefined;
+      let isSavedToMyCalendar = false;
+
+      if (ev.communityId) {
+        communityName = communityNameById.get(ev.communityId as string);
+        isSavedToMyCalendar = computeIsSavedToMyCalendar({
+          requiresRsvp: ev.requiresRsvp,
+          rsvpStatus,
+          hasActiveSave: savedIds.has(idStr),
+          hasOptOut: optOutIds.has(idStr),
+        });
+        // Community events that appear via the space index (have spaceId set)
+        // must still respect personal-calendar saved state — only include if
+        // actively saved. This mirrors listCommunityEventsForDate filtering.
+        if (!isSavedToMyCalendar) continue;
+      }
+
+      result.push({ ...ev, communityName, isSavedToMyCalendar });
+    }
+    return result;
   },
 });
 
@@ -253,7 +381,7 @@ export const create = mutation({
       const isOwnerByCommunityRecord = community.ownerId === userId;
       const isOwnerOrAdminMembership =
         membership &&
-        membership.status !== 'left' &&
+        isActiveCommunityMember(membership) &&
         (membership.role === 'owner' || membership.role === 'admin');
       const canCreateCommunityEvent =
         isOwnerByCommunityRecord || Boolean(isOwnerOrAdminMembership);
@@ -274,7 +402,7 @@ export const create = mutation({
       uploadedAt: now,
     }));
 
-    return await ctx.db.insert('events', {
+    const eventId = await ctx.db.insert('events', {
       ...args,
       attachments: stamped,
       tasksVisibleToParticipants: args.tasksVisibleToParticipants ?? false,
@@ -282,6 +410,29 @@ export const create = mutation({
       createdBy: userId,
       createdAt: now,
     });
+
+    if (args.communityId) {
+      const existingSave = await ctx.db
+        .query('savedCommunityEvents')
+        .withIndex('by_user_event', (q) =>
+          q.eq('userId', userId).eq('eventId', eventId)
+        )
+        .unique();
+      if (existingSave) {
+        if (existingSave.removedAt !== undefined) {
+          await ctx.db.patch(existingSave._id, { removedAt: undefined });
+        }
+      } else {
+        await ctx.db.insert('savedCommunityEvents', {
+          userId,
+          eventId,
+          communityId: args.communityId,
+          createdAt: now,
+        });
+      }
+    }
+
+    return eventId;
   },
 });
 
@@ -327,7 +478,7 @@ export const update = mutation({
         existing.communityId,
         userId
       );
-      if (!membership || membership.status === 'left') {
+      if (!isActiveCommunityMember(membership)) {
         throw new Error('אין הרשאה לערוך את האירוע');
       }
       const isCreator = existing.createdBy === userId;
@@ -395,8 +546,12 @@ export const cancelEvent = mutation({
     const event = await ctx.db.get(eventId);
     if (!event) throw new Error('אירוע לא נמצא');
     if (event.communityId) {
-      const membership = await getCommunityMembership(ctx, event.communityId, userId);
-      if (!membership || membership.status === 'left') {
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) {
         throw new Error('אין הרשאה');
       }
       const isCreator = event.createdBy === userId;
@@ -469,8 +624,12 @@ export const deleteEvent = mutation({
     const event = await ctx.db.get(eventId);
     if (!event) throw new Error('אירוע לא נמצא');
     if (event.communityId) {
-      const membership = await getCommunityMembership(ctx, event.communityId, userId);
-      if (!membership || membership.status === 'left') {
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) {
         throw new Error('אין הרשאה');
       }
       const isCreator = event.createdBy === userId;
@@ -527,7 +686,7 @@ export const listCommunityEventsForDate = query({
       .withIndex('by_user', (q) => q.eq('userId', userId))
       .collect();
 
-    const activeMembers = memberships.filter((m) => m.status !== 'left');
+    const activeMembers = memberships.filter((m) => isActiveCommunityMember(m));
 
     const userRsvps = await ctx.db
       .query('eventRsvps')
@@ -536,6 +695,9 @@ export const listCommunityEventsForDate = query({
     const rsvpByEventId = new Map(
       userRsvps.map((r) => [r.eventId as string, r.status])
     );
+
+    const savedIds = await loadActiveSavedEventIds(ctx, userId);
+    const optOutIds = await loadOptOutEventIds(ctx, userId);
 
     const results = await Promise.all(
       activeMembers.map(async ({ communityId, role }) => {
@@ -554,14 +716,21 @@ export const listCommunityEventsForDate = query({
 
         return events
           .filter((ev) => ev.status !== 'cancelled')
-          .filter((ev) =>
-            shouldIncludeCommunityEventForPersonalAggregates({
-              eventCreatedBy: ev.createdBy,
-              viewerUserId: userId,
-              membershipRole: role,
+          .filter((ev) => {
+            const privileged = isCommunityEventPrivilegedForCalendar(
+              ev.createdBy,
+              userId,
+              role
+            );
+            const idStr = ev._id as string;
+            return shouldIncludeInPersonalHomeCalendar({
+              privileged,
+              requiresRsvp: ev.requiresRsvp,
               rsvpStatus: rsvpByEventId.get(ev._id),
-            })
-          )
+              hasActiveSave: savedIds.has(idStr),
+              hasOptOut: optOutIds.has(idStr),
+            });
+          })
           .map((ev) => ({
             _id: ev._id,
             title: ev.title,
@@ -571,6 +740,12 @@ export const listCommunityEventsForDate = query({
             communityId,
             communityName: community.name,
             location: ev.location,
+            isSavedToMyCalendar: computeIsSavedToMyCalendar({
+              requiresRsvp: ev.requiresRsvp,
+              rsvpStatus: rsvpByEventId.get(ev._id),
+              hasActiveSave: savedIds.has(ev._id as string),
+              hasOptOut: optOutIds.has(ev._id as string),
+            }),
           }));
       })
     );

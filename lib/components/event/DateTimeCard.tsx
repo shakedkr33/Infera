@@ -1,13 +1,30 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useState } from 'react';
-import { Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import {
+  Platform,
+  Pressable,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
 
 // ─── Custom RTL Calendar Grid ─────────────────────────────────────────────────
 
 const MONTH_NAMES_HE = [
-  'ינואר','פברואר','מרץ','אפריל','מאי','יוני',
-  'יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר',
+  'ינואר',
+  'פברואר',
+  'מרץ',
+  'אפריל',
+  'מאי',
+  'יוני',
+  'יולי',
+  'אוגוסט',
+  'ספטמבר',
+  'אוקטובר',
+  'נובמבר',
+  'דצמבר',
 ];
 // Index 0 = Sunday → rightmost column in RTL
 const DAY_LABELS = ["א'", "ב'", "ג'", "ד'", "ה'", "ו'", 'ש'];
@@ -19,7 +36,12 @@ interface CalendarGridProps {
   onChange: (date: Date) => void;
 }
 
-function CalendarGrid({ value, minimumDate, accentColor, onChange }: CalendarGridProps) {
+function CalendarGrid({
+  value,
+  minimumDate,
+  accentColor,
+  onChange,
+}: CalendarGridProps) {
   const [viewYear, setViewYear] = useState(value.getFullYear());
   const [viewMonth, setViewMonth] = useState(value.getMonth());
 
@@ -35,12 +57,16 @@ function CalendarGrid({ value, minimumDate, accentColor, onChange }: CalendarGri
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
 
   const goToPrev = () => {
-    if (viewMonth === 0) { setViewYear(y => y - 1); setViewMonth(11); }
-    else setViewMonth(m => m - 1);
+    if (viewMonth === 0) {
+      setViewYear((y) => y - 1);
+      setViewMonth(11);
+    } else setViewMonth((m) => m - 1);
   };
   const goToNext = () => {
-    if (viewMonth === 11) { setViewYear(y => y + 1); setViewMonth(0); }
-    else setViewMonth(m => m + 1);
+    if (viewMonth === 11) {
+      setViewYear((y) => y + 1);
+      setViewMonth(0);
+    } else setViewMonth((m) => m + 1);
   };
 
   return (
@@ -50,7 +76,9 @@ function CalendarGrid({ value, minimumDate, accentColor, onChange }: CalendarGri
         <Pressable onPress={goToNext} hitSlop={8}>
           <MaterialIcons name="chevron-left" size={24} color={accentColor} />
         </Pressable>
-        <Text style={cal.headerTitle}>{MONTH_NAMES_HE[viewMonth]} {viewYear}</Text>
+        <Text style={cal.headerTitle}>
+          {MONTH_NAMES_HE[viewMonth]} {viewYear}
+        </Text>
         <Pressable onPress={goToPrev} hitSlop={8}>
           <MaterialIcons name="chevron-right" size={24} color={accentColor} />
         </Pressable>
@@ -75,20 +103,29 @@ function CalendarGrid({ value, minimumDate, accentColor, onChange }: CalendarGri
               viewMonth === value.getMonth() &&
               viewYear === value.getFullYear();
             const isDisabled =
-              !!minimumDate &&
-              new Date(viewYear, viewMonth, day) < minimumDate;
+              !!minimumDate && new Date(viewYear, viewMonth, day) < minimumDate;
             return (
               <Pressable
                 key={di}
                 style={cal.cell}
-                onPress={() => !isDisabled && onChange(new Date(viewYear, viewMonth, day))}
+                onPress={() =>
+                  !isDisabled && onChange(new Date(viewYear, viewMonth, day))
+                }
                 disabled={isDisabled}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel={`${day} ${MONTH_NAMES_HE[viewMonth]}`}
-                accessibilityState={{ selected: isSelected, disabled: isDisabled }}
+                accessibilityState={{
+                  selected: isSelected,
+                  disabled: isDisabled,
+                }}
               >
-                <View style={[cal.dayCircle, isSelected && { backgroundColor: accentColor }]}>
+                <View
+                  style={[
+                    cal.dayCircle,
+                    isSelected && { backgroundColor: accentColor },
+                  ]}
+                >
                   <Text
                     style={[
                       cal.dayText,
@@ -122,7 +159,13 @@ const cal = StyleSheet.create({
   row: { flexDirection: 'row-reverse' },
   cell: { flex: 1, alignItems: 'center', paddingVertical: 4 },
   dayLabel: { fontSize: 12, color: '#6b7280', fontWeight: '600' },
-  dayCircle: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  dayCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   dayText: { fontSize: 14, color: '#111827' },
   dayTextDisabled: { color: '#d1d5db' },
   dayTextSelected: { color: '#fff', fontWeight: '700' },
@@ -160,7 +203,11 @@ export function applyDuration(
   start.setHours(h ?? 0, m ?? 0, 0, 0);
   const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
   return {
-    endDate: new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime(),
+    endDate: new Date(
+      end.getFullYear(),
+      end.getMonth(),
+      end.getDate()
+    ).getTime(),
     endTime: `${fmt2(end.getHours())}:${fmt2(end.getMinutes())}`,
   };
 }
@@ -355,18 +402,28 @@ export function DateTimeCard({
 
               {/* Calendar icon → inline grid */}
               <Pressable
-                style={[s.calIconBtn, openPicker === 'startDateGrid' && s.chipActive]}
+                style={[
+                  s.calIconBtn,
+                  openPicker === 'startDateGrid' && s.chipActive,
+                ]}
                 onPress={() => togglePicker('startDateGrid')}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="לוח שנה - תאריך התחלה"
               >
-                <MaterialIcons name="calendar-today" size={14} color={PRIMARY} />
+                <MaterialIcons
+                  name="calendar-today"
+                  size={14}
+                  color={PRIMARY}
+                />
               </Pressable>
 
               {/* Date text chip → spinner wheel */}
               <Pressable
-                style={[s.dateTextChip, openPicker === 'startDate' && s.dateChipOpen]}
+                style={[
+                  s.dateTextChip,
+                  openPicker === 'startDate' && s.dateChipOpen,
+                ]}
                 onPress={() => togglePicker('startDate')}
                 accessible={true}
                 accessibilityRole="button"
@@ -392,7 +449,9 @@ export function DateTimeCard({
                 accessibilityRole="button"
                 accessibilityLabel={`שעת סיום: ${endTime ?? 'לא נבחרה'}`}
               >
-                <Text style={[s.timeChipText, isInvalidRange && s.chipTextInvalid]}>
+                <Text
+                  style={[s.timeChipText, isInvalidRange && s.chipTextInvalid]}
+                >
                   {endTime ?? '--:--'}
                 </Text>
               </Pressable>
@@ -413,7 +472,9 @@ export function DateTimeCard({
                 <MaterialIcons
                   name="calendar-today"
                   size={14}
-                  color={isInvalidRange ? '#ef4444' : isSameDay ? PRIMARY : '#ea580c'}
+                  color={
+                    isInvalidRange ? '#ef4444' : isSameDay ? PRIMARY : '#ea580c'
+                  }
                 />
               </Pressable>
 
@@ -444,7 +505,9 @@ export function DateTimeCard({
           </View>
 
           {isInvalidRange && (
-            <Text style={s.invalidHint}>שעת הסיום חייבת להיות אחרי שעת ההתחלה</Text>
+            <Text style={s.invalidHint}>
+              שעת הסיום חייבת להיות אחרי שעת ההתחלה
+            </Text>
           )}
 
           {/* ── Day chips — hidden in allDay mode ── */}
@@ -462,7 +525,9 @@ export function DateTimeCard({
                   accessibilityState={{ selected: isActive }}
                   accessibilityLabel={chip.label}
                 >
-                  <Text style={[s.dayChipText, isActive && s.dayChipTextActive]}>
+                  <Text
+                    style={[s.dayChipText, isActive && s.dayChipTextActive]}
+                  >
                     {chip.label}
                   </Text>
                 </Pressable>
@@ -487,15 +552,19 @@ export function DateTimeCard({
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             locale="he"
             themeVariant="light"
-            // @ts-ignore — valid iOS prop
             textColor="#111827"
             onChange={(_, selected) => {
               if (selected) handleStartDateChange(selected);
             }}
           />
           {Platform.OS === 'ios' && (
-            <Pressable style={s.pickerConfirmBtn} onPress={closePicker}
-              accessible={true} accessibilityRole="button" accessibilityLabel="אישור">
+            <Pressable
+              style={s.pickerConfirmBtn}
+              onPress={closePicker}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="אישור"
+            >
               <Text style={s.pickerConfirmText}>בחר</Text>
             </Pressable>
           )}
@@ -525,15 +594,19 @@ export function DateTimeCard({
             is24Hour={true}
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             themeVariant="light"
-            // @ts-ignore
             textColor="#111827"
             onChange={(_, selected) => {
               if (selected) handleStartTimeChange(selected);
             }}
           />
           {Platform.OS === 'ios' && (
-            <Pressable style={s.pickerConfirmBtn} onPress={closePicker}
-              accessible={true} accessibilityRole="button" accessibilityLabel="אישור">
+            <Pressable
+              style={s.pickerConfirmBtn}
+              onPress={closePicker}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="אישור"
+            >
               <Text style={s.pickerConfirmText}>בחר</Text>
             </Pressable>
           )}
@@ -550,15 +623,19 @@ export function DateTimeCard({
             minimumDate={new Date(startDate)}
             locale="he"
             themeVariant="light"
-            // @ts-ignore
             textColor="#111827"
             onChange={(_, selected) => {
               if (selected) handleEndDateChange(selected);
             }}
           />
           {Platform.OS === 'ios' && (
-            <Pressable style={s.pickerConfirmBtn} onPress={closePicker}
-              accessible={true} accessibilityRole="button" accessibilityLabel="אישור">
+            <Pressable
+              style={s.pickerConfirmBtn}
+              onPress={closePicker}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="אישור"
+            >
               <Text style={s.pickerConfirmText}>בחר</Text>
             </Pressable>
           )}
@@ -589,15 +666,19 @@ export function DateTimeCard({
             is24Hour={true}
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             themeVariant="light"
-            // @ts-ignore
             textColor="#111827"
             onChange={(_, selected) => {
               if (selected) handleEndTimeChange(selected);
             }}
           />
           {Platform.OS === 'ios' && (
-            <Pressable style={s.pickerConfirmBtn} onPress={closePicker}
-              accessible={true} accessibilityRole="button" accessibilityLabel="אישור">
+            <Pressable
+              style={s.pickerConfirmBtn}
+              onPress={closePicker}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="אישור"
+            >
               <Text style={s.pickerConfirmText}>בחר</Text>
             </Pressable>
           )}

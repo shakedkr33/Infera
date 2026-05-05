@@ -61,7 +61,11 @@ export type ReminderType =
   | 'morning_same_day'
   | 'day_before_evening';
 
-export type ReminderPreset = 'at_event' | 'hour_before' | 'day_before' | 'custom';
+export type ReminderPreset =
+  | 'at_event'
+  | 'hour_before'
+  | 'day_before'
+  | 'custom';
 export type ReminderUnit = 'minutes' | 'hours' | 'days';
 
 export interface Reminder {
@@ -80,10 +84,10 @@ export interface Reminder {
 }
 
 const REMINDER_DEFAULTS: Record<ReminderPreset, Omit<Reminder, 'preset'>> = {
-  at_event:    { offsetMinutes: 0 },
+  at_event: { offsetMinutes: 0 },
   hour_before: { offsetMinutes: 60 },
-  day_before:  { offsetMinutes: 1440 },
-  custom:      { offsetMinutes: 30, customValue: 30, customUnit: 'minutes' },
+  day_before: { offsetMinutes: 1440 },
+  custom: { offsetMinutes: 30, customValue: 30, customUnit: 'minutes' },
 };
 
 /** Build a Reminder with the correct default offsetMinutes for a given preset. */
@@ -96,14 +100,14 @@ export function makeReminder(preset: ReminderPreset): Reminder {
 export interface EventData {
   id?: string;
   title: string;
-  date: number;         // start date as midnight Unix ms
-  startTime?: string;   // "HH:MM"
-  endDate?: number;     // end date as midnight Unix ms (cross-midnight safe)
-  endTime?: string;     // "HH:MM"
+  date: number; // start date as midnight Unix ms
+  startTime?: string; // "HH:MM"
+  endDate?: number; // end date as midnight Unix ms (cross-midnight safe)
+  endTime?: string; // "HH:MM"
   isAllDay: boolean;
   recurrence: RecurrenceType;
-  location?: string;    // physical address → events.location
-  onlineUrl?: string;   // meeting link → events.onlineUrl
+  location?: string; // physical address → events.location
+  onlineUrl?: string; // meeting link → events.onlineUrl
   locationCoords?: { lat: number; lng: number };
   notes?: string;
   remindersEnabled: boolean;

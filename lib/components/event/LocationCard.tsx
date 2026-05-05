@@ -1,12 +1,6 @@
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useRef, useState } from 'react';
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 
 const PRIMARY = '#36a9e2';
@@ -19,8 +13,8 @@ type LocMode = 'address' | 'link';
 
 /** Values emitted on every change. Callers spread these into event state. */
 export interface LocationUpdate {
-  location: string;   // physical address → EventData.location
-  onlineUrl: string;  // meeting URL     → EventData.onlineUrl
+  location: string; // physical address → EventData.location
+  onlineUrl: string; // meeting URL     → EventData.onlineUrl
 }
 
 interface LocationCardProps {
@@ -46,7 +40,8 @@ export function LocationCard({
   const [locMode, setLocMode] = useState<LocMode>(hasLink ? 'link' : 'address');
 
   // Ref to imperatively clear the Google Places input text
-  const placesRef = useRef<React.ElementRef<typeof GooglePlacesAutocomplete>>(null);
+  const placesRef =
+    useRef<React.ElementRef<typeof GooglePlacesAutocomplete>>(null);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 

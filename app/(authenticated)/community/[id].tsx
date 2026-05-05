@@ -23,6 +23,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import {
+  getOpenCommunityCalendarActionLabel,
+  isOpenCommunityCalendarActionVisible,
+} from '@/lib/openCommunityCalendarUi';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -62,6 +66,8 @@ interface EventDoc {
   status?: 'active' | 'cancelled';
   cancelledAt?: number;
   cancelReason?: string;
+  /** Open community events: personal calendar / "הסר מהיומן" (from Convex) */
+  isSavedToMyCalendar?: boolean;
 }
 
 interface TaskDoc {
@@ -365,6 +371,11 @@ interface CommunityEventFlyerCardProps {
   flyerDetailsOnly?: boolean;
   /** When false for participants, hide X/Y task counts (tasks not visible to them). */
   showTaskMetrics?: boolean;
+  isSavedToMyCalendar?: boolean;
+  onCalendarToggle?: (eventId: Id<'events'>) => void;
+  /** false for pending / non-active members (no personal calendar for community events) */
+  viewerIsActiveCommunityMember?: boolean;
+  communityArchived?: boolean;
 }
 
 function CommunityEventFlyerCard({
@@ -376,32 +387,37 @@ function CommunityEventFlyerCard({
   onRsvpSelect,
   flyerDetailsOnly = false,
   showTaskMetrics = true,
+  isSavedToMyCalendar = false,
+  onCalendarToggle,
+  viewerIsActiveCommunityMember = true,
+  communityArchived = false,
 }: CommunityEventFlyerCardProps) {
   const [showInlineChoices, setShowInlineChoices] = useState(false);
-  const variant = FLYER_VARIANTS[Math.abs(event._id.length) % FLYER_VARIANTS.length];
+  const variant =
+    FLYER_VARIANTS[Math.abs(event._id.length) % FLYER_VARIANTS.length];
+  const isOpenCommunityEvent = event.requiresRsvp === false;
   /** Invitee has not chosen yet — CTA ממתין לאישור opens inline choices */
-  const showInviteePendingCta = !flyerDetailsOnly && rsvpStatus === 'none';
+  const showInviteePendingCta =
+    !flyerDetailsOnly && !isOpenCommunityEvent && rsvpStatus === 'none';
   /** Invitee chose yes/maybe/no — can change inline without locking after yes */
   const showMemberChangeRsvpCta =
-    !flyerDetailsOnly && rsvpStatus !== 'none';
+    !flyerDetailsOnly && !isOpenCommunityEvent && rsvpStatus !== 'none';
   const showInlineRsvpRow =
-    showInlineChoices &&
-    (showInviteePendingCta || showMemberChangeRsvpCta);
+    showInlineChoices && (showInviteePendingCta || showMemberChangeRsvpCta);
   const rawCategory = event.category?.trim();
   const showCategoryPill = Boolean(rawCategory && rawCategory.length > 0);
   const dateLabel = formatFlyerDate(event.startTime);
   const timeLabel = formatFlyerTime(event);
   const locationLabel = event.location?.trim() || 'מיקום יתעדכן בהמשך';
-  const rsvpMeta =
-    rsvpStatus === 'yes'
+  const rsvpMeta = isOpenCommunityEvent
+    ? 'פתוח לחברי הקהילה'
+    : rsvpStatus === 'yes'
       ? 'אישרת הגעה'
       : rsvpStatus === 'no'
         ? 'סימנת לא'
         : rsvpStatus === 'maybe'
           ? 'סימנת אולי'
-          : event.requiresRsvp
-            ? 'דורש אישור הגעה'
-            : 'פתוח לחברי הקהילה';
+          : 'נדרש אישור הגעה';
   const tasksMeta =
     showTaskMetrics && taskSummary && taskSummary.total > 0
       ? `${taskSummary.assigned}/${taskSummary.total} משימות הוקצו`
@@ -412,12 +428,30 @@ function CommunityEventFlyerCard({
   }, [rsvpStatus]);
 
   const isCancelledEvent = event.status === 'cancelled';
+  const openCalendarActionLabel =
+    getOpenCommunityCalendarActionLabel(isSavedToMyCalendar);
+  const showOpenCalendarCta =
+    onCalendarToggle !== undefined &&
+    isOpenCommunityCalendarActionVisible({
+      event: {
+        communityId: event.communityId ?? null,
+        requiresRsvp: event.requiresRsvp,
+        status: event.status,
+      },
+      hasValidConvexEventId: true,
+      communityArchived,
+      viewerIsActiveMember: viewerIsActiveCommunityMember,
+    });
 
   return (
     <View
       style={[
         styles.flyerCard,
-        { width: cardWidth, backgroundColor: variant.bg, borderColor: variant.border },
+        {
+          width: cardWidth,
+          backgroundColor: variant.bg,
+          borderColor: variant.border,
+        },
         isCancelledEvent ? { opacity: 0.68 } : null,
       ]}
     >
@@ -443,13 +477,21 @@ function CommunityEventFlyerCard({
         </Text>
         <View style={styles.flyerDividerRow}>
           <View
-            style={[styles.flyerDividerLine, { backgroundColor: variant.divider }]}
+            style={[
+              styles.flyerDividerLine,
+              { backgroundColor: variant.divider },
+            ]}
           />
-          <Text style={[styles.flyerDividerDiamond, { color: variant.divider }]}>
+          <Text
+            style={[styles.flyerDividerDiamond, { color: variant.divider }]}
+          >
             ✦
           </Text>
           <View
-            style={[styles.flyerDividerLine, { backgroundColor: variant.divider }]}
+            style={[
+              styles.flyerDividerLine,
+              { backgroundColor: variant.divider },
+            ]}
           />
         </View>
         <Text style={styles.flyerDate}>{dateLabel}</Text>
@@ -460,7 +502,9 @@ function CommunityEventFlyerCard({
         <Text
           style={[
             styles.flyerMeta,
-            rsvpStatus === 'maybe' && styles.flyerMetaEmphasis,
+            !isOpenCommunityEvent &&
+              rsvpStatus === 'maybe' &&
+              styles.flyerMetaEmphasis,
             { color: variant.meta },
           ]}
           numberOfLines={1}
@@ -468,7 +512,11 @@ function CommunityEventFlyerCard({
           {rsvpMeta}
         </Text>
         <Text
-          style={[styles.flyerMeta, styles.flyerMetaLast, { color: variant.meta }]}
+          style={[
+            styles.flyerMeta,
+            styles.flyerMetaLast,
+            { color: variant.meta },
+          ]}
           numberOfLines={1}
         >
           {tasksMeta}
@@ -501,6 +549,19 @@ function CommunityEventFlyerCard({
               </TouchableOpacity>
             ))}
           </View>
+        ) : showOpenCalendarCta ? (
+          <TouchableOpacity
+            style={[styles.flyerCtaBtn, { backgroundColor: variant.buttonBg }]}
+            onPress={() => onCalendarToggle(event._id)}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={openCalendarActionLabel}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+          >
+            <Text style={[styles.flyerCtaText, { color: variant.buttonText }]}>
+              {openCalendarActionLabel}
+            </Text>
+          </TouchableOpacity>
         ) : (
           <TouchableOpacity
             style={[styles.flyerCtaBtn, { backgroundColor: variant.buttonBg }]}
@@ -586,8 +647,12 @@ function EventRow({
     badgeColor = '#ef4444';
   }
 
+  const isOpenCommunityEvent = event.requiresRsvp === false;
   const showRsvpBadge =
-    !isCancelled && !past && (event.requiresRsvp || rsvpStatus !== 'none');
+    !isOpenCommunityEvent &&
+    !isCancelled &&
+    !past &&
+    (event.requiresRsvp !== false || rsvpStatus !== 'none');
   const showCancelledBadge = isCancelled;
 
   return (
@@ -962,9 +1027,7 @@ function TabAll({
   const gridGap = 12;
   const availableWidth = screenWidth - horizontalPadding;
   const flyerCardWidth =
-    flyerColumns === 1
-      ? availableWidth
-      : (availableWidth - gridGap) / 2;
+    flyerColumns === 1 ? availableWidth : (availableWidth - gridGap) / 2;
   // Stable timestamps — computed once on mount, never change
   const windowStart = useMemo(() => {
     const d = new Date();
@@ -1012,6 +1075,31 @@ function TabAll({
 
   const activeEvents = events.filter((ev) => ev.status !== 'cancelled');
 
+  const addCommunityEventToMyCalendar = useMutation(
+    api.communityEventCalendar.addCommunityEventToMyCalendar
+  );
+  const removeCommunityEventFromMyCalendar = useMutation(
+    api.communityEventCalendar.removeCommunityEventFromMyCalendar
+  );
+
+  const handleCalendarToggle = useCallback(
+    (eventId: Id<'events'>) => {
+      const ev = activeEvents.find((e) => e._id === eventId);
+      const saved = ev?.isSavedToMyCalendar === true;
+      const run = saved
+        ? removeCommunityEventFromMyCalendar
+        : addCommunityEventToMyCalendar;
+      return run({ eventId }).catch(() =>
+        Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן')
+      );
+    },
+    [
+      activeEvents,
+      addCommunityEventToMyCalendar,
+      removeCommunityEventFromMyCalendar,
+    ]
+  );
+
   const recentlyCancelledEvents = events.filter(
     (ev) =>
       ev.status === 'cancelled' &&
@@ -1019,15 +1107,23 @@ function TabAll({
       Date.now() - ev.cancelledAt < 24 * 60 * 60 * 1000
   );
 
-  // Section 1: events the user created, or RSVPed "yes" (confirmed attendance)
+  // Section 1: events the user created, or RSVPed "yes", or open events in personal calendar
   const myEvents = activeEvents.filter((ev) => {
-    if (ev.createdBy === currentUserId) return true;
+    if (currentUserId !== undefined && ev.createdBy === currentUserId)
+      return true;
+    if (ev.requiresRsvp === false) {
+      return ev.isSavedToMyCalendar === true;
+    }
     return (rsvpMap[ev._id] ?? 'none') === 'yes';
   });
 
-  // Section 3: other people's events where user has not confirmed "yes"
+  // Section 3: other members' events not in the user's personal calendar
   const pendingEvents = activeEvents.filter((ev) => {
-    if (ev.createdBy === currentUserId) return false;
+    if (currentUserId !== undefined && ev.createdBy === currentUserId)
+      return false;
+    if (ev.requiresRsvp === false) {
+      return !ev.isSavedToMyCalendar;
+    }
     return (rsvpMap[ev._id] ?? 'none') !== 'yes';
   });
 
@@ -1189,6 +1285,8 @@ function TabAll({
                 <CommunityEventFlyerCard
                   key={ev._id}
                   event={ev}
+                  isSavedToMyCalendar={ev.isSavedToMyCalendar}
+                  onCalendarToggle={handleCalendarToggle}
                   rsvpStatus={rsvpMap[ev._id] ?? 'none'}
                   taskSummary={taskCountsMap[ev._id]}
                   cardWidth={flyerCardWidth}
@@ -1309,6 +1407,8 @@ function TabAll({
                 <CommunityEventFlyerCard
                   key={ev._id}
                   event={ev}
+                  isSavedToMyCalendar={ev.isSavedToMyCalendar}
+                  onCalendarToggle={handleCalendarToggle}
                   rsvpStatus={rsvpMap[ev._id] ?? 'none'}
                   taskSummary={taskCountsMap[ev._id]}
                   cardWidth={flyerCardWidth}
@@ -1768,6 +1868,7 @@ export default function CommunityDetailScreen() {
   const toggleCompleted = useMutation(api.tasks.toggleCompleted);
   const deleteCommunity = useMutation(api.communities.deleteCommunity);
   const toggleNotifications = useMutation(api.communities.toggleNotifications);
+  const markCommunityViewed = useMutation(api.communities.markCommunityViewed);
 
   // ── Local state
   const [activeTab, setActiveTab] = useState<Tab>(() => {
@@ -1791,11 +1892,20 @@ export default function CommunityDetailScreen() {
   const [descriptionCanExpand, setDescriptionCanExpand] = useState(false);
   const menuBtnRef = useRef<View>(null);
 
-  // Reset description state when community changes
+  // Reset description when switching communities
   useEffect(() => {
     setDescriptionExpanded(false);
     setDescriptionCanExpand(false);
   }, [communityId]);
+
+  // Mark viewed for list "new events" hint — only for fully approved members
+  useEffect(() => {
+    if (community === undefined || community === null) return;
+    if (community.myMembershipStatus === 'pending') return;
+    markCommunityViewed({ communityId }).catch(() => {
+      // non-blocking
+    });
+  }, [communityId, community, markCommunityViewed]);
   const addBtnRef = useRef<View>(null);
 
   // ── Persisted TabAll state — lifted here so it survives tab switches
@@ -2059,6 +2169,34 @@ export default function CommunityDetailScreen() {
           >
             <Text style={styles.retryText}>חזור</Text>
           </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (community.myMembershipStatus === 'pending') {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.pendingGateHeader}>
+          <View style={{ width: 40 }} />
+          <Text style={styles.pendingGateTitle} numberOfLines={1}>
+            {community.name}
+          </Text>
+          <TouchableOpacity
+            onPress={handleBack}
+            style={styles.headerIconBtn}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="חזרה לרשימת הקהילות"
+          >
+            <Ionicons name="chevron-forward" size={22} color="#374151" />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.loadingCenter}>
+          <Ionicons name="time-outline" size={52} color="#94a3b8" />
+          <Text style={[styles.emptyText, styles.pendingGateMessage]}>
+            בקשת ההצטרפות נשלחה וממתינה לאישור מנהל הקהילה
+          </Text>
         </View>
       </SafeAreaView>
     );
@@ -2757,6 +2895,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 12,
     padding: 32,
+  },
+  pendingGateHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 6,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f1f5f9',
+  },
+  pendingGateTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
+  pendingGateMessage: {
+    marginTop: 18,
+    paddingHorizontal: 24,
+    lineHeight: 24,
   },
   emptyText: { fontSize: 16, color: '#6b7280', textAlign: 'center' },
 
