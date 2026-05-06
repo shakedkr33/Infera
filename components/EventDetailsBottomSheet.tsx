@@ -1,5 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
+import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -8,6 +9,7 @@ import {
   Alert,
   Animated,
   Dimensions,
+  I18nManager,
   Image,
   Linking,
   Modal,
@@ -25,16 +27,14 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
-import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
   isOpenCommunityInformationalLabelVisible,
 } from '@/lib/openCommunityCalendarUi';
-import { I18nManager } from 'react-native';
-import Constants from 'expo-constants';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 
 /**
@@ -70,13 +70,15 @@ const HEB_FLEX_END: 'flex-start' | 'flex-end' = shouldSupplyInvertedRtlValues
   : 'flex-end';
 // Use writingDirection only on Text components. Do not add it to View
 // containers: on Android it can affect native layoutDirection and break visual RTL.
-const HEB_WRITING_DIRECTION: 'rtl' | undefined =
-  isAndroidExpoGo ? undefined : 'rtl';
+const HEB_WRITING_DIRECTION: 'rtl' | undefined = isAndroidExpoGo
+  ? undefined
+  : 'rtl';
 
 const { height: screenHeight } = Dimensions.get('window');
 const SHEET_HEIGHT = screenHeight * 0.9;
 const RSVP_DETAIL_MODAL_MAX_HEIGHT = screenHeight * 0.62;
 const RSVP_DETAIL_SCROLL_MAX_HEIGHT = RSVP_DETAIL_MODAL_MAX_HEIGHT - 160;
+const INYOMI_EVENT_LINK_BASE = 'https://inyomi.app/e';
 
 /** RSVP — strong fills + borders so controls read as real buttons on light cards */
 const MEMBER_RSVP_OPTIONS = [
@@ -197,9 +199,9 @@ export function EventDetailsBottomSheet({
 
   const [navPickerOpen, setNavPickerOpen] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
-  const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<number | null>(
-    null
-  );
+  const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<
+    number | null
+  >(null);
   const [pendingRsvpStatus, setPendingRsvpStatus] = useState<
     'yes' | 'no' | 'maybe' | null
   >(null);
@@ -273,7 +275,6 @@ export function EventDetailsBottomSheet({
 
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const deleteEventMutation = useMutation(api.events.deleteEvent);
-  const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
   const addImportantItemsToMyTasks = useMutation(
     api.tasks.addEventImportantItemsToMyTasks
   );
@@ -372,7 +373,6 @@ export function EventDetailsBottomSheet({
       eventTasks,
       myAssignedEventTasksState,
       pendingRsvpStatus,
-      setRsvpNoAndUnclaimMyEventTasks,
       showRsvpNoBlockedDialog,
       upsertRsvpMutation,
     ]
@@ -381,6 +381,7 @@ export function EventDetailsBottomSheet({
   const [importantItemsCopiedLocally, setImportantItemsCopiedLocally] =
     useState(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset local copy state when the selected event or sheet visibility changes.
   useEffect(() => {
     setImportantItemsCopiedLocally(false);
     setIsCopyingImportantItems(false);
@@ -479,40 +480,31 @@ export function EventDetailsBottomSheet({
   const handleShare = (): void => {
     if (!displayEvent) return;
     const doShare = async (): Promise<void> => {
-      const lines = [displayEvent.title];
-      if (displayEvent.startTime) {
-        let dateLine = new Date(displayEvent.startTime).toLocaleDateString(
-          'he-IL',
-          { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
-        );
-        if (!displayEvent.allDay) {
-          dateLine += ` · ${formatTime(displayEvent.startTime)}`;
-        }
-        lines.push(dateLine);
-      } else if (displayEvent.timeLabel) {
-        lines.push(displayEvent.timeLabel);
-      }
-      if (displayEvent.location) lines.push(`מיקום: ${displayEvent.location}`);
-      const shareText = lines.join('\n');
+      const message = buildCommunityEventShareMessage({
+        title: displayEvent.title,
+        eventId: displayEvent.id,
+        startTime: displayEvent.startTime,
+        dateTimeParts:
+          'dateTimeParts' in displayEvent
+            ? displayEvent.dateTimeParts
+            : undefined,
+        allDay: displayEvent.allDay,
+        timeLabel: displayEvent.timeLabel,
+        location: displayEvent.location,
+        importantItems:
+          eventImportantItems ?? displayEvent.importantItems ?? [],
+        communityName: communityRecord?.name ?? displayEvent.groupName,
+      });
 
-      if (!displayEvent.communityId && convexEventId) {
-        try {
-          const { token } = await createShareLinkMutation({
-            eventId: convexEventId,
-          });
-          await Share.share({
-            message: `${shareText}\n\nhttps://inyomi.com/shared/${token}`,
-          });
-          return;
-        } catch {
-          // Fallback to text-only share below.
-        }
-      }
-
-      await Share.share({ message: shareText });
+      await Share.share({ message });
     };
 
-    doShare().catch(() => Alert.alert('שגיאה', 'לא ניתן לשתף כרגע'));
+    doShare().catch(() => {
+      Alert.alert(
+        'שיתוף לא זמין',
+        'לא ניתן לשתף את האירוע כרגע. נסו שוב עוד רגע.'
+      );
+    });
   };
 
   const handleCancel = (): void => {
@@ -683,8 +675,7 @@ export function EventDetailsBottomSheet({
   const participantsCanSeeTasks =
     displayEvent?.tasksVisibleToParticipants === true;
   const canSeeEventTasksSection = displayEvent?.communityId
-    ? canManageTasks ||
-      Boolean(myMembership && participantsCanSeeTasks)
+    ? canManageTasks || Boolean(myMembership && participantsCanSeeTasks)
     : isEventCreator;
 
   const canEdit = displayEvent?.communityId
@@ -868,9 +859,7 @@ export function EventDetailsBottomSheet({
               ) : null}
 
               <View style={styles.heroCard}>
-                <Text style={styles.sheetTitle}>
-                  {displayEvent.title}
-                </Text>
+                <Text style={styles.sheetTitle}>{displayEvent.title}</Text>
                 {displayEvent.groupName ? (
                   <Text style={styles.groupLabel}>
                     {displayEvent.groupName}
@@ -879,7 +868,7 @@ export function EventDetailsBottomSheet({
                 <View style={styles.infoRow}>
                   <MaterialIcons color="#94a3b8" name="schedule" size={17} />
                   <View style={styles.dateTimeBlock}>
-                      <Text style={styles.dateLine}>
+                    <Text style={styles.dateLine}>
                       {displayEvent.dateTimeParts
                         ? displayEvent.dateTimeParts.dateLine
                         : displayEvent.timeLabel}
@@ -985,9 +974,7 @@ export function EventDetailsBottomSheet({
                 <View style={[styles.sectionCard, styles.rsvpMemberCard]}>
                   {showMemberRsvpButtons ? (
                     <>
-                      <Text style={styles.rsvpMemberTitle}>
-                        האם תשתתף/י?
-                      </Text>
+                      <Text style={styles.rsvpMemberTitle}>האם תשתתף/י?</Text>
                       <View style={styles.rsvpMemberButtonRow}>
                         {MEMBER_RSVP_OPTIONS.map((opt) => {
                           const isActive = currentRsvpStatus === opt.status;
@@ -1126,9 +1113,7 @@ export function EventDetailsBottomSheet({
               ) : null}
 
               <View style={styles.sectionCard}>
-                <Text style={styles.sectionTitle}>
-                  תזמון
-                </Text>
+                <Text style={styles.sectionTitle}>תזמון</Text>
                 <View style={styles.scheduleRow}>
                   <MaterialIcons color="#36a9e2" name="repeat" size={18} />
                   <Text style={styles.scheduleText}>
@@ -1144,9 +1129,7 @@ export function EventDetailsBottomSheet({
                           name="notifications-none"
                           size={16}
                         />
-                        <Text style={styles.reminderDisplayText}>
-                          {label}
-                        </Text>
+                        <Text style={styles.reminderDisplayText}>{label}</Text>
                       </View>
                     ))}
                   </View>
@@ -1173,7 +1156,9 @@ export function EventDetailsBottomSheet({
                   <Pressable
                     accessibilityLabel={importantItemsCopyLabel}
                     accessibilityRole="button"
-                    accessibilityState={{ disabled: importantItemsCopyDisabled }}
+                    accessibilityState={{
+                      disabled: importantItemsCopyDisabled,
+                    }}
                     accessible={true}
                     disabled={importantItemsCopyDisabled}
                     onPress={handleCopyImportantItems}
@@ -1193,13 +1178,9 @@ export function EventDetailsBottomSheet({
 
               {convexEventId && canSeeEventTasksSection ? (
                 <View style={styles.sectionCard}>
-                  <Text style={styles.sectionTitle}>
-                    משימות לאירוע
-                  </Text>
+                  <Text style={styles.sectionTitle}>משימות לאירוע</Text>
                   {eventTasks === undefined ? (
-                    <Text style={styles.mutedText}>
-                      טוען משימות...
-                    </Text>
+                    <Text style={styles.mutedText}>טוען משימות...</Text>
                   ) : tasks.length > 0 ? (
                     <View style={styles.compactList}>
                       {visibleTasks.map((task) => {
@@ -1224,8 +1205,7 @@ export function EventDetailsBottomSheet({
                           displayEvent.communityId &&
                           Boolean(myMembership) &&
                           participantsCanSeeTasks;
-                        const isClaimable =
-                          showSelfClaimAction && !hasAssignee;
+                        const isClaimable = showSelfClaimAction && !hasAssignee;
                         const canUnclaimHere =
                           showSelfClaimAction && isAssignedToCurrentUser;
                         const shouldShowActionChip =
@@ -1260,8 +1240,7 @@ export function EventDetailsBottomSheet({
                                   }}
                                   style={({ pressed }) => [
                                     styles.taskAssignmentAction,
-                                    canUnclaimHere &&
-                                      styles.taskAssignmentMine,
+                                    canUnclaimHere && styles.taskAssignmentMine,
                                     pressed &&
                                       styles.taskAssignmentActionPressed,
                                   ]}
@@ -2794,6 +2773,79 @@ function formatDateTimeParts(
     ? 'כל היום'
     : `${formatTime(startTime)}-${formatTime(endTime)}`;
   return { dateLine, timeLine };
+}
+
+interface CommunityEventShareMessageInput {
+  title: string;
+  eventId: string;
+  startTime?: number;
+  dateTimeParts?: { dateLine: string; timeLine: string };
+  allDay?: boolean;
+  timeLabel?: string;
+  location?: string;
+  importantItems: Array<{ id: string; title: string }>;
+  communityName?: string;
+}
+
+function buildCommunityEventShareMessage({
+  title,
+  eventId,
+  startTime,
+  dateTimeParts,
+  allDay,
+  timeLabel,
+  location,
+  importantItems,
+  communityName,
+}: CommunityEventShareMessageInput): string {
+  const trimmedCommunityName = communityName?.trim();
+  const trimmedLocation = location?.trim();
+  const trimmedImportantItems = importantItems
+    .map((item) => item.title.trim())
+    .filter((itemTitle) => itemTitle.length > 0);
+  const dateParts =
+    dateTimeParts ??
+    (startTime
+      ? {
+          dateLine: new Date(startTime).toLocaleDateString('he-IL', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+          }),
+          timeLine: allDay ? 'כל היום' : formatTime(startTime),
+        }
+      : null);
+
+  const lines = ['אירוע קהילה ב־InYomi 👥'];
+  if (trimmedCommunityName) {
+    lines.push(`קהילה: ${trimmedCommunityName}`);
+  }
+  lines.push('', title.trim());
+
+  if (dateParts) {
+    lines.push(`מתי: ${dateParts.dateLine}, ${dateParts.timeLine}`);
+  } else if (timeLabel?.trim()) {
+    lines.push(`מתי: ${timeLabel.trim()}`);
+  }
+
+  if (trimmedLocation) {
+    lines.push(`איפה: ${trimmedLocation}`);
+  }
+
+  if (trimmedImportantItems.length > 0) {
+    lines.push('', 'חשוב לזכור:');
+    lines.push(...trimmedImportantItems.map((itemTitle) => `• ${itemTitle}`));
+  }
+
+  lines.push(
+    '',
+    'נשלח דרך InYomi — עושים סדר באירועים, משימות וקהילות.',
+    'לפתיחת האירוע / הצטרפות:',
+    `${INYOMI_EVENT_LINK_BASE}/${eventId}`
+  );
+
+  return lines.join('\n');
 }
 
 function formatFileSize(sizeBytes: number): string {

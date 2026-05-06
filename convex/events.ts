@@ -292,6 +292,57 @@ export const getById = query({
   },
 });
 
+export const resolveCommunityEventLink = query({
+  args: { eventId: v.id('events') },
+  returns: v.union(
+    v.object({ status: v.literal('authRequired') }),
+    v.object({ status: v.literal('notFound') }),
+    v.object({
+      status: v.literal('notMember'),
+      communityId: v.id('communities'),
+      inviteCode: v.string(),
+    }),
+    v.object({
+      status: v.literal('ok'),
+      eventId: v.id('events'),
+      communityId: v.id('communities'),
+    })
+  ),
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { status: 'authRequired' as const };
+
+    const event = await ctx.db.get(eventId);
+    if (!event || !event.communityId || event.status === 'cancelled') {
+      return { status: 'notFound' as const };
+    }
+
+    const community = await ctx.db.get(event.communityId);
+    if (!community || community.archived === true) {
+      return { status: 'notFound' as const };
+    }
+
+    const membership = await getCommunityMembership(
+      ctx,
+      event.communityId,
+      userId
+    );
+    if (!isActiveCommunityMember(membership)) {
+      return {
+        status: 'notMember' as const,
+        communityId: event.communityId,
+        inviteCode: community.inviteCode,
+      };
+    }
+
+    return {
+      status: 'ok' as const,
+      eventId,
+      communityId: event.communityId,
+    };
+  },
+});
+
 // ─────────────────────────────────────────────────────────────
 // שליפת אירועי קהילה עם cursor pagination (לביצועים)
 // ─────────────────────────────────────────────────────────────
