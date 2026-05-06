@@ -101,6 +101,18 @@ function getReminderLabels(eventLike: unknown): string[] {
     .map(formatReminderLabel);
 }
 
+function uniqueById<T>(items: readonly T[], getId: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    const id = getId(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(item);
+  }
+  return unique;
+}
+
 // ─── RSVP Options (module-level to avoid recreating in render) ────────────────
 
 const RSVP_OPTIONS = [
@@ -194,6 +206,10 @@ export default function EventDetailScreen() {
   );
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
+    eventId ? { eventId } : 'skip'
+  );
+  const eventImportantItems = useQuery(
+    api.tasks.listEventImportantItems,
     eventId ? { eventId } : 'skip'
   );
   const importantItemsCopyState = useQuery(
@@ -551,11 +567,15 @@ export default function EventDetailScreen() {
   const canSeeTasksSection = event.communityId
     ? canManageTasks || canRegularMemberSeeTasks
     : isCreator;
+  const eventTasksForDisplay = uniqueById(
+    eventTasks ?? [],
+    (task) => task._id as string
+  );
 
   const assignedCount =
-    eventTasks?.filter(
+    eventTasksForDisplay.filter(
       (t) => !!t.assignedToUserId || !!t.assignedToManual?.trim()
-    ).length ?? 0;
+    ).length;
 
   const yesCount = rsvps?.filter((r) => r.status === 'yes').length ?? 0;
   const maybeCount = rsvps?.filter((r) => r.status === 'maybe').length ?? 0;
@@ -570,7 +590,7 @@ export default function EventDetailScreen() {
       ? formatRecurrenceLabel(event.recurringPattern)
       : 'ללא';
   const reminderLabels = getReminderLabels(event);
-  const importantItems = event.importantItems ?? [];
+  const importantItems = eventImportantItems ?? event.importantItems ?? [];
   const hasImportantItems = importantItems.length > 0;
   const importantItemsCopyLoading = importantItemsCopyState === undefined;
   const allImportantItemsCopied =
@@ -608,7 +628,7 @@ export default function EventDetailScreen() {
 
   // ── Assignee sheet: derive current assignee from the task being managed
   const _assigneeSheetTask = assigneeSheetTaskId
-    ? (eventTasks?.find((t) => t._id === assigneeSheetTaskId) ?? null)
+    ? (eventTasksForDisplay.find((t) => t._id === assigneeSheetTaskId) ?? null)
     : null;
   const currentAssigneeForSheet: LocalAssignee | null =
     _assigneeSheetTask?.assignedToUserId
@@ -961,16 +981,16 @@ export default function EventDetailScreen() {
           <View style={styles.card}>
             {/* Header: title + assignment summary */}
             <View style={styles.taskSectionHeader}>
-              {eventTasks.length > 0 ? (
+              {eventTasksForDisplay.length > 0 ? (
                 <Text
                   style={[
                     styles.taskSummary,
-                    assignedCount === eventTasks.length
+                    assignedCount === eventTasksForDisplay.length
                       ? styles.taskSummaryAllDone
                       : null,
                   ]}
                 >
-                  {`${assignedCount}/${eventTasks.length} הוקצו`}
+                  {`${assignedCount}/${eventTasksForDisplay.length} הוקצו`}
                 </Text>
               ) : null}
               <Text style={styles.sectionTitle}>משימות לאירוע</Text>
@@ -1022,7 +1042,7 @@ export default function EventDetailScreen() {
               </View>
             ) : null}
 
-            {eventTasks.length === 0 ? (
+            {eventTasksForDisplay.length === 0 ? (
               <View style={styles.emptyParticipants}>
                 <Ionicons name="list-outline" size={32} color="#d1d5db" />
                 <Text style={styles.emptyParticipantsText}>
@@ -1031,7 +1051,7 @@ export default function EventDetailScreen() {
               </View>
             ) : (
               <View style={styles.tasksList}>
-                {eventTasks.map((task) => {
+                {eventTasksForDisplay.map((task) => {
                   const assigneeDisplay = (
                     task as { assigneeDisplay?: string }
                   ).assigneeDisplay?.trim();

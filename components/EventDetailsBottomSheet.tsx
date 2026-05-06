@@ -126,6 +126,18 @@ function rsvpRowDisplayName(row: {
   return trimmed && trimmed.length > 0 ? trimmed : 'משתמש';
 }
 
+function uniqueById<T>(items: readonly T[], getId: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    const id = getId(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(item);
+  }
+  return unique;
+}
+
 export interface EventItem {
   id: string;
   time: string;
@@ -304,6 +316,10 @@ export function EventDetailsBottomSheet({
   ]);
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
+    convexEventId ? { eventId: convexEventId } : 'skip'
+  );
+  const eventImportantItems = useQuery(
+    api.tasks.listEventImportantItems,
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
   const rsvps = useQuery(
@@ -611,7 +627,7 @@ export function EventDetailsBottomSheet({
   const reminderLabels = (displayEvent?.reminders ?? [])
     .filter((r): r is number => typeof r === 'number')
     .map(formatReminderLabel);
-  const tasks = eventTasks ?? [];
+  const tasks = uniqueById(eventTasks ?? [], (task) => task._id as string);
   const visibleTasks = showAllTasks ? tasks : tasks.slice(0, 2);
   const rsvpRows = rsvps ?? [];
   const yesCount = rsvpRows.filter((r) => r.status === 'yes').length;
@@ -619,7 +635,8 @@ export function EventDetailsBottomSheet({
   const noCount = rsvpRows.filter((r) => r.status === 'no').length;
   const isOpenCommunityEvent =
     Boolean(displayEvent?.communityId) && displayEvent?.requiresRsvp === false;
-  const importantItems = displayEvent?.importantItems ?? [];
+  const importantItems =
+    eventImportantItems ?? displayEvent?.importantItems ?? [];
   const hasImportantItems = importantItems.length > 0;
   const importantItemsCopyLoading = importantItemsCopyState === undefined;
   const allImportantItemsCopied =

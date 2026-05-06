@@ -39,6 +39,132 @@ function sanitizeImportantItems(
   return sanitized.length > 0 ? sanitized : undefined;
 }
 
+function getImportantItemDueDate(eventStart: number): number | undefined {
+  if (eventStart < Date.now()) {
+    return undefined;
+  }
+  return eventStart;
+}
+
+async function syncCommunityEventImportantItemTasks(
+  ctx: MutationCtx,
+  args: {
+    eventId: Id<'events'>;
+    communityId: Id<'communities'>;
+    spaceId?: Id<'spaces'>;
+    startTime: number;
+    createdBy: Id<'users'>;
+    importantItems: Array<{ id: string; title: string }> | undefined;
+  }
+): Promise<Array<{ id: string; title: string }> | undefined> {
+  const existingTasks = (
+    await ctx.db
+      .query('tasks')
+      .withIndex('by_community', (q) => q.eq('communityId', args.communityId))
+      .collect()
+  ).filter(
+    (task) =>
+      task.sourceType === 'community_event_important_item' &&
+      task.sourceEventId === args.eventId
+  );
+
+  const canonicalTasks = existingTasks.filter(
+    (task) => task.assignedTo === undefined
+  );
+  const existingByStableId = new Map(
+    canonicalTasks.map((task) => [task._id as string, task])
+  );
+  const existingBySourceItemId = new Map(
+    canonicalTasks
+      .filter((task) => typeof task.sourceImportantItemId === 'string')
+      .map((task) => [task.sourceImportantItemId as string, task])
+  );
+  const dueDate = getImportantItemDueDate(args.startTime);
+  const keptTaskIds = new Set<string>();
+  const normalizedItems: Array<{ id: string; title: string }> = [];
+
+  for (const item of args.importantItems ?? []) {
+    const title = item.title.trim();
+    if (!title) continue;
+
+    const existingTask =
+      existingByStableId.get(item.id) ?? existingBySourceItemId.get(item.id);
+    if (existingTask) {
+      await ctx.db.patch(existingTask._id, {
+        title,
+        dueDate,
+        spaceId: undefined,
+        communityId: args.communityId,
+        sourceImportantItemId: existingTask._id,
+      });
+      keptTaskIds.add(existingTask._id as string);
+      for (const task of existingTasks) {
+        const isSameImportantItem =
+          task._id === existingTask._id ||
+          task.sourceImportantItemId === item.id ||
+          task.sourceImportantItemId === existingTask._id;
+        if (isSameImportantItem) {
+          await ctx.db.patch(task._id, {
+            title,
+            dueDate,
+            sourceImportantItemId: existingTask._id,
+          });
+          keptTaskIds.add(task._id as string);
+        }
+      }
+      normalizedItems.push({ id: existingTask._id as string, title });
+      continue;
+    }
+
+    const taskId = await ctx.db.insert('tasks', {
+      title,
+      completed: false,
+      communityId: args.communityId,
+      dueDate,
+      isAiGenerated: false,
+      createdBy: args.createdBy,
+      createdAt: Date.now(),
+      sourceType: 'community_event_important_item',
+      sourceEventId: args.eventId,
+    });
+    await ctx.db.patch(taskId, { sourceImportantItemId: taskId });
+    keptTaskIds.add(taskId as string);
+    for (const task of existingTasks) {
+      if (task.sourceImportantItemId === item.id) {
+        await ctx.db.patch(task._id, {
+          title,
+          dueDate,
+          sourceImportantItemId: taskId,
+        });
+        keptTaskIds.add(task._id as string);
+      }
+    }
+    normalizedItems.push({ id: taskId as string, title });
+  }
+
+  for (const task of existingTasks) {
+    if (!keptTaskIds.has(task._id as string)) {
+      await ctx.db.delete(task._id);
+    }
+  }
+
+  return normalizedItems.length > 0 ? normalizedItems : undefined;
+}
+
+async function getUserSpaceId(
+  ctx: MutationCtx,
+  userId: Id<'users'>
+): Promise<Id<'spaces'> | undefined> {
+  const membership = await ctx.db
+    .query('members')
+    .withIndex('by_user', (q) => q.eq('userId', userId))
+    .first();
+  if (membership?.spaceId) return membership.spaceId;
+
+  const user = await ctx.db.get(userId);
+  return user?.defaultSpaceId;
+}
+
 async function getCommunityMembership(
   ctx: MutationCtx | QueryCtx,
   communityId: Id<'communities'>,
@@ -319,7 +445,10 @@ export const listByDateRange = query({
     }
 
     const result: Array<
-      (typeof rows)[0] & { communityName?: string; isSavedToMyCalendar: boolean }
+      (typeof rows)[0] & {
+        communityName?: string;
+        isSavedToMyCalendar: boolean;
+      }
     > = [];
     for (const ev of rows) {
       const idStr = ev._id as string;
@@ -384,6 +513,9 @@ export const create = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
     const importantItems = sanitizeImportantItems(args.importantItems);
+    const resolvedSpaceId =
+      args.spaceId ??
+      (args.communityId ? await getUserSpaceId(ctx, userId) : undefined);
 
     if (args.communityId) {
       const community = await ctx.db.get(args.communityId);
@@ -421,6 +553,7 @@ export const create = mutation({
 
     const eventId = await ctx.db.insert('events', {
       ...args,
+      spaceId: resolvedSpaceId,
       attachments: stamped,
       importantItems,
       tasksVisibleToParticipants: args.tasksVisibleToParticipants ?? false,
@@ -448,6 +581,21 @@ export const create = mutation({
           createdAt: now,
         });
       }
+    }
+
+    if (args.communityId) {
+      const syncedImportantItems = await syncCommunityEventImportantItemTasks(
+        ctx,
+        {
+          eventId,
+          communityId: args.communityId,
+          spaceId: resolvedSpaceId,
+          startTime: args.startTime,
+          createdBy: userId,
+          importantItems,
+        }
+      );
+      await ctx.db.patch(eventId, { importantItems: syncedImportantItems });
     }
 
     return eventId;
@@ -541,13 +689,27 @@ export const update = mutation({
     }
 
     const sanitizedImportantItems = sanitizeImportantItems(importantItems);
+    const resolvedSpaceId =
+      existing.spaceId ??
+      (existing.communityId ? await getUserSpaceId(ctx, userId) : undefined);
+    const syncedImportantItems =
+      importantItems !== undefined && existing.communityId
+        ? await syncCommunityEventImportantItemTasks(ctx, {
+            eventId: id,
+            communityId: existing.communityId,
+            spaceId: resolvedSpaceId,
+            startTime: fields.startTime ?? existing.startTime,
+            createdBy: existing.createdBy,
+            importantItems: sanitizedImportantItems,
+          })
+        : sanitizedImportantItems;
     await ctx.db.patch(id, {
       ...fields,
       ...(stampedAttachments !== undefined
         ? { attachments: stampedAttachments }
         : {}),
       ...(importantItems !== undefined
-        ? { importantItems: sanitizedImportantItems }
+        ? { importantItems: syncedImportantItems }
         : {}),
     });
   },

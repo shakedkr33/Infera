@@ -102,6 +102,18 @@ function isEventPast(event: EventDoc): boolean {
   return event.endTime < now;
 }
 
+function uniqueById<T>(items: readonly T[], getId: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    const id = getId(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(item);
+  }
+  return unique;
+}
+
 function formatEventDate(ts: number, allDay?: boolean): string {
   const d = new Date(ts);
   if (allDay) {
@@ -1162,7 +1174,10 @@ function TabAll({
         const snap = pendingSnapshots.get(id);
         return snap ? [{ ...snap, completed: false }] : [];
       });
-    return [...fromQuery, ...fromLocalCache, ...fromPendingCache];
+    return uniqueById(
+      [...fromQuery, ...fromLocalCache, ...fromPendingCache],
+      (task) => task._id as string
+    );
   }, [
     reminders,
     localCompletedIds,

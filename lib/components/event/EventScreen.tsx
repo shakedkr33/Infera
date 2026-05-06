@@ -215,6 +215,7 @@ export default function EventScreen({
   const [isDirty, setIsDirty] = useState(!isEditMode);
   const [titleError, setTitleError] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [importantItemDraft, setImportantItemDraft] = useState('');
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -263,8 +264,9 @@ export default function EventScreen({
       );
       return;
     }
-    if (isSaving) return;
+    if (isSavingRef.current) return;
 
+    isSavingRef.current = true;
     setIsSaving(true);
     try {
       if (onSave) {
@@ -286,6 +288,7 @@ export default function EventScreen({
     } catch {
       Alert.alert('שגיאה', 'לא ניתן לשמור. נסה שוב.');
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };

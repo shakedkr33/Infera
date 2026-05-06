@@ -321,10 +321,7 @@ export default function EditEventScreen(): React.JSX.Element {
         reminders: data.remindersEnabled
           ? data.reminders.map((r) => r.offsetMinutes)
           : [],
-        importantItems:
-          data.importantItems && data.importantItems.length > 0
-            ? data.importantItems
-            : undefined,
+        importantItems: data.importantItems ?? [],
       });
 
       // ── Task diff ────────────────────────────────────────────────────────────

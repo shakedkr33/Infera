@@ -13,6 +13,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -29,6 +30,8 @@ const MUTED_TEXT = '#8A94A6';
 const TITLE_COLOR = '#111827';
 const MENU_BTN_BG = '#F3F6FA';
 const MENU_ICON_COLOR = '#7A8699';
+const GRID_HORIZONTAL_PADDING = 16;
+const GRID_COLUMN_GAP = 14;
 
 const FILTER_CHIPS = [
   'הכל',
@@ -195,9 +198,13 @@ function ActivitySummary({ nextActivity, referenceNow }: ActivitySummaryProps) {
 
 // ─── Skeleton Card ────────────────────────────────────────────────────────────
 
-function SkeletonCard() {
+interface SkeletonCardProps {
+  width: number;
+}
+
+function SkeletonCard({ width }: SkeletonCardProps) {
   return (
-    <View style={styles.cardWrapper}>
+    <View style={[styles.cardWrapper, { width }]}>
       <View style={styles.cardInner}>
         <View style={styles.skeletonTopRow}>
           <View style={[styles.skeletonCircle]} />
@@ -221,6 +228,7 @@ interface CardProps {
   onMenuPress: (ref: View | null) => void;
   onPress: () => void;
   referenceNow: number;
+  width: number;
 }
 
 function CommunityCard({
@@ -228,6 +236,7 @@ function CommunityCard({
   onMenuPress,
   onPress,
   referenceNow,
+  width,
 }: CardProps) {
   const { community } = item;
   const menuRef = useRef<View>(null);
@@ -248,7 +257,7 @@ function CommunityCard({
 
   return (
     <Pressable
-      style={styles.cardWrapper}
+      style={[styles.cardWrapper, { width }]}
       onPress={onPress}
       accessible
       accessibilityRole="button"
@@ -425,6 +434,7 @@ function PopoverMenu({ visible, position, onClose, items }: PopoverMenuProps) {
 
 export default function CommunitiesScreen() {
   const router = useRouter();
+  const { width: screenWidth } = useWindowDimensions();
 
   const [viewerNow, setViewerNow] = useState(() => Date.now());
   useEffect(() => {
@@ -770,6 +780,8 @@ export default function CommunitiesScreen() {
   );
 
   const isLoading = communitiesData === undefined;
+  const availableGridWidth = screenWidth - GRID_HORIZONTAL_PADDING * 2;
+  const cardWidth = (availableGridWidth - GRID_COLUMN_GAP) / 2;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -841,7 +853,7 @@ export default function CommunitiesScreen() {
           numColumns={2}
           columnWrapperStyle={styles.columnWrapper}
           contentContainerStyle={styles.listContent}
-          renderItem={() => <SkeletonCard />}
+          renderItem={() => <SkeletonCard width={cardWidth} />}
         />
       ) : filtered.length === 0 ? (
         <View style={styles.emptyContainer}>
@@ -882,6 +894,7 @@ export default function CommunitiesScreen() {
                 );
               }}
               referenceNow={viewerNow}
+              width={cardWidth}
             />
           )}
         />
@@ -1143,12 +1156,15 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#fff' },
 
   // ── Grid
-  listContent: { padding: 16, gap: 14 },
-  columnWrapper: { gap: 14 },
+  listContent: { padding: GRID_HORIZONTAL_PADDING, gap: 14 },
+  columnWrapper: {
+    flexDirection: 'row-reverse',
+    gap: GRID_COLUMN_GAP,
+    justifyContent: 'flex-start',
+  },
 
   // ── Card — LTR row: accent strip stays on the physical right edge
   cardWrapper: {
-    flex: 1,
     backgroundColor: '#fff',
     borderRadius: 24,
     direction: 'ltr',
