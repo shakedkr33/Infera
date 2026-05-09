@@ -52,7 +52,10 @@ export default function SharedEventPreview(): React.JSX.Element {
     api.shareLinks.getSharePreview,
     token ? { token } : 'skip'
   );
-  const spaceId = useQuery(api.users.getMySpace, isAuthenticated ? {} : 'skip');
+  const spaceId = useQuery(
+    api.users.getMySpace,
+    isAuthenticated ? {} : 'skip'
+  );
   const saveLinkedEvent = useMutation(api.linkedEvents.saveLinkedEvent);
 
   const [saved, setSaved] = useState(false);
@@ -101,11 +104,7 @@ export default function SharedEventPreview(): React.JSX.Element {
       <SafeAreaView style={s.safe} edges={['top']}>
         <View style={s.headerBar}>
           <Pressable
-            onPress={() =>
-              router.canGoBack()
-                ? router.back()
-                : router.replace('/(authenticated)')
-            }
+            onPress={() => router.canGoBack() ? router.back() : router.replace('/(authenticated)')}
             style={s.backBtn}
             accessible
             accessibilityRole="button"
@@ -156,11 +155,7 @@ export default function SharedEventPreview(): React.JSX.Element {
       {/* Header */}
       <View style={s.headerBar}>
         <Pressable
-          onPress={() =>
-            router.canGoBack()
-              ? router.back()
-              : router.replace('/(authenticated)')
-          }
+          onPress={() => router.canGoBack() ? router.back() : router.replace('/(authenticated)')}
           style={s.backBtn}
           accessible
           accessibilityRole="button"
@@ -237,12 +232,12 @@ export default function SharedEventPreview(): React.JSX.Element {
             disabled={saving}
             accessible
             accessibilityRole="button"
-            accessibilityLabel="להוסיף ליומן"
+            accessibilityLabel="הוסף ליומן שלי"
           >
             {saving ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={s.primaryBtnText}>להוסיף ליומן</Text>
+              <Text style={s.primaryBtnText}>הוסף ליומן שלי</Text>
             )}
           </Pressable>
         ) : (

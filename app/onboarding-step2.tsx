@@ -56,13 +56,13 @@ export default function OnboardingStep2() {
             />
           </Pressable>
           <Text style={{ color: colors.sage }} className="font-bold">
-            שלב 2 מתוך 3
+            שלב 2 מתוך 4
           </Text>
           <View className="w-10" />
         </View>
         <View className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
           <View
-            className="h-full w-2/3 rounded-full"
+            className="h-full w-2/4 rounded-full"
             style={{ backgroundColor: colors.sage }}
           />
         </View>

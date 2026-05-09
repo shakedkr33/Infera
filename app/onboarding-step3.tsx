@@ -1,6 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
@@ -17,7 +17,7 @@ const sources = [
 export default function OnboardingStep3() {
   const router = useRouter();
   const { data, updateData } = useOnboarding();
-  const [selected, setSelected] = useState<string[]>(data.sources || []);
+  const [selected, setSelected] = useState<string[]>(data.infoSources || []);
 
   const toggleSelection = (id: string) => {
     setSelected((prev) =>
@@ -26,8 +26,8 @@ export default function OnboardingStep3() {
   };
 
   const handleContinue = () => {
-    updateData({ sources: selected });
-    router.replace('/(auth)/sign-in');
+    updateData({ infoSources: selected });
+    router.push('/onboarding-step4');
   };
 
   return (
@@ -43,13 +43,13 @@ export default function OnboardingStep3() {
             />
           </Pressable>
           <Text style={{ color: colors.sage }} className="font-bold">
-            שלב 3 מתוך 3
+            שלב 3 מתוך 4
           </Text>
           <View className="w-10" />
         </View>
         <View className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
           <View
-            className="h-full w-full rounded-full"
+            className="h-full w-3/4 rounded-full"
             style={{ backgroundColor: colors.sage }}
           />
         </View>
