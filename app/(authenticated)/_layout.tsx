@@ -7,6 +7,7 @@ import { useContext, useEffect, useRef, useState } from 'react';
 // Same key exported from app/shared/[token].tsx — kept here as a literal to avoid
 // dynamic-segment import issues in the module resolver.
 const PENDING_SHARE_TOKEN_KEY = 'pendingShareToken';
+
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -23,6 +24,7 @@ import { ActionSheetContext } from '@/contexts/ActionSheetContext';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
+import { PENDING_COMMUNITY_EVENT_ID_KEY } from '@/lib/pendingEventLink';
 
 // ─── Regular Tab Button (icon + label wrapped in selection pill) ──────────────
 
@@ -177,7 +179,11 @@ export default function AuthenticatedLayout() {
   // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition
   // hasLocalOnboardingData lets a just-registered user through while Convex
   // propagates the finishOnboarding mutation result (avoids redirect loop).
-  const { data: onboardingData, updateData, hydrateFromServer } = useOnboarding();
+  const {
+    data: onboardingData,
+    updateData,
+    hydrateFromServer,
+  } = useOnboarding();
   const hasLocalOnboardingData = !!onboardingData.spaceType;
   const finishOnboarding = useMutation(api.onboarding.finishOnboarding);
   // Ref guard prevents a second mutation call if a render occurs while the first is in-flight.
@@ -214,7 +220,8 @@ export default function AuthenticatedLayout() {
       onboardingData.onboardingCompleted ||
       !myProfile ||
       hydratedRef.current
-    ) return;
+    )
+      return;
 
     hydratedRef.current = true;
     hydrateFromServer(myProfile);
@@ -233,11 +240,13 @@ export default function AuthenticatedLayout() {
     if (
       !isAuthenticated ||
       userStatus === undefined ||
+      userStatus === null ||
       userStatus.onboardingComplete ||
       !hasLocalOnboardingData ||
       onboardingData.onboardingCompleted ||
       savingRef.current
-    ) return;
+    )
+      return;
 
     savingRef.current = true;
     finishOnboarding({
@@ -289,6 +298,23 @@ export default function AuthenticatedLayout() {
             params: { token: pendingToken },
           });
         });
+      })
+      .catch(() => {});
+  }, [isAuthenticated, router]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    AsyncStorage.getItem(PENDING_COMMUNITY_EVENT_ID_KEY)
+      .then((pendingEventId) => {
+        if (!pendingEventId) return;
+        return AsyncStorage.removeItem(PENDING_COMMUNITY_EVENT_ID_KEY).then(
+          () => {
+            router.replace({
+              pathname: '/e/[eventId]',
+              params: { eventId: pendingEventId },
+            });
+          }
+        );
       })
       .catch(() => {});
   }, [isAuthenticated, router]);
@@ -428,6 +454,8 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="import-calendar" options={{ href: null }} />
           <Tabs.Screen name="import-holidays" options={{ href: null }} />
           <Tabs.Screen name="family-profile" options={{ href: null }} />
+          <Tabs.Screen name="family-profile-setup" options={{ href: null }} />
+          <Tabs.Screen name="family-bootstrap" options={{ href: null }} />
           <Tabs.Screen name="community-create" options={{ href: null }} />
           <Tabs.Screen name="community-edit/[id]" options={{ href: null }} />
           <Tabs.Screen name="event-edit/[id]" options={{ href: null }} />

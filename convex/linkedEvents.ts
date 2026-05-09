@@ -54,9 +54,9 @@ async function resolveLinkedEventData(
     endTime: source.endTime as number,
     location: source.location as string | undefined,
     allDay: (source.allDay as boolean | undefined) ?? false,
-    resolvedStatus: (source.status === 'cancelled'
-      ? 'cancelled'
-      : 'active') as 'active' | 'cancelled',
+    resolvedStatus: (source.status === 'cancelled' ? 'cancelled' : 'active') as
+      | 'active'
+      | 'cancelled',
   };
 }
 
@@ -104,8 +104,7 @@ export const saveLinkedEvent = mutation({
       ownerUserId: sourceEvent.createdBy,
       spaceId,
       // Inherit cancelled status if source is already cancelled
-      sourceStatus:
-        sourceEvent.status === 'cancelled' ? 'cancelled' : 'active',
+      sourceStatus: sourceEvent.status === 'cancelled' ? 'cancelled' : 'active',
       // Snapshot — 4 public fields only; notes/participants/attachments excluded (privacy)
       snapshotTitle: sourceEvent.title,
       snapshotStartTime: sourceEvent.startTime,
@@ -235,7 +234,9 @@ export const getLinkedEventDetail = query({
     // Owner name for labeling in the detail screen
     const owner = await ctx.db.get(linked.ownerUserId);
     const ownerName =
-      (owner as { fullName?: string; phone?: string } | null)?.fullName?.trim() ||
+      (
+        owner as { fullName?: string; phone?: string } | null
+      )?.fullName?.trim() ||
       ((owner as { phone?: string } | null)?.phone
         ? `...${(owner as { phone: string }).phone.slice(-4)}`
         : null);

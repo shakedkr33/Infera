@@ -1,10 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import { useQuery } from 'convex/react';
-import { useRouter } from 'expo-router';
+import { useMutation, useQuery } from 'convex/react';
+import { usePathname, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { normalizeIsraeliPhone } from '../../lib/phoneUtils';
-import { maskPhone } from '../../lib/utils/contactPhone';
-import { api } from '../../convex/_generated/api';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -19,7 +16,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-
 import { AddPersonBottomSheet } from '../../components/onboarding/AddPersonBottomSheet';
 import {
   ColorPicker,
@@ -34,22 +30,30 @@ import {
 import { colors, shadows } from '../../constants/theme';
 import type { FamilyMember } from '../../contexts/OnboardingContext';
 import { useOnboarding } from '../../contexts/OnboardingContext';
+import { api } from '../../convex/_generated/api';
 // FIXED: verified family member status reactivity after matchedUserId update
 import {
   MAX_PEOPLE,
   MAX_PETS,
   useFamilyProfileEditor,
 } from '../../hooks/useFamilyProfileEditor';
+import { normalizeIsraeliPhone } from '../../lib/phoneUtils';
+import { maskPhone } from '../../lib/utils/contactPhone';
 
 // FIXED: share-sheet invitation implemented for "שלח הזמנה" and "שלח שוב"
 const INVITE_LINK = 'https://inyomi.app/join';
 
 export default function FamilyProfileScreen() {
   const router = useRouter();
+  const pathname = usePathname();
+  const isOptionalPostAuthSetup =
+    pathname?.includes('family-profile-setup') ?? false;
+  const markFamilySetupSkipped = useMutation(api.users.markFamilySetupSkipped);
   const { data } = useOnboarding();
 
-  // FIXED: removed isPersonalOnly flag — screen is unified for all space types
-  const screenTitle = 'ניהול פרופיל';
+  const screenTitle = isOptionalPostAuthSetup
+    ? 'נגדיר את המשפחה?'
+    : 'ניהול פרופיל';
 
   // Initialise from previously saved context data (unlike onboarding which starts empty)
   const editor = useFamilyProfileEditor(data.familyData?.familyMembers ?? []);
@@ -113,6 +117,12 @@ export default function FamilyProfileScreen() {
     cancelConversion,
   } = editor;
 
+  const handleSkipOptionalSetup = (): void => {
+    markFamilySetupSkipped()
+      .then(() => router.replace('/(authenticated)'))
+      .catch(() => router.replace('/(authenticated)'));
+  };
+
   // FIXED: profile form now collapses to saved display card after save
   // FIXED: profile card now opens collapsed if user already has saved data
   const [profileSaved, setProfileSaved] = useState(
@@ -125,9 +135,18 @@ export default function FamilyProfileScreen() {
   // FIXED: delete confirmation dialog text aligned right (RTL)
   const [deleteTarget, setDeleteTarget] = useState<FamilyMember | null>(null);
 
-  const handleFirstNameChange = (v: string) => { setFirstName(v); setProfileSaved(false); };
-  const handleLastNameChange = (v: string) => { setLastName(v); setProfileSaved(false); };
-  const handleNicknameChange = (v: string) => { setNickname(v); setProfileSaved(false); };
+  const handleFirstNameChange = (v: string) => {
+    setFirstName(v);
+    setProfileSaved(false);
+  };
+  const handleLastNameChange = (v: string) => {
+    setLastName(v);
+    setProfileSaved(false);
+  };
+  const handleNicknameChange = (v: string) => {
+    setNickname(v);
+    setProfileSaved(false);
+  };
 
   const handleSaveProfile = () => {
     handleSavePersonalName();
@@ -135,7 +154,9 @@ export default function FamilyProfileScreen() {
   };
 
   // FIXED: displayName shows "firstName lastName (nickname)" format
-  const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(' ');
+  const fullName = [firstName.trim(), lastName.trim()]
+    .filter(Boolean)
+    .join(' ');
   const displayName = fullName
     ? nickname.trim()
       ? `${fullName} (${nickname.trim()})`
@@ -160,7 +181,7 @@ export default function FamilyProfileScreen() {
   const statusRank: Record<string, number> = { none: 0, invited: 1, joined: 2 };
   const maxInviteStatus = (
     a: FamilyMember['inviteStatus'],
-    b: FamilyMember['inviteStatus'],
+    b: FamilyMember['inviteStatus']
   ): FamilyMember['inviteStatus'] => {
     const ra = statusRank[a ?? 'none'] ?? 0;
     const rb = statusRank[b ?? 'none'] ?? 0;
@@ -180,7 +201,7 @@ export default function FamilyProfileScreen() {
       matchedUserId: serverMatch.matchedUserId ?? localMember.matchedUserId,
       inviteStatus: maxInviteStatus(
         serverMatch.inviteStatus as FamilyMember['inviteStatus'],
-        localMember.inviteStatus,
+        localMember.inviteStatus
       ),
     };
   });
@@ -214,7 +235,8 @@ export default function FamilyProfileScreen() {
             matchedUserId: contact.matchedUserId,
             inviteStatus: contact.inviteStatus as FamilyMember['inviteStatus'],
             sourceType: phone ? ('contact' as const) : ('manual' as const),
-            maskedPhone: contact.maskedPhone ?? (phone ? maskPhone(phone) : undefined),
+            maskedPhone:
+              contact.maskedPhone ?? (phone ? maskPhone(phone) : undefined),
           };
         });
 
@@ -225,7 +247,10 @@ export default function FamilyProfileScreen() {
     const rows = serverFamilyContacts?.members ?? [];
     const matched = rows.find((s) => {
       if (member.selectedPhoneNumber && s.selectedPhoneNumber) {
-        return normalizePhone(s.selectedPhoneNumber) === normalizePhone(member.selectedPhoneNumber);
+        return (
+          normalizePhone(s.selectedPhoneNumber) ===
+          normalizePhone(member.selectedPhoneNumber)
+        );
       }
       return s.displayName === member.name;
     });
@@ -288,7 +313,11 @@ export default function FamilyProfileScreen() {
         {/* Top bar */}
         <View className="flex-row items-center justify-between px-5 pt-3 pb-1">
           <Pressable
-            onPress={() => router.back()}
+            onPress={() =>
+              isOptionalPostAuthSetup
+                ? router.replace('/(authenticated)')
+                : router.back()
+            }
             accessible={true}
             accessibilityRole="button"
             accessibilityLabel="חזרה"
@@ -308,6 +337,15 @@ export default function FamilyProfileScreen() {
           </Text>
           <View className="w-10" />
         </View>
+
+        {isOptionalPostAuthSetup ? (
+          <View className="px-5 pb-3">
+            <Text className="text-right text-sm leading-relaxed text-gray-600">
+              כדי ש־InYomi תוכל להציג צבעים, משתתפים ותזכורות לפי בני המשפחה,
+              אפשר להגדיר עכשיו את הפרופיל המשפחתי.
+            </Text>
+          </View>
+        ) : null}
 
         <ScrollView
           className="flex-1 px-5"
@@ -349,15 +387,23 @@ export default function FamilyProfileScreen() {
                   </Text>
                   {/* FIXED: admin badge shown on the personal card for the space admin */}
                   {isAdmin && (
-                    <View style={{
-                      marginTop: 3,
-                      paddingHorizontal: 8,
-                      paddingVertical: 2,
-                      borderRadius: 99,
-                      backgroundColor: '#e8f5fd',
-                      alignSelf: 'flex-end',
-                    }}>
-                      <Text style={{ fontSize: 10, fontWeight: '700', color: '#36a9e2' }}>
+                    <View
+                      style={{
+                        marginTop: 3,
+                        paddingHorizontal: 8,
+                        paddingVertical: 2,
+                        borderRadius: 99,
+                        backgroundColor: '#e8f5fd',
+                        alignSelf: 'flex-end',
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 10,
+                          fontWeight: '700',
+                          color: '#36a9e2',
+                        }}
+                      >
                         מנהל/ת המשפחה
                       </Text>
                     </View>
@@ -366,13 +412,18 @@ export default function FamilyProfileScreen() {
               </View>
             </Pressable>
           ) : (
-            <View className="bg-white rounded-3xl p-5 mb-6" style={shadows.soft}>
+            <View
+              className="bg-white rounded-3xl p-5 mb-6"
+              style={shadows.soft}
+            >
               <View className="flex-row-reverse items-center gap-4 mb-4">
                 <View
                   className="w-14 h-14 rounded-full items-center justify-center"
                   style={{ backgroundColor: personalColor }}
                 >
-                  <Text style={{ color: 'white', fontSize: 22, fontWeight: '700' }}>
+                  <Text
+                    style={{ color: 'white', fontSize: 22, fontWeight: '700' }}
+                  >
                     {(firstName || '?').charAt(0)}
                   </Text>
                 </View>
@@ -425,7 +476,9 @@ export default function FamilyProfileScreen() {
                     className="mt-1 h-12 rounded-xl items-center justify-center"
                     style={{ backgroundColor: colors.primary }}
                   >
-                    <Text className="text-white font-bold text-base">שמירת פרטים</Text>
+                    <Text className="text-white font-bold text-base">
+                      שמירת פרטים
+                    </Text>
                   </Pressable>
                   {personalSaved ? (
                     <Text
@@ -444,7 +497,10 @@ export default function FamilyProfileScreen() {
               <ColorPicker
                 selectedColor={personalColor}
                 onSelectColor={setPersonalColor}
-                takenColors={familyMembers.map((m) => ({ color: m.color, name: m.name }))}
+                takenColors={familyMembers.map((m) => ({
+                  color: m.color,
+                  name: m.name,
+                }))}
                 size={38}
               />
             </View>
@@ -458,7 +514,8 @@ export default function FamilyProfileScreen() {
 
           {/* Explainer text */}
           <Text className="text-xs text-gray-400 text-right mb-4 pr-1 leading-relaxed">
-            אפשר להוסיף בני משפחה דרך אנשי קשר כדי להזמין אותם בהמשך, או ליצור פרופיל פנימי לילדים ובני משפחה בלי סמארטפון לצורך שיוך וסינון.
+            אפשר להוסיף בני משפחה דרך אנשי קשר כדי להזמין אותם בהמשך, או ליצור
+            פרופיל פנימי לילדים ובני משפחה בלי סמארטפון לצורך שיוך וסינון.
           </Text>
 
           {/* FIXED: add buttons hidden for members — admin only */}
@@ -468,7 +525,10 @@ export default function FamilyProfileScreen() {
               {/* FIXED: added pressed state feedback to "הוספה מאנשי קשר" button */}
               {/* FIXED: restored button box with NativeWind layout + dynamic pressed state via style function */}
               <Pressable
-                onPress={() => { setOpenSheetToContacts(true); openAddPersonSheet(); }}
+                onPress={() => {
+                  setOpenSheetToContacts(true);
+                  openAddPersonSheet();
+                }}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="הוספה מאנשי קשר"
@@ -479,13 +539,23 @@ export default function FamilyProfileScreen() {
                   opacity: pressed ? 0.85 : 1,
                 })}
               >
-                <MaterialIcons name="contacts" size={16} color={colors.primary} />
-                <Text className="font-semibold text-sm" style={{ color: colors.primary }}>
+                <MaterialIcons
+                  name="contacts"
+                  size={16}
+                  color={colors.primary}
+                />
+                <Text
+                  className="font-semibold text-sm"
+                  style={{ color: colors.primary }}
+                >
                   הוספה מאנשי קשר
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => { cancelPending(); startManualAddPerson(); }}
+                onPress={() => {
+                  cancelPending();
+                  startManualAddPerson();
+                }}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="הוספה ידנית"
@@ -512,26 +582,28 @@ export default function FamilyProfileScreen() {
               {/* FIXED: prevented duplicate card render for same family member */}
               {/* FIXED: edit form only shown for admins — isAdmin guard added */}
               {displayMembers
-                .filter((m, idx, arr) => arr.findIndex((x) => x.id === m.id) === idx)
-                .map((member) =>
-                isAdmin && editingId === member.id && pendingMember ? (
-                  renderEditCard(member)
-                ) : (
-                  <FamilyMemberManagementCard
-                    key={member.id}
-                    member={member}
-                    isAdmin={isAdmin}
-                    adminUserId={adminUserId}
-                    onEdit={() => startEditMember(member)}
-                    onRemove={() => handleDeleteMember(member)}
-                    onSendInvite={() => handleSendInvite(member)}
-                    onConvertToContact={() => {
-                      setOpenSheetToContacts(true);
-                      startConvertToContact(member);
-                    }}
-                  />
+                .filter(
+                  (m, idx, arr) => arr.findIndex((x) => x.id === m.id) === idx
                 )
-              )}
+                .map((member) =>
+                  isAdmin && editingId === member.id && pendingMember ? (
+                    renderEditCard(member)
+                  ) : (
+                    <FamilyMemberManagementCard
+                      key={member.id}
+                      member={member}
+                      isAdmin={isAdmin}
+                      adminUserId={adminUserId}
+                      onEdit={() => startEditMember(member)}
+                      onRemove={() => handleDeleteMember(member)}
+                      onSendInvite={() => handleSendInvite(member)}
+                      onConvertToContact={() => {
+                        setOpenSheetToContacts(true);
+                        startConvertToContact(member);
+                      }}
+                    />
+                  )
+                )}
               {isAddingNewPerson && pendingMember && (
                 <FamilyMemberEditCard
                   name={pendingMember.name}
@@ -584,7 +656,7 @@ export default function FamilyProfileScreen() {
             הוסיפו את חיית המחמד שלכם כדי לעקוב אחרי כל המשימות והאירועים שלה
           </Text>
           <View className="bg-white rounded-3xl p-5 mb-4" style={shadows.soft}>
-              {petMembers.length === 0 && !isAddingNewPet ? (
+            {petMembers.length === 0 && !isAddingNewPet ? (
               <View className="items-center py-3" style={styles.dashedBorder}>
                 <MaterialIcons name="pets" size={38} color="#d1d5db" />
                 <Text className="text-gray-400 font-semibold mt-2 mb-1 text-center">
@@ -625,7 +697,9 @@ export default function FamilyProfileScreen() {
                       member={member}
                       isAdmin={isAdmin}
                       onEdit={() => startEditMember(member)}
-                      onRemove={() => removeMember(member.id, findEntityRowId(member))}
+                      onRemove={() =>
+                        removeMember(member.id, findEntityRowId(member))
+                      }
                     />
                   )
                 )}
@@ -647,36 +721,63 @@ export default function FamilyProfileScreen() {
                   />
                 )}
                 {/* FIXED: pet add/quota UI hidden for members */}
-                {isAdmin && (canAddPet ? (
-                  <Pressable
-                    onPress={handleAddPet}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel="הוספת חיית מחמד נוספת"
-                    className="flex-row-reverse items-center justify-center gap-2 py-3 border border-dashed border-gray-200 rounded-xl mt-1"
-                  >
-                    <MaterialIcons
-                      name="pets"
-                      size={18}
-                      color={colors.primary}
-                    />
-                    <Text
-                      style={{ color: colors.primary }}
-                      className="font-semibold"
+                {isAdmin &&
+                  (canAddPet ? (
+                    <Pressable
+                      onPress={handleAddPet}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel="הוספת חיית מחמד נוספת"
+                      className="flex-row-reverse items-center justify-center gap-2 py-3 border border-dashed border-gray-200 rounded-xl mt-1"
                     >
-                      הוספת חיית מחמד
+                      <MaterialIcons
+                        name="pets"
+                        size={18}
+                        color={colors.primary}
+                      />
+                      <Text
+                        style={{ color: colors.primary }}
+                        className="font-semibold"
+                      >
+                        הוספת חיית מחמד
+                      </Text>
+                    </Pressable>
+                  ) : (
+                    <Text className="text-xs text-gray-300 text-center mt-2">
+                      הגעת למכסה של {MAX_PETS} חיות מחמד.
                     </Text>
-                  </Pressable>
-                ) : (
-                  <Text className="text-xs text-gray-300 text-center mt-2">
-                    הגעת למכסה של {MAX_PETS} חיות מחמד.
-                  </Text>
-                ))}
+                  ))}
               </>
             )}
           </View>
-
         </ScrollView>
+
+        {isOptionalPostAuthSetup ? (
+          <View className="border-t border-gray-200 bg-[#f6f7f8] px-5 pb-4 pt-4">
+            <Pressable
+              onPress={() => openAddPersonSheet()}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="הגדרת המשפחה"
+              className="mb-3 h-12 items-center justify-center rounded-2xl bg-[#36a9e2]"
+            >
+              <Text className="font-bold text-base text-white">
+                הגדרת המשפחה
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={handleSkipOptionalSetup}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="לא עכשיו, אפשר להשלים אחר כך"
+              className="h-12 items-center justify-center rounded-xl py-2"
+            >
+              <Text className="text-center text-base text-gray-600">
+                לא עכשיו, אפשר להשלים אחר כך
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
       </KeyboardAvoidingView>
 
       {/* FIXED: "הפוך לאיש קשר" updates existing record in place, preserves existing fields */}
@@ -688,7 +789,9 @@ export default function FamilyProfileScreen() {
           cancelConversion();
         }}
         onContactSelected={
-          convertingToContactId ? handleContactForConversion : handleContactSelected
+          convertingToContactId
+            ? handleContactForConversion
+            : handleContactSelected
         }
         onManual={startManualAddPerson}
         openContactsDirectly={openSheetToContacts}
@@ -702,47 +805,112 @@ export default function FamilyProfileScreen() {
         onRequestClose={() => setDeleteTarget(null)}
       >
         <Pressable
-          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
           onPress={() => setDeleteTarget(null)}
           accessible={false}
         >
           <Pressable
-            style={{ width: '82%', backgroundColor: 'white', borderRadius: 18, padding: 24 }}
+            style={{
+              width: '82%',
+              backgroundColor: 'white',
+              borderRadius: 18,
+              padding: 24,
+            }}
             onPress={() => {}}
             accessible={false}
           >
-            <Text style={{ fontSize: 17, fontWeight: '700', color: '#111827', textAlign: 'right', marginBottom: 8 }}>
+            <Text
+              style={{
+                fontSize: 17,
+                fontWeight: '700',
+                color: '#111827',
+                textAlign: 'right',
+                marginBottom: 8,
+              }}
+            >
               מחיקת בן משפחה
             </Text>
-            <Text style={{ fontSize: 14, color: '#6b7280', textAlign: 'right', lineHeight: 22, marginBottom: 24 }}>
+            <Text
+              style={{
+                fontSize: 14,
+                color: '#6b7280',
+                textAlign: 'right',
+                lineHeight: 22,
+                marginBottom: 24,
+              }}
+            >
               {`האם למחוק את ${deleteTarget?.name ?? ''} מהפרופיל המשפחתי?`}
             </Text>
             <View style={{ flexDirection: 'row-reverse', gap: 10 }}>
               <Pressable
                 onPress={() => {
                   if (deleteTarget) {
-                    console.log('[DELETE] deleteTarget:', deleteTarget?.name, deleteTarget?.id);
-                    console.log('[DELETE] findEntityRowId result:', findEntityRowId(deleteTarget));
-                    console.log('[DELETE] serverFamilyContacts members:', JSON.stringify(serverFamilyContacts?.members?.map(m => ({ _id: m._id, displayName: m.displayName, selectedPhone: m.selectedPhoneNumber }))));
-                    removeMember(deleteTarget.id, findEntityRowId(deleteTarget));
+                    console.log(
+                      '[DELETE] deleteTarget:',
+                      deleteTarget?.name,
+                      deleteTarget?.id
+                    );
+                    console.log(
+                      '[DELETE] findEntityRowId result:',
+                      findEntityRowId(deleteTarget)
+                    );
+                    console.log(
+                      '[DELETE] serverFamilyContacts members:',
+                      JSON.stringify(
+                        serverFamilyContacts?.members?.map((m) => ({
+                          _id: m._id,
+                          displayName: m.displayName,
+                          selectedPhone: m.selectedPhoneNumber,
+                        }))
+                      )
+                    );
+                    removeMember(
+                      deleteTarget.id,
+                      findEntityRowId(deleteTarget)
+                    );
                   }
                   setDeleteTarget(null);
                 }}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="מחיקה"
-                style={{ flex: 1, backgroundColor: '#fee2e2', borderRadius: 10, paddingVertical: 13, alignItems: 'center' }}
+                style={{
+                  flex: 1,
+                  backgroundColor: '#fee2e2',
+                  borderRadius: 10,
+                  paddingVertical: 13,
+                  alignItems: 'center',
+                }}
               >
-                <Text style={{ fontSize: 15, fontWeight: '600', color: '#dc2626' }}>מחיקה</Text>
+                <Text
+                  style={{ fontSize: 15, fontWeight: '600', color: '#dc2626' }}
+                >
+                  מחיקה
+                </Text>
               </Pressable>
               <Pressable
                 onPress={() => setDeleteTarget(null)}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="ביטול"
-                style={{ flex: 1, backgroundColor: '#f1f5f9', borderRadius: 10, paddingVertical: 13, alignItems: 'center' }}
+                style={{
+                  flex: 1,
+                  backgroundColor: '#f1f5f9',
+                  borderRadius: 10,
+                  paddingVertical: 13,
+                  alignItems: 'center',
+                }}
               >
-                <Text style={{ fontSize: 15, fontWeight: '600', color: '#374151' }}>ביטול</Text>
+                <Text
+                  style={{ fontSize: 15, fontWeight: '600', color: '#374151' }}
+                >
+                  ביטול
+                </Text>
               </Pressable>
             </View>
           </Pressable>

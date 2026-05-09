@@ -30,6 +30,30 @@ type Task = {
   }[];
 };
 
+type AssignedEventTask = {
+  id: string;
+  title: string;
+  completed: boolean;
+  eventTitle: string;
+  eventStartTime: number;
+  eventAllDay: boolean;
+  communityName: string;
+};
+
+function formatEventTaskDate(timestamp: number, allDay: boolean): string {
+  const date = new Date(timestamp);
+  const dateText = date.toLocaleDateString('he-IL', {
+    day: 'numeric',
+    month: 'long',
+  });
+  if (allDay) return `${dateText} · כל היום`;
+  const timeText = date.toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `${dateText} · ${timeText}`;
+}
+
 /* MOCK_TASKS – הוסר, נתונים מגיעים מ-Convex:
 const MOCK_TASKS: Task[] = [
   { id: '1', title: 'לקבוע תור לרופא ילדים', category: 'אישי', isUrgent: true, isOverdue: true, completed: false },
@@ -53,11 +77,23 @@ export default function TasksScreen() {
   // ── Convex: tasks queries ────────────────────────────────────────────────
   const convexTasks = useQuery(
     api.tasks.listBySpace,
-    spaceId ? { spaceId } : 'skip'
+    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
   );
   const convexUndated = useQuery(
     api.tasks.listUndated,
-    spaceId ? { spaceId } : 'skip'
+    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
+  );
+  const eventTaskRange = useMemo(() => {
+    const fromDate = new Date();
+    fromDate.setHours(0, 0, 0, 0);
+    const toDate = new Date(fromDate);
+    toDate.setDate(toDate.getDate() + 90);
+    toDate.setHours(23, 59, 59, 999);
+    return { from: fromDate.getTime(), to: toDate.getTime() };
+  }, []);
+  const assignedEventTaskRows = useQuery(
+    api.eventTasks.listMyAssignedEventTasks,
+    eventTaskRange
   );
 
   // ממיר נתוני Convex לפורמט Task המקומי
@@ -127,6 +163,29 @@ export default function TasksScreen() {
     const matchesSearch = task.title
       .toLowerCase()
       .includes(searchQuery.toLowerCase());
+    return matchesFilter && matchesSearch;
+  });
+  const assignedEventTasks: AssignedEventTask[] = useMemo(
+    () =>
+      (assignedEventTaskRows ?? []).map((task) => ({
+        id: task._id,
+        title: task.title,
+        completed: task.completed,
+        eventTitle: task.eventTitle,
+        eventStartTime: task.eventStartTime,
+        eventAllDay: task.eventAllDay,
+        communityName: task.communityName,
+      })),
+    [assignedEventTaskRows]
+  );
+  const filteredAssignedEventTasks = assignedEventTasks.filter((task) => {
+    const matchesFilter =
+      activeFilter === 'הכל' || activeFilter === 'אירועים';
+    const normalizedSearch = searchQuery.toLowerCase();
+    const matchesSearch =
+      task.title.toLowerCase().includes(normalizedSearch) ||
+      task.eventTitle.toLowerCase().includes(normalizedSearch) ||
+      task.communityName.toLowerCase().includes(normalizedSearch);
     return matchesFilter && matchesSearch;
   });
 
@@ -221,6 +280,15 @@ export default function TasksScreen() {
                     router.push(`/(authenticated)/task/${task.id}` as never)
                   }
                 />
+              ))}
+            </View>
+          )}
+
+          {filteredAssignedEventTasks.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>משימות מאירועים</Text>
+              {filteredAssignedEventTasks.map((task) => (
+                <EventTaskCard key={task.id} task={task} />
               ))}
             </View>
           )}
@@ -406,6 +474,46 @@ function TaskCard({
   );
 }
 
+function EventTaskCard({ task }: { task: AssignedEventTask }) {
+  return (
+    <View
+      style={[styles.taskCard, task.completed && styles.taskCardCompleted]}
+      accessible={true}
+      accessibilityLabel={`משימת אירוע: ${task.title}`}
+    >
+      <View style={styles.taskCardHeader}>
+        <View style={styles.eventTaskIcon}>
+          <MaterialIcons name="event-available" size={20} color={PRIMARY_BLUE} />
+        </View>
+        <View style={styles.taskContent}>
+          <Text
+            style={[
+              styles.taskTitle,
+              task.completed && styles.taskTitleCompleted,
+            ]}
+          >
+            {task.title}
+          </Text>
+          <Text style={styles.eventTaskMeta} numberOfLines={1}>
+            {task.eventTitle}
+          </Text>
+          <Text style={styles.eventTaskMeta} numberOfLines={1}>
+            {formatEventTaskDate(task.eventStartTime, task.eventAllDay)}
+          </Text>
+          <View style={styles.tagsRow}>
+            <View style={[styles.tag, styles.eventTaskTag]}>
+              <Text style={styles.eventTaskTagText}>משימת אירוע</Text>
+            </View>
+            <View style={styles.tag}>
+              <Text style={styles.tagText}>{task.communityName}</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -560,6 +668,15 @@ const styles = StyleSheet.create({
   checkboxUrgent: {
     borderColor: '#ef4444',
   },
+  eventTaskIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#E8F5FD',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 12,
+  },
 
   /* Task Content */
   taskContent: {
@@ -579,6 +696,12 @@ const styles = StyleSheet.create({
     textDecorationLine: 'line-through',
     color: '#9ca3af',
   },
+  eventTaskMeta: {
+    fontSize: 13,
+    color: '#637588',
+    textAlign: 'right',
+    marginBottom: 4,
+  },
 
   /* Tags */
   tagsRow: {
@@ -595,10 +718,18 @@ const styles = StyleSheet.create({
   tagOverdue: {
     backgroundColor: '#fee2e2',
   },
+  eventTaskTag: {
+    backgroundColor: '#E8F5FD',
+  },
   tagText: {
     fontSize: 12,
     fontWeight: '600',
     color: '#637588',
+  },
+  eventTaskTagText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: PRIMARY_BLUE,
   },
   tagTextOverdue: {
     fontSize: 12,

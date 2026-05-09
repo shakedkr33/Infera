@@ -204,7 +204,11 @@ export default function CreateCommunityScreen() {
           <Text style={styles.label}>שם הקהילה</Text>
           <TextInput
             ref={nameRef}
-            style={[styles.input, !!nameError && styles.inputError]}
+            style={[
+              styles.input,
+              !!nameError && styles.inputError,
+              { writingDirection: 'rtl' },
+            ]}
             value={name}
             onChangeText={(t) => {
               setName(t);
@@ -214,7 +218,6 @@ export default function CreateCommunityScreen() {
             placeholderTextColor="#9ca3af"
             maxLength={40}
             textAlign="right"
-            writingDirection="rtl"
             returnKeyType="next"
             onSubmitEditing={() => {}}
             accessible
@@ -228,7 +231,7 @@ export default function CreateCommunityScreen() {
         <View style={styles.field}>
           <Text style={styles.label}>תיאור (לא חובה)</Text>
           <TextInput
-            style={[styles.input, styles.textArea]}
+            style={[styles.input, styles.textArea, { writingDirection: 'rtl' }]}
             value={description}
             onChangeText={setDescription}
             placeholder="כמה מילים על הקהילה (לא חובה)"
@@ -236,7 +239,6 @@ export default function CreateCommunityScreen() {
             multiline
             numberOfLines={3}
             textAlign="right"
-            writingDirection="rtl"
             textAlignVertical="top"
             accessible
             accessibilityLabel="תיאור הקהילה"

@@ -13,10 +13,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  type TextStyle,
   View,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
@@ -25,6 +27,7 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
+import { getTextAlign } from '@/lib/rtl';
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -80,6 +83,8 @@ type Item = {
   reminders?: number[];
   // FIXED: linkedEventId set on linked shared events → routes to linked-event/[id] detail
   linkedEventId?: string;
+  /** Mirrors Convex calendar flags for community rows opened from home timeline */
+  isSavedToMyCalendar?: boolean;
 };
 
 type UndatedTask = {
@@ -302,8 +307,11 @@ export default function HomeScreen() {
     return { from: fromMs, to: toMs };
   }, [selectedDate]);
 
-  const communityEvents =
-    useQuery(api.events.listCommunityEventsForDate, { from, to }) ?? [];
+  const communityEventsQuery = useQuery(api.events.listCommunityEventsForDate, {
+    from,
+    to,
+  });
+  const communityEvents = communityEventsQuery ?? [];
 
   // ── Personal events for selected date ─────────────────────────────────────
   const personalEventData =
@@ -311,6 +319,29 @@ export default function HomeScreen() {
       api.events.listByDateRange,
       spaceId ? { spaceId: spaceId as Id<'spaces'>, from, to } : 'skip'
     ) ?? [];
+
+  /**
+   * Space-scoped `listByDateRange` returns every event in the user's space,
+   * including community events that are NOT on the personal/home aggregate
+   * (e.g. open community event after "remove from my calendar"). Home must
+   * not show those — align with `listCommunityEventsForDate` + server
+   * `shouldIncludeInPersonalHomeCalendar`. While the community query is still
+   * loading, keep unfiltered personal rows to avoid wiping the list briefly.
+   */
+  const personalEventsForHome = useMemo(() => {
+    if (communityEventsQuery === undefined) {
+      return personalEventData;
+    }
+    const allowedCommunityHomeIds = new Set(
+      communityEventsQuery.map((e) => e._id as string)
+    );
+    return personalEventData.filter((ev) => {
+      if (!ev.communityId) {
+        return true;
+      }
+      return allowedCommunityHomeIds.has(ev._id as string);
+    });
+  }, [personalEventData, communityEventsQuery]);
 
   // FIXED: linked (shared) events for selected date — merged into timeline
   const linkedEventData =
@@ -326,7 +357,7 @@ export default function HomeScreen() {
   // ── Convex: dated tasks ────────────────────────────────────────────────────
   const convexTasks = useQuery(
     api.tasks.listBySpace,
-    spaceId ? { spaceId } : 'skip'
+    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
   );
 
   const todayTasks: Item[] = useMemo(
@@ -397,10 +428,11 @@ export default function HomeScreen() {
         completed: false,
         allDay: ev.allDay,
         groupName: ev.communityName,
-        communityId: ev.communityId,
+        communityId: ev.communityId as string | undefined,
         personalTaskSummary,
         isRecurring: undefined,
         recurringPattern: undefined,
+        isSavedToMyCalendar: ev.isSavedToMyCalendar,
       };
     });
   }, [communityEvents, assignedEventTasks]);
@@ -411,7 +443,7 @@ export default function HomeScreen() {
       assignedEventTasks.map((t) => ({
         id: t._id,
         time: t.eventAllDay
-          ? ''
+          ? '00:00'
           : new Date(t.eventStartTime).toLocaleTimeString('he-IL', {
               hour: '2-digit',
               minute: '2-digit',
@@ -423,9 +455,10 @@ export default function HomeScreen() {
         iconBg: '#F0FDF4',
         iconColor: '#16a34a',
         assigneeColor: '#16a34a',
-        completed: false,
-        allDay: t.eventAllDay,
+        completed: t.completed ?? false,
+        allDay: false,
         groupName: t.communityName,
+        communityId: t.communityId as string,
       })),
     [assignedEventTasks]
   );
@@ -433,35 +466,51 @@ export default function HomeScreen() {
   // ── Personal events for selected date mapped to Item shape ───────────────
   const personalEventItems: Item[] = useMemo(
     () =>
-      personalEventData.map((ev) => ({
-        id: ev._id,
-        time: ev.allDay
-          ? ''
-          : new Date(ev.startTime).toLocaleTimeString('he-IL', {
-              hour: '2-digit',
-              minute: '2-digit',
-            }),
-        endTime:
-          !ev.allDay && ev.endTime != null
-            ? new Date(ev.endTime).toLocaleTimeString('he-IL', {
+      personalEventsForHome.map((ev) => {
+        const communityIdStr = ev.communityId
+          ? (ev.communityId as string)
+          : undefined;
+        const communityName =
+          communityIdStr !== undefined && 'communityName' in ev
+            ? (ev as { communityName?: string }).communityName
+            : undefined;
+        const isSavedToMyCalendar =
+          'isSavedToMyCalendar' in ev
+            ? (ev as { isSavedToMyCalendar?: boolean }).isSavedToMyCalendar
+            : undefined;
+        return {
+          id: ev._id,
+          time: ev.allDay
+            ? ''
+            : new Date(ev.startTime).toLocaleTimeString('he-IL', {
                 hour: '2-digit',
                 minute: '2-digit',
-              })
-            : undefined,
-        title: ev.title,
-        location: ev.location ?? '',
-        type: 'event' as const,
-        icon: 'event',
-        iconBg: '#e8f5fd',
-        iconColor: '#36a9e2',
-        assigneeColor: '#36a9e2',
-        completed: false,
-        allDay: ev.allDay,
-        isRecurring: ev.isRecurring,
-        recurringPattern: ev.recurringPattern,
-        reminders: (ev as { reminders?: number[] }).reminders,
-      })),
-    [personalEventData]
+              }),
+          endTime:
+            !ev.allDay && ev.endTime != null
+              ? new Date(ev.endTime).toLocaleTimeString('he-IL', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : undefined,
+          title: ev.title,
+          location: ev.location ?? '',
+          type: 'event' as const,
+          icon: 'event',
+          iconBg: '#e8f5fd',
+          iconColor: '#36a9e2',
+          assigneeColor: '#36a9e2',
+          completed: false,
+          allDay: ev.allDay,
+          isRecurring: ev.isRecurring,
+          recurringPattern: ev.recurringPattern,
+          reminders: (ev as { reminders?: number[] }).reminders,
+          groupName: communityIdStr ? communityName : undefined,
+          communityId: communityIdStr,
+          isSavedToMyCalendar,
+        };
+      }),
+    [personalEventsForHome]
   );
 
   // FIXED: linked (shared) events mapped to Item shape
@@ -511,9 +560,11 @@ export default function HomeScreen() {
         title: i.title,
         iconColor: i.iconColor,
         groupName: i.groupName,
+        communityId: i.communityId,
         isRecurring: undefined,
         recurringPattern: undefined,
         linkedEventId: i.linkedEventId,
+        reminders: i.reminders,
       }));
     const personalAllDay = personalEventItems
       .filter((i) => i.allDay)
@@ -521,10 +572,12 @@ export default function HomeScreen() {
         id: i.id,
         title: i.title,
         iconColor: i.iconColor,
-        groupName: undefined,
+        groupName: i.groupName,
+        communityId: i.communityId,
         isRecurring: i.isRecurring,
         recurringPattern: i.recurringPattern,
         reminders: i.reminders,
+        linkedEventId: i.linkedEventId,
       }));
     // FIXED: include linked all-day events in all-day strip
     const linkedAllDay = linkedEventItems
@@ -534,10 +587,23 @@ export default function HomeScreen() {
         title: i.title,
         iconColor: i.iconColor,
         groupName: i.groupName,
+        communityId: undefined as string | undefined,
         isRecurring: undefined,
         recurringPattern: undefined,
+        reminders: i.reminders,
+        linkedEventId: i.linkedEventId,
       }));
-    return [...communityAllDay, ...personalAllDay, ...linkedAllDay];
+    // Same event can appear in more than one source (e.g. community + personal lists); dedupe by id.
+    const merged = [...communityAllDay, ...personalAllDay, ...linkedAllDay];
+    const seenIds = new Set<string>();
+    const deduped: typeof merged = [];
+    for (const ev of merged) {
+      if (!seenIds.has(ev.id)) {
+        seenIds.add(ev.id);
+        deduped.push(ev);
+      }
+    }
+    return deduped;
   }, [communityEventItems, personalEventItems, linkedEventItems]);
 
   // allItems = personal events + tasks (today) + mock items + community events + assigned tasks
@@ -575,12 +641,19 @@ export default function HomeScreen() {
       if (!b.time) return -1;
       return toMinutes(a.time) - toMinutes(b.time);
     });
-  }, [todayTasks, items, personalEventItems, linkedEventItems, communityEventItems, assignedTaskItems]);
+  }, [
+    todayTasks,
+    items,
+    personalEventItems,
+    linkedEventItems,
+    communityEventItems,
+    assignedTaskItems,
+  ]);
 
   // ── Convex: undated tasks ──────────────────────────────────────────────────
   const convexUndatedTasks = useQuery(
     api.tasks.listUndated,
-    spaceId ? { spaceId } : 'skip'
+    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
   );
   // mock fallback כל עוד אין נתונים בדאטהבייס
   /* MOCK (הוסר):
@@ -753,6 +826,26 @@ export default function HomeScreen() {
 
   const AVATAR_COLORS = ['#FFD1DC', '#E0F2F1', '#FFF9C4', '#E8EAF6', '#FCE4EC'];
 
+  // iOS native RTL flips literal textAlign:'right' to the wrong side — use getTextAlign()
+  const stylesRtl = useMemo(() => {
+    const ta = getTextAlign();
+    return StyleSheet.create(
+      Object.fromEntries(
+        Object.entries(styles).map(([key, style]) => {
+          if (
+            style &&
+            typeof style === 'object' &&
+            'textAlign' in style &&
+            (style as TextStyle).textAlign === 'right'
+          ) {
+            return [key, { ...style, textAlign: ta ?? 'right' }];
+          }
+          return [key, style];
+        })
+      ) as typeof styles
+    );
+  }, []);
+
   // ── Month calendar grid ─────────────────────────────────────────────────────
   const HEB_DAYS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
   const monthName = today.toLocaleDateString('he-IL', {
@@ -767,33 +860,34 @@ export default function HomeScreen() {
   while (calGridDays.length % 7 !== 0) calGridDays.push(null);
 
   const renderMonthCalendar = () => (
-    <View style={styles.monthCalendar}>
-      <Text style={styles.monthName}>{monthName}</Text>
-      <View style={styles.monthGrid}>
+    <View style={stylesRtl.monthCalendar}>
+      <Text style={stylesRtl.monthName}>{monthName}</Text>
+      <View style={stylesRtl.monthGrid}>
         {HEB_DAYS.map((d) => (
-          <View key={d} style={styles.monthDayHeader}>
-            <Text style={styles.monthDayHeaderText}>{d}</Text>
+          <View key={d} style={stylesRtl.monthDayHeader}>
+            <Text style={stylesRtl.monthDayHeaderText}>{d}</Text>
           </View>
         ))}
         {calGridDays.map((day, i) => {
-          if (!day) return <View key={`e-${i}`} style={styles.monthDayCell} />;
+          if (!day)
+            return <View key={`e-${i}`} style={stylesRtl.monthDayCell} />;
           const isSel = isSameDay(day, selectedDate);
           const isTod = isSameDay(day, today);
           return (
             <Pressable
               key={i}
               style={[
-                styles.monthDayCell,
-                isSel && styles.monthDayCellSelected,
-                !isSel && isTod && styles.monthDayCellToday,
+                stylesRtl.monthDayCell,
+                isSel && stylesRtl.monthDayCellSelected,
+                !isSel && isTod && stylesRtl.monthDayCellToday,
               ]}
               onPress={() => setSelectedDate(day)}
             >
               <Text
                 style={[
-                  styles.monthDayText,
-                  isSel && styles.monthDayTextSelected,
-                  !isSel && isTod && styles.monthDayTextToday,
+                  stylesRtl.monthDayText,
+                  isSel && stylesRtl.monthDayTextSelected,
+                  !isSel && isTod && stylesRtl.monthDayTextToday,
                 ]}
               >
                 {day.getDate()}
@@ -899,7 +993,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <View style={styles.header}>
+      <View style={stylesRtl.header}>
         {/* Bell — left */}
         <Pressable
           onPress={handleBellPress}
@@ -916,8 +1010,8 @@ export default function HomeScreen() {
             color="#111517"
           />
           {unseenCount > 0 && (
-            <View style={styles.bellBadge}>
-              <Text style={styles.bellBadgeText}>
+            <View style={stylesRtl.bellBadge}>
+              <Text style={stylesRtl.bellBadgeText}>
                 {unseenCount > 9 ? '9+' : unseenCount}
               </Text>
             </View>
@@ -927,8 +1021,8 @@ export default function HomeScreen() {
         {/* Text stack + avatar — right */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <View style={{ alignItems: 'flex-end' }}>
-            <Text style={styles.headerDate}>{todayLabel}</Text>
-            <Text style={styles.headerGreeting}>
+            <Text style={stylesRtl.headerDate}>{todayLabel}</Text>
+            <Text style={stylesRtl.headerGreeting}>
               {userFirstName ? `${greeting}, ${userFirstName}` : greeting}
             </Text>
           </View>
@@ -938,8 +1032,8 @@ export default function HomeScreen() {
             accessibilityRole="button"
             accessibilityLabel="פתח פרופיל"
           >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
+            <View style={stylesRtl.avatar}>
+              <Text style={stylesRtl.avatarText}>
                 {userFirstName ? userFirstName[0].toUpperCase() : '?'}
               </Text>
             </View>
@@ -949,10 +1043,10 @@ export default function HomeScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
         {/* ── Date section header (toggle + "היום" chip) ────────────────────── */}
-        <View style={styles.dateSectionRow}>
+        <View style={stylesRtl.dateSectionRow}>
           {!isSameDay(selectedDate, today) && (
             <Pressable
-              style={styles.todayChip}
+              style={stylesRtl.todayChip}
               onPress={() => {
                 setSelectedDate(today);
                 scrollToToday();
@@ -962,14 +1056,14 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel="חזרה להיום"
             >
-              <Text style={styles.todayChipText}>היום</Text>
+              <Text style={stylesRtl.todayChipText}>היום</Text>
             </Pressable>
           )}
           <Pressable
             onPress={() =>
               setCalendarMode((m) => (m === 'carousel' ? 'month' : 'carousel'))
             }
-            style={styles.calendarToggleBtn}
+            style={stylesRtl.calendarToggleBtn}
             accessible={true}
             accessibilityRole="button"
             accessibilityLabel={
@@ -988,7 +1082,7 @@ export default function HomeScreen() {
 
         {/* ── Carousel OR month calendar ─────────────────────────────────────── */}
         {calendarMode === 'carousel' ? (
-          <View style={styles.carouselRow}>
+          <View style={stylesRtl.carouselRow}>
             <ScrollView
               ref={dateScrollRef}
               horizontal
@@ -1010,23 +1104,23 @@ export default function HomeScreen() {
                     key={i}
                     onPress={() => setSelectedDate(day)}
                     style={[
-                      styles.dayPill,
-                      isSelected && styles.dayPillSelected,
-                      !isSelected && isToday && styles.dayPillToday,
+                      stylesRtl.dayPill,
+                      isSelected && stylesRtl.dayPillSelected,
+                      !isSelected && isToday && stylesRtl.dayPillToday,
                     ]}
                   >
                     <Text
                       style={[
-                        styles.dayPillWeekday,
-                        isSelected && styles.dayPillTextSelected,
+                        stylesRtl.dayPillWeekday,
+                        isSelected && stylesRtl.dayPillTextSelected,
                       ]}
                     >
                       {shortName}
                     </Text>
                     <Text
                       style={[
-                        styles.dayPillNumber,
-                        isSelected && styles.dayPillTextSelected,
+                        stylesRtl.dayPillNumber,
+                        isSelected && stylesRtl.dayPillTextSelected,
                       ]}
                     >
                       {day.getDate()}
@@ -1043,7 +1137,7 @@ export default function HomeScreen() {
         )}
 
         {hasEventsOrTasks && (
-          <Text style={styles.subtitleCount}>
+          <Text style={stylesRtl.subtitleCount}>
             {isSummaryMode
               ? `${allItems.filter((i) => !i.allDay).length} פעילויות ביום זה`
               : `יש לך ${allItems.filter((i) => !i.allDay).length} פעילויות היום`}
@@ -1052,24 +1146,24 @@ export default function HomeScreen() {
 
         {/* ── Empty state — no events or tasks ─────────────────────────────── */}
         {shouldShowEventsEmptyState && (
-          <View style={styles.emptyStateContainer}>
-            <View style={styles.emptyStateIconWrap}>
+          <View style={stylesRtl.emptyStateContainer}>
+            <View style={stylesRtl.emptyStateIconWrap}>
               <MaterialIcons name="calendar-today" size={36} color="#36a9e2" />
             </View>
-            <Text style={styles.emptyStateTitle}>
+            <Text style={stylesRtl.emptyStateTitle}>
               עדיין לא הוספת אירועים או משימות
             </Text>
-            <Text style={styles.emptyStateSubtitle}>
+            <Text style={stylesRtl.emptyStateSubtitle}>
               התחילי בהוספת אירוע ראשון או ייבוא יומן קיים.
             </Text>
             <Pressable
-              style={styles.emptyStatePrimaryBtn}
+              style={stylesRtl.emptyStatePrimaryBtn}
               onPress={() => router.push('/(authenticated)/import-calendar')}
               accessible={true}
               accessibilityRole="button"
               accessibilityLabel="ייבוא מיומן גוגל או אפל"
             >
-              <Text style={styles.emptyStatePrimaryBtnText}>
+              <Text style={stylesRtl.emptyStatePrimaryBtnText}>
                 ייבוא מיומן גוגל / אפל
               </Text>
             </Pressable>
@@ -1081,11 +1175,11 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel="הוספת אירוע ראשון"
             >
-              <Text style={styles.emptyStateSecondaryBtnText}>
+              <Text style={stylesRtl.emptyStateSecondaryBtnText}>
                 הוספת אירוע ראשון
               </Text>
             </Pressable>
-            <Text style={styles.emptyStateHint}>
+            <Text style={stylesRtl.emptyStateHint}>
               אפשר גם ללחוץ על הפלוס במרכז המסך כדי ליצור אירוע, משימה, יום
               הולדת או קבוצה.
             </Text>
@@ -1097,7 +1191,7 @@ export default function HomeScreen() {
           <View
             style={{ paddingHorizontal: 24, marginBottom: 8, marginTop: 4 }}
           >
-            <Text style={styles.summaryTitle}>סיכום יום</Text>
+            <Text style={stylesRtl.summaryTitle}>סיכום יום</Text>
           </View>
         )}
 
@@ -1112,13 +1206,15 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel={`פרטי אירוע: ${nextEvent.title}`}
             >
-              <View style={[styles.cardShadow, styles.eventCard]}>
-                <View style={styles.eventAccentBar} />
+              <View style={[stylesRtl.cardShadow, stylesRtl.eventCard]}>
+                <View style={stylesRtl.eventAccentBar} />
                 <View style={{ padding: 24, paddingRight: 32 }}>
                   {/* Top row: "האירוע הבא" pill (right) + relative start time (left) */}
-                  <View style={styles.eventTopRow}>
-                    <View style={styles.eventNextPill}>
-                      <Text style={styles.eventNextPillText}>האירוע הבא</Text>
+                  <View style={stylesRtl.eventTopRow}>
+                    <View style={stylesRtl.eventNextPill}>
+                      <Text style={stylesRtl.eventNextPillText}>
+                        האירוע הבא
+                      </Text>
                     </View>
                     {/* Relative time — only within 2 hours */}
                     {(() => {
@@ -1145,8 +1241,14 @@ export default function HomeScreen() {
                     })()}
                   </View>
 
+                  {nextEvent.communityId && nextEvent.groupName ? (
+                    <View style={{ marginBottom: 8 }}>
+                      <CommunityEventNameTag name={nextEvent.groupName} />
+                    </View>
+                  ) : null}
+
                   {/* Title */}
-                  <Text style={styles.eventTitle}>{nextEvent.title}</Text>
+                  <Text style={stylesRtl.eventTitle}>{nextEvent.title}</Text>
 
                   {/* Time range */}
                   <Text
@@ -1164,10 +1266,10 @@ export default function HomeScreen() {
                   </Text>
 
                   {/* Address row: location text right, "נווט" button left */}
-                  <View style={styles.eventAddressRow}>
-                    <View style={styles.eventAddressGroup}>
+                  <View style={stylesRtl.eventAddressRow}>
+                    <View style={stylesRtl.eventAddressGroup}>
                       {/* Text first in row-reverse = rightmost; icon on its left */}
-                      <Text style={styles.eventAddress} numberOfLines={1}>
+                      <Text style={stylesRtl.eventAddress} numberOfLines={1}>
                         {nextEvent.location}
                       </Text>
                       <MaterialIcons
@@ -1178,7 +1280,7 @@ export default function HomeScreen() {
                     </View>
                     {nextEvent.location ? (
                       <Pressable
-                        style={styles.navBtn}
+                        style={stylesRtl.navBtn}
                         onPress={(e) => {
                           e.stopPropagation?.();
                           handleOpenNavPicker(nextEvent.location);
@@ -1192,7 +1294,7 @@ export default function HomeScreen() {
                           size={16}
                           color="#8d6e63"
                         />
-                        <Text style={styles.navBtnText}>נווט</Text>
+                        <Text style={stylesRtl.navBtnText}>נווט</Text>
                       </Pressable>
                     ) : null}
                   </View>
@@ -1206,11 +1308,11 @@ export default function HomeScreen() {
         {/* End-of-day fallback: today, had timed items, none are future */}
         {isEndOfDay && !nextEvent && (
           <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
-            <View style={[styles.cardShadow, styles.endOfDayCard]}>
-              <Text style={styles.endOfDayTitle}>
+            <View style={[stylesRtl.cardShadow, stylesRtl.endOfDayCard]}>
+              <Text style={stylesRtl.endOfDayTitle}>
                 אין לך עוד משימות ואירועים להיום
               </Text>
-              <Text style={styles.endOfDaySubtitle}>
+              <Text style={stylesRtl.endOfDaySubtitle}>
                 אפשר לסגור את היום בנחת או לעבור למה שמחכה מחר
               </Text>
               <Pressable
@@ -1223,7 +1325,7 @@ export default function HomeScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="מה יש מחר"
               >
-                <Text style={styles.endOfDayCta}>מה יש מחר ←</Text>
+                <Text style={stylesRtl.endOfDayCta}>מה יש מחר ←</Text>
               </Pressable>
             </View>
           </View>
@@ -1231,10 +1333,10 @@ export default function HomeScreen() {
 
         {/* ── Empty day state (data exists but not today) ──────────────────── */}
         {hasEventsOrTasks && !hasDayData && (
-          <View style={styles.emptyDayContainer}>
+          <View style={stylesRtl.emptyDayContainer}>
             <MaterialIcons name="calendar-today" size={28} color="#d1d5db" />
-            <Text style={styles.emptyDayTitle}>היום פנוי 🎉</Text>
-            <Text style={styles.emptyDaySubtitle}>
+            <Text style={stylesRtl.emptyDayTitle}>היום פנוי 🎉</Text>
+            <Text style={stylesRtl.emptyDaySubtitle}>
               אין לך אירועים או משימות בתאריך הזה.
             </Text>
             <Pressable
@@ -1242,7 +1344,7 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel="הוספת אירוע"
             >
-              <Text style={styles.emptyDayLink}>+ הוספת אירוע</Text>
+              <Text style={stylesRtl.emptyDayLink}>+ הוספת אירוע</Text>
             </Pressable>
           </View>
         )}
@@ -1250,11 +1352,11 @@ export default function HomeScreen() {
         {/* ── Birthdays — hidden in summary/past-day mode ───────────────────── */}
         {!isSummaryMode && (
           <View style={{ marginBottom: 32 }}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>🎂 ימי הולדת קרובים</Text>
+            <View style={stylesRtl.sectionHeader}>
+              <Text style={stylesRtl.sectionTitle}>🎂 ימי הולדת קרובים</Text>
               {!shouldShowBirthdaysEmptyState && (
                 <Pressable onPress={() => router.push('/birthdays')}>
-                  <Text style={styles.seeAll}>ראה הכל</Text>
+                  <Text style={stylesRtl.seeAll}>ראה הכל</Text>
                 </Pressable>
               )}
             </View>
@@ -1338,11 +1440,11 @@ export default function HomeScreen() {
                   <Pressable
                     key={b.id}
                     onPress={() => openBirthdayCard(b)}
-                    style={styles.birthdayCard}
+                    style={stylesRtl.birthdayCard}
                   >
                     <View
                       style={[
-                        styles.birthdayAvatar,
+                        stylesRtl.birthdayAvatar,
                         {
                           backgroundColor:
                             AVATAR_COLORS[idx % AVATAR_COLORS.length],
@@ -1350,10 +1452,10 @@ export default function HomeScreen() {
                       ]}
                     />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.birthdayCountdown}>
+                      <Text style={stylesRtl.birthdayCountdown}>
                         {getCountdownLabel(b)}:
                       </Text>
-                      <Text style={styles.birthdayName}>{b.name}</Text>
+                      <Text style={stylesRtl.birthdayName}>{b.name}</Text>
                     </View>
                   </Pressable>
                 ))}
@@ -1366,21 +1468,21 @@ export default function HomeScreen() {
         {hasDayData && (
           <>
             {!isSummaryMode && !isEndOfDay && (
-              <View style={styles.sectionHeader}>
-                <Text style={styles.timelineTitle}>המשך היום</Text>
+              <View style={stylesRtl.sectionHeader}>
+                <Text style={stylesRtl.timelineTitle}>המשך היום</Text>
               </View>
             )}
 
             {/* All-day events */}
             {allDayEvents.length > 0 && (
               <View style={{ paddingHorizontal: 24, marginBottom: 8 }}>
-                <Text style={styles.allDayLabel}>
+                <Text style={stylesRtl.allDayLabel}>
                   אירועים/משימות של כל היום
                 </Text>
                 {allDayEvents.map((ev) => (
                   <Pressable
                     key={ev.id}
-                    style={styles.allDayCard}
+                    style={stylesRtl.allDayCard}
                     onPress={() =>
                       openEventSheet({
                         id: ev.id,
@@ -1395,6 +1497,7 @@ export default function HomeScreen() {
                         completed: false,
                         allDay: true,
                         groupName: ev.groupName,
+                        communityId: ev.communityId,
                         isRecurring: ev.isRecurring,
                         recurringPattern: ev.recurringPattern,
                         reminders: ev.reminders,
@@ -1407,21 +1510,27 @@ export default function HomeScreen() {
                   >
                     <View
                       style={[
-                        styles.allDayAccent,
+                        stylesRtl.allDayAccent,
                         { backgroundColor: ev.iconColor },
                       ]}
                     />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.allDayTitle}>{ev.title}</Text>
-                      {/* TODO: לחבר לנתוני קבוצה אמיתיים מ-Convex כשהסכמה מוכנה */}
-                      {ev.groupName ? (
-                        <View style={styles.groupRow}>
+                      {ev.communityId && ev.groupName ? (
+                        <View style={{ marginBottom: 6 }}>
+                          <CommunityEventNameTag name={ev.groupName} />
+                        </View>
+                      ) : null}
+                      <Text style={stylesRtl.allDayTitle}>{ev.title}</Text>
+                      {ev.groupName && !ev.communityId ? (
+                        <View style={stylesRtl.groupRow}>
                           <MaterialIcons
                             name="group"
                             size={12}
                             color="#64748b"
                           />
-                          <Text style={styles.groupText}>{ev.groupName}</Text>
+                          <Text style={stylesRtl.groupText}>
+                            {ev.groupName}
+                          </Text>
                         </View>
                       ) : null}
                     </View>
@@ -1441,7 +1550,7 @@ export default function HomeScreen() {
                       key={item.id}
                       renderRightActions={() => (
                         <Pressable
-                          style={styles.deleteAction}
+                          style={stylesRtl.deleteAction}
                           onPress={() => confirmDelete(item)}
                           accessible={true}
                           accessibilityRole="button"
@@ -1458,8 +1567,8 @@ export default function HomeScreen() {
                       <Pressable
                         onPress={() => handleCardPress(item)}
                         style={[
-                          styles.summaryCard,
-                          item.completed && styles.summaryCardMuted,
+                          stylesRtl.summaryCard,
+                          item.completed && stylesRtl.summaryCardMuted,
                         ]}
                         accessible={true}
                         accessibilityRole="button"
@@ -1467,7 +1576,7 @@ export default function HomeScreen() {
                       >
                         <View
                           style={[
-                            styles.timelineAccent,
+                            stylesRtl.timelineAccent,
                             {
                               backgroundColor: item.completed
                                 ? '#d1d5db'
@@ -1491,10 +1600,15 @@ export default function HomeScreen() {
                           )}
                           <View style={{ flex: 1 }}>
                             {item.time ? (
-                              <Text style={styles.summaryCardTime}>
+                              <Text style={stylesRtl.summaryCardTime}>
                                 {item.time}
                                 {item.endTime ? ` – ${item.endTime}` : ''}
                               </Text>
+                            ) : null}
+                            {item.communityId && item.groupName ? (
+                              <View style={{ marginBottom: 6, marginTop: 2 }}>
+                                <CommunityEventNameTag name={item.groupName} />
+                              </View>
                             ) : null}
                             {/* Title + assignee circle */}
                             <View
@@ -1506,32 +1620,32 @@ export default function HomeScreen() {
                             >
                               <Text
                                 style={[
-                                  styles.taskTitle,
-                                  item.completed && styles.completedText,
+                                  stylesRtl.taskTitle,
+                                  item.completed && stylesRtl.completedText,
                                 ]}
                               >
                                 {item.title}
                               </Text>
                               <View
                                 style={[
-                                  styles.assigneeCircle,
+                                  stylesRtl.assigneeCircle,
                                   { backgroundColor: item.assigneeColor },
                                 ]}
                               />
                             </View>
                             {item.location ? (
-                              <Text style={styles.itemLocation}>
+                              <Text style={stylesRtl.itemLocation}>
                                 {item.location}
                               </Text>
                             ) : null}
-                            {item.groupName ? (
-                              <View style={styles.groupRow}>
+                            {item.groupName && !item.communityId ? (
+                              <View style={stylesRtl.groupRow}>
                                 <MaterialIcons
                                   name="group"
                                   size={12}
                                   color="#64748b"
                                 />
-                                <Text style={styles.groupText}>
+                                <Text style={stylesRtl.groupText}>
                                   {item.groupName}
                                 </Text>
                               </View>
@@ -1590,7 +1704,7 @@ export default function HomeScreen() {
                       key={item.id}
                       renderRightActions={() => (
                         <Pressable
-                          style={styles.deleteAction}
+                          style={stylesRtl.deleteAction}
                           onPress={() => confirmDelete(item)}
                           accessible={true}
                           accessibilityRole="button"
@@ -1612,8 +1726,8 @@ export default function HomeScreen() {
                         }}
                       >
                         {/* Time column */}
-                        <View style={styles.timeColumn}>
-                          <Text style={styles.timeText}>{item.time}</Text>
+                        <View style={stylesRtl.timeColumn}>
+                          <Text style={stylesRtl.timeText}>{item.time}</Text>
                           {item.endTime && (
                             <Text
                               style={{
@@ -1631,10 +1745,10 @@ export default function HomeScreen() {
                         {/* Card */}
                         <View style={{ flex: 1, marginBottom: 12 }}>
                           <Pressable onPress={() => handleCardPress(item)}>
-                            <View style={styles.timelineCard}>
+                            <View style={stylesRtl.timelineCard}>
                               <View
                                 style={[
-                                  styles.timelineAccent,
+                                  stylesRtl.timelineAccent,
                                   { backgroundColor: item.iconColor },
                                 ]}
                               />
@@ -1653,6 +1767,13 @@ export default function HomeScreen() {
                                   />
                                 )}
                                 <View style={{ flex: 1 }}>
+                                  {item.communityId && item.groupName ? (
+                                    <View style={{ marginBottom: 6 }}>
+                                      <CommunityEventNameTag
+                                        name={item.groupName}
+                                      />
+                                    </View>
+                                  ) : null}
                                   {/* Title row: title + assignee circles only */}
                                   <View
                                     style={{
@@ -1663,8 +1784,9 @@ export default function HomeScreen() {
                                   >
                                     <Text
                                       style={[
-                                        styles.taskTitle,
-                                        item.completed && styles.completedText,
+                                        stylesRtl.taskTitle,
+                                        item.completed &&
+                                          stylesRtl.completedText,
                                       ]}
                                     >
                                       {item.title}
@@ -1678,7 +1800,7 @@ export default function HomeScreen() {
                                     >
                                       <View
                                         style={[
-                                          styles.assigneeCircle,
+                                          stylesRtl.assigneeCircle,
                                           {
                                             backgroundColor: item.assigneeColor,
                                           },
@@ -1775,7 +1897,7 @@ export default function HomeScreen() {
 
                                   {/* Metadata row: location/group on right, badge on left */}
                                   {(item.location ||
-                                    item.groupName ||
+                                    (item.groupName && !item.communityId) ||
                                     item.personalTaskSummary ||
                                     item.pending) && (
                                     <View
@@ -1789,26 +1911,27 @@ export default function HomeScreen() {
                                       {/* Right: location, group, task summary */}
                                       <View style={{ flex: 1 }}>
                                         {item.location ? (
-                                          <Text style={styles.itemLocation}>
+                                          <Text style={stylesRtl.itemLocation}>
                                             {item.location}
                                           </Text>
                                         ) : null}
-                                        {/* TODO: לחבר לנתוני קבוצה אמיתיים מ-Convex */}
-                                        {item.groupName ? (
-                                          <View style={styles.groupRow}>
+                                        {item.groupName && !item.communityId ? (
+                                          <View style={stylesRtl.groupRow}>
                                             <MaterialIcons
                                               name="group"
                                               size={12}
                                               color="#64748b"
                                             />
-                                            <Text style={styles.groupText}>
+                                            <Text style={stylesRtl.groupText}>
                                               {item.groupName}
                                             </Text>
                                           </View>
                                         ) : null}
                                         {item.personalTaskSummary ? (
                                           <Text
-                                            style={styles.personalTaskSummary}
+                                            style={
+                                              stylesRtl.personalTaskSummary
+                                            }
                                           >
                                             {item.personalTaskSummary}
                                           </Text>
@@ -1840,9 +1963,13 @@ export default function HomeScreen() {
                                         >
                                           {(!item.rsvpStatus ||
                                             item.rsvpStatus === 'none') && (
-                                            <View style={styles.pendingBadge}>
+                                            <View
+                                              style={stylesRtl.pendingBadge}
+                                            >
                                               <Text
-                                                style={styles.pendingBadgeText}
+                                                style={
+                                                  stylesRtl.pendingBadgeText
+                                                }
                                               >
                                                 ממתין לאישור
                                               </Text>
@@ -1851,13 +1978,13 @@ export default function HomeScreen() {
                                           {item.rsvpStatus === 'yes' && (
                                             <View
                                               style={[
-                                                styles.pendingBadge,
+                                                stylesRtl.pendingBadge,
                                                 { backgroundColor: '#dcfce7' },
                                               ]}
                                             >
                                               <Text
                                                 style={[
-                                                  styles.pendingBadgeText,
+                                                  stylesRtl.pendingBadgeText,
                                                   { color: '#166534' },
                                                 ]}
                                               >
@@ -1868,13 +1995,13 @@ export default function HomeScreen() {
                                           {item.rsvpStatus === 'maybe' && (
                                             <View
                                               style={[
-                                                styles.pendingBadge,
+                                                stylesRtl.pendingBadge,
                                                 { backgroundColor: '#fef9c3' },
                                               ]}
                                             >
                                               <Text
                                                 style={[
-                                                  styles.pendingBadgeText,
+                                                  stylesRtl.pendingBadgeText,
                                                   { color: '#854d0e' },
                                                 ]}
                                               >
@@ -1957,8 +2084,8 @@ export default function HomeScreen() {
         {/* ── Undated tasks ──────────────────────────────────────────────────── */}
         {undatedTasks.length > 0 && (
           <View style={{ marginBottom: 32 }}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>משימות ללא תאריך</Text>
+            <View style={stylesRtl.sectionHeader}>
+              <Text style={stylesRtl.sectionTitle}>משימות ללא תאריך</Text>
               {undatedTasks.length > 3 && (
                 <Pressable
                   onPress={() => setShowAllUndated(true)}
@@ -1982,7 +2109,7 @@ export default function HomeScreen() {
               {undatedTasks.slice(0, 3).map((task) => (
                 <Pressable
                   key={task.id}
-                  style={styles.undatedRow}
+                  style={stylesRtl.undatedRow}
                   onPress={() =>
                     console.log('TODO: navigate to task edit', task.id)
                   }
@@ -1996,8 +2123,8 @@ export default function HomeScreen() {
                   />
                   <Text
                     style={[
-                      styles.undatedTitle,
-                      task.completed && styles.completedText,
+                      stylesRtl.undatedTitle,
+                      task.completed && stylesRtl.completedText,
                     ]}
                     numberOfLines={1}
                   >
@@ -2054,7 +2181,7 @@ export default function HomeScreen() {
                     {undatedTasks.map((task) => (
                       <Pressable
                         key={task.id}
-                        style={styles.undatedRow}
+                        style={stylesRtl.undatedRow}
                         onPress={() => {
                           setShowAllUndated(false);
                           console.log('TODO: navigate to task edit', task.id);
@@ -2069,8 +2196,8 @@ export default function HomeScreen() {
                         />
                         <Text
                           style={[
-                            styles.undatedTitle,
-                            task.completed && styles.completedText,
+                            stylesRtl.undatedTitle,
+                            task.completed && stylesRtl.completedText,
                           ]}
                           numberOfLines={2}
                         >
@@ -2112,7 +2239,7 @@ export default function HomeScreen() {
           <View
             style={{ paddingHorizontal: 24, marginTop: 8, marginBottom: 40 }}
           >
-            <Text style={styles.moodTitle}>איך הרגיש היום שלך?</Text>
+            <Text style={stylesRtl.moodTitle}>איך הרגיש היום שלך?</Text>
             {currentDayMood === null ? (
               <View style={{ flexDirection: 'row-reverse', gap: 10 }}>
                 {MOODS.map((mood) => (
@@ -2186,10 +2313,10 @@ export default function HomeScreen() {
 
       {/* ── Welcome toast ──────────────────────────────────────────────────── */}
       {showToast && (
-        <View style={styles.toastWrapper}>
-          <View style={[styles.toastShadow, styles.toastCard]}>
+        <View style={stylesRtl.toastWrapper}>
+          <View style={[stylesRtl.toastShadow, stylesRtl.toastCard]}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.toastText}>
+              <Text style={stylesRtl.toastText}>
                 {userFirstName
                   ? `ברוכים הבאים הביתה, ${userFirstName}! הכל מוכן. ה-AI של InYomi כבר התחילה לעבוד לסנכרן לך את היום.`
                   : 'ברוכים הבאים הביתה! הכל מוכן. ה-AI של InYomi כבר התחילה לעבוד לסנכרן לך את היום.'}

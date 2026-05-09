@@ -1,7 +1,7 @@
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -11,16 +11,27 @@ import {
   Share,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRIMARY = '#36a9e2';
+const PILL_BG = '#EAF7FD';
+const DIVIDER_COLOR = '#E8EDF3';
+const MUTED_TEXT = '#8A94A6';
+const TITLE_COLOR = '#111827';
+const MENU_BTN_BG = '#F3F6FA';
+const MENU_ICON_COLOR = '#7A8699';
+const GRID_HORIZONTAL_PADDING = 16;
+const GRID_COLUMN_GAP = 14;
 
 const FILTER_CHIPS = [
   'הכל',
@@ -44,9 +55,23 @@ interface CommunityItem {
     inviteCode: string;
     createdAt: number;
     color?: string;
+    joinApprovalMode?: 'manual' | 'automatic';
   };
   role: UserRole;
   pinned: boolean;
+  notificationsEnabled: boolean;
+  membersCount: number;
+  hasNewEvents: boolean;
+  /** רק לבעלים/מנהלים — מספר ממתינים לאישור */
+  pendingMembersCount: number;
+  membershipStatus: 'active' | 'left' | 'pending';
+  nextActivity: {
+    id: Id<'events'>;
+    title: string;
+    startsAt: number;
+    status?: 'active' | 'cancelled';
+    allDay?: boolean;
+  } | null;
 }
 
 interface MenuPosition {
@@ -54,22 +79,144 @@ interface MenuPosition {
   y: number;
 }
 
+/** Hebrew relative date/time for the next community event (device local timezone). */
+function formatUpcomingEventTimeLine(
+  startsAt: number,
+  referenceNow: number,
+  allDay?: boolean
+): string {
+  const d = new Date(startsAt);
+  if (allDay) {
+    const startOfEventDay = new Date(d);
+    startOfEventDay.setHours(0, 0, 0, 0);
+    const startOfNowDay = new Date(referenceNow);
+    startOfNowDay.setHours(0, 0, 0, 0);
+    const dayDiff = Math.round(
+      (startOfEventDay.getTime() - startOfNowDay.getTime()) / 86_400_000
+    );
+    const datePart = d.toLocaleDateString('he-IL', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+    });
+    if (dayDiff === 0) return `היום · ${datePart}`;
+    if (dayDiff === 1) return `מחר · ${datePart}`;
+    return datePart;
+  }
+
+  const timeStr = d.toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const startOfEventDay = new Date(d);
+  startOfEventDay.setHours(0, 0, 0, 0);
+  const startOfNowDay = new Date(referenceNow);
+  startOfNowDay.setHours(0, 0, 0, 0);
+  const dayDiff = Math.round(
+    (startOfEventDay.getTime() - startOfNowDay.getTime()) / 86_400_000
+  );
+  if (dayDiff === 0) return `היום ב־${timeStr}`;
+  if (dayDiff === 1) return `מחר ב־${timeStr}`;
+  if (dayDiff > 1 && dayDiff < 7) {
+    const weekday = d.toLocaleDateString('he-IL', { weekday: 'long' });
+    return `${weekday} ב־${timeStr}`;
+  }
+  return d.toLocaleString('he-IL', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+interface ActivitySummaryProps {
+  nextActivity: CommunityItem['nextActivity'];
+  referenceNow: number;
+}
+
+function ActivitySummary({ nextActivity, referenceNow }: ActivitySummaryProps) {
+  const titleAlign = rtl.textAlign ?? 'right';
+  const rowDir = rtl.flexDirection;
+
+  if (nextActivity) {
+    const timeLine = formatUpcomingEventTimeLine(
+      nextActivity.startsAt,
+      referenceNow,
+      nextActivity.allDay
+    );
+    const showTitle = nextActivity.title.trim().length > 0;
+    return (
+      <View style={styles.activityBlock}>
+        <View style={[styles.activityRow, { flexDirection: rowDir }]}>
+          <Ionicons color={PRIMARY} name="calendar-outline" size={18} />
+          <View style={styles.activityTextCol}>
+            <Text
+              style={[
+                styles.activityLabel,
+                { color: PRIMARY, textAlign: titleAlign },
+              ]}
+            >
+              אירוע קרוב
+            </Text>
+            <Text
+              style={[
+                styles.activitySub,
+                { color: TITLE_COLOR, textAlign: titleAlign },
+              ]}
+              numberOfLines={1}
+            >
+              {timeLine}
+            </Text>
+            {showTitle ? (
+              <Text
+                style={[styles.activityEventTitle, { textAlign: titleAlign }]}
+                numberOfLines={1}
+              >
+                {nextActivity.title}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.activityBlock}>
+      <View style={[styles.activityRow, { flexDirection: rowDir }]}>
+        <Ionicons color="#9CA3AF" name="calendar-outline" size={17} />
+        <View style={styles.activityTextCol}>
+          <Text style={[styles.activityNoneLabel, { textAlign: titleAlign }]}>
+            אין פעילות קרובה
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 // ─── Skeleton Card ────────────────────────────────────────────────────────────
 
-function SkeletonCard() {
+interface SkeletonCardProps {
+  width: number;
+}
+
+function SkeletonCard({ width }: SkeletonCardProps) {
   return (
-    <View style={styles.cardWrapper}>
+    <View style={[styles.cardWrapper, { width }]}>
       <View style={styles.cardInner}>
-        <View style={[styles.skeletonLine, { width: '65%' }]} />
-        <View style={[styles.skeletonLine, { width: '35%', marginTop: 8 }]} />
-        <View
-          style={[
-            styles.skeletonLine,
-            { width: '50%', marginTop: 6, height: 10 },
-          ]}
-        />
+        <View style={styles.skeletonTopRow}>
+          <View style={[styles.skeletonCircle]} />
+          <View style={[styles.skeletonPill]} />
+        </View>
+        <View style={[styles.skeletonLine, { width: '88%', marginTop: 14 }]} />
+        <View style={[styles.skeletonLine, { width: '45%', marginTop: 10 }]} />
+        <View style={styles.skeletonDivider} />
+        <View style={[styles.skeletonLine, { width: '72%', height: 12 }]} />
+        <View style={{ flex: 1, minHeight: 4 }} />
       </View>
-      <View style={[styles.colorBar, { backgroundColor: '#e5e7eb' }]} />
+      <View style={styles.accentStrip} />
     </View>
   );
 }
@@ -78,88 +225,135 @@ function SkeletonCard() {
 
 interface CardProps {
   item: CommunityItem;
-  onPinToggle: () => void;
   onMenuPress: (ref: View | null) => void;
   onPress: () => void;
+  referenceNow: number;
+  width: number;
 }
 
-function CommunityCard({ item, onPinToggle, onMenuPress, onPress }: CardProps) {
-  const { community, pinned } = item;
+function CommunityCard({
+  item,
+  onMenuPress,
+  onPress,
+  referenceNow,
+  width,
+}: CardProps) {
+  const { community } = item;
   const menuRef = useRef<View>(null);
   const firstTag = community.tags?.[0];
+  const titleAlign = rtl.textAlign ?? 'right';
+  const rowDir = rtl.flexDirection;
+  const membersCount = Number.isFinite(item.membersCount)
+    ? item.membersCount
+    : 0;
+  const canManage = item.role === 'owner' || item.role === 'admin';
+  const pendingCount = item.pendingMembersCount ?? 0;
+  const showPendingMenuBadge = canManage && pendingCount > 0;
+  const pendingBadgeLabel = pendingCount <= 9 ? String(pendingCount) : '+9';
+
+  const membersMetaLine = canManage
+    ? `בניהולך · ${membersCount} חברים`
+    : `${membersCount} חברים`;
 
   return (
     <Pressable
-      style={styles.cardWrapper}
+      style={[styles.cardWrapper, { width }]}
       onPress={onPress}
       accessible
       accessibilityRole="button"
-      accessibilityLabel={`קהילה: ${community.name}`}
+      accessibilityLabel={`פתח קהילה ${community.name}`}
     >
       <View style={styles.cardInner}>
-        {/* שורה עליונה: שם (ימין) + אייקונים (שמאל) */}
+        {/*
+          LTR wrapper: physical left = menu, physical right = category pill.
+        */}
         <View style={styles.cardTopRow}>
-          {/* שם – עד 2 שורות */}
-          <Text style={styles.cardName} numberOfLines={2}>
-            {community.name}
-          </Text>
-          {/* אייקונים בפינה שמאל-עליונה */}
-          <View style={styles.cardActions}>
+          <View
+            ref={menuRef}
+            collapsable={false}
+            style={styles.menuTriggerWrap}
+          >
             <TouchableOpacity
-              onPress={onPinToggle}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              onPress={() => onMenuPress(menuRef.current)}
+              style={styles.menuTrigger}
               accessible
               accessibilityRole="button"
-              accessibilityLabel={pinned ? 'בטל הצמדה' : 'הצמד'}
+              accessibilityLabel={
+                showPendingMenuBadge
+                  ? `תפריט פעולות לקהילה, ${pendingCount} ממתינים לאישור`
+                  : 'תפריט פעולות לקהילה'
+              }
             >
               <Ionicons
-                name={pinned ? 'pin' : 'pin-outline'}
-                size={pinned ? 18 : 16}
-                color={pinned ? PRIMARY : '#bbb'}
-                style={
-                  pinned ? { transform: [{ rotate: '-15deg' }] } : undefined
-                }
+                color={MENU_ICON_COLOR}
+                name="ellipsis-horizontal"
+                size={18}
               />
             </TouchableOpacity>
-            <View ref={menuRef}>
-              <TouchableOpacity
-                onPress={() => onMenuPress(menuRef.current)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessible
-                accessibilityRole="button"
-                accessibilityLabel="אפשרויות"
-              >
-                <Ionicons name="ellipsis-vertical" size={16} color="#999" />
-              </TouchableOpacity>
-            </View>
+            {showPendingMenuBadge ? (
+              <View style={styles.menuPendingBadge} pointerEvents="none">
+                <Text style={styles.menuPendingBadgeText}>
+                  {pendingBadgeLabel}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.cardTopRight}>
+            {firstTag ? (
+              <View style={styles.categoryPill}>
+                <Text
+                  style={[styles.categoryPillText, { textAlign: titleAlign }]}
+                >
+                  {firstTag}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.categoryPillPlaceholder} />
+            )}
           </View>
         </View>
 
-        {/* tag ראשון */}
-        {firstTag ? (
-          <View style={styles.tagChip}>
-            <Text style={styles.tagText}>{firstTag}</Text>
-          </View>
-        ) : (
-          <View style={styles.tagPlaceholder} />
-        )}
-
-        {/* מספר חברים – TODO: חבר ל-memberCount אמיתי מ-getCommunityMembers */}
-        <Text style={styles.memberCount}>חברים</Text>
-
-        {/* פעילות קרובה – TODO: חבר ל-nextActivityLabel מהשרת */}
-        <Text style={styles.nextActivity} numberOfLines={1}>
-          אין פעילויות קרובות
+        <Text
+          style={[styles.cardTitle, { textAlign: titleAlign }]}
+          numberOfLines={2}
+        >
+          {community.name}
         </Text>
+
+        <View style={[styles.membersRow, { flexDirection: rowDir }]}>
+          <Ionicons color={MUTED_TEXT} name="people-outline" size={16} />
+          <Text
+            style={[
+              styles.membersText,
+              { textAlign: titleAlign, flex: 1, minWidth: 0 },
+            ]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
+            {membersMetaLine}
+          </Text>
+        </View>
+
+        <View style={styles.divider} />
+
+        <ActivitySummary
+          nextActivity={item.nextActivity}
+          referenceNow={referenceNow}
+        />
+
+        {item.hasNewEvents ? (
+          <Text
+            style={[styles.newEventsHint, { textAlign: titleAlign }]}
+            numberOfLines={1}
+          >
+            יש אירועים חדשים
+          </Text>
+        ) : null}
       </View>
 
-      {/* פס צבע בצד ימין */}
-      <View
-        style={[
-          styles.colorBar,
-          { backgroundColor: community.color ?? PRIMARY },
-        ]}
-      />
+      <View style={styles.accentStrip} />
     </Pressable>
   );
 }
@@ -171,6 +365,10 @@ interface PopoverMenuItem {
   iconName: React.ComponentProps<typeof Ionicons>['name'];
   onPress: () => void;
   danger?: boolean;
+  /** נגישות — אם לא מוגדר, משתמשים ב־label */
+  accessibilityLabel?: string;
+  /** טקסט משני מתחת לשורת התווית (למשל הקשר ממתינים) */
+  subtitle?: string;
 }
 
 interface PopoverMenuProps {
@@ -194,7 +392,7 @@ function PopoverMenu({ visible, position, onClose, items }: PopoverMenuProps) {
       <View style={[styles.popover, { top: position.y, right: position.x }]}>
         {items.map((m, idx) => (
           <Pressable
-            key={m.label}
+            key={`${idx}-${m.label}`}
             style={[
               styles.popoverItem,
               idx < items.length - 1 && styles.popoverItemBorder,
@@ -205,13 +403,21 @@ function PopoverMenu({ visible, position, onClose, items }: PopoverMenuProps) {
             }}
             accessible
             accessibilityRole="button"
-            accessibilityLabel={m.label}
+            accessibilityLabel={
+              m.accessibilityLabel ??
+              (m.subtitle ? `${m.label}, ${m.subtitle}` : m.label)
+            }
           >
-            <Text
-              style={[styles.popoverLabel, m.danger && styles.popoverDanger]}
-            >
-              {m.label}
-            </Text>
+            <View style={styles.popoverLabelCol}>
+              <Text
+                style={[styles.popoverLabel, m.danger && styles.popoverDanger]}
+              >
+                {m.label}
+              </Text>
+              {m.subtitle ? (
+                <Text style={styles.popoverSubtitle}>{m.subtitle}</Text>
+              ) : null}
+            </View>
             <Ionicons
               name={m.iconName}
               size={18}
@@ -228,14 +434,48 @@ function PopoverMenu({ visible, position, onClose, items }: PopoverMenuProps) {
 
 export default function CommunitiesScreen() {
   const router = useRouter();
+  const { width: screenWidth } = useWindowDimensions();
 
-  const communitiesData = useQuery(api.communities.listMyCommunities);
+  const [viewerNow, setViewerNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => {
+      setViewerNow(Date.now());
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const communitiesData = useQuery(api.communities.listMyCommunities, {
+    viewerNow,
+  });
   const togglePinned = useMutation(api.communities.togglePinned);
   const deleteCommunity = useMutation(api.communities.deleteCommunity);
+  const toggleNotifications = useMutation(api.communities.toggleNotifications);
+  const leaveCommunity = useMutation(api.communities.leaveCommunity);
+  const joinCommunityByCode = useMutation(api.communities.joinCommunityByCode);
+  const updateJoinApprovalMode = useMutation(
+    api.communities.updateCommunityJoinApprovalMode
+  );
 
   const [activeFilter, setActiveFilter] = useState<FilterChip>('הכל');
   const [menuItem, setMenuItem] = useState<CommunityItem | null>(null);
   const [menuPos, setMenuPos] = useState<MenuPosition>({ x: 16, y: 200 });
+  const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joinLoading, setJoinLoading] = useState(false);
+  const [joinApprovalModalItem, setJoinApprovalModalItem] =
+    useState<CommunityItem | null>(null);
+  const [joinApprovalDraft, setJoinApprovalDraft] = useState<
+    'manual' | 'automatic'
+  >('automatic');
+  const [joinApprovalSaving, setJoinApprovalSaving] = useState(false);
+
+  const extractInviteCode = useCallback((rawInput: string): string => {
+    const trimmed = rawInput.trim();
+    if (!trimmed) return '';
+    const normalized = trimmed.replace(/\/+$/, '');
+    const parts = normalized.split('/');
+    const lastSegment = parts[parts.length - 1] ?? '';
+    return lastSegment.trim().toUpperCase();
+  }, []);
 
   // ── סינון לפי chip
   const filtered = (communitiesData ?? []).filter((row) => {
@@ -293,22 +533,145 @@ export default function CommunitiesScreen() {
     [deleteCommunity]
   );
 
+  const handleShareJoinLink = useCallback((item: CommunityItem) => {
+    const inviteCode = item.community.inviteCode;
+    if (!inviteCode) {
+      Alert.alert('שגיאה', 'לא נמצא קישור הזמנה לקהילה זו');
+      return;
+    }
+    const inviteUrl = `https://inyomi.app/join/${inviteCode}`;
+    const message = `הצטרפו לקהילה "${item.community.name}" באפליקציית Inyomi: ${inviteUrl}`;
+
+    setTimeout(async () => {
+      try {
+        await Share.share({ message });
+      } catch {
+        Alert.alert('שגיאה', 'לא ניתן לשתף כרגע');
+      }
+    }, 300);
+  }, []);
+
+  const handleToggleNotifications = useCallback(
+    async (communityId: Id<'communities'>) => {
+      try {
+        const result = await toggleNotifications({ communityId });
+        const msg = result.notificationsEnabled
+          ? 'ההתראות הופעלו לקהילה הזו'
+          : 'ההתראות כבויות לקהילה הזו';
+        Alert.alert('התראות', msg, [{ text: 'אישור' }]);
+      } catch {
+        Alert.alert('שגיאה', 'לא ניתן לעדכן התראות כרגע');
+      }
+    },
+    [toggleNotifications]
+  );
+
+  const handleLeaveCommunity = useCallback(
+    (communityId: Id<'communities'>) => {
+      Alert.alert(
+        'לעזוב את הקהילה?',
+        'לא תראי יותר את האירועים והמשימות של הקהילה הזו.',
+        [
+          { text: 'ביטול', style: 'cancel' },
+          {
+            text: 'עזיבה',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await leaveCommunity({ communityId });
+              } catch (err) {
+                Alert.alert(
+                  'שגיאה',
+                  err instanceof Error ? err.message : 'לא ניתן לעזוב את הקהילה'
+                );
+              }
+            },
+          },
+        ]
+      );
+    },
+    [leaveCommunity]
+  );
+
+  const handleSaveJoinApproval = useCallback(async () => {
+    if (!joinApprovalModalItem) return;
+    setJoinApprovalSaving(true);
+    try {
+      await updateJoinApprovalMode({
+        communityId: joinApprovalModalItem.community._id,
+        joinApprovalMode: joinApprovalDraft,
+      });
+      setJoinApprovalModalItem(null);
+    } catch {
+      Alert.alert('שגיאה', 'לא ניתן לשמור את ההגדרות');
+    } finally {
+      setJoinApprovalSaving(false);
+    }
+  }, [joinApprovalDraft, joinApprovalModalItem, updateJoinApprovalMode]);
+
+  const handleJoinByCode = useCallback(async () => {
+    const inviteCode = extractInviteCode(joinCodeInput);
+    if (!inviteCode) {
+      Alert.alert('שגיאה', 'הכניסי קוד הצטרפות');
+      return;
+    }
+
+    setJoinLoading(true);
+    try {
+      const result = await joinCommunityByCode({ inviteCode });
+      if (result.status === 'invalid_code') {
+        Alert.alert(
+          'שגיאה',
+          'לא הצלחנו להצטרף לקהילה. בדקי שהקוד נכון ונסי שוב.'
+        );
+        return;
+      }
+      if (result.status === 'pending_approval') {
+        setJoinModalOpen(false);
+        setJoinCodeInput('');
+        Alert.alert(
+          'בקשת ההצטרפות נשלחה',
+          'בקשת ההצטרפות נשלחה וממתינה לאישור מנהל הקהילה'
+        );
+        return;
+      }
+      if (result.status === 'already_member') {
+        setJoinModalOpen(false);
+        setJoinCodeInput('');
+        Alert.alert('הצלחה', 'את כבר חברה בקהילה הזו');
+        return;
+      }
+      if (result.status === 'joined') {
+        setJoinModalOpen(false);
+        setJoinCodeInput('');
+        Alert.alert('הצלחה', 'הצטרפת לקהילה');
+      }
+    } catch {
+      Alert.alert(
+        'שגיאה',
+        'לא הצלחנו להצטרף לקהילה. בדקי שהקוד נכון ונסי שוב.'
+      );
+    } finally {
+      setJoinLoading(false);
+    }
+  }, [extractInviteCode, joinCodeInput, joinCommunityByCode]);
+
   // ── בניית פריטי תפריט דינמית לפי הקהילה הנבחרת
   const buildMenuItems = useCallback(
     (item: CommunityItem): PopoverMenuItem[] => {
-      const { community, role, pinned } = item;
-
-      const inviteUrl = community.inviteCode
-        ? `https://inyomi.app/join/${community.inviteCode}`
-        : null;
+      const { community, role, pinned, notificationsEnabled } = item;
+      const isOwner = role === 'owner';
+      const isAdmin = role === 'admin';
+      const isMember = role === 'member';
+      const pendingForMenu = item.pendingMembersCount ?? 0;
 
       const items: PopoverMenuItem[] = [
         {
-          label: pinned ? 'בטל הצמדה' : 'הצמדה',
+          label: pinned ? 'בטל נעיצה' : 'נעץ קהילה',
           iconName: pinned ? 'pin' : 'pin-outline',
           onPress: () => handleTogglePin(community._id),
         },
-        ...(role === 'owner' || role === 'admin'
+        ...(isOwner || isAdmin
           ? [
               {
                 label: 'ערוך קהילה',
@@ -322,50 +685,53 @@ export default function CommunitiesScreen() {
               },
             ]
           : []),
-        {
-          label: 'ניהול חברים',
-          iconName: 'people-outline',
-          onPress: () => {
-            router.push(
-              `/(authenticated)/community-members/${community._id}` as Parameters<
-                typeof router.push
-              >[0]
-            );
-          },
-        },
-        {
-          label: 'קישור הצטרפות',
-          iconName: 'share-outline',
-          onPress: () => {
-            if (!inviteUrl) {
-              Alert.alert('שגיאה', 'לא נמצא קישור הזמנה לקהילה זו');
-              return;
-            }
-            Share.share({
-              message: `הצטרפו לקהילה "${community.name}" באפליקציית Inyomi: ${inviteUrl}`,
-            });
-          },
-        },
-        {
-          label: 'קבל התראות',
-          iconName: 'notifications-outline',
-          onPress: () => {
-            Alert.alert(
-              'התראות קהילה',
-              'מעכשיו תקבלו התראה על כל אירוע חדש או שינוי באירועי הקהילה.',
-              [{ text: 'אישור' }]
-            );
-            // TODO: connect to notifications
-          },
-        },
-        {
-          label: 'השתק',
-          iconName: 'volume-mute-outline',
-          onPress: () => {
-            // TODO: add toggleMuteCommunity mutation to convex/communities.ts
-            Alert.alert('בקרוב', 'אפשרות ההשתקה תהיה זמינה בקרוב');
-          },
-        },
+        ...(isOwner || isAdmin
+          ? [
+              {
+                label: 'ניהול חברים',
+                ...(pendingForMenu > 0
+                  ? {
+                      subtitle: `${pendingForMenu} ממתינים לאישור`,
+                    }
+                  : {}),
+                iconName: 'people-outline' as const,
+                onPress: () => {
+                  router.push(
+                    `/(authenticated)/community-members/${community._id}` as Parameters<
+                      typeof router.push
+                    >[0]
+                  );
+                },
+              },
+              {
+                label: 'הגדרות הצטרפות',
+                iconName: 'settings-outline' as const,
+                accessibilityLabel: 'הגדרות הצטרפות לקהילה',
+                onPress: () => {
+                  setJoinApprovalDraft(
+                    item.community.joinApprovalMode ?? 'automatic'
+                  );
+                  setJoinApprovalModalItem(item);
+                },
+              },
+              {
+                label: 'שיתוף קישור הצטרפות',
+                iconName: 'share-outline' as const,
+                onPress: () => handleShareJoinLink(item),
+              },
+            ]
+          : []),
+        ...(isMember
+          ? [
+              {
+                label: notificationsEnabled ? 'אל תקבל התראות' : 'קבל התראות',
+                iconName: notificationsEnabled
+                  ? ('notifications-off-outline' as const)
+                  : ('notifications-outline' as const),
+                onPress: () => handleToggleNotifications(community._id),
+              },
+            ]
+          : []),
         {
           label: 'הצג ביומן',
           iconName: 'calendar-outline',
@@ -380,8 +746,17 @@ export default function CommunitiesScreen() {
         },
       ];
 
+      if (isMember) {
+        items.push({
+          label: 'עזיבת הקהילה',
+          iconName: 'exit-outline',
+          danger: true,
+          onPress: () => handleLeaveCommunity(community._id),
+        });
+      }
+
       // מחיקה – owner בלבד
-      if (role === 'owner') {
+      if (isOwner) {
         items.push({
           label: 'מחיקת קהילה',
           iconName: 'trash-outline',
@@ -392,10 +767,21 @@ export default function CommunitiesScreen() {
 
       return items;
     },
-    [handleTogglePin, handleDelete, router]
+    [
+      handleTogglePin,
+      handleDelete,
+      handleShareJoinLink,
+      handleToggleNotifications,
+      handleLeaveCommunity,
+      router,
+      setJoinApprovalDraft,
+      setJoinApprovalModalItem,
+    ]
   );
 
   const isLoading = communitiesData === undefined;
+  const availableGridWidth = screenWidth - GRID_HORIZONTAL_PADDING * 2;
+  const cardWidth = (availableGridWidth - GRID_COLUMN_GAP) / 2;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -411,6 +797,25 @@ export default function CommunitiesScreen() {
         >
           <MaterialIcons name="add" size={22} color="#fff" />
         </Pressable>
+      </View>
+
+      <View style={styles.secondaryActionRow}>
+        <TouchableOpacity
+          style={styles.joinByCodeBtn}
+          onPress={() => setJoinModalOpen(true)}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="יש לך קוד הצטרפות?"
+        >
+          <Text
+            style={[
+              styles.joinByCodeText,
+              { textAlign: rtl.textAlign ?? 'right' },
+            ]}
+          >
+            יש לך קוד הצטרפות?
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* ── Chips סינון */}
@@ -448,7 +853,7 @@ export default function CommunitiesScreen() {
           numColumns={2}
           columnWrapperStyle={styles.columnWrapper}
           contentContainerStyle={styles.listContent}
-          renderItem={() => <SkeletonCard />}
+          renderItem={() => <SkeletonCard width={cardWidth} />}
         />
       ) : filtered.length === 0 ? (
         <View style={styles.emptyContainer}>
@@ -480,7 +885,6 @@ export default function CommunitiesScreen() {
           renderItem={({ item }) => (
             <CommunityCard
               item={item}
-              onPinToggle={() => handleTogglePin(item.community._id)}
               onMenuPress={(ref) => handleMenuPress(item, ref)}
               onPress={() => {
                 router.push(
@@ -489,6 +893,8 @@ export default function CommunitiesScreen() {
                   >[0]
                 );
               }}
+              referenceNow={viewerNow}
+              width={cardWidth}
             />
           )}
         />
@@ -501,6 +907,175 @@ export default function CommunitiesScreen() {
         onClose={() => setMenuItem(null)}
         items={menuItem ? buildMenuItems(menuItem) : []}
       />
+
+      <Modal
+        visible={joinModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setJoinModalOpen(false)}
+      >
+        <Pressable
+          style={styles.joinModalBackdrop}
+          onPress={() => setJoinModalOpen(false)}
+        />
+        <View style={styles.joinModalCard}>
+          <Text style={styles.joinModalTitle}>הצטרפות לקהילה</Text>
+          <TextInput
+            value={joinCodeInput}
+            onChangeText={setJoinCodeInput}
+            style={styles.joinInput}
+            placeholder="הכניסי קוד הצטרפות"
+            placeholderTextColor="#9ca3af"
+            autoCapitalize="characters"
+            textAlign="right"
+            editable={!joinLoading}
+            accessible
+            accessibilityLabel="קוד הצטרפות"
+          />
+          <View style={styles.joinModalButtons}>
+            <TouchableOpacity
+              style={styles.joinCancelBtn}
+              onPress={() => setJoinModalOpen(false)}
+              disabled={joinLoading}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="ביטול"
+            >
+              <Text style={styles.joinCancelText}>ביטול</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.joinSubmitBtn,
+                joinLoading && styles.joinSubmitBtnDisabled,
+              ]}
+              onPress={handleJoinByCode}
+              disabled={joinLoading}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="הצטרפות"
+            >
+              <Text style={styles.joinSubmitText}>
+                {joinLoading ? 'מצטרפת...' : 'הצטרפות'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={joinApprovalModalItem !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setJoinApprovalModalItem(null)}
+      >
+        <Pressable
+          style={styles.joinModalBackdrop}
+          onPress={() => setJoinApprovalModalItem(null)}
+        />
+        <View style={styles.joinApprovalModalCard}>
+          <Text style={styles.joinModalTitle}>הגדרות הצטרפות</Text>
+          <Text style={styles.joinApprovalSubtitle}>
+            בחרי איך אנשים שמקבלים קישור לקהילה יצטרפו אליה
+          </Text>
+
+          <Pressable
+            onPress={() => setJoinApprovalDraft('manual')}
+            style={[
+              styles.approvalOption,
+              { flexDirection: rtl.flexDirection },
+              joinApprovalDraft === 'manual' && styles.approvalOptionSelected,
+            ]}
+            accessible
+            accessibilityRole="radio"
+            accessibilityState={{ selected: joinApprovalDraft === 'manual' }}
+            accessibilityLabel="אישור ידני"
+          >
+            <View
+              style={[
+                styles.radioOuter,
+                joinApprovalDraft === 'manual' && styles.radioOuterSelected,
+              ]}
+            >
+              {joinApprovalDraft === 'manual' ? (
+                <View style={styles.radioInner} />
+              ) : null}
+            </View>
+            <View style={styles.approvalOptionTextCol}>
+              <Text style={styles.approvalOptionTitle}>אישור ידני</Text>
+              <Text style={styles.approvalOptionDesc}>
+                כל מי שמצטרף דרך הקישור ימתין לאישור שלך לפני שיוכל להיכנס
+                לקהילה. מתאים לגנים, כיתות וקבוצות פרטיות.
+              </Text>
+            </View>
+          </Pressable>
+
+          <Pressable
+            onPress={() => setJoinApprovalDraft('automatic')}
+            style={[
+              styles.approvalOption,
+              { flexDirection: rtl.flexDirection },
+              joinApprovalDraft === 'automatic' &&
+                styles.approvalOptionSelected,
+            ]}
+            accessible
+            accessibilityRole="radio"
+            accessibilityState={{ selected: joinApprovalDraft === 'automatic' }}
+            accessibilityLabel="אישור אוטומטי"
+          >
+            <View
+              style={[
+                styles.radioOuter,
+                joinApprovalDraft === 'automatic' && styles.radioOuterSelected,
+              ]}
+            >
+              {joinApprovalDraft === 'automatic' ? (
+                <View style={styles.radioInner} />
+              ) : null}
+            </View>
+            <View style={styles.approvalOptionTextCol}>
+              <Text style={styles.approvalOptionTitle}>אישור אוטומטי</Text>
+              <Text style={styles.approvalOptionDesc}>
+                כל מי שמקבל את הקישור ייכנס מיד לקהילה, בלי אישור מנהל. מתאים
+                לקהילות פתוחות כמו עירייה או שכונה.
+              </Text>
+            </View>
+          </Pressable>
+
+          <View style={styles.joinModalButtons}>
+            <TouchableOpacity
+              style={styles.joinCancelBtn}
+              onPress={() => setJoinApprovalModalItem(null)}
+              disabled={joinApprovalSaving}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="ביטול"
+            >
+              <Text style={styles.joinCancelText}>ביטול</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.joinSubmitBtn,
+                joinApprovalSaving && styles.joinSubmitBtnDisabled,
+              ]}
+              onPress={() => {
+                void handleSaveJoinApproval();
+              }}
+              disabled={joinApprovalSaving}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel={
+                joinApprovalDraft === 'manual'
+                  ? 'שמירה, נבחר אישור ידני'
+                  : 'שמירה, נבחר אישור אוטומטי'
+              }
+            >
+              <Text style={styles.joinSubmitText}>
+                {joinApprovalSaving ? 'שומר...' : 'שמירה'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -538,6 +1113,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  secondaryActionRow: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+    /* RTL: cross-axis start = physical right (flex-end was aligning children to the left). */
+    alignItems: 'flex-start',
+  },
+  joinByCodeBtn: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  joinByCodeText: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
 
   // ── Chips
   chipsScroll: {
@@ -565,77 +1156,192 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#fff' },
 
   // ── Grid
-  listContent: { padding: 16, gap: 12 },
-  columnWrapper: { gap: 12 },
+  listContent: { padding: GRID_HORIZONTAL_PADDING, gap: 14 },
+  columnWrapper: {
+    flexDirection: 'row-reverse',
+    gap: GRID_COLUMN_GAP,
+    justifyContent: 'flex-start',
+  },
 
-  // ── Card
+  // ── Card — LTR row: accent strip stays on the physical right edge
   cardWrapper: {
-    flex: 1,
     backgroundColor: '#fff',
-    borderRadius: 16,
+    borderRadius: 24,
+    direction: 'ltr',
     flexDirection: 'row',
     overflow: 'hidden',
-    minHeight: 140,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 3,
+    minHeight: 218,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.07,
+    shadowRadius: 14,
+    elevation: 4,
   },
-  colorBar: {
-    width: 5,
-    borderTopRightRadius: 16,
-    borderBottomRightRadius: 16,
+  accentStrip: {
+    width: 6,
+    backgroundColor: PRIMARY,
+    borderTopRightRadius: 24,
+    borderBottomRightRadius: 24,
   },
   cardInner: {
     flex: 1,
-    padding: 12,
-    alignItems: 'flex-end',
+    padding: 16,
+    alignItems: 'stretch',
+    justifyContent: 'flex-start',
+    minHeight: 218,
   },
   cardTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     width: '100%',
+    gap: 10,
+    minHeight: 34,
   },
-  cardName: {
-    fontSize: 15,
+  menuTriggerWrap: {
+    width: 34,
+    height: 34,
+    position: 'relative',
+  },
+  menuTrigger: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: MENU_BTN_BG,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuPendingBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuPendingBadgeText: {
+    fontSize: 10,
     fontWeight: '700',
-    color: '#111827',
-    textAlign: 'right',
+    color: '#fff',
+  },
+  cardTopRight: {
     flex: 1,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    minWidth: 0,
+  },
+  categoryPill: {
+    backgroundColor: PILL_BG,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    maxWidth: '100%',
+  },
+  categoryPillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: PRIMARY,
     writingDirection: 'rtl',
   },
-  cardActions: {
-    flexDirection: 'row',
+  categoryPillPlaceholder: {
+    minHeight: 30,
+  },
+  cardTitle: {
+    fontSize: 21,
+    fontWeight: '800',
+    color: TITLE_COLOR,
+    marginTop: 12,
+    writingDirection: 'rtl',
+    lineHeight: 26,
+  },
+  membersRow: {
     alignItems: 'center',
-    gap: 6,
-    marginLeft: 4,
-  },
-  tagChip: {
+    gap: 8,
     marginTop: 8,
-    backgroundColor: '#f3f4f6',
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    alignSelf: 'flex-end',
+    justifyContent: 'flex-end',
+    width: '100%',
   },
-  tagText: { fontSize: 11, color: '#6b7280', fontWeight: '500' },
-  tagPlaceholder: { height: 18, marginTop: 8 },
-  memberCount: {
-    fontSize: 11,
-    color: '#888',
-    marginTop: 4,
-    textAlign: 'right',
+  membersText: {
+    fontSize: 13,
+    color: MUTED_TEXT,
+    writingDirection: 'rtl',
   },
-  nextActivity: {
-    fontSize: 11,
-    color: '#aaa',
+  divider: {
+    height: 1,
+    backgroundColor: DIVIDER_COLOR,
+    marginVertical: 14,
+  },
+  activityBlock: {
+    width: '100%',
+  },
+  activityRow: {
+    alignItems: 'flex-start',
+    gap: 10,
+    width: '100%',
+  },
+  activityTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  activityLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    writingDirection: 'rtl',
+  },
+  activitySub: {
+    fontSize: 13,
     marginTop: 3,
-    textAlign: 'right',
+    writingDirection: 'rtl',
   },
-
+  activityNoneLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: MUTED_TEXT,
+    writingDirection: 'rtl',
+  },
+  activityEventTitle: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: MUTED_TEXT,
+    marginTop: 4,
+    writingDirection: 'rtl',
+  },
+  newEventsHint: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#94a3b8',
+    marginTop: 8,
+    writingDirection: 'rtl',
+  },
   // ── Skeleton
+  skeletonTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+  },
+  skeletonCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#e8eef5',
+  },
+  skeletonPill: {
+    width: 56,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#e8eef5',
+  },
+  skeletonDivider: {
+    height: 1,
+    backgroundColor: DIVIDER_COLOR,
+    marginVertical: 14,
+    width: '100%',
+  },
   skeletonLine: {
     height: 14,
     backgroundColor: '#e5e7eb',
@@ -694,6 +1400,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     gap: 10,
   },
+  popoverLabelCol: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'flex-end',
+  },
   popoverItemBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f3f4f6',
@@ -702,7 +1413,161 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#374151',
     textAlign: 'right',
-    flex: 1,
+    alignSelf: 'stretch',
+  },
+  popoverSubtitle: {
+    fontSize: 12,
+    color: '#94a3b8',
+    textAlign: 'right',
+    marginTop: 2,
+    writingDirection: 'rtl',
   },
   popoverDanger: { color: '#ef4444' },
+  joinModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  joinModalCard: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    top: '33%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  joinModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+    marginBottom: 12,
+  },
+  joinInput: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    color: '#111827',
+    backgroundColor: '#fafafa',
+  },
+  joinModalButtons: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'flex-start',
+    gap: 10,
+    marginTop: 14,
+  },
+  joinCancelBtn: {
+    minHeight: 44,
+    minWidth: 90,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  joinCancelText: {
+    fontSize: 15,
+    color: '#4b5563',
+    fontWeight: '600',
+  },
+  joinSubmitBtn: {
+    minHeight: 44,
+    minWidth: 90,
+    borderRadius: 10,
+    backgroundColor: PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  joinSubmitBtnDisabled: {
+    opacity: 0.7,
+  },
+  joinSubmitText: {
+    fontSize: 15,
+    color: '#fff',
+    fontWeight: '700',
+  },
+  joinApprovalModalCard: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    top: '15%',
+    maxHeight: '85%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  joinApprovalSubtitle: {
+    fontSize: 14,
+    color: MUTED_TEXT,
+    textAlign: 'right',
+    marginBottom: 14,
+    lineHeight: 20,
+    writingDirection: 'rtl',
+  },
+  approvalOption: {
+    alignItems: 'flex-start',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    marginBottom: 10,
+    gap: 10,
+  },
+  approvalOptionSelected: {
+    borderColor: PRIMARY,
+    backgroundColor: '#f5fbfe',
+  },
+  approvalOptionTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  approvalOptionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: TITLE_COLOR,
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  approvalOptionDesc: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'right',
+    marginTop: 6,
+    lineHeight: 18,
+    writingDirection: 'rtl',
+  },
+  radioOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  radioOuterSelected: {
+    borderColor: PRIMARY,
+  },
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: PRIMARY,
+  },
 });

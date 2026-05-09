@@ -1,30 +1,148 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
+import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
   Dimensions,
+  I18nManager,
   Image,
   Linking,
   Modal,
   PanResponder,
+  Platform,
   Pressable,
   ScrollView,
   Share,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
+import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
+import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import {
+  getOpenCommunityCalendarActionLabel,
+  isOpenCommunityCalendarActionVisible,
+  isOpenCommunityInformationalLabelVisible,
+} from '@/lib/openCommunityCalendarUi';
+import { getConvexErrorCode } from '@/lib/utils/convexError';
+
+/**
+ * Inside a Modal, RTL alignment must be handled manually per environment.
+ *
+ * Expo Go detection: use both fields because executionEnvironment can be
+ * unreliable on some Android SDK versions — appOwnership is a safer fallback.
+ */
+const _isExpoGo =
+  Constants.executionEnvironment === 'storeClient' ||
+  Constants.appOwnership === 'expo';
+
+/**
+ * - iOS:                 Modal does NOT auto-flip → explicit 'right' / 'row-reverse'
+ * - Android Expo Go:     visual debugging showed RN still flips these values inside
+ *                        this Modal even when I18nManager.isRTL is false, so supply
+ *                        'left'/'row' to get visual right alignment / RTL rows.
+ * - Android native RTL:  OS flips 'right'→'left' automatically inside Modal
+ *                        → use 'left'/'row' so OS corrects them to 'right'/'row-reverse'
+ */
+const isAndroidExpoGo = Platform.OS === 'android' && _isExpoGo;
+const shouldSupplyInvertedRtlValues = isAndroidExpoGo || I18nManager.isRTL;
+const HEB_TEXT_ALIGN: 'left' | 'right' = shouldSupplyInvertedRtlValues
+  ? 'left'
+  : 'right';
+const HEB_ROW: 'row' | 'row-reverse' = shouldSupplyInvertedRtlValues
+  ? 'row'
+  : 'row-reverse';
+const HEB_FLEX_END: 'flex-start' | 'flex-end' = shouldSupplyInvertedRtlValues
+  ? 'flex-start'
+  : 'flex-end';
+// Use writingDirection only on Text components. Do not add it to View
+// containers: on Android it can affect native layoutDirection and break visual RTL.
+const HEB_WRITING_DIRECTION: 'rtl' | undefined = isAndroidExpoGo
+  ? undefined
+  : 'rtl';
 
 const { height: screenHeight } = Dimensions.get('window');
 const SHEET_HEIGHT = screenHeight * 0.9;
+const RSVP_DETAIL_MODAL_MAX_HEIGHT = screenHeight * 0.62;
+const RSVP_DETAIL_SCROLL_MAX_HEIGHT = RSVP_DETAIL_MODAL_MAX_HEIGHT - 160;
+const INYOMI_EVENT_LINK_BASE = 'https://inyomi.app/e';
+const CALENDAR_REMOVE_CONFIRM_TITLE = 'להסיר מהיומן?';
+const CALENDAR_REMOVE_CONFIRM_MESSAGE =
+  'שימי לב, הוקצו לך משימות באירוע הזה. האירוע יוסר מהיומן שלך, אבל המשימות עדיין יופיעו במסך המשימות.';
+const CALENDAR_REMOVE_CONFIRMATION_CODE =
+  'CALENDAR_REMOVE_REQUIRES_ACTIVE_TASK_CONFIRMATION';
+
+/** RSVP — strong fills + borders so controls read as real buttons on light cards */
+const MEMBER_RSVP_OPTIONS = [
+  {
+    status: 'yes' as const,
+    label: 'כן',
+    selectedBg: '#dcfce7',
+    selectedBorder: '#16a34a',
+    selectedText: '#14532d',
+  },
+  {
+    status: 'maybe' as const,
+    label: 'אולי',
+    selectedBg: '#fef3c7',
+    selectedBorder: '#d97706',
+    selectedText: '#92400e',
+  },
+  {
+    status: 'no' as const,
+    label: 'לא',
+    selectedBg: '#fee2e2',
+    selectedBorder: '#dc2626',
+    selectedText: '#991b1b',
+  },
+] as const;
+
+function getBottomSheetRsvpHelperText(
+  status: 'yes' | 'no' | 'maybe' | 'none'
+): string | null {
+  if (status === 'yes') {
+    return 'אישרת הגעה';
+  }
+  if (status === 'maybe') {
+    return 'סימנת אולי';
+  }
+  if (status === 'no') {
+    return 'סימנת שלא תגיע/י';
+  }
+  return null;
+}
+
+function rsvpRowDisplayName(row: {
+  displayName?: string;
+  userId: string;
+}): string {
+  const trimmed = row.displayName?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : 'משתמש';
+}
+
+function uniqueById<T>(items: readonly T[], getId: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    const id = getId(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(item);
+  }
+  return unique;
+}
 
 export interface EventItem {
   id: string;
@@ -43,6 +161,12 @@ export interface EventItem {
   recurringPattern?: string;
   reminders?: number[];
   canEdit?: boolean;
+  /** Convex community id when this row is a community (or saved community) event */
+  communityId?: string;
+  /** From listByDateRange / listCommunity… when known */
+  isSavedToMyCalendar?: boolean;
+  importantItems?: Array<{ id: string; title: string }>;
+  tasksVisibleToParticipants?: boolean;
 }
 
 interface EventDetailsBottomSheetProps {
@@ -74,9 +198,23 @@ export function EventDetailsBottomSheet({
   onNavigate: _onNavigate,
 }: EventDetailsBottomSheetProps): React.JSX.Element | null {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [showAllTasks, setShowAllTasks] = useState(false);
+
   const [navPickerOpen, setNavPickerOpen] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<
+    number | null
+  >(null);
+  const [pendingRsvpStatus, setPendingRsvpStatus] = useState<
+    'yes' | 'no' | 'maybe' | null
+  >(null);
+  const [
+    calendarRemoveConfirmationEventId,
+    setCalendarRemoveConfirmationEventId,
+  ] = useState<Id<'events'> | null>(null);
+  const [participantRsvpDetailsOpen, setParticipantRsvpDetailsOpen] =
+    useState(false);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
   const isClosingRef = useRef(false);
   const [isClosingState, setIsClosingState] = useState(false);
@@ -130,6 +268,12 @@ export function EventDetailsBottomSheet({
     }
   }, [visible]);
 
+  useEffect(() => {
+    if (!visible) {
+      setParticipantRsvpDetailsOpen(false);
+    }
+  }, [visible]);
+
   const handleRequestClose = (): void => {
     if (isClosingRef.current) return;
     onClose();
@@ -139,20 +283,168 @@ export function EventDetailsBottomSheet({
 
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const deleteEventMutation = useMutation(api.events.deleteEvent);
-  const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
+  const addImportantItemsToMyTasks = useMutation(
+    api.tasks.addEventImportantItemsToMyTasks
+  );
+  const upsertRsvpMutation = useMutation(api.eventRsvps.upsertRsvp);
+  const setRsvpNoAndUnclaimMyEventTasks = useMutation(
+    api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
+  );
+  const addCommunityEventToMyCalendar = useMutation(
+    api.communityEventCalendar.addCommunityEventToMyCalendar
+  );
+  const removeCommunityEventFromMyCalendar = useMutation(
+    api.communityEventCalendar.removeCommunityEventFromMyCalendar
+  );
+  const claimEventTask = useMutation(api.eventTasks.claimEventTask);
+  const unclaimEventTask = useMutation(api.eventTasks.unclaimEventTask);
+
   const eventDoc = useQuery(
     api.events.getById,
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
+  const importantItemsCopyState = useQuery(
+    api.tasks.hasUserCopiedAllImportantItemsFromEvent,
+    convexEventId ? { eventId: convexEventId } : 'skip'
+  );
+
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
+    convexEventId ? { eventId: convexEventId } : 'skip'
+  );
+  const eventImportantItems = useQuery(
+    api.tasks.listEventImportantItems,
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
   const rsvps = useQuery(
     api.eventRsvps.listByEvent,
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
+  const myAssignedEventTasksState = useQuery(
+    api.eventRsvps.hasMyAssignedEventTasksForEvent,
+    convexEventId ? { eventId: convexEventId } : 'skip'
+  );
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
+
+  const showCalendarRemoveConfirmation = useCallback(
+    (eventIdToRemove: Id<'events'>): void => {
+      setCalendarRemoveConfirmationEventId(eventIdToRemove);
+    },
+    []
+  );
+
+  const handleConfirmCalendarRemoval = useCallback((): void => {
+    if (!calendarRemoveConfirmationEventId) return;
+    const eventIdToRemove = calendarRemoveConfirmationEventId;
+    setCalendarRemoveConfirmationEventId(null);
+    removeCommunityEventFromMyCalendar({
+      eventId: eventIdToRemove,
+      confirmRemoveWithActiveTask: true,
+    }).catch(() => Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן'));
+  }, [
+    calendarRemoveConfirmationEventId,
+    removeCommunityEventFromMyCalendar,
+  ]);
+
+  const handleCancelCalendarRemoval = useCallback(
+    (): void => setCalendarRemoveConfirmationEventId(null),
+    []
+  );
+
+  const handleOpenCalendarToggle = useCallback((): void => {
+    if (!convexEventId || eventDoc === undefined || eventDoc === null) return;
+    const isSaved = eventDoc.isSavedToMyCalendar === true;
+    if (isSaved && myAssignedEventTasksState?.hasAssignedTasks === true) {
+      showCalendarRemoveConfirmation(convexEventId);
+      return;
+    }
+    const run = isSaved
+      ? removeCommunityEventFromMyCalendar
+      : addCommunityEventToMyCalendar;
+    run({ eventId: convexEventId }).catch((error) => {
+      const errorCode = getConvexErrorCode(error);
+      if (
+        isSaved &&
+        (errorCode === CALENDAR_REMOVE_CONFIRMATION_CODE ||
+          errorCode === 'CALENDAR_REMOVE_BLOCKED_BY_ACTIVE_TASK')
+      ) {
+        showCalendarRemoveConfirmation(convexEventId);
+        return;
+      }
+      Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן');
+    });
+  }, [
+    convexEventId,
+    eventDoc,
+    myAssignedEventTasksState,
+    addCommunityEventToMyCalendar,
+    removeCommunityEventFromMyCalendar,
+    showCalendarRemoveConfirmation,
+  ]);
+  const showRsvpNoBlockedDialog = useCallback(
+    (count: number): void => {
+      if (!convexEventId) return;
+      setBlockedRsvpTaskCount(count);
+    },
+    [convexEventId]
+  );
+  const handleRsvp = useCallback(
+    (status: 'yes' | 'no' | 'maybe') => {
+      if (!convexEventId || pendingRsvpStatus) return;
+      const localAssignedCount = (eventTasks ?? []).filter(
+        (task) => task.assignedToUserId === currentUserId
+      ).length;
+      const assignedCount =
+        myAssignedEventTasksState?.count ?? localAssignedCount;
+      if (status === 'no' && assignedCount > 0) {
+        showRsvpNoBlockedDialog(assignedCount);
+        return;
+      }
+      setPendingRsvpStatus(status);
+      upsertRsvpMutation({ eventId: convexEventId, status })
+        .catch((error) => {
+          if (
+            status === 'no' &&
+            getConvexErrorCode(error) === 'RSVP_NO_BLOCKED_BY_ACTIVE_TASK'
+          ) {
+            showRsvpNoBlockedDialog(assignedCount > 0 ? assignedCount : 1);
+            return;
+          }
+          Alert.alert('שגיאה', 'לא ניתן לשמור תגובה');
+        })
+        .finally(() => {
+          setPendingRsvpStatus(null);
+        });
+    },
+    [
+      convexEventId,
+      currentUserId,
+      eventTasks,
+      myAssignedEventTasksState,
+      pendingRsvpStatus,
+      showRsvpNoBlockedDialog,
+      upsertRsvpMutation,
+    ]
+  );
+  const [isCopyingImportantItems, setIsCopyingImportantItems] = useState(false);
+  const [importantItemsCopiedLocally, setImportantItemsCopiedLocally] =
+    useState(false);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset local copy state when the selected event or sheet visibility changes.
+  useEffect(() => {
+    setImportantItemsCopiedLocally(false);
+    setIsCopyingImportantItems(false);
+  }, [convexEventId, visible]);
+
+  const permCommunityId = eventDoc?.communityId;
+  const communityRecord = useQuery(
+    api.communities.getById,
+    permCommunityId ? { communityId: permCommunityId } : 'skip'
+  );
+  const communityMembersResult = useQuery(
+    api.communities.getCommunityMembers,
+    permCommunityId ? { communityId: permCommunityId } : 'skip'
+  );
 
   const displayEvent =
     eventDoc && eventDoc !== null
@@ -176,15 +468,18 @@ export function EventDetailsBottomSheet({
           recurringPattern: eventDoc.recurringPattern,
           reminders: (eventDoc as { reminders?: number[] }).reminders,
           attachments: (eventDoc.attachments ?? []) as Attachment[],
+          importantItems: eventDoc.importantItems ?? [],
           participants: eventDoc.participants ?? [],
           requiresRsvp: eventDoc.requiresRsvp,
           startTime: eventDoc.startTime,
           allDay: eventDoc.allDay,
           communityId: eventDoc.communityId,
           createdBy: eventDoc.createdBy,
+          tasksVisibleToParticipants: eventDoc.tasksVisibleToParticipants,
           status: eventDoc.status,
           cancelledAt: eventDoc.cancelledAt,
           cancelReason: eventDoc.cancelReason,
+          isSavedToMyCalendar: eventDoc.isSavedToMyCalendar === true,
         }
       : event
         ? {
@@ -202,15 +497,18 @@ export function EventDetailsBottomSheet({
             recurringPattern: event.recurringPattern,
             reminders: event.reminders,
             attachments: [] as Attachment[],
+            importantItems: event.importantItems ?? [],
             participants: [],
             requiresRsvp: false,
             startTime: undefined,
             allDay: event.allDay,
-            communityId: undefined,
+            communityId: event.communityId,
             createdBy: undefined,
+            tasksVisibleToParticipants: event.tasksVisibleToParticipants,
             status: undefined,
             cancelledAt: undefined,
             cancelReason: undefined,
+            isSavedToMyCalendar: event.isSavedToMyCalendar === true,
           }
         : null;
 
@@ -219,47 +517,43 @@ export function EventDetailsBottomSheet({
     onClose();
     router.push({
       pathname: '/(authenticated)/event-edit/[id]',
-      params: { id: displayEvent.id, returnTo: 'home' },
+      params: {
+        id: displayEvent.id,
+        ...(displayEvent.communityId
+          ? { returnCommunityId: displayEvent.communityId as string }
+          : {}),
+      },
     });
   };
 
   const handleShare = (): void => {
     if (!displayEvent) return;
     const doShare = async (): Promise<void> => {
-      const lines = [displayEvent.title];
-      if (displayEvent.startTime) {
-        let dateLine = new Date(displayEvent.startTime).toLocaleDateString(
-          'he-IL',
-          { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
-        );
-        if (!displayEvent.allDay) {
-          dateLine += ` · ${formatTime(displayEvent.startTime)}`;
-        }
-        lines.push(dateLine);
-      } else if (displayEvent.timeLabel) {
-        lines.push(displayEvent.timeLabel);
-      }
-      if (displayEvent.location) lines.push(`מיקום: ${displayEvent.location}`);
-      const shareText = lines.join('\n');
+      const message = buildCommunityEventShareMessage({
+        title: displayEvent.title,
+        eventId: displayEvent.id,
+        startTime: displayEvent.startTime,
+        dateTimeParts:
+          'dateTimeParts' in displayEvent
+            ? displayEvent.dateTimeParts
+            : undefined,
+        allDay: displayEvent.allDay,
+        timeLabel: displayEvent.timeLabel,
+        location: displayEvent.location,
+        importantItems:
+          eventImportantItems ?? displayEvent.importantItems ?? [],
+        communityName: communityRecord?.name ?? displayEvent.groupName,
+      });
 
-      if (!displayEvent.communityId && convexEventId) {
-        try {
-          const { token } = await createShareLinkMutation({
-            eventId: convexEventId,
-          });
-          await Share.share({
-            message: `${shareText}\n\nhttps://inyomi.com/shared/${token}`,
-          });
-          return;
-        } catch {
-          // Fallback to text-only share below.
-        }
-      }
-
-      await Share.share({ message: shareText });
+      await Share.share({ message });
     };
 
-    doShare().catch(() => Alert.alert('שגיאה', 'לא ניתן לשתף כרגע'));
+    doShare().catch(() => {
+      Alert.alert(
+        'שיתוף לא זמין',
+        'לא ניתן לשתף את האירוע כרגע. נסו שוב עוד רגע.'
+      );
+    });
   };
 
   const handleCancel = (): void => {
@@ -311,6 +605,43 @@ export function EventDetailsBottomSheet({
     setNavPickerOpen(true);
   };
 
+  const handleCopyImportantItems = (): void => {
+    if (!convexEventId || isCopyingImportantItems) return;
+    setIsCopyingImportantItems(true);
+    addImportantItemsToMyTasks({ eventId: convexEventId })
+      .then(() => {
+        setImportantItemsCopiedLocally(true);
+      })
+      .catch(() => Alert.alert('שגיאה', 'לא ניתן להוסיף למשימות כרגע'))
+      .finally(() => setIsCopyingImportantItems(false));
+  };
+
+  const handleClaimEventTask = (taskId: Id<'eventTasks'>): void => {
+    Alert.alert('להשתבץ למשימה הזו?', '', [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'כן, אני אקח את זה',
+        onPress: () =>
+          claimEventTask({ id: taskId }).catch(() =>
+            Alert.alert('שגיאה', 'לא ניתן להשתבץ למשימה כרגע')
+          ),
+      },
+    ]);
+  };
+
+  const handleUnclaimEventTask = (taskId: Id<'eventTasks'>): void => {
+    Alert.alert('להסיר אותך מהמשימה?', '', [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'כן, להסיר אותי',
+        onPress: () =>
+          unclaimEventTask({ id: taskId }).catch(() =>
+            Alert.alert('שגיאה', 'לא ניתן להסיר הקצאה כרגע')
+          ),
+      },
+    ]);
+  };
+
   const openNavigationUrl = (app: 'google' | 'waze'): void => {
     const location = displayEvent?.location?.trim();
     if (!location) return;
@@ -337,34 +668,167 @@ export function EventDetailsBottomSheet({
   const reminderLabels = (displayEvent?.reminders ?? [])
     .filter((r): r is number => typeof r === 'number')
     .map(formatReminderLabel);
-  const tasks = eventTasks ?? [];
+  const tasks = uniqueById(eventTasks ?? [], (task) => task._id as string);
   const visibleTasks = showAllTasks ? tasks : tasks.slice(0, 2);
   const rsvpRows = rsvps ?? [];
   const yesCount = rsvpRows.filter((r) => r.status === 'yes').length;
   const maybeCount = rsvpRows.filter((r) => r.status === 'maybe').length;
   const noCount = rsvpRows.filter((r) => r.status === 'no').length;
-  const shouldShowParticipants =
-    Boolean(displayEvent?.requiresRsvp) ||
-    rsvpRows.length > 0 ||
-    (displayEvent?.participants?.length ?? 0) > 0;
-  const canEdit = Boolean(convexEventId || event?.canEdit !== false);
-  const canCancel = Boolean(
-    convexEventId &&
-      displayEvent?.createdBy &&
-      currentUserId &&
-      displayEvent.createdBy === currentUserId &&
-      displayEvent.status !== 'cancelled'
+  const isOpenCommunityEvent =
+    Boolean(displayEvent?.communityId) && displayEvent?.requiresRsvp === false;
+  const importantItems =
+    eventImportantItems ?? displayEvent?.importantItems ?? [];
+  const hasImportantItems = importantItems.length > 0;
+  const importantItemsCopyLoading = importantItemsCopyState === undefined;
+  const allImportantItemsCopied =
+    importantItemsCopiedLocally ||
+    (importantItemsCopyState?.allCopied === true && hasImportantItems);
+  const importantItemsCopyDisabled =
+    importantItemsCopyLoading ||
+    isCopyingImportantItems ||
+    allImportantItemsCopied;
+  const importantItemsCopyLabel = allImportantItemsCopied
+    ? 'נוסף למשימות שלך ✓'
+    : 'הוסף למשימות שלי';
+  const importantItemsCopyButtonStyle = allImportantItemsCopied
+    ? styles.importantItemsCopiedBtn
+    : importantItemsCopyDisabled
+      ? styles.importantItemsCopyBtnDisabled
+      : styles.importantItemsCopyBtn;
+  const importantItemsCopyTextStyle = allImportantItemsCopied
+    ? styles.importantItemsCopiedBtnText
+    : importantItemsCopyDisabled
+      ? styles.importantItemsCopyBtnTextDisabled
+      : styles.importantItemsCopyBtnText;
+
+  const hasCommunityResponseSummary = Boolean(
+    !isOpenCommunityEvent && (displayEvent?.requiresRsvp || rsvpRows.length > 0)
   );
+  const hasManualParticipantNames =
+    (displayEvent?.participants?.length ?? 0) > 0;
+
+  const myMembership = communityMembersResult?.members?.find(
+    (m) => m.userId === currentUserId
+  );
+  const isEventCreator =
+    Boolean(displayEvent?.createdBy && currentUserId) &&
+    displayEvent?.createdBy === currentUserId;
+  const isCommunityOwnerOrAdmin =
+    myMembership?.role === 'owner' || myMembership?.role === 'admin';
+  const canManageCommunityEvent =
+    Boolean(displayEvent?.communityId) &&
+    (isEventCreator || isCommunityOwnerOrAdmin);
+  const canManageTasks = displayEvent?.communityId
+    ? canManageCommunityEvent
+    : isEventCreator;
+  const participantsCanSeeTasks =
+    displayEvent?.tasksVisibleToParticipants === true;
+  const canSeeEventTasksSection = displayEvent?.communityId
+    ? canManageTasks || Boolean(myMembership && participantsCanSeeTasks)
+    : isEventCreator;
+
+  const canEdit = displayEvent?.communityId
+    ? canManageCommunityEvent
+    : Boolean(
+        convexEventId &&
+          displayEvent?.createdBy &&
+          currentUserId &&
+          displayEvent.createdBy === currentUserId
+      );
+
+  const canCancel = displayEvent?.communityId
+    ? Boolean(
+        convexEventId &&
+          canManageCommunityEvent &&
+          displayEvent.status !== 'cancelled'
+      )
+    : Boolean(
+        convexEventId && isEventCreator && displayEvent?.status !== 'cancelled'
+      );
+
   const canDelete = Boolean(
     convexEventId &&
-      displayEvent?.communityId &&
-      displayEvent?.createdBy &&
-      currentUserId &&
-      displayEvent.createdBy === currentUserId &&
-      displayEvent.status === 'cancelled' &&
+      displayEvent?.status === 'cancelled' &&
       displayEvent.cancelledAt !== undefined &&
-      Date.now() - (displayEvent.cancelledAt as number) < 24 * 60 * 60 * 1000
+      Date.now() - (displayEvent.cancelledAt as number) < 24 * 60 * 60 * 1000 &&
+      (displayEvent.communityId ? canManageCommunityEvent : isEventCreator)
   );
+
+  /** Owner/admin/creator: no RSVP prompt on community events — mirror event/[id].tsx */
+  const skipCommunityRsvpPrompt =
+    isEventCreator ||
+    (Boolean(displayEvent?.communityId) && isCommunityOwnerOrAdmin);
+
+  const myRsvpRow = rsvpRows.find((r) => r.userId === currentUserId);
+  const rawRsvp = myRsvpRow?.status;
+  const currentRsvpStatus: 'yes' | 'no' | 'maybe' | 'none' =
+    rawRsvp === 'yes' || rawRsvp === 'maybe' || rawRsvp === 'no'
+      ? rawRsvp
+      : 'none';
+
+  const rsvpHelperText = getBottomSheetRsvpHelperText(currentRsvpStatus);
+
+  const showMemberRsvp = Boolean(
+    !skipCommunityRsvpPrompt && displayEvent?.communityId
+  );
+
+  const showMemberRsvpButtons = Boolean(
+    showMemberRsvp && !isOpenCommunityEvent
+  );
+
+  const openCommunityCalendarInfoReady =
+    !displayEvent?.communityId ||
+    (communityRecord !== undefined && communityMembersResult !== undefined);
+
+  const viewerIsActiveCommunityMemberForCalendar =
+    communityMembersResult !== undefined && communityMembersResult !== null;
+
+  /** Personal calendar toggle — same rules as community flyer; not gated on RSVP/banner/skip. */
+  const showOpenCalendarButton = Boolean(
+    openCommunityCalendarInfoReady &&
+      isOpenCommunityCalendarActionVisible({
+        event: {
+          communityId: displayEvent?.communityId ?? null,
+          requiresRsvp: displayEvent?.requiresRsvp,
+          status: displayEvent?.status,
+        },
+        hasValidConvexEventId: Boolean(convexEventId),
+        communityArchived: communityRecord?.archived === true,
+        viewerIsActiveMember: viewerIsActiveCommunityMemberForCalendar,
+      })
+  );
+
+  /** Event mode label — all active members including creator/admin (not gated on RSVP skip). */
+  const showOpenCommunityLabel = Boolean(
+    openCommunityCalendarInfoReady &&
+      displayEvent &&
+      isOpenCommunityInformationalLabelVisible({
+        event: {
+          communityId: displayEvent.communityId ?? null,
+          requiresRsvp: displayEvent.requiresRsvp,
+          status: displayEvent.status,
+        },
+        communityArchived: communityRecord?.archived === true,
+        viewerIsActiveMember: viewerIsActiveCommunityMemberForCalendar,
+      })
+  );
+
+  const showRsvpUnifiedCard = Boolean(
+    convexEventId &&
+      (showMemberRsvpButtons ||
+        hasCommunityResponseSummary ||
+        hasManualParticipantNames)
+  );
+
+  /**
+   * Footer state must track Convex `eventDoc` when loaded — avoids mismatched
+   * Pressable vs Text styles during query refresh (white-on-white) and keeps
+   * label + colors in sync after add/remove mutations.
+   */
+  const openCalendarFooterSaved =
+    convexEventId && eventDoc !== undefined && eventDoc !== null
+      ? eventDoc.isSavedToMyCalendar === true
+      : displayEvent?.isSavedToMyCalendar === true;
 
   return (
     <Modal
@@ -392,6 +856,28 @@ export function EventDetailsBottomSheet({
           <View style={styles.handle} />
         </View>
 
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.sheetCloseBar,
+            { paddingLeft: insets.left + 14, paddingRight: 14 },
+          ]}
+        >
+          <Pressable
+            accessibilityLabel="סגירת פרטי האירוע"
+            accessibilityRole="button"
+            accessible={true}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            onPress={handleRequestClose}
+            style={({ pressed }) => [
+              styles.sheetCloseHit,
+              pressed && styles.sheetCloseHitPressed,
+            ]}
+          >
+            <MaterialIcons color="#64748b" name="close" size={24} />
+          </Pressable>
+        </View>
+
         {isLoading ? (
           <View style={styles.loadingState}>
             <ActivityIndicator color="#36a9e2" size="large" />
@@ -402,9 +888,10 @@ export function EventDetailsBottomSheet({
             <Text style={styles.emptyText}>אירוע לא נמצא</Text>
           </View>
         ) : (
-          <>
+          <View style={styles.sheetMainColumn}>
             <ScrollView
               contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="always"
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
               style={styles.scrollArea}
@@ -444,37 +931,48 @@ export function EventDetailsBottomSheet({
                 </View>
 
                 {hasLocation ? (
-                  <View style={styles.locationRow}>
-                    <View style={styles.locationTextWrap}>
-                      <MaterialIcons
-                        color="#94a3b8"
-                        name="location-on"
-                        size={17}
-                      />
-                      <Text numberOfLines={1} style={styles.locationText}>
-                        {displayEvent.location}
-                      </Text>
+                  <View style={styles.locationRowLtrShell}>
+                    <View style={styles.locationRow}>
+                      <Pressable
+                        accessibilityLabel={`נווט אל ${displayEvent.location}`}
+                        accessibilityRole="button"
+                        accessible={true}
+                        onPress={handleNavigate}
+                        style={styles.navigateBtn}
+                      >
+                        <MaterialIcons color="#fff" name="near-me" size={14} />
+                        <Text style={styles.navigateBtnText}>נווט</Text>
+                      </Pressable>
+                      <View style={styles.locationTextBlock}>
+                        <MaterialIcons
+                          color="#94a3b8"
+                          name="location-on"
+                          size={17}
+                        />
+                        <Text numberOfLines={1} style={styles.locationText}>
+                          {displayEvent.location}
+                        </Text>
+                      </View>
                     </View>
-                    <Pressable
-                      accessibilityLabel={`נווט אל ${displayEvent.location}`}
-                      accessibilityRole="button"
-                      accessible={true}
-                      onPress={handleNavigate}
-                      style={styles.navigateBtn}
-                    >
-                      <MaterialIcons color="#fff" name="near-me" size={14} />
-                      <Text style={styles.navigateBtnText}>נווט</Text>
-                    </Pressable>
                   </View>
                 ) : null}
 
-                <View style={styles.quickActionsRow}>
+                {showOpenCommunityLabel ? (
+                  <View style={styles.openCommunityHeroInfo}>
+                    <MaterialIcons color="#64748b" name="groups" size={18} />
+                    <Text style={styles.openCommunityHeroInfoText}>
+                      פתוח לחברי הקהילה
+                    </Text>
+                  </View>
+                ) : null}
+
+                <View style={styles.quickActionsLtrRow}>
                   <QuickAction
-                    color="#36a9e2"
-                    disabled={!canEdit}
-                    icon="edit"
-                    label="עריכה"
-                    onPress={handleEdit}
+                    color="#dc2626"
+                    disabled={!canCancel}
+                    icon="event-busy"
+                    label="ביטול"
+                    onPress={handleCancel}
                   />
                   <QuickAction
                     color="#2563eb"
@@ -484,11 +982,11 @@ export function EventDetailsBottomSheet({
                     onPress={handleShare}
                   />
                   <QuickAction
-                    color="#dc2626"
-                    disabled={!canCancel}
-                    icon="event-busy"
-                    label="ביטול"
-                    onPress={handleCancel}
+                    color="#36a9e2"
+                    disabled={!canEdit}
+                    icon="edit"
+                    label="עריכה"
+                    onPress={handleEdit}
                   />
                 </View>
 
@@ -521,6 +1019,148 @@ export function EventDetailsBottomSheet({
                 ) : null}
               </View>
 
+              {showRsvpUnifiedCard ? (
+                <View style={[styles.sectionCard, styles.rsvpMemberCard]}>
+                  {showMemberRsvpButtons ? (
+                    <>
+                      <Text style={styles.rsvpMemberTitle}>האם תשתתף/י?</Text>
+                      <View style={styles.rsvpMemberButtonRow}>
+                        {MEMBER_RSVP_OPTIONS.map((opt) => {
+                          const isActive = currentRsvpStatus === opt.status;
+                          const rsvpDisabled =
+                            displayEvent.status === 'cancelled' ||
+                            pendingRsvpStatus !== null;
+                          return (
+                            <TouchableOpacity
+                              key={opt.status}
+                              activeOpacity={0.82}
+                              accessibilityHint={
+                                rsvpDisabled
+                                  ? undefined
+                                  : 'מגדיר את תגובת ההגעה שלך לאירוע'
+                              }
+                              accessibilityLabel={opt.label}
+                              accessibilityRole="button"
+                              accessibilityState={{
+                                disabled: rsvpDisabled,
+                                selected: isActive,
+                              }}
+                              accessible={true}
+                              disabled={rsvpDisabled}
+                              hitSlop={{
+                                top: 8,
+                                bottom: 8,
+                                left: 6,
+                                right: 6,
+                              }}
+                              onPress={() => handleRsvp(opt.status)}
+                              style={[
+                                styles.rsvpSegment,
+                                {
+                                  backgroundColor: isActive
+                                    ? opt.selectedBg
+                                    : '#f8fafc',
+                                  borderColor: isActive
+                                    ? opt.selectedBorder
+                                    : '#64748b',
+                                  opacity: rsvpDisabled ? 0.5 : 1,
+                                },
+                                isActive && styles.rsvpSegmentSelected,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.rsvpSegmentText,
+                                  isActive && {
+                                    color: opt.selectedText,
+                                    fontWeight: '800',
+                                  },
+                                ]}
+                              >
+                                {opt.label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                      {rsvpHelperText ? (
+                        <Text style={styles.rsvpMemberHelper}>
+                          {rsvpHelperText}
+                        </Text>
+                      ) : currentRsvpStatus === 'none' &&
+                        displayEvent.status !== 'cancelled' ? (
+                        <Text style={styles.rsvpMemberHint}>
+                          בחר/י את תגובתך
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {showMemberRsvpButtons &&
+                  (hasCommunityResponseSummary || hasManualParticipantNames) ? (
+                    <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {hasCommunityResponseSummary ? (
+                    <Pressable
+                      accessibilityHint="פותח רשימת משתתפים לפי סוג תגובה"
+                      accessibilityLabel={`תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}. צפייה`}
+                      accessibilityRole="button"
+                      accessible={true}
+                      onPress={() => setParticipantRsvpDetailsOpen(true)}
+                      style={({ pressed }) => [
+                        styles.rsvpCommunitySummaryBtn,
+                        pressed && styles.rsvpCommunitySummaryBtnPressed,
+                      ]}
+                    >
+                      <Text style={styles.rsvpCommunitySummarySectionTitle}>
+                        תגובות משתתפים
+                      </Text>
+                      <View style={styles.rsvpCommunitySummaryRow}>
+                        <Text style={styles.rsvpCommunitySummaryCounts}>
+                          {`כן ${yesCount} · אולי ${maybeCount} · לא ${noCount}`}
+                        </Text>
+                        <MaterialIcons
+                          color="#94a3b8"
+                          name="chevron-left"
+                          size={22}
+                        />
+                      </View>
+                      <Text style={styles.rsvpCommunitySummaryViewHint}>
+                        צפייה
+                      </Text>
+                    </Pressable>
+                  ) : null}
+
+                  {hasCommunityResponseSummary && hasManualParticipantNames ? (
+                    <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {!hasCommunityResponseSummary &&
+                  showMemberRsvpButtons &&
+                  hasManualParticipantNames ? (
+                    <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {hasManualParticipantNames ? (
+                    <View style={styles.rsvpManualParticipantsBlock}>
+                      <Text style={styles.rsvpManualParticipantsTitle}>
+                        מוזמנים (מהאירוע)
+                      </Text>
+                      <View style={styles.participantsWrap}>
+                        {displayEvent.participants.map((name) => (
+                          <View key={name} style={styles.participantPill}>
+                            <Text style={styles.participantPillText}>
+                              {name}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
               <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>תזמון</Text>
                 <View style={styles.scheduleRow}>
@@ -545,7 +1185,47 @@ export function EventDetailsBottomSheet({
                 ) : null}
               </View>
 
-              {convexEventId ? (
+              {hasImportantItems ? (
+                <View style={styles.sectionCard}>
+                  <View style={styles.importantItemsHeaderChip}>
+                    <Text style={styles.importantItemsHeaderChipText}>
+                      {`📌 חשוב לזכור · ${importantItems.length}`}
+                    </Text>
+                  </View>
+                  <View style={styles.importantItemsList}>
+                    {importantItems.map((item) => (
+                      <View key={item.id} style={styles.importantItemRow}>
+                        <Text style={styles.importantItemBullet}>•</Text>
+                        <Text style={styles.importantItemText}>
+                          {item.title}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                  <Pressable
+                    accessibilityLabel={importantItemsCopyLabel}
+                    accessibilityRole="button"
+                    accessibilityState={{
+                      disabled: importantItemsCopyDisabled,
+                    }}
+                    accessible={true}
+                    disabled={importantItemsCopyDisabled}
+                    onPress={handleCopyImportantItems}
+                    style={({ pressed }) => [
+                      importantItemsCopyButtonStyle,
+                      pressed &&
+                        !importantItemsCopyDisabled &&
+                        styles.importantItemsCopyBtnPressed,
+                    ]}
+                  >
+                    <Text style={importantItemsCopyTextStyle}>
+                      {importantItemsCopyLabel}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {convexEventId && canSeeEventTasksSection ? (
                 <View style={styles.sectionCard}>
                   <Text style={styles.sectionTitle}>משימות לאירוע</Text>
                   {eventTasks === undefined ? (
@@ -556,6 +1236,27 @@ export function EventDetailsBottomSheet({
                         const assigneeDisplay = (
                           task as { assigneeDisplay?: string }
                         ).assigneeDisplay?.trim();
+                        const isAssignedToCurrentUser =
+                          task.assignedToUserId === currentUserId;
+                        const hasAssignee = Boolean(
+                          assigneeDisplay ||
+                            task.assignedToUserId ||
+                            task.assignedToManual?.trim()
+                        );
+                        const assignmentLabel = !hasAssignee
+                          ? 'לא הוקצה'
+                          : isAssignedToCurrentUser
+                            ? 'הוקצה אליי ✓'
+                            : assigneeDisplay
+                              ? `הוקצה ל-${assigneeDisplay}`
+                              : 'הוקצה';
+                        const showSelfClaimAction =
+                          displayEvent.communityId &&
+                          Boolean(myMembership) &&
+                          participantsCanSeeTasks;
+                        const isClaimable = showSelfClaimAction && !hasAssignee;
+                        const canUnclaimHere =
+                          showSelfClaimAction && isAssignedToCurrentUser;
                         return (
                           <View key={task._id} style={styles.detailListRow}>
                             <MaterialIcons
@@ -567,11 +1268,73 @@ export function EventDetailsBottomSheet({
                               <Text style={styles.detailListTitle}>
                                 {task.title}
                               </Text>
-                              <Text style={styles.mutedText}>
-                                {assigneeDisplay
-                                  ? `הוקצה ל-${assigneeDisplay}`
-                                  : 'לא הוקצה'}
-                              </Text>
+                              {isClaimable ? (
+                                <Pressable
+                                  accessibilityLabel="אני אקח"
+                                  accessibilityRole="button"
+                                  accessible={true}
+                                  onPress={() => handleClaimEventTask(task._id)}
+                                  style={({ pressed }) => [
+                                    styles.taskAssignmentAction,
+                                    pressed &&
+                                      styles.taskAssignmentActionPressed,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[styles.taskAssignmentActionText]}
+                                  >
+                                    אני אקח
+                                  </Text>
+                                </Pressable>
+                              ) : canUnclaimHere ? (
+                                <View style={styles.taskAssignmentStatusRow}>
+                                  <Text
+                                    style={[
+                                      styles.taskAssignmentStatusText,
+                                      styles.taskAssignmentMineText,
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    הוקצה אליי
+                                  </Text>
+                                  <Pressable
+                                    accessibilityLabel="בטל הקצאה"
+                                    accessibilityRole="button"
+                                    accessible={true}
+                                    onPress={() =>
+                                      handleUnclaimEventTask(task._id)
+                                    }
+                                    style={({ pressed }) => [
+                                      styles.taskUnassignAction,
+                                      pressed &&
+                                        styles.taskAssignmentActionPressed,
+                                    ]}
+                                  >
+                                    <Text style={styles.taskUnassignActionText}>
+                                      בטל הקצאה
+                                    </Text>
+                                  </Pressable>
+                                </View>
+                              ) : (
+                                <View
+                                  style={[
+                                    styles.taskAssignmentStatusChip,
+                                    !hasAssignee &&
+                                      styles.taskAssignmentStatusChipMuted,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.taskAssignmentStatusText,
+                                      !hasAssignee &&
+                                        styles.taskAssignmentStatusTextMuted,
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    {assignmentLabel}
+                                  </Text>
+                                </View>
+                              )}
                             </View>
                           </View>
                         );
@@ -602,42 +1365,6 @@ export function EventDetailsBottomSheet({
                 </View>
               ) : null}
 
-              {shouldShowParticipants ? (
-                <View style={styles.sectionCard}>
-                  <Text style={styles.sectionTitle}>משתתפים</Text>
-                  {displayEvent.requiresRsvp ? (
-                    <View style={styles.rsvpSummaryRow}>
-                      <View style={[styles.rsvpChip, styles.rsvpYes]}>
-                        <Text style={styles.rsvpChipText}>
-                          {`כן ${yesCount}`}
-                        </Text>
-                      </View>
-                      <View style={[styles.rsvpChip, styles.rsvpMaybe]}>
-                        <Text style={styles.rsvpChipText}>
-                          {`אולי ${maybeCount}`}
-                        </Text>
-                      </View>
-                      <View style={[styles.rsvpChip, styles.rsvpNo]}>
-                        <Text
-                          style={styles.rsvpChipText}
-                        >{`לא ${noCount}`}</Text>
-                      </View>
-                    </View>
-                  ) : null}
-                  {displayEvent.participants.length > 0 ? (
-                    <View style={styles.participantsWrap}>
-                      {displayEvent.participants.map((name) => (
-                        <View key={name} style={styles.participantPill}>
-                          <Text style={styles.participantPillText}>{name}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : rsvpRows.length === 0 ? (
-                    <Text style={styles.mutedText}>אין משתתפים להצגה</Text>
-                  ) : null}
-                </View>
-              ) : null}
-
               {displayEvent.attachments.length > 0 ? (
                 <View style={styles.sectionCard}>
                   <Text style={styles.sectionTitle}>קבצים מצורפים</Text>
@@ -654,21 +1381,60 @@ export function EventDetailsBottomSheet({
               ) : null}
             </ScrollView>
 
-            <View style={styles.bottomButtons}>
-              <Pressable
-                accessibilityLabel="סגירה"
-                accessibilityRole="button"
-                accessible={true}
-                onPress={handleRequestClose}
-                style={styles.closeBtn}
-              >
-                <Text style={styles.closeBtnText}>סגירה</Text>
-              </Pressable>
-            </View>
-          </>
+            <SafeAreaView edges={['bottom']} style={styles.sheetFooterSafe}>
+              {showOpenCalendarButton ? (
+                <View style={styles.openCalendarFooter}>
+                  <Pressable
+                    accessibilityHint="מוסיף או מסיר את האירוע מהיומן האישי שלך"
+                    accessibilityLabel={getOpenCommunityCalendarActionLabel(
+                      openCalendarFooterSaved
+                    )}
+                    accessibilityRole="button"
+                    accessible={true}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    onPress={handleOpenCalendarToggle}
+                    style={({ pressed }) => ({
+                      alignSelf: 'stretch' as const,
+                      opacity: pressed ? 0.9 : 1,
+                    })}
+                  >
+                    <View
+                      style={{
+                        alignSelf: 'stretch',
+                        minHeight: 48,
+                        paddingVertical: 14,
+                        paddingHorizontal: 16,
+                        borderRadius: 14,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: openCalendarFooterSaved
+                          ? '#ffffff'
+                          : '#36a9e2',
+                        borderWidth: openCalendarFooterSaved ? 2 : 0,
+                        borderColor: '#7dd3fc',
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 16,
+                          fontWeight: '700',
+                          textAlign: 'center',
+                          color: openCalendarFooterSaved
+                            ? '#0369a1'
+                            : '#ffffff',
+                        }}
+                      >
+                        {getOpenCommunityCalendarActionLabel(
+                          openCalendarFooterSaved
+                        )}
+                      </Text>
+                    </View>
+                  </Pressable>
+                </View>
+              ) : null}
+            </SafeAreaView>
+          </View>
         )}
-
-        <SafeAreaView edges={['bottom']} />
       </Animated.View>
 
       <Modal
@@ -757,6 +1523,118 @@ export function EventDetailsBottomSheet({
           </Pressable>
         </View>
       </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setParticipantRsvpDetailsOpen(false)}
+        transparent
+        visible={participantRsvpDetailsOpen}
+      >
+        <Pressable
+          accessibilityLabel="סגור"
+          accessibilityRole="button"
+          accessible={true}
+          onPress={() => setParticipantRsvpDetailsOpen(false)}
+          style={styles.rsvpDetailModalBackdrop}
+        />
+        <View
+          style={[
+            styles.rsvpDetailModalSheet,
+            { maxHeight: RSVP_DETAIL_MODAL_MAX_HEIGHT },
+          ]}
+        >
+          <Text style={styles.rsvpDetailModalTitle}>תגובות משתתפים</Text>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            style={[
+              styles.rsvpDetailScroll,
+              { maxHeight: RSVP_DETAIL_SCROLL_MAX_HEIGHT },
+            ]}
+            contentContainerStyle={styles.rsvpDetailScrollContent}
+          >
+            <View style={styles.rsvpDetailGroup}>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`כן (${yesCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'yes').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'yes')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+            <View style={styles.rsvpDetailGroup}>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`אולי (${maybeCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'maybe').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'maybe')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+            <View style={styles.rsvpDetailGroup}>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`לא (${noCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'no').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'no')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+          </ScrollView>
+          <Pressable
+            accessibilityLabel="סגירת רשימת משתתפים"
+            accessibilityRole="button"
+            accessible={true}
+            onPress={() => setParticipantRsvpDetailsOpen(false)}
+            style={styles.rsvpDetailCloseBtn}
+          >
+            <Text style={styles.rsvpDetailCloseBtnText}>סגירה</Text>
+          </Pressable>
+        </View>
+      </Modal>
+      <RsvpBlockedByTaskDialog
+        assignedTaskCount={blockedRsvpTaskCount ?? 1}
+        onClose={() => setBlockedRsvpTaskCount(null)}
+        onConfirm={() => {
+          if (!convexEventId) return;
+          setBlockedRsvpTaskCount(null);
+          setRsvpNoAndUnclaimMyEventTasks({ eventId: convexEventId }).catch(
+            () => Alert.alert('שגיאה', 'לא ניתן לעדכן אישור הגעה')
+          );
+        }}
+        visible={blockedRsvpTaskCount !== null}
+      />
+      <AppConfirmationDialog
+        cancelLabel="ביטול"
+        confirmDestructive
+        confirmLabel="להסיר בכל זאת"
+        message={CALENDAR_REMOVE_CONFIRM_MESSAGE}
+        onCancel={handleCancelCalendarRemoval}
+        onConfirm={handleConfirmCalendarRemoval}
+        title={CALENDAR_REMOVE_CONFIRM_TITLE}
+        visible={calendarRemoveConfirmationEventId !== null}
+      />
     </Modal>
   );
 }
@@ -919,7 +1797,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 32,
     marginTop: 10,
-    marginBottom: 6,
+    marginBottom: 2,
+  },
+  /** LTR קבוע כדי שכפתור הסגירה יישאר בקצה שמאלי פיזי. */
+  sheetCloseBar: {
+    width: '100%',
+    minHeight: 48,
+    direction: 'ltr',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  sheetCloseHit: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(148, 163, 184, 0.14)',
+  },
+  sheetCloseHitPressed: {
+    opacity: 0.88,
+    backgroundColor: 'rgba(148, 163, 184, 0.22)',
   },
   loadingState: {
     flex: 1,
@@ -934,13 +1833,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
+  sheetMainColumn: {
+    flex: 1,
+    width: '100%',
+  },
   scrollArea: {
     flex: 1,
     paddingHorizontal: 18,
+    width: '100%',
   },
   scrollContent: {
     paddingBottom: 14,
     gap: 8,
+    alignItems: 'stretch',
+    width: '100%',
   },
   cancelledBadge: {
     alignSelf: 'stretch',
@@ -954,75 +1860,102 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: '#991b1b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   cancelReason: {
     fontSize: 13,
     color: '#7f1d1d',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   heroCard: {
+    alignSelf: 'stretch',
     backgroundColor: '#f8fafc',
     borderRadius: 18,
     padding: 14,
     gap: 7,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e2e8f0',
+    width: '100%',
   },
   sheetTitle: {
+    alignSelf: 'stretch',
     fontSize: 23,
     fontWeight: '800',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   groupLabel: {
+    alignSelf: 'stretch',
     fontSize: 13,
     color: '#64748b',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     marginTop: -3,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   infoRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 7,
+    width: '100%',
   },
   dateTimeBlock: {
     flex: 1,
     gap: 1,
+    alignItems: 'flex-end',
   },
   dateLine: {
     fontSize: 14,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '600',
+    writingDirection: HEB_WRITING_DIRECTION,
+    alignSelf: 'stretch',
   },
   timeText: {
     fontSize: 15,
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '800',
+    writingDirection: HEB_WRITING_DIRECTION,
+    alignSelf: 'stretch',
   },
   infoText: {
     fontSize: 15,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     flex: 1,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
+  /** מנע כפל RTL בתוך Modal — שומר נווט משמאל וטקסט מימין */
+  locationRowLtrShell: {
+    alignSelf: 'stretch',
+    width: '100%',
+    direction: 'ltr',
+  },
+  /** נווט משמאל, טקסט + אייקון מיקום מימין (אייקון בקצה ימין) */
   locationRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: 10,
+    width: '100%',
   },
-  locationTextWrap: {
+  /** בתוך LTR: row-reverse + אייקון ואז טקסט → אייקון בקצה ימין, טקסט נצמד אליו */
+  locationTextBlock: {
+    flex: 1,
     flexDirection: 'row-reverse',
     alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 7,
-    flex: 1,
+    minWidth: 0,
   },
   locationText: {
     flex: 1,
+    minWidth: 0,
     fontSize: 14,
     color: '#334155',
     textAlign: 'right',
@@ -1035,6 +1968,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
     minHeight: 36,
   },
@@ -1042,15 +1976,19 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
     fontSize: 13,
+    textAlign: 'right',
   },
-  quickActionsRow: {
-    flexDirection: 'row-reverse',
+  /** LTR קבוע: ביטול משמאל · שיתוף במרכז · עריכה מימין (לא תלוי בהיפוך iOS) */
+  quickActionsLtrRow: {
+    direction: 'ltr',
+    width: '100%',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingTop: 2,
   },
   deleteEventBtn: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
@@ -1066,6 +2004,7 @@ const styles = StyleSheet.create({
     color: '#dc2626',
     fontSize: 14,
     fontWeight: '600',
+    textAlign: HEB_TEXT_ALIGN,
   },
   quickAction: {
     alignItems: 'center',
@@ -1088,128 +2027,654 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#334155',
     fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   disabledText: {
     color: '#cbd5e1',
   },
   notesBox: {
+    alignSelf: 'stretch',
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#e2e8f0',
     paddingTop: 8,
     gap: 2,
+    width: '100%',
   },
   notesLabel: {
+    alignSelf: 'stretch',
     fontSize: 12,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '800',
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   notesText: {
+    alignSelf: 'stretch',
     fontSize: 14,
     color: '#334155',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     lineHeight: 20,
     fontWeight: '600',
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  openCommunityHeroInfo: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 4,
+    width: '100%',
+  },
+  openCommunityHeroInfoText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  sheetFooterSafe: {
+    backgroundColor: '#fff',
+  },
+  openCalendarFooter: {
+    paddingHorizontal: 24,
+    paddingTop: 14,
+    paddingBottom: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e5e7eb',
+    backgroundColor: '#fff',
+  },
+  openCalendarFooterBtnPrimary: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#36a9e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openCalendarFooterBtnTextPrimary: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  openCalendarFooterBtnSecondary: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#7dd3fc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openCalendarFooterBtnTextSecondary: {
+    color: '#0369a1',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpMemberCard: {
+    alignSelf: 'stretch',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+    gap: 10,
+    width: '100%',
+  },
+  rsvpMemberTitle: {
+    alignSelf: 'stretch',
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpMemberButtonRow: {
+    flexDirection: 'row-reverse',
+    gap: 6,
+    alignItems: 'stretch',
+    alignSelf: 'stretch',
+    width: '100%',
+  },
+  rsvpSegment: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  rsvpSegmentSelected: {
+    elevation: 3,
+    shadowOpacity: 0.12,
+  },
+  rsvpSegmentText: {
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 18,
+    textAlign: 'center',
+    includeFontPadding: false,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  /**
+   * View draws border/bg/shadow (reliable on Android). Pressable is a transparent flex fill;
+   * no android_ripple here — ripple was hiding the visible fill on some devices.
+   */
+  rsvpMemberBtnShell: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    minHeight: 48,
+    borderRadius: 12,
+    borderStyle: 'solid',
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 4,
+  },
+  rsvpMemberBtnShellSelected: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+  },
+  rsvpMemberBtnPressable: {
+    flex: 1,
+    alignSelf: 'stretch',
+    minHeight: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+  },
+  rsvpMemberBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1e293b',
+    textAlign: 'center',
+    includeFontPadding: false,
+    letterSpacing: 0.12,
+  },
+  rsvpMemberBtnTextSelected: {
+    fontWeight: '800',
+  },
+  rsvpMemberHelper: {
+    alignSelf: 'stretch',
+    marginTop: 2,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: '#64748b',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpMemberBtnContent: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 4,
+  },
+  rsvpMemberHint: {
+    alignSelf: 'stretch',
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpUnifiedDivider: {
+    height: StyleSheet.hairlineWidth * 2,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 4,
+  },
+  rsvpCommunitySummaryBtn: {
+    alignSelf: 'stretch',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    width: '100%',
+  },
+  rsvpCommunitySummaryBtnPressed: {
+    backgroundColor: '#e8f0f6',
+  },
+  rsvpCommunitySummarySectionTitle: {
+    alignSelf: 'stretch',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+    textAlign: HEB_TEXT_ALIGN,
+    marginBottom: 4,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpCommunitySummaryRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 6,
+    width: '100%',
+  },
+  rsvpCommunitySummaryCounts: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#334155',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpCommunitySummaryViewHint: {
+    alignSelf: 'stretch',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#36a9e2',
+    textAlign: HEB_TEXT_ALIGN,
+    marginTop: 6,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpManualParticipantsBlock: {
+    gap: 8,
+    width: '100%',
+  },
+  rsvpManualParticipantsTitle: {
+    alignSelf: 'stretch',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.32)',
+  },
+  rsvpDetailModalSheet: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
+    bottom: 26,
+    backgroundColor: '#fff',
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    gap: 10,
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    width: 'auto',
+  },
+  rsvpDetailModalTitle: {
+    alignSelf: 'stretch',
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailScroll: {
+    flexGrow: 0,
+  },
+  rsvpDetailScrollContent: {
+    gap: 18,
+    paddingBottom: 8,
+    width: '100%',
+  },
+  rsvpDetailGroup: {
+    gap: 6,
+    width: '100%',
+  },
+  rsvpDetailGroupTitle: {
+    alignSelf: 'stretch',
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailName: {
+    alignSelf: 'stretch',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: HEB_TEXT_ALIGN,
+    paddingVertical: 2,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailEmpty: {
+    alignSelf: 'stretch',
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailCloseBtn: {
+    minHeight: 44,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rsvpDetailCloseBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#475569',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   sectionTitle: {
+    alignSelf: 'stretch',
     fontSize: 15,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   sectionCard: {
+    alignSelf: 'stretch',
     backgroundColor: '#f8fafc',
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e2e8f0',
     padding: 12,
     gap: 8,
+    width: '100%',
   },
   scheduleRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 8,
+    width: '100%',
   },
   scheduleText: {
     flex: 1,
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '600',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   reminderRows: {
     gap: 6,
+    width: '100%',
   },
   reminderDisplayRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 8,
     paddingVertical: 3,
+    width: '100%',
   },
   reminderDisplayText: {
     flex: 1,
     fontSize: 14,
     color: '#334155',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '800',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   compactList: {
-    gap: 8,
+    gap: 6,
+    width: '100%',
   },
   detailListRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
+    flexDirection: HEB_ROW,
+    alignItems: 'flex-start',
     gap: 8,
+    paddingVertical: 6,
+    width: '100%',
   },
   detailListContent: {
     flex: 1,
-    gap: 2,
+    alignItems: HEB_FLEX_END,
+    gap: 6,
+    minWidth: 0,
   },
   detailListTitle: {
     fontSize: 14,
     color: '#111827',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+    alignSelf: 'stretch',
   },
   mutedText: {
+    alignSelf: 'stretch',
     fontSize: 13,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  taskAssignmentAction: {
+    alignSelf: HEB_FLEX_END,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: HEB_FLEX_END,
+    minWidth: 76,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#E6F4FB',
+    borderWidth: 1,
+    borderColor: '#7dd3fc',
+  },
+  taskAssignmentActionPressed: {
+    opacity: 0.84,
+  },
+  taskAssignmentMine: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#86efac',
+  },
+  taskAssignmentActionText: {
+    fontSize: 12,
+    color: '#0369a1',
+    fontWeight: '800',
+    lineHeight: 16,
+    textAlign: HEB_TEXT_ALIGN,
+    includeFontPadding: false,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  taskAssignmentMineText: {
+    color: '#166534',
+  },
+  taskAssignmentStatusRow: {
+    alignSelf: HEB_FLEX_END,
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    justifyContent: HEB_FLEX_END,
+    gap: 10,
+  },
+  taskUnassignAction: {
+    minHeight: 32,
+    justifyContent: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  taskUnassignActionText: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '700',
+    lineHeight: 16,
+    textAlign: HEB_TEXT_ALIGN,
+    includeFontPadding: false,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  taskAssignmentStatusChip: {
+    alignSelf: HEB_FLEX_END,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    borderColor: '#e2e8f0',
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  taskAssignmentStatusChipMuted: {
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
+    paddingHorizontal: 0,
+  },
+  taskAssignmentStatusText: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  taskAssignmentStatusTextMuted: {
+    color: '#64748b',
+    fontWeight: '600',
   },
   showMoreBtn: {
-    alignSelf: 'flex-end',
+    alignSelf: HEB_FLEX_END,
     paddingVertical: 6,
     paddingHorizontal: 10,
     minHeight: 32,
   },
   showMoreText: {
+    alignSelf: 'stretch',
     color: '#36a9e2',
     fontWeight: '700',
     fontSize: 13,
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
-  rsvpSummaryRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
+  importantItemsList: {
     gap: 8,
+    width: '100%',
   },
-  rsvpChip: {
+  importantItemsHeaderChip: {
+    alignSelf: HEB_FLEX_END,
+    backgroundColor: '#E6F4FB',
     borderRadius: 999,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#BAE6FD',
   },
-  rsvpYes: {
-    backgroundColor: '#dcfce7',
-  },
-  rsvpMaybe: {
-    backgroundColor: '#fef3c7',
-  },
-  rsvpNo: {
-    backgroundColor: '#fee2e2',
-  },
-  rsvpChipText: {
+  importantItemsHeaderChipText: {
     fontSize: 12,
-    color: '#374151',
+    fontWeight: '800',
+    color: '#0369a1',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  importantItemRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'flex-start',
+    gap: 8,
+    width: '100%',
+  },
+  importantItemBullet: {
+    fontSize: 16,
+    color: '#36a9e2',
+    lineHeight: 22,
+  },
+  importantItemText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#334155',
+    textAlign: HEB_TEXT_ALIGN,
+    lineHeight: 22,
+    fontWeight: '600',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  importantItemsCopyBtn: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#36a9e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importantItemsCopiedBtn: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#7dd3fc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importantItemsCopyBtnPressed: {
+    opacity: 0.9,
+  },
+  importantItemsCopyBtnDisabled: {
+    alignSelf: 'stretch',
+    minHeight: 48,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#36a9e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importantItemsCopyBtnText: {
+    color: '#0369a1',
+    fontSize: 16,
     fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  importantItemsCopiedBtnText: {
+    color: '#0369a1',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  importantItemsCopyBtnTextDisabled: {
+    color: '#0369a1',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   participantsWrap: {
     flexDirection: 'row-reverse',
@@ -1226,6 +2691,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#334155',
     fontWeight: '600',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   attachmentCard: {
     flexDirection: 'row-reverse',
@@ -1267,24 +2734,8 @@ const styles = StyleSheet.create({
     color: '#36a9e2',
     fontSize: 12,
     fontWeight: '700',
-  },
-  bottomButtons: {
-    paddingHorizontal: 24,
-    paddingBottom: 18,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
-  },
-  closeBtn: {
-    alignSelf: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 18,
-    minHeight: 36,
-  },
-  closeBtnText: {
-    color: '#475569',
-    fontSize: 15,
-    fontWeight: '800',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   navPickerBackdrop: {
     flex: 1,
@@ -1304,7 +2755,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     marginBottom: 2,
   },
   navOption: {
@@ -1325,7 +2776,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#334155',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   navCancel: {
     minHeight: 44,
@@ -1415,6 +2866,79 @@ function formatDateTimeParts(
     ? 'כל היום'
     : `${formatTime(startTime)}-${formatTime(endTime)}`;
   return { dateLine, timeLine };
+}
+
+interface CommunityEventShareMessageInput {
+  title: string;
+  eventId: string;
+  startTime?: number;
+  dateTimeParts?: { dateLine: string; timeLine: string };
+  allDay?: boolean;
+  timeLabel?: string;
+  location?: string;
+  importantItems: Array<{ id: string; title: string }>;
+  communityName?: string;
+}
+
+function buildCommunityEventShareMessage({
+  title,
+  eventId,
+  startTime,
+  dateTimeParts,
+  allDay,
+  timeLabel,
+  location,
+  importantItems,
+  communityName,
+}: CommunityEventShareMessageInput): string {
+  const trimmedCommunityName = communityName?.trim();
+  const trimmedLocation = location?.trim();
+  const trimmedImportantItems = importantItems
+    .map((item) => item.title.trim())
+    .filter((itemTitle) => itemTitle.length > 0);
+  const dateParts =
+    dateTimeParts ??
+    (startTime
+      ? {
+          dateLine: new Date(startTime).toLocaleDateString('he-IL', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+          }),
+          timeLine: allDay ? 'כל היום' : formatTime(startTime),
+        }
+      : null);
+
+  const lines = ['אירוע קהילה ב־InYomi 👥'];
+  if (trimmedCommunityName) {
+    lines.push(`קהילה: ${trimmedCommunityName}`);
+  }
+  lines.push('', title.trim());
+
+  if (dateParts) {
+    lines.push(`מתי: ${dateParts.dateLine}, ${dateParts.timeLine}`);
+  } else if (timeLabel?.trim()) {
+    lines.push(`מתי: ${timeLabel.trim()}`);
+  }
+
+  if (trimmedLocation) {
+    lines.push(`איפה: ${trimmedLocation}`);
+  }
+
+  if (trimmedImportantItems.length > 0) {
+    lines.push('', 'חשוב לזכור:');
+    lines.push(...trimmedImportantItems.map((itemTitle) => `• ${itemTitle}`));
+  }
+
+  lines.push(
+    '',
+    'נשלח דרך InYomi — עושים סדר באירועים, משימות וקהילות.',
+    'לפתיחת האירוע / הצטרפות:',
+    `${INYOMI_EVENT_LINK_BASE}/${eventId}`
+  );
+
+  return lines.join('\n');
 }
 
 function formatFileSize(sizeBytes: number): string {

@@ -62,13 +62,37 @@ export default function JoinCommunityScreen() {
     try {
       const result = await joinCommunity({ inviteCode: code });
 
+      if (result.status === 'invalid_code') {
+        Alert.alert('שגיאה', 'הקישור אינו תקין או שהקהילה אינה זמינה.');
+        return;
+      }
+
+      if (result.status === 'pending_approval') {
+        Alert.alert(
+          'בקשת ההצטרפות נשלחה',
+          'בקשת ההצטרפות נשלחה וממתינה לאישור מנהל הקהילה',
+          [
+            {
+              text: 'אישור',
+              onPress: () =>
+                router.replace(
+                  '/(authenticated)/communities' as Parameters<
+                    typeof router.replace
+                  >[0]
+                ),
+            },
+          ]
+        );
+        return;
+      }
+
       if (result.status === 'joined') {
         Alert.alert('הצטרפת בהצלחה! 🎉', undefined, [
           {
             text: 'אישור',
             onPress: () =>
               router.replace(
-                `/(authenticated)/communities/${result.communityId}` as Parameters<
+                `/(authenticated)/community/${result.communityId}` as Parameters<
                   typeof router.replace
                 >[0]
               ),
@@ -77,7 +101,7 @@ export default function JoinCommunityScreen() {
       } else {
         // already_member – navigate directly
         router.replace(
-          `/(authenticated)/communities/${result.communityId}` as Parameters<
+          `/(authenticated)/community/${result.communityId}` as Parameters<
             typeof router.replace
           >[0]
         );

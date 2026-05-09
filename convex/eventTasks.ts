@@ -1,8 +1,10 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
-import { v } from 'convex/values';
+import { ConvexError, v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
-import type { QueryCtx } from './_generated/server';
+import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import { saveCommunityEventToPersonalCalendar } from './communityEventCalendarHelpers';
+import { isActiveCommunityMember } from './communityMemberUtils';
 
 // ─────────────────────────────────────────────────────────────
 // סיכום משימות לפי קהילה (לתצוגת כרטיסי אירועים — ללא N+1)
@@ -10,12 +12,28 @@ import { mutation, query } from './_generated/server';
 export const getTaskCountsByCommunity = query({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return {};
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!isActiveCommunityMember(membership)) return {};
+
     const events = await ctx.db
       .query('events')
       .withIndex('by_community_date', (q) => q.eq('communityId', communityId))
       .collect();
 
-    const counts: Record<string, { total: number; assigned: number }> = {};
+    const counts: Record<
+      string,
+      {
+        total: number;
+        assigned: number;
+        totalTasksCount: number;
+        assignedTasksCount: number;
+        myAssignedTasks: Array<{ id: Id<'eventTasks'>; title: string }>;
+        hasMyAssignedTasks: boolean;
+      }
+    > = {};
 
     await Promise.all(
       events.map(async (ev) => {
@@ -23,11 +41,23 @@ export const getTaskCountsByCommunity = query({
           .query('eventTasks')
           .withIndex('by_event', (q) => q.eq('eventId', ev._id))
           .collect();
+        const activeTasks =
+          ev.status === 'cancelled'
+            ? []
+            : tasks.filter((task) => task.completed !== true);
+        const assignedTasksCount = activeTasks.filter(
+          (t) => t.assignedToUserId || t.assignedToManual?.trim()
+        ).length;
+        const myAssignedTasks = activeTasks
+          .filter((t) => t.assignedToUserId === userId)
+          .map((t) => ({ id: t._id, title: t.title }));
         counts[ev._id] = {
-          total: tasks.length,
-          assigned: tasks.filter(
-            (t) => t.assignedToUserId || t.assignedToManual?.trim()
-          ).length,
+          total: activeTasks.length,
+          assigned: assignedTasksCount,
+          totalTasksCount: activeTasks.length,
+          assignedTasksCount,
+          myAssignedTasks,
+          hasMyAssignedTasks: myAssignedTasks.length > 0,
         };
       })
     );
@@ -36,18 +66,17 @@ export const getTaskCountsByCommunity = query({
   },
 });
 
-async function isCommunityMember(
-  ctx: QueryCtx,
+async function getCommunityMembership(
+  ctx: QueryCtx | MutationCtx,
   communityId: Id<'communities'>,
   userId: Id<'users'>
-): Promise<boolean> {
-  const m = await ctx.db
+) {
+  return await ctx.db
     .query('communityMembers')
     .withIndex('by_community_user', (q) =>
       q.eq('communityId', communityId).eq('userId', userId)
     )
     .unique();
-  return m !== null;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -56,6 +85,31 @@ async function isCommunityMember(
 export const listByEvent = query({
   args: { eventId: v.id('events') },
   handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const event = await ctx.db.get(eventId);
+    if (!event) return [];
+
+    if (event.communityId) {
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) return [];
+
+      const canManageTasks =
+        event.createdBy === userId ||
+        membership.role === 'owner' ||
+        membership.role === 'admin';
+
+      if (!canManageTasks && event.tasksVisibleToParticipants !== true)
+        return [];
+    } else if (event.createdBy !== userId) {
+      return [];
+    }
+
     const tasks = await ctx.db
       .query('eventTasks')
       .withIndex('by_event', (q) => q.eq('eventId', eventId))
@@ -178,6 +232,7 @@ export const toggleCompleted = mutation({
     if (!task) throw new Error('משימה לא נמצאה');
     const event = await ctx.db.get(task.eventId);
     if (!event) throw new Error('אירוע לא נמצא');
+    if (event.status === 'cancelled') throw new Error('האירוע בוטל');
 
     if (event.communityId) {
       const communityId = event.communityId;
@@ -220,22 +275,33 @@ export const setAssignee = mutation({
     if (!task) throw new Error('משימה לא נמצאה');
     const event = await ctx.db.get(task.eventId);
     if (!event) throw new Error('אירוע לא נמצא');
+    if (event.status === 'cancelled') throw new Error('האירוע בוטל');
 
     const hasUserId = !!task.assignedToUserId;
     const hasManual = !!task.assignedToManual?.trim();
     const isAssigned = hasUserId || hasManual;
-    const isCreator = event.createdBy === userId;
+    let canManageAssignments = event.createdBy === userId;
     const isAssignedUser = task.assignedToUserId === userId;
 
     if (event.communityId) {
-      const isMember = await isCommunityMember(ctx, event.communityId, userId);
-      if (!isMember) throw new Error('רק חברי הקהילה יכולים להקצות משימות');
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) {
+        throw new Error('רק חברי קהילה פעילים יכולים להקצות משימות');
+      }
+      canManageAssignments =
+        canManageAssignments ||
+        membership.role === 'owner' ||
+        membership.role === 'admin';
     }
 
     if (assignee === null) {
-      if (!isCreator && !isAssignedUser)
+      if (!canManageAssignments && !isAssignedUser)
         throw new Error('רק הממונה או יוצר האירוע יכולים לבטל הקצאה');
-      if (hasManual && !isCreator)
+      if (hasManual && !canManageAssignments)
         throw new Error('רק יוצר האירוע יכול לשנות הקצאה ידנית');
       await ctx.db.patch(id, {
         assignedToUserId: undefined,
@@ -245,7 +311,8 @@ export const setAssignee = mutation({
     }
 
     if (assignee.type === 'manual') {
-      if (!isCreator) throw new Error('רק יוצר האירוע יכול להקצות שם ידני');
+      if (!canManageAssignments)
+        throw new Error('רק מנהלי האירוע יכולים להקצות שם ידני');
       await ctx.db.patch(id, {
         assignedToUserId: undefined,
         assignedToManual: assignee.name.trim() || undefined,
@@ -254,15 +321,194 @@ export const setAssignee = mutation({
     }
 
     if (assignee.type === 'user') {
-      if (!isCreator && isAssigned)
+      if (!canManageAssignments && isAssigned)
         throw new Error('רק יוצר האירוע או הממונה הנוכחי יכולים לשנות הקצאה');
-      if (!isCreator && !isAssigned && assignee.userId !== userId)
+      if (!canManageAssignments && !isAssigned && assignee.userId !== userId)
         throw new Error('משימה לא מוקצית – ניתן להקצות רק את עצמך');
       await ctx.db.patch(id, {
         assignedToUserId: assignee.userId,
         assignedToManual: undefined,
       });
+      if (event.communityId) {
+        await saveCommunityEventToPersonalCalendar(ctx, {
+          userId: assignee.userId,
+          eventId: event._id,
+          communityId: event.communityId,
+        });
+        // TODO(server-push): notify assignee that a task was assigned and event was added to their calendar.
+      }
     }
+  },
+});
+
+export const updateEventTaskVisibility = mutation({
+  args: {
+    eventId: v.id('events'),
+    tasksVisibleToParticipants: v.boolean(),
+  },
+  handler: async (ctx, { eventId, tasksVisibleToParticipants }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+
+    if (!event.communityId) {
+      if (event.createdBy !== userId)
+        throw new Error('אין הרשאה לעדכן נראות משימות');
+    } else {
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      const canManage =
+        event.createdBy === userId ||
+        membership?.role === 'owner' ||
+        membership?.role === 'admin';
+      if (!isActiveCommunityMember(membership) || !canManage) {
+        throw new Error('אין הרשאה לעדכן נראות משימות');
+      }
+    }
+
+    await ctx.db.patch(eventId, { tasksVisibleToParticipants });
+  },
+});
+
+export const claimEventTask = mutation({
+  args: { id: v.id('eventTasks') },
+  returns: v.object({
+    taskId: v.id('eventTasks'),
+    wasAddedToCalendar: v.boolean(),
+    rsvpChanged: v.union(
+      v.literal('set_to_yes'),
+      v.literal('unchanged'),
+      v.literal('not_applicable')
+    ),
+  }),
+  handler: async (ctx, { id }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(id);
+    if (!task) throw new Error('משימה לא נמצאה');
+    const event = await ctx.db.get(task.eventId);
+    if (!event || !event.communityId)
+      throw new Error('פעולה זו זמינה רק באירוע קהילתי');
+    if (event.status === 'cancelled') throw new Error('האירוע בוטל');
+    if (event.startTime <= Date.now()) {
+      throw new ConvexError({
+        code: 'EVENT_IS_PAST',
+        message: 'לא ניתן להשתבץ למשימה באירוע שעבר',
+      });
+    }
+
+    const membership = await getCommunityMembership(
+      ctx,
+      event.communityId,
+      userId
+    );
+    if (!isActiveCommunityMember(membership)) {
+      throw new Error('רק חברי קהילה פעילים יכולים להשתבץ למשימה');
+    }
+
+    const canManage =
+      event.createdBy === userId ||
+      membership.role === 'owner' ||
+      membership.role === 'admin';
+
+    if (!canManage && event.tasksVisibleToParticipants !== true) {
+      throw new Error('המשימות אינן גלויות למשתתפים');
+    }
+
+    const isAssigned =
+      !!task.assignedToUserId || !!task.assignedToManual?.trim();
+    if (isAssigned) throw new Error('המשימה כבר הוקצתה');
+
+    await ctx.db.patch(id, {
+      assignedToUserId: userId,
+      assignedToManual: undefined,
+    });
+
+    const { wasAddedToCalendar } =
+      await saveCommunityEventToPersonalCalendar(ctx, {
+        userId,
+        eventId: event._id,
+        communityId: event.communityId,
+      });
+
+    let rsvpChanged: 'set_to_yes' | 'unchanged' | 'not_applicable' =
+      'not_applicable';
+    if (event.requiresRsvp === true) {
+      const existingRsvp = await ctx.db
+        .query('eventRsvps')
+        .withIndex('by_event_user', (q) =>
+          q.eq('eventId', event._id).eq('userId', userId)
+        )
+        .unique();
+      if (existingRsvp?.status === 'yes') {
+        rsvpChanged = 'unchanged';
+      } else if (existingRsvp) {
+        await ctx.db.patch(existingRsvp._id, {
+          status: 'yes',
+          updatedAt: Date.now(),
+        });
+        rsvpChanged = 'set_to_yes';
+      } else {
+        await ctx.db.insert('eventRsvps', {
+          eventId: event._id,
+          userId,
+          status: 'yes',
+          updatedAt: Date.now(),
+        });
+        rsvpChanged = 'set_to_yes';
+      }
+    }
+
+    return { taskId: id, wasAddedToCalendar, rsvpChanged };
+  },
+});
+
+export const unclaimEventTask = mutation({
+  args: { id: v.id('eventTasks') },
+  handler: async (ctx, { id }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(id);
+    if (!task) throw new Error('משימה לא נמצאה');
+    const event = await ctx.db.get(task.eventId);
+    if (!event || !event.communityId)
+      throw new Error('פעולה זו זמינה רק באירוע קהילתי');
+    if (event.status === 'cancelled') throw new Error('האירוע בוטל');
+
+    const membership = await getCommunityMembership(
+      ctx,
+      event.communityId,
+      userId
+    );
+    if (!isActiveCommunityMember(membership)) {
+      throw new Error('רק חברי קהילה פעילים יכולים להסיר הקצאה');
+    }
+
+    const canManage =
+      event.createdBy === userId ||
+      membership.role === 'owner' ||
+      membership.role === 'admin';
+
+    if (!canManage && event.tasksVisibleToParticipants !== true) {
+      throw new Error('המשימות אינן גלויות למשתתפים');
+    }
+
+    if (!task.assignedToUserId) throw new Error('המשימה אינה מוקצית למשתמש');
+    if (!canManage && task.assignedToUserId !== userId) {
+      throw new Error('ניתן להסיר רק הקצאה של עצמך');
+    }
+
+    await ctx.db.patch(id, {
+      assignedToUserId: undefined,
+      assignedToManual: undefined,
+    });
   },
 });
 
@@ -280,7 +526,7 @@ export const listMyAssignedEventTasksForDate = query({
       .withIndex('by_user', (q) => q.eq('userId', userId))
       .collect();
 
-    const activeMembers = memberships.filter((m) => m.status !== 'left');
+    const activeMembers = memberships.filter((m) => isActiveCommunityMember(m));
 
     const results = await Promise.all(
       activeMembers.map(async ({ communityId }) => {
@@ -311,6 +557,7 @@ export const listMyAssignedEventTasksForDate = query({
               .map((t) => ({
                 _id: t._id,
                 title: t.title,
+                completed: t.completed ?? false,
                 eventId: ev._id,
                 eventTitle: ev.title,
                 eventStartTime: ev.startTime,
@@ -326,6 +573,84 @@ export const listMyAssignedEventTasksForDate = query({
     );
 
     return results.flat();
+  },
+});
+
+export const listMyAssignedEventTasks = query({
+  args: { from: v.number(), to: v.number() },
+  returns: v.array(
+    v.object({
+      _id: v.id('eventTasks'),
+      title: v.string(),
+      completed: v.boolean(),
+      eventId: v.id('events'),
+      eventTitle: v.string(),
+      eventStartTime: v.number(),
+      eventEndTime: v.number(),
+      eventAllDay: v.boolean(),
+      communityId: v.id('communities'),
+      communityName: v.string(),
+    })
+  ),
+  handler: async (ctx, { from, to }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const memberships = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+
+    const activeMembers = memberships.filter((m) => isActiveCommunityMember(m));
+
+    const results = await Promise.all(
+      activeMembers.map(async ({ communityId }) => {
+        const community = await ctx.db.get(communityId);
+        if (!community || community.archived) return [];
+
+        const events = await ctx.db
+          .query('events')
+          .withIndex('by_community_date', (q) =>
+            q
+              .eq('communityId', communityId)
+              .gte('startTime', from)
+              .lte('startTime', to)
+          )
+          .collect();
+
+        const activeEvents = events.filter((ev) => ev.status !== 'cancelled');
+
+        const taskRows = await Promise.all(
+          activeEvents.map(async (ev) => {
+            const tasks = await ctx.db
+              .query('eventTasks')
+              .withIndex('by_event', (q) => q.eq('eventId', ev._id))
+              .collect();
+
+            return tasks
+              .filter((t) => t.assignedToUserId === userId)
+              .map((t) => ({
+                _id: t._id,
+                title: t.title,
+                completed: t.completed ?? false,
+                eventId: ev._id,
+                eventTitle: ev.title,
+                eventStartTime: ev.startTime,
+                eventEndTime: ev.endTime,
+                eventAllDay: ev.allDay ?? false,
+                communityId,
+                communityName: community.name,
+              }));
+          })
+        );
+
+        return taskRows.flat();
+      })
+    );
+
+    return results
+      .flat()
+      .sort((a, b) => a.eventStartTime - b.eventStartTime);
   },
 });
 

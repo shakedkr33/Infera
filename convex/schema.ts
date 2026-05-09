@@ -27,6 +27,8 @@ export default defineSchema({
     defaultSpaceId: v.optional(v.id('spaces')),
     // FIXED: family profile persistence — stores onboarding family contacts as JSON blob
     familyContacts: v.optional(v.any()),
+    /** Post-auth optional family setup was skipped; prevents nag on every launch */
+    familySetupSkippedAt: v.optional(v.number()),
   })
     .index('by_email', ['email'])
     .index('by_phone', ['phone'])
@@ -105,6 +107,7 @@ export default defineSchema({
     allFamily: v.optional(v.boolean()), // true → shared with all family members
     sharedWithFamilyMemberIds: v.optional(v.array(v.string())), // entity row IDs of selected family members
     communityId: v.optional(v.id('communities')),
+    tasksVisibleToParticipants: v.optional(v.boolean()),
     requiresRsvp: v.optional(v.boolean()), // האם האירוע דורש אישור השתתפות
     status: v.optional(v.union(v.literal('active'), v.literal('cancelled'))),
     cancelledAt: v.optional(v.number()),
@@ -123,6 +126,14 @@ export default defineSchema({
           sizeBytes: v.number(),
           uploadedAt: v.number(),
           uploadedBy: v.id('users'),
+        })
+      )
+    ),
+    importantItems: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          title: v.string(),
         })
       )
     ),
@@ -148,11 +159,15 @@ export default defineSchema({
     createdAt: v.number(),
     communityId: v.optional(v.id('communities')), // קהילה שאליה שייכת המשימה
     completedAt: v.optional(v.number()), // חותמת זמן השלמה (לצורך היסטוריה)
+    sourceType: v.optional(v.literal('community_event_important_item')),
+    sourceEventId: v.optional(v.id('events')),
+    sourceImportantItemId: v.optional(v.string()),
   })
     .index('by_space_completed', ['spaceId', 'completed'])
     .index('by_assigned', ['assignedTo'])
     .index('by_space', ['spaceId'])
-    .index('by_community', ['communityId']),
+    .index('by_community', ['communityId'])
+    .index('by_assigned_source_event', ['assignedTo', 'sourceEventId']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת ימי הולדת
@@ -231,6 +246,28 @@ export default defineSchema({
     .index('by_user', ['userId']),
 
   // ═══════════════════════════════════════════════════════
+  // אירועי קהילה פתוחים — שמירה אישית ליומן / בית (למשתמש בלבד)
+  // ═══════════════════════════════════════════════════════
+  savedCommunityEvents: defineTable({
+    userId: v.id('users'),
+    eventId: v.id('events'),
+    communityId: v.id('communities'),
+    createdAt: v.number(),
+    removedAt: v.optional(v.number()),
+  })
+    .index('by_user', ['userId'])
+    .index('by_user_event', ['userId', 'eventId']),
+
+  /** הסרה ידנית מיומן אישי כשעדיין קיים RSVP yes (אירוע עבר ממצב RSVP לפתוח) */
+  communityEventPersonalCalendarOptOuts: defineTable({
+    userId: v.id('users'),
+    eventId: v.id('events'),
+    createdAt: v.number(),
+  })
+    .index('by_user', ['userId'])
+    .index('by_user_event', ['userId', 'eventId']),
+
+  // ═══════════════════════════════════════════════════════
   // טבלת מצב רוח יומי
   // ═══════════════════════════════════════════════════════
   dailyMoods: defineTable({
@@ -290,6 +327,10 @@ export default defineSchema({
     createdAt: v.number(),
     archived: v.optional(v.boolean()),
     pinnedByUserIds: v.optional(v.array(v.id('users'))), // deprecated – use communityMembers.pinned
+    /** Join via invite link: manual = admin approval required; automatic = immediate (default if unset). */
+    joinApprovalMode: v.optional(
+      v.union(v.literal('manual'), v.literal('automatic'))
+    ),
   })
     .index('by_owner', ['ownerId'])
     .index('by_space', ['spaceId'])
@@ -305,7 +346,11 @@ export default defineSchema({
     pinned: v.boolean(),
     notificationsEnabled: v.boolean(),
     joinedAt: v.number(),
-    status: v.optional(v.union(v.literal('active'), v.literal('left'))),
+    status: v.optional(
+      v.union(v.literal('active'), v.literal('left'), v.literal('pending'))
+    ),
+    /** Last time the user opened this community detail (for "new events" hints on the list). */
+    lastViewedAt: v.optional(v.number()),
   })
     .index('by_community', ['communityId'])
     .index('by_user', ['userId'])

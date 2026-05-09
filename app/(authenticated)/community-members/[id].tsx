@@ -1,10 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
+  Pressable,
   Share,
   StyleSheet,
   Text,
@@ -28,6 +32,7 @@ const ROLE_LABELS: Record<'owner' | 'admin' | 'member', string> = {
 // ─── Member Row ───────────────────────────────────────────────────────────────
 
 interface MemberInfo {
+  membershipId: Id<'communityMembers'>;
   userId: Id<'users'>;
   role: 'owner' | 'admin' | 'member';
   joinedAt: number;
@@ -39,9 +44,17 @@ interface MemberRowProps {
   member: MemberInfo;
   showRemove?: boolean;
   onRemove?: () => void;
+  roleActionLabel?: string;
+  onRoleAction?: () => void;
 }
 
-function MemberRow({ member, showRemove, onRemove }: MemberRowProps) {
+function MemberRow({
+  member,
+  showRemove,
+  onRemove,
+  roleActionLabel,
+  onRoleAction,
+}: MemberRowProps) {
   return (
     <View style={styles.memberRow}>
       {/* כפתור הסרה — מופיע בצד שמאל כשרלוונטי */}
@@ -54,6 +67,18 @@ function MemberRow({ member, showRemove, onRemove }: MemberRowProps) {
           accessibilityLabel={`הסר את ${member.fullName}`}
         >
           <Ionicons name="person-remove-outline" size={20} color="#9ca3af" />
+        </TouchableOpacity>
+      ) : null}
+
+      {roleActionLabel && onRoleAction ? (
+        <TouchableOpacity
+          onPress={onRoleAction}
+          style={styles.roleActionBtn}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel={`${roleActionLabel} עבור ${member.fullName}`}
+        >
+          <Text style={styles.roleActionText}>{roleActionLabel}</Text>
         </TouchableOpacity>
       ) : null}
 
@@ -110,6 +135,14 @@ export default function CommunityMembersScreen() {
 
   const leaveCommunity = useMutation(api.communities.leaveCommunity);
   const removeMember = useMutation(api.communities.removeMember);
+  const promoteMemberToAdmin = useMutation(
+    api.communities.promoteMemberToAdmin
+  );
+  const demoteAdminToMember = useMutation(api.communities.demoteAdminToMember);
+  const approvePendingMember = useMutation(
+    api.communities.approvePendingMember
+  );
+  const rejectPendingMember = useMutation(api.communities.rejectPendingMember);
 
   const communityId = id as Id<'communities'>;
 
@@ -119,18 +152,84 @@ export default function CommunityMembersScreen() {
       (m) => m.userId === currentUserId && m.role === 'owner'
     ) ??
       false);
+  const isAdmin =
+    currentUserId !== undefined &&
+    (data?.members.some(
+      (m) => m.userId === currentUserId && m.role === 'admin'
+    ) ??
+      false);
+  const canInvite = isOwner || isAdmin;
+  const canManage = data?.canManage ?? false;
+  const pendingMembers = data?.pendingMembers ?? [];
+  const [inviteCodeOpen, setInviteCodeOpen] = useState(false);
 
-  const handleInvite = () => {
+  const handleApprovePending = (member: MemberInfo) => {
+    Alert.alert('אישור הצטרפות', `לאשר את ${member.fullName} לקהילה?`, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'אישור',
+        onPress: async () => {
+          try {
+            await approvePendingMember({
+              communityId,
+              memberId: member.membershipId,
+            });
+          } catch (err) {
+            Alert.alert(
+              'שגיאה',
+              err instanceof Error ? err.message : 'לא ניתן לאשר'
+            );
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleRejectPending = (member: MemberInfo) => {
+    Alert.alert('דחיית בקשה', `לדחות את בקשת ההצטרפות של ${member.fullName}?`, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'דחייה',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await rejectPendingMember({
+              communityId,
+              memberId: member.membershipId,
+            });
+          } catch (err) {
+            Alert.alert(
+              'שגיאה',
+              err instanceof Error ? err.message : 'לא ניתן לדחות'
+            );
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleShareInviteLink = () => {
     if (!data?.community.inviteCode) {
       Alert.alert('שגיאה', 'לא נמצא קישור הזמנה לקהילה זו');
       return;
     }
-    const url = `https://inyomi.app/join/${data.community.inviteCode}`;
+    const code = data.community.inviteCode;
+    const url = `https://inyomi.app/join/${code}`;
     Share.share({
-      message: `הצטרפו לקהילה "${data.community.name}" באפליקציית Inyomi: ${url}`,
+      message: `הצטרפי לקהילה "${data.community.name}" באיניומי:\n${url}\n\nאו הזיני קוד הצטרפות:\n${code}`,
     });
     // TODO: add contacts picker flow – check which contacts are Inyomi users,
     //       send internal invite vs share link
+  };
+
+  const handleCopyInviteCode = async () => {
+    const code = data?.community.inviteCode;
+    if (!code) {
+      Alert.alert('שגיאה', 'לא נמצא קוד הזמנה לקהילה זו');
+      return;
+    }
+    await Clipboard.setStringAsync(code);
+    Alert.alert('הצלחה', 'הקוד הועתק');
   };
 
   const handleLeave = () => {
@@ -185,6 +284,54 @@ export default function CommunityMembersScreen() {
     );
   };
 
+  const handlePromoteToAdmin = (member: MemberInfo) => {
+    Alert.alert(
+      'הגדרה כמנהל/ת',
+      `להגדיר את ${member.fullName} כמנהל/ת קהילה?`,
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'אישור',
+          onPress: async () => {
+            try {
+              await promoteMemberToAdmin({
+                communityId,
+                targetUserId: member.userId,
+              });
+            } catch (err) {
+              Alert.alert(
+                'שגיאה',
+                err instanceof Error ? err.message : 'לא ניתן לעדכן הרשאה'
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDemoteToMember = (member: MemberInfo) => {
+    Alert.alert('הסרה מניהול', `להסיר את ${member.fullName} מתפקיד מנהל/ת?`, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'אישור',
+        onPress: async () => {
+          try {
+            await demoteAdminToMember({
+              communityId,
+              targetUserId: member.userId,
+            });
+          } catch (err) {
+            Alert.alert(
+              'שגיאה',
+              err instanceof Error ? err.message : 'לא ניתן לעדכן הרשאה'
+            );
+          }
+        },
+      },
+    ]);
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* ── כותרת */}
@@ -209,14 +356,6 @@ export default function CommunityMembersScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ── תת-כותרת */}
-      <View style={styles.subHeader}>
-        <Text style={styles.subHeaderText}>
-          {data ? `${data.members.length} חברים` : ''}
-        </Text>
-        <Text style={styles.subHeaderTitle}>חברי הקהילה</Text>
-      </View>
-
       {/* ── רשימת חברים */}
       {data === undefined ? (
         <View style={styles.loadingContainer}>
@@ -229,14 +368,84 @@ export default function CommunityMembersScreen() {
       ) : (
         <FlatList<MemberInfo>
           data={data.members}
-          keyExtractor={(m) => m.userId}
+          keyExtractor={(m) => m.membershipId}
           contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            <>
+              {canManage && pendingMembers.length > 0 ? (
+                <View style={styles.pendingSection}>
+                  <Text style={styles.pendingSectionTitle}>ממתינים לאישור</Text>
+                  {pendingMembers.map((m) => (
+                    <View key={m.membershipId} style={styles.pendingCard}>
+                      <View style={styles.memberRow}>
+                        <View style={styles.memberAvatar}>
+                          <Ionicons name="person" size={20} color={PRIMARY} />
+                        </View>
+                        <View style={styles.memberInfo}>
+                          <Text style={styles.memberName} numberOfLines={1}>
+                            {m.fullName}
+                          </Text>
+                          {m.email ? (
+                            <Text style={styles.memberEmail} numberOfLines={1}>
+                              {m.email}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+                      <View style={styles.pendingActions}>
+                        <TouchableOpacity
+                          style={styles.rejectPendingBtn}
+                          onPress={() => handleRejectPending(m)}
+                          accessible
+                          accessibilityRole="button"
+                          accessibilityLabel={`דחיית בקשת ${m.fullName}`}
+                        >
+                          <Text style={styles.rejectPendingBtnText}>דחייה</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.approvePendingBtn}
+                          onPress={() => handleApprovePending(m)}
+                          accessible
+                          accessibilityRole="button"
+                          accessibilityLabel={`אישור ${m.fullName}`}
+                        >
+                          <Text style={styles.approvePendingBtnText}>
+                            אישור
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              <View style={styles.subHeader}>
+                <Text style={styles.subHeaderText}>
+                  {`${data.members.length} חברים`}
+                </Text>
+                <Text style={styles.subHeaderTitle}>חברי הקהילה</Text>
+              </View>
+            </>
+          }
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           renderItem={({ item }) => (
             <MemberRow
               member={item}
               showRemove={isOwner && item.userId !== currentUserId}
               onRemove={() => handleRemove(item)}
+              roleActionLabel={
+                isOwner && item.role === 'member'
+                  ? 'הגדר כמנהל/ת'
+                  : isOwner && item.role === 'admin'
+                    ? 'הסר מניהול'
+                    : undefined
+              }
+              onRoleAction={
+                isOwner && item.role === 'member'
+                  ? () => handlePromoteToAdmin(item)
+                  : isOwner && item.role === 'admin'
+                    ? () => handleDemoteToMember(item)
+                    : undefined
+              }
             />
           )}
         />
@@ -256,22 +465,74 @@ export default function CommunityMembersScreen() {
             <Text style={styles.leaveBtnText}>עזיבת הקהילה</Text>
           </TouchableOpacity>
         ) : null}
-        <TouchableOpacity
-          style={styles.inviteBtn}
-          onPress={handleInvite}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="הזמנת חברים לקהילה"
-        >
-          <Ionicons
-            name="share-outline"
-            size={20}
-            color="#fff"
-            style={styles.inviteIcon}
-          />
-          <Text style={styles.inviteBtnText}>הזמנת חברים</Text>
-        </TouchableOpacity>
+        {canInvite ? (
+          <TouchableOpacity
+            style={styles.inviteBtn}
+            onPress={() => setInviteCodeOpen(true)}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="הזמנת חברים לקהילה"
+          >
+            <Ionicons
+              name="share-outline"
+              size={20}
+              color="#fff"
+              style={styles.inviteIcon}
+            />
+            <Text style={styles.inviteBtnText}>הזמנת חברים</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
+
+      <Modal
+        visible={inviteCodeOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setInviteCodeOpen(false)}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setInviteCodeOpen(false)}
+        />
+        <View style={styles.codeModal}>
+          <TouchableOpacity
+            style={styles.codeCloseBtn}
+            onPress={() => setInviteCodeOpen(false)}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="סגירה"
+          >
+            <Ionicons name="close" size={20} color="#6b7280" />
+          </TouchableOpacity>
+          <Text style={styles.codeTitle}>קוד ההצטרפות לקהילה</Text>
+          <Text style={styles.codeText}>
+            {data?.community.inviteCode ?? '—'}
+          </Text>
+          <Text style={styles.codeHelper}>
+            אפשר להזין את הקוד במסך הקהילות כדי להצטרף.
+          </Text>
+          <View style={styles.codeActions}>
+            <TouchableOpacity
+              style={styles.copyBtn}
+              onPress={handleCopyInviteCode}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="העתקת קוד"
+            >
+              <Text style={styles.copyBtnText}>העתקת קוד</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.closeBtnSecondary}
+              onPress={handleShareInviteLink}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="שיתוף קישור"
+            >
+              <Text style={styles.closeBtnSecondaryText}>שיתוף קישור</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -320,6 +581,61 @@ const styles = StyleSheet.create({
   subHeaderText: {
     fontSize: 13,
     color: '#9ca3af',
+  },
+  pendingSection: {
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: '#f8fafc',
+  },
+  pendingSectionTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#64748b',
+    textAlign: 'right',
+    paddingHorizontal: 20,
+    marginBottom: 8,
+  },
+  pendingCard: {
+    backgroundColor: '#fff',
+    marginBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f1f5f9',
+  },
+  pendingActions: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+  },
+  approvePendingBtn: {
+    minHeight: 40,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    backgroundColor: PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  approvePendingBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  rejectPendingBtn: {
+    minHeight: 40,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  rejectPendingBtnText: {
+    color: '#64748b',
+    fontSize: 15,
+    fontWeight: '600',
   },
 
   // ── List
@@ -375,6 +691,18 @@ const styles = StyleSheet.create({
   removeBtn: {
     padding: 4,
   },
+  roleActionBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
+  },
+  roleActionText: {
+    fontSize: 12,
+    color: '#374151',
+    fontWeight: '600',
+    textAlign: 'right',
+  },
 
   // ── Loading / Error
   loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
@@ -428,5 +756,80 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  codeModal: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    top: '30%',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 18,
+  },
+  codeCloseBtn: {
+    alignSelf: 'flex-start',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f3f4f6',
+    marginBottom: 8,
+  },
+  codeTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+    marginBottom: 12,
+  },
+  codeText: {
+    fontSize: 34,
+    fontWeight: '800',
+    color: PRIMARY,
+    textAlign: 'center',
+    letterSpacing: 2,
+    marginBottom: 8,
+  },
+  codeHelper: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'right',
+    marginBottom: 14,
+  },
+  codeActions: {
+    flexDirection: 'row-reverse',
+    gap: 10,
+  },
+  copyBtn: {
+    flex: 1,
+    minHeight: 44,
+    backgroundColor: PRIMARY,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  copyBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  closeBtnSecondary: {
+    flex: 1,
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  closeBtnSecondaryText: {
+    color: '#374151',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

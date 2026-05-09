@@ -136,7 +136,7 @@ export default function CommunityReminderNewScreen() {
         title: title.trim(),
         description: description.trim() || undefined,
         dueDate: resolveDueDate(),
-        spaceId: spaceId ?? undefined,
+        spaceId: spaceId ? (spaceId as Id<'spaces'>) : undefined,
         communityId: communityId
           ? (communityId as Id<'communities'>)
           : undefined,

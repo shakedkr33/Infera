@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   Linking,
@@ -19,14 +20,25 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
+import { isOpenCommunityCalendarActionVisible } from '@/lib/openCommunityCalendarUi';
+import { getConvexErrorCode } from '@/lib/utils/convexError';
+
+const HEB_TEXT_ALIGN = 'left';
+const HEB_ROW = 'row';
+const HEB_FLEX_END = 'flex-start';
+const HEB_WRITING_DIRECTION: undefined = undefined;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRIMARY = '#36a9e2';
+const IMPORTANT_ITEMS_SECTION_TITLE = 'חשוב לזכור';
+const IMPORTANT_ITEMS_COPY_DEFAULT = 'הוסף למשימות שלי';
+const IMPORTANT_ITEMS_COPY_SUCCESS = 'נוסף למשימות שלך ✓';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -88,12 +100,42 @@ function getReminderLabels(eventLike: unknown): string[] {
     .map(formatReminderLabel);
 }
 
+function uniqueById<T>(items: readonly T[], getId: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    const id = getId(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(item);
+  }
+  return unique;
+}
+
 // ─── RSVP Options (module-level to avoid recreating in render) ────────────────
 
 const RSVP_OPTIONS = [
-  { status: 'yes' as const, label: 'כן', activeColor: '#22c55e' },
-  { status: 'maybe' as const, label: 'אולי', activeColor: '#eab308' },
-  { status: 'no' as const, label: 'לא', activeColor: '#ef4444' },
+  {
+    status: 'yes' as const,
+    label: 'כן',
+    selectedBg: '#dcfce7',
+    selectedBorder: '#16a34a',
+    selectedText: '#14532d',
+  },
+  {
+    status: 'maybe' as const,
+    label: 'אולי',
+    selectedBg: '#fef3c7',
+    selectedBorder: '#d97706',
+    selectedText: '#92400e',
+  },
+  {
+    status: 'no' as const,
+    label: 'לא',
+    selectedBg: '#fee2e2',
+    selectedBorder: '#dc2626',
+    selectedText: '#991b1b',
+  },
 ];
 
 // ─── Overflow Menu ────────────────────────────────────────────────────────────
@@ -170,29 +212,65 @@ export default function EventDetailScreen() {
   // If the guard fails we skip all queries (pass 'skip') and show the not-found state.
   const eventId = isValidConvexId(id) ? (id as Id<'events'>) : null;
 
-  const event = useQuery(
-    api.events.getById,
-    eventId ? { eventId } : 'skip'
-  );
+  const event = useQuery(api.events.getById, eventId ? { eventId } : 'skip');
   const rsvps = useQuery(
     api.eventRsvps.listByEvent,
+    eventId ? { eventId } : 'skip'
+  );
+  const myAssignedEventTasksState = useQuery(
+    api.eventRsvps.hasMyAssignedEventTasksForEvent,
     eventId ? { eventId } : 'skip'
   );
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
     eventId ? { eventId } : 'skip'
   );
+  const eventImportantItems = useQuery(
+    api.tasks.listEventImportantItems,
+    eventId ? { eventId } : 'skip'
+  );
+  const importantItemsCopyState = useQuery(
+    api.tasks.hasUserCopiedAllImportantItemsFromEvent,
+    eventId ? { eventId } : 'skip'
+  );
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
 
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
+  const setRsvpNoAndUnclaimMyEventTasks = useMutation(
+    api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
+  );
+  const addCommunityEventToMyCalendar = useMutation(
+    api.communityEventCalendar.addCommunityEventToMyCalendar
+  );
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const removeEventTask = useMutation(api.eventTasks.remove);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
+  const updateEventTaskVisibility = useMutation(
+    api.eventTasks.updateEventTaskVisibility
+  );
+  const claimEventTask = useMutation(api.eventTasks.claimEventTask);
+  const unclaimEventTask = useMutation(api.eventTasks.unclaimEventTask);
+  const addEventImportantItemsToMyTasks = useMutation(
+    api.tasks.addEventImportantItemsToMyTasks
+  );
   // FIXED: link-based sharing for personal events (no communityId)
   const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
 
+  const showRsvpNoBlockedDialog = useCallback(
+    (count: number): void => {
+      if (!eventId) return;
+      setBlockedRsvpTaskCount(count);
+    },
+    [eventId]
+  );
+
   const communityMembersData = useQuery(
     api.communities.getCommunityMembers,
+    event?.communityId ? { communityId: event.communityId } : 'skip'
+  );
+
+  const communityRecord = useQuery(
+    api.communities.getById,
     event?.communityId ? { communityId: event.communityId } : 'skip'
   );
 
@@ -206,6 +284,13 @@ export default function EventDetailScreen() {
   const menuBtnRef = useRef<View>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [isCopyingImportantItems, setIsCopyingImportantItems] = useState(false);
+  const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<
+    number | null
+  >(null);
+  const [importantItemsCopyError, setImportantItemsCopyError] = useState<
+    string | null
+  >(null);
 
   const handleMenuPress = useCallback(() => {
     if (!menuBtnRef.current) {
@@ -224,12 +309,56 @@ export default function EventDetailScreen() {
   const handleRsvp = useCallback(
     (status: RsvpStatus) => {
       if (!eventId) return;
-      upsertRsvp({ eventId, status }).catch(() =>
-        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה')
-      );
+      const localAssignedCount = (eventTasks ?? []).filter(
+        (task) => task.assignedToUserId === currentUserId
+      ).length;
+      const assignedCount =
+        myAssignedEventTasksState?.count ?? localAssignedCount;
+      if (status === 'no' && assignedCount > 0) {
+        showRsvpNoBlockedDialog(assignedCount);
+        return;
+      }
+      upsertRsvp({ eventId, status }).catch((error) => {
+        if (
+          status === 'no' &&
+          getConvexErrorCode(error) === 'RSVP_NO_BLOCKED_BY_ACTIVE_TASK'
+        ) {
+          showRsvpNoBlockedDialog(assignedCount > 0 ? assignedCount : 1);
+          return;
+        }
+        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה');
+      });
     },
-    [eventId, upsertRsvp]
+    [
+      currentUserId,
+      eventId,
+      eventTasks,
+      myAssignedEventTasksState,
+      showRsvpNoBlockedDialog,
+      upsertRsvp,
+    ]
   );
+
+  const handleAddToCalendar = useCallback(() => {
+    if (!eventId || !event) return;
+    if (event.isSavedToMyCalendar === true) return;
+    addCommunityEventToMyCalendar({ eventId }).catch(() =>
+      Alert.alert('שגיאה', 'לא הצלחנו להוסיף ליומן. נסי שוב בעוד רגע.')
+    );
+  }, [event, eventId, addCommunityEventToMyCalendar]);
+
+  const handleCopyImportantItems = useCallback(async () => {
+    if (!eventId || isCopyingImportantItems) return;
+    setIsCopyingImportantItems(true);
+    setImportantItemsCopyError(null);
+    try {
+      await addEventImportantItemsToMyTasks({ eventId });
+    } catch {
+      setImportantItemsCopyError('לא ניתן להוסיף למשימות כרגע');
+    } finally {
+      setIsCopyingImportantItems(false);
+    }
+  }, [eventId, isCopyingImportantItems, addEventImportantItemsToMyTasks]);
 
   const handleCancelEvent = useCallback(async () => {
     if (!event || !eventId) return;
@@ -296,27 +425,59 @@ export default function EventDetailScreen() {
     };
 
     // Delay so ⋯ menu modal has fully dismissed before system Share sheet opens
-    setTimeout(() => { doShare(); }, 300);
+    setTimeout(() => {
+      doShare();
+    }, 300);
   }, [event, eventId, createShareLinkMutation]);
 
-  // FIXED: make saved event addresses tappable without changing stored data.
-  const handleOpenLocation = useCallback(() => {
+  const openNavigationUrl = useCallback(
+    (app: 'apple' | 'google' | 'waze'): void => {
+      const location = event?.location?.trim();
+      if (!location) return;
+
+      const encodedLocation = encodeURIComponent(location);
+      const url =
+        app === 'apple'
+          ? `maps://?q=${encodedLocation}`
+          : app === 'google'
+            ? Platform.OS === 'ios'
+              ? `comgooglemaps://?q=${encodedLocation}`
+              : `https://www.google.com/maps/search/?api=1&query=${encodedLocation}`
+            : `waze://?q=${encodedLocation}&navigate=yes`;
+
+      Linking.openURL(url).catch(() => {
+        Alert.alert('שגיאה', 'לא הצלחנו לפתוח ניווט. נסי שוב בעוד רגע.');
+      });
+    },
+    [event?.location]
+  );
+
+  const handleOpenNavigationChooser = useCallback(() => {
     const location = event?.location?.trim();
     if (!location) return;
 
-    const encodedLocation = encodeURIComponent(location);
-    const primaryUrl =
-      Platform.OS === 'ios'
-        ? `maps://?q=${encodedLocation}`
-        : `geo:0,0?q=${encodedLocation}`;
-    const fallbackUrl = `https://maps.google.com/?q=${encodedLocation}`;
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Apple Maps', 'Google Maps', 'Waze', 'ביטול'],
+          cancelButtonIndex: 3,
+          userInterfaceStyle: 'light',
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 0) openNavigationUrl('apple');
+          if (buttonIndex === 1) openNavigationUrl('google');
+          if (buttonIndex === 2) openNavigationUrl('waze');
+        }
+      );
+      return;
+    }
 
-    Linking.openURL(primaryUrl).catch(() => {
-      Linking.openURL(fallbackUrl).catch(() => {
-        Alert.alert('שגיאה', 'לא ניתן לפתוח את המיקום');
-      });
-    });
-  }, [event?.location]);
+    Alert.alert('בחרי אפליקציית ניווט', undefined, [
+      { text: 'Google Maps', onPress: () => openNavigationUrl('google') },
+      { text: 'Waze', onPress: () => openNavigationUrl('waze') },
+      { text: 'ביטול', style: 'cancel' },
+    ]);
+  }, [event?.location, openNavigationUrl]);
 
   const overflowItems = useMemo<OverflowItem[]>(() => {
     const items: OverflowItem[] = [
@@ -326,7 +487,12 @@ export default function EventDetailScreen() {
         onPress: () => {
           router.push({
             pathname: '/(authenticated)/event-edit/[id]',
-            params: { id: eventId },
+            params: {
+              id: eventId as string,
+              ...(event?.communityId
+                ? { returnCommunityId: event.communityId as string }
+                : {}),
+            },
           });
         },
       },
@@ -345,7 +511,7 @@ export default function EventDetailScreen() {
       });
     }
     return items;
-  }, [handleShare, event?.status, eventId, router]);
+  }, [handleShare, event?.communityId, event?.status, eventId, router]);
 
   // ── Invalid route param (e.g. mock item ids like "1", "2")
   if (!eventId) {
@@ -356,7 +522,11 @@ export default function EventDetailScreen() {
           <Text style={styles.notFoundText}>אירוע לא נמצא</Text>
           <TouchableOpacity
             style={styles.errorBackBtn}
-            onPress={() => router.replace('/(authenticated)' as Parameters<typeof router.replace>[0])}
+            onPress={() =>
+              router.replace(
+                '/(authenticated)' as Parameters<typeof router.replace>[0]
+              )
+            }
             accessible
             accessibilityRole="button"
             accessibilityLabel="חזור"
@@ -412,16 +582,38 @@ export default function EventDetailScreen() {
   const myRsvp = rsvps?.find((r) => r.userId === currentUserId);
   const currentStatus: RsvpStatus = (myRsvp?.status as RsvpStatus) ?? 'none';
   const members = communityMembersData?.members ?? [];
+  const myCommunityMembership = members.find((m) => m.userId === currentUserId);
+  const isCommunityOwnerOrAdmin =
+    myCommunityMembership?.role === 'owner' ||
+    myCommunityMembership?.role === 'admin';
+  const canManageCommunityEvent =
+    Boolean(event.communityId) && (isCreator || isCommunityOwnerOrAdmin);
+  /** Owner/admin/creator: no RSVP prompt on community events */
+  const skipCommunityRsvpPrompt =
+    isCreator || (Boolean(event.communityId) && isCommunityOwnerOrAdmin);
+  const canOpenEventOverflowMenu = event.communityId
+    ? canManageCommunityEvent
+    : isCreator;
+  const canManageTasks = isCreator || isCommunityOwnerOrAdmin;
+  const participantsCanSeeTasks = event.tasksVisibleToParticipants === true;
+  const canRegularMemberSeeTasks = Boolean(
+    event.communityId && myCommunityMembership && participantsCanSeeTasks
+  );
+  const canSeeTasksSection = event.communityId
+    ? canManageTasks || canRegularMemberSeeTasks
+    : isCreator;
+  const eventTasksForDisplay = uniqueById(
+    eventTasks ?? [],
+    (task) => task._id as string
+  );
 
-  const assignedCount =
-    eventTasks?.filter(
-      (t) => !!t.assignedToUserId || !!t.assignedToManual?.trim()
-    ).length ?? 0;
+  const assignedCount = eventTasksForDisplay.filter(
+    (t) => !!t.assignedToUserId || !!t.assignedToManual?.trim()
+  ).length;
 
   const yesCount = rsvps?.filter((r) => r.status === 'yes').length ?? 0;
   const maybeCount = rsvps?.filter((r) => r.status === 'maybe').length ?? 0;
   const noCount = rsvps?.filter((r) => r.status === 'no').length ?? 0;
-  const hasAnyRsvps = yesCount > 0 || maybeCount > 0 || noCount > 0;
   const participantNames = (event.participants ?? [])
     .map((name) => name.trim())
     .filter((name) => name.length > 0);
@@ -431,13 +623,46 @@ export default function EventDetailScreen() {
       ? formatRecurrenceLabel(event.recurringPattern)
       : 'ללא';
   const reminderLabels = getReminderLabels(event);
+  const importantItems = eventImportantItems ?? event.importantItems ?? [];
+  const hasImportantItems = importantItems.length > 0;
+  const importantItemsCopyLoading = importantItemsCopyState === undefined;
+  const allImportantItemsCopied =
+    importantItemsCopyState?.allCopied === true && hasImportantItems;
+  const importantItemsButtonDisabled =
+    importantItemsCopyLoading ||
+    isCopyingImportantItems ||
+    allImportantItemsCopied;
+  const importantItemsButtonLabel = allImportantItemsCopied
+    ? IMPORTANT_ITEMS_COPY_SUCCESS
+    : IMPORTANT_ITEMS_COPY_DEFAULT;
+  const eventRequiresRsvp = event.requiresRsvp === true;
+
+  const openCommunityCalendarInfoReady =
+    !event.communityId ||
+    (communityRecord !== undefined && communityMembersData !== undefined);
+
+  const viewerIsActiveCommunityMemberForCalendar =
+    communityMembersData !== undefined && communityMembersData !== null;
+
+  const showOpenCommunityCalendarAction =
+    openCommunityCalendarInfoReady &&
+    isOpenCommunityCalendarActionVisible({
+      event: {
+        communityId: event.communityId ?? null,
+        requiresRsvp: event.requiresRsvp,
+        status: event.status,
+      },
+      hasValidConvexEventId: true,
+      communityArchived: communityRecord?.archived === true,
+      viewerIsActiveMember: viewerIsActiveCommunityMemberForCalendar,
+    });
 
   // Local variable to satisfy TypeScript in closures (event.onlineUrl may be undefined)
   const onlineUrl = event.onlineUrl;
 
   // ── Assignee sheet: derive current assignee from the task being managed
   const _assigneeSheetTask = assigneeSheetTaskId
-    ? (eventTasks?.find((t) => t._id === assigneeSheetTaskId) ?? null)
+    ? (eventTasksForDisplay.find((t) => t._id === assigneeSheetTaskId) ?? null)
     : null;
   const currentAssigneeForSheet: LocalAssignee | null =
     _assigneeSheetTask?.assignedToUserId
@@ -487,7 +712,7 @@ export default function EventDetailScreen() {
 
         {/* Last child → left in RTL: ⋯ for creator */}
         <View ref={menuBtnRef} style={styles.headerIconBtn}>
-          {isCreator && (
+          {canOpenEventOverflowMenu && (
             <TouchableOpacity
               onPress={handleMenuPress}
               style={styles.headerIconBtn}
@@ -505,6 +730,7 @@ export default function EventDetailScreen() {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="always"
         showsVerticalScrollIndicator={false}
       >
         {/* ── Cancelled banner */}
@@ -549,16 +775,28 @@ export default function EventDetailScreen() {
 
           {/* Location — address text */}
           {event.location ? (
-            <TouchableOpacity
-              style={styles.detailRow}
-              onPress={handleOpenLocation}
-              accessible
-              accessibilityRole="link"
-              accessibilityLabel="פתח מיקום במפות"
-            >
-              <Ionicons name="location-outline" size={18} color={PRIMARY} />
-              <Text style={styles.linkText}>{event.location}</Text>
-            </TouchableOpacity>
+            <View style={styles.locationDetailRow}>
+              <TouchableOpacity
+                style={styles.locationTextPressable}
+                onPress={handleOpenNavigationChooser}
+                accessible
+                accessibilityRole="link"
+                accessibilityLabel="פתח מיקום במפות"
+              >
+                <Ionicons name="location-outline" size={18} color={PRIMARY} />
+                <Text style={styles.linkText}>{event.location}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.navigateInlineBtn}
+                onPress={handleOpenNavigationChooser}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="נווט למיקום האירוע"
+              >
+                <Ionicons name="navigate-outline" size={14} color="#0369a1" />
+                <Text style={styles.navigateInlineBtnText}>נווט</Text>
+              </TouchableOpacity>
+            </View>
           ) : null}
 
           {/* Online URL — meeting/video link */}
@@ -621,10 +859,7 @@ export default function EventDetailScreen() {
               {event.attachments.map((attachment) => {
                 const sizeLabel = formatFileSize(attachment.sizeBytes);
                 return (
-                  <View
-                    key={attachment.storageId}
-                    style={styles.attachmentRow}
-                  >
+                  <View key={attachment.storageId} style={styles.attachmentRow}>
                     <Ionicons
                       name={
                         attachment.mimeType.startsWith('image/')
@@ -651,88 +886,228 @@ export default function EventDetailScreen() {
           </View>
         ) : null}
 
-        {/* ── Section 2: RSVP / passive state */}
-        {
-          !isCreator && event.requiresRsvp === true ? (
-            /* Case A: requiresRsvp + non-creator */
-            <View
-              style={[
-                styles.card,
-                event.status === 'cancelled' && styles.rsvpDisabled,
+        {hasImportantItems ? (
+          <View style={styles.card}>
+            <View style={styles.importantItemsHeaderChip}>
+              <Text style={styles.importantItemsHeaderChipText}>
+                {`📌 ${IMPORTANT_ITEMS_SECTION_TITLE} · ${importantItems.length}`}
+              </Text>
+            </View>
+            <View style={styles.importantItemsList}>
+              {importantItems.map((item) => (
+                <View key={item.id} style={styles.importantItemRow}>
+                  <Text style={styles.importantItemBullet}>•</Text>
+                  <Text style={styles.importantItemText}>{item.title}</Text>
+                </View>
+              ))}
+            </View>
+            <Pressable
+              accessibilityLabel={importantItemsButtonLabel}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: importantItemsButtonDisabled }}
+              accessible={true}
+              disabled={importantItemsButtonDisabled}
+              onPress={handleCopyImportantItems}
+              style={({ pressed }) => [
+                allImportantItemsCopied
+                  ? styles.importantItemsCopiedBtn
+                  : styles.importantItemsCopyBtn,
+                pressed && !importantItemsButtonDisabled
+                  ? styles.importantItemsCopyBtnPressed
+                  : null,
+                importantItemsButtonDisabled && !allImportantItemsCopied
+                  ? styles.importantItemsCopyBtnDisabled
+                  : null,
               ]}
             >
-              <Text style={styles.rsvpTitle}>האם תשתתף?</Text>
-              <View style={styles.rsvpRow}>
-                {RSVP_OPTIONS.map((opt) => {
-                  const isActive = currentStatus === opt.status;
-                  const disabled = event.status === 'cancelled';
-                  return (
-                    <TouchableOpacity
-                      key={opt.status}
+              <Text
+                style={
+                  allImportantItemsCopied
+                    ? styles.importantItemsCopiedBtnText
+                    : styles.importantItemsCopyBtnText
+                }
+              >
+                {importantItemsButtonLabel}
+              </Text>
+            </Pressable>
+            {importantItemsCopyError ? (
+              <Text style={styles.importantItemsCopyError}>
+                {importantItemsCopyError}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* ── Section 2: RSVP / passive state */}
+        {!skipCommunityRsvpPrompt && eventRequiresRsvp ? (
+          <View
+            style={[
+              styles.card,
+              styles.rsvpCardElevated,
+              event.status === 'cancelled' && styles.rsvpDisabled,
+            ]}
+          >
+            <Text style={styles.rsvpTitle}>האם תשתתף?</Text>
+            <View style={styles.rsvpRow}>
+              {RSVP_OPTIONS.map((opt) => {
+                const isActive = currentStatus === opt.status;
+                const rsvpDisabled = event.status === 'cancelled';
+                return (
+                  <TouchableOpacity
+                    key={opt.status}
+                    activeOpacity={0.82}
+                    disabled={rsvpDisabled}
+                    hitSlop={{
+                      top: 8,
+                      bottom: 8,
+                      left: 6,
+                      right: 6,
+                    }}
+                    style={[
+                      styles.rsvpBtn,
+                      {
+                        backgroundColor: isActive ? opt.selectedBg : '#f8fafc',
+                        borderColor: isActive ? opt.selectedBorder : '#64748b',
+                        opacity: rsvpDisabled ? 0.45 : 1,
+                      },
+                      isActive && styles.rsvpBtnSelected,
+                    ]}
+                    onPress={() => handleRsvp(opt.status)}
+                    accessible
+                    accessibilityRole="button"
+                    accessibilityLabel={opt.label}
+                    accessibilityState={{
+                      selected: isActive,
+                      disabled: rsvpDisabled,
+                    }}
+                  >
+                    <Text
                       style={[
-                        styles.rsvpBtn,
-                        {
-                          backgroundColor: isActive
-                            ? opt.activeColor
-                            : '#f3f4f6',
+                        styles.rsvpBtnText,
+                        isActive && {
+                          color: opt.selectedText,
+                          fontWeight: '800',
                         },
                       ]}
-                      onPress={
-                        disabled ? undefined : () => handleRsvp(opt.status)
-                      }
-                      accessible
-                      accessibilityRole="button"
-                      accessibilityLabel={opt.label}
-                      accessibilityState={{ selected: isActive, disabled }}
                     >
-                      <Text
-                        style={[
-                          styles.rsvpBtnText,
-                          isActive && styles.rsvpBtnTextActive,
-                        ]}
-                      >
-                        {opt.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-          ) : !isCreator ? (
-            /* Case B: no requiresRsvp + non-creator */
-            <View style={styles.card}>
-              <View style={styles.passiveRow}>
-                <Ionicons name="calendar-outline" size={18} color={PRIMARY} />
-                <Text style={styles.passiveText}>
-                  אירוע זה אינו דורש אישור הגעה
-                </Text>
-              </View>
-              {/* TODO: add "הוסף ליומן" action when calendar integration is ready */}
+          </View>
+        ) : null}
+
+        {showOpenCommunityCalendarAction ? (
+          <View style={styles.card}>
+            <View style={styles.passiveRow}>
+              <Ionicons name="people-outline" size={18} color="#94a3b8" />
+              <Text style={styles.passiveText}>פתוח לחברי הקהילה</Text>
             </View>
-          ) : null /* Case C: creator — no RSVP section */
-        }
+            <Pressable
+              accessibilityHint="מוסיף או מסיר את האירוע מהיומן האישי שלך"
+              accessibilityLabel={
+                event.isSavedToMyCalendar === true ? 'נוסף ליומן' : 'הוסף ליומן'
+              }
+              accessibilityRole="button"
+              accessibilityState={{
+                disabled: event.isSavedToMyCalendar === true,
+              }}
+              accessible={true}
+              disabled={event.isSavedToMyCalendar === true}
+              onPress={handleAddToCalendar}
+              style={({ pressed }) => [
+                event.isSavedToMyCalendar === true
+                  ? styles.openCalendarBtnSecondary
+                  : styles.openCalendarBtn,
+                pressed &&
+                  event.isSavedToMyCalendar !== true &&
+                  styles.openCalendarBtnPressed,
+              ]}
+            >
+              <Text
+                style={
+                  event.isSavedToMyCalendar === true
+                    ? styles.openCalendarBtnTextSecondary
+                    : styles.openCalendarBtnText
+                }
+              >
+                {event.isSavedToMyCalendar === true
+                  ? 'נוסף ליומן'
+                  : 'הוסף ליומן'}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {/* ── Section 3: משימות לאירוע */}
-        {eventTasks !== undefined && (
+        {eventTasks !== undefined && canSeeTasksSection && (
           <View style={styles.card}>
             {/* Header: title + assignment summary */}
             <View style={styles.taskSectionHeader}>
-              {eventTasks.length > 0 ? (
+              <Text style={styles.taskSectionTitle}>משימות לאירוע</Text>
+              {eventTasksForDisplay.length > 0 ? (
                 <Text
                   style={[
                     styles.taskSummary,
-                    assignedCount === eventTasks.length
+                    assignedCount === eventTasksForDisplay.length
                       ? styles.taskSummaryAllDone
                       : null,
                   ]}
                 >
-                  {`${assignedCount}/${eventTasks.length} הוקצו`}
+                  {`${assignedCount}/${eventTasksForDisplay.length} הוקצו`}
                 </Text>
               ) : null}
-              <Text style={styles.sectionTitle}>משימות לאירוע</Text>
             </View>
 
-            {eventTasks.length === 0 ? (
+            {canManageTasks ? (
+              <View style={styles.taskVisibilitySection}>
+                <View style={styles.taskVisibilityTextBlock}>
+                  <Text style={styles.taskVisibilityTitle}>
+                    משימות גלויות למשתתפים
+                  </Text>
+                  <Text style={styles.taskVisibilityHelper}>
+                    {participantsCanSeeTasks
+                      ? 'משתתפים יכולים לראות ולהשתבץ למשימות פנויות'
+                      : 'רק את ומנהלות האירוע רואות את המשימות'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.taskVisibilityToggleTouch}
+                  onPress={() => {
+                    updateEventTaskVisibility({
+                      eventId,
+                      tasksVisibleToParticipants: !participantsCanSeeTasks,
+                    }).catch(() =>
+                      Alert.alert('שגיאה', 'לא ניתן לעדכן נראות משימות')
+                    );
+                  }}
+                  accessible
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: participantsCanSeeTasks }}
+                  accessibilityLabel="משימות גלויות למשתתפים"
+                >
+                  <View
+                    style={[
+                      styles.taskVisibilityToggleTrack,
+                      participantsCanSeeTasks &&
+                        styles.taskVisibilityToggleTrackOn,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.taskVisibilityToggleThumb,
+                        participantsCanSeeTasks &&
+                          styles.taskVisibilityToggleThumbOn,
+                      ]}
+                    />
+                  </View>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            {eventTasksForDisplay.length === 0 ? (
               <View style={styles.emptyParticipants}>
                 <Ionicons name="list-outline" size={32} color="#d1d5db" />
                 <Text style={styles.emptyParticipantsText}>
@@ -741,15 +1116,28 @@ export default function EventDetailScreen() {
               </View>
             ) : (
               <View style={styles.tasksList}>
-                {eventTasks.map((task) => {
+                {eventTasksForDisplay.map((task) => {
                   const assigneeDisplay = (
                     task as { assigneeDisplay?: string }
                   ).assigneeDisplay?.trim();
-                  const isAssigned = !!assigneeDisplay;
+                  const isAssigned = Boolean(
+                    assigneeDisplay ||
+                      task.assignedToUserId ||
+                      task.assignedToManual?.trim()
+                  );
+                  const isAssignedToCurrentUser =
+                    task.assignedToUserId === currentUserId;
+                  const assignmentLabel = !isAssigned
+                    ? 'אני אקח'
+                    : isAssignedToCurrentUser
+                      ? 'הוקצה אליי'
+                      : assigneeDisplay
+                        ? `הוקצה ל־${assigneeDisplay}`
+                        : 'הוקצה';
                   return (
                     <View key={task._id} style={styles.taskRow}>
                       {/* Actions — left side in RTL (creator only) */}
-                      {isCreator && (
+                      {canManageTasks && (
                         <View style={styles.taskActions}>
                           <TouchableOpacity
                             onPress={() => {
@@ -808,17 +1196,135 @@ export default function EventDetailScreen() {
                         <Text style={styles.taskTitle} numberOfLines={2}>
                           {task.title}
                         </Text>
-                        {isAssigned ? (
-                          <Text
-                            style={styles.taskAssignedLabel}
-                            numberOfLines={1}
-                          >
-                            {`הוקצה ל־${assigneeDisplay}`}
-                          </Text>
+                        {canManageTasks ? (
+                          isAssigned ? (
+                            <View style={styles.taskAssignmentStatusRow}>
+                              <Text
+                                style={
+                                  isAssignedToCurrentUser
+                                    ? styles.taskAssignedLabel
+                                    : styles.taskAssignedOtherLabel
+                                }
+                                numberOfLines={1}
+                              >
+                                {assignmentLabel}
+                              </Text>
+                              {isAssignedToCurrentUser ? (
+                                <TouchableOpacity
+                                  hitSlop={{
+                                    top: 8,
+                                    bottom: 8,
+                                    left: 8,
+                                    right: 8,
+                                  }}
+                                  onPress={() =>
+                                    unclaimEventTask({ id: task._id }).catch(
+                                      () =>
+                                        Alert.alert(
+                                          'שגיאה',
+                                          'לא ניתן להסיר הקצאה כרגע'
+                                        )
+                                    )
+                                  }
+                                  style={styles.taskUnassignBtn}
+                                  accessible
+                                  accessibilityRole="button"
+                                  accessibilityLabel="בטל הקצאה"
+                                >
+                                  <Text style={styles.taskUnassignBtnText}>
+                                    בטל הקצאה
+                                  </Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          ) : (
+                            <TouchableOpacity
+                              hitSlop={{
+                                top: 8,
+                                bottom: 8,
+                                left: 8,
+                                right: 8,
+                              }}
+                              style={styles.taskClaimBtn}
+                              onPress={() =>
+                                claimEventTask({ id: task._id }).catch(() =>
+                                  Alert.alert(
+                                    'שגיאה',
+                                    'לא ניתן להשתבץ למשימה כרגע'
+                                  )
+                                )
+                              }
+                              accessible
+                              accessibilityRole="button"
+                              accessibilityLabel="אני אקח"
+                            >
+                              <Text style={styles.taskClaimBtnText}>
+                                אני אקח
+                              </Text>
+                            </TouchableOpacity>
+                          )
+                        ) : isAssigned ? (
+                          <View style={styles.taskAssignmentStatusRow}>
+                            <Text
+                              style={
+                                isAssignedToCurrentUser
+                                  ? styles.taskAssignedLabel
+                                  : styles.taskAssignedOtherLabel
+                              }
+                              numberOfLines={1}
+                            >
+                              {assignmentLabel}
+                            </Text>
+                            {isAssignedToCurrentUser ? (
+                              <TouchableOpacity
+                                hitSlop={{
+                                  top: 8,
+                                  bottom: 8,
+                                  left: 8,
+                                  right: 8,
+                                }}
+                                onPress={() =>
+                                  unclaimEventTask({ id: task._id }).catch(() =>
+                                    Alert.alert(
+                                      'שגיאה',
+                                      'לא ניתן להסיר הקצאה כרגע'
+                                    )
+                                  )
+                                }
+                                style={styles.taskUnassignBtn}
+                                accessible
+                                accessibilityRole="button"
+                                accessibilityLabel="בטל הקצאה"
+                              >
+                                <Text style={styles.taskUnassignBtnText}>
+                                  בטל הקצאה
+                                </Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
                         ) : (
-                          <Text style={styles.taskUnassignedLabel}>
-                            לא הוקצה
-                          </Text>
+                          <TouchableOpacity
+                            hitSlop={{
+                              top: 8,
+                              bottom: 8,
+                              left: 8,
+                              right: 8,
+                            }}
+                            style={styles.taskClaimBtn}
+                            onPress={() =>
+                              claimEventTask({ id: task._id }).catch(() =>
+                                Alert.alert(
+                                  'שגיאה',
+                                  'לא ניתן להשתבץ למשימה כרגע'
+                                )
+                              )
+                            }
+                            accessible
+                            accessibilityRole="button"
+                            accessibilityLabel="אני אקח"
+                          >
+                            <Text style={styles.taskClaimBtnText}>אני אקח</Text>
+                          </TouchableOpacity>
                         )}
                       </View>
                     </View>
@@ -832,52 +1338,33 @@ export default function EventDetailScreen() {
         {/* ── Section 4: משתתפים */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>משתתפים</Text>
-          {hasAnyRsvps || hasParticipants ? (
-            <>
-              {hasAnyRsvps ? (
-                <View style={styles.pillsRow}>
-                  {yesCount > 0 && (
-                    <View style={[styles.pill, styles.pillYes]}>
-                      <Text
-                        style={[styles.pillText, styles.pillYesText]}
-                      >{`מגיעים (${yesCount})`}</Text>
-                    </View>
-                  )}
-                  {maybeCount > 0 && (
-                    <View style={[styles.pill, styles.pillMaybe]}>
-                      <Text
-                        style={[styles.pillText, styles.pillMaybeText]}
-                      >{`אולי (${maybeCount})`}</Text>
-                    </View>
-                  )}
-                  {noCount > 0 && (
-                    <View style={[styles.pill, styles.pillNo]}>
-                      <Text
-                        style={[styles.pillText, styles.pillNoText]}
-                      >{`לא מגיעים (${noCount})`}</Text>
-                    </View>
-                  )}
-                </View>
-              ) : null}
-
-              {hasParticipants ? (
-                <View style={styles.participantChips}>
-                  {participantNames.map((name) => (
-                    <View key={name} style={styles.participantChip}>
-                      <Text style={styles.participantChipText}>{name}</Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
-            </>
-          ) : (
-            <View style={styles.emptyParticipants}>
-              <Ionicons name="people-outline" size={32} color="#d1d5db" />
-              <Text style={styles.emptyParticipantsText}>
-                עדיין אין תגובות לאירוע זה
-              </Text>
+          <View style={styles.pillsRow}>
+            <View style={[styles.pill, styles.pillYes]}>
+              <Text
+                style={[styles.pillText, styles.pillYesText]}
+              >{`מגיעים (${yesCount})`}</Text>
             </View>
-          )}
+            <View style={[styles.pill, styles.pillMaybe]}>
+              <Text
+                style={[styles.pillText, styles.pillMaybeText]}
+              >{`אולי (${maybeCount})`}</Text>
+            </View>
+            <View style={[styles.pill, styles.pillNo]}>
+              <Text
+                style={[styles.pillText, styles.pillNoText]}
+              >{`לא (${noCount})`}</Text>
+            </View>
+          </View>
+
+          {hasParticipants ? (
+            <View style={styles.participantChips}>
+              {participantNames.map((name) => (
+                <View key={name} style={styles.participantChip}>
+                  <Text style={styles.participantChipText}>{name}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
         </View>
       </ScrollView>
 
@@ -895,7 +1382,7 @@ export default function EventDetailScreen() {
         currentAssignee={currentAssigneeForSheet}
         members={members}
         currentUserId={currentUserId}
-        isCreator={isCreator}
+        isCreator={canManageTasks}
         manualName={manualAssigneeName}
         onManualNameChange={setManualAssigneeName}
         onSelectUser={(userId: Id<'users'>) => {
@@ -986,6 +1473,18 @@ export default function EventDetailScreen() {
           </View>
         </View>
       </Modal>
+      <RsvpBlockedByTaskDialog
+        assignedTaskCount={blockedRsvpTaskCount ?? 1}
+        onClose={() => setBlockedRsvpTaskCount(null)}
+        onConfirm={() => {
+          if (!eventId) return;
+          setBlockedRsvpTaskCount(null);
+          setRsvpNoAndUnclaimMyEventTasks({ eventId }).catch(() =>
+            Alert.alert('שגיאה', 'לא ניתן לעדכן אישור הגעה')
+          );
+        }}
+        visible={blockedRsvpTaskCount !== null}
+      />
     </SafeAreaView>
   );
 }
@@ -993,7 +1492,14 @@ export default function EventDetailScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f6f7f8' },
+  container: {
+    flex: 1,
+    backgroundColor: '#f6f7f8',
+    ...Platform.select({
+      android: { direction: 'rtl' as const },
+      default: {},
+    }),
+  },
   centered: {
     flex: 1,
     alignItems: 'center',
@@ -1020,7 +1526,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   headerIconBtn: {
     width: 36,
@@ -1039,6 +1545,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     gap: 14,
+    alignItems: 'stretch',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
@@ -1046,24 +1553,59 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
 
-  // ── Detail rows
+  // ── Detail rows (אייקון בימין, טקסט מיושר ימינה — row-reverse עקבי באנדרואיד / iOS)
   detailRow: {
-    flexDirection: 'row',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 10,
-    justifyContent: 'flex-end',
+    width: '100%',
+  },
+  locationDetailRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+  },
+  locationTextPressable: {
+    flex: 1,
+    minHeight: 44,
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 10,
+  },
+  navigateInlineBtn: {
+    minHeight: 44,
+    minWidth: 68,
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: '#E6F4FB',
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+    paddingHorizontal: 10,
+  },
+  navigateInlineBtnText: {
+    color: '#0369a1',
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   detailText: {
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     flex: 1,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   linkText: {
     fontSize: 14,
     color: PRIMARY,
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     flex: 1,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   separator: {
     height: 1,
@@ -1072,32 +1614,33 @@ const styles = StyleSheet.create({
   descriptionText: {
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     lineHeight: 22,
   },
   descriptionLabel: {
     fontSize: 15,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   scheduleRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 10,
+    width: '100%',
   },
   scheduleText: {
     flex: 1,
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '600',
   },
   reminderRows: {
     gap: 8,
   },
   reminderDisplayRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#e8f5fd',
@@ -1109,7 +1652,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: PRIMARY,
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     fontWeight: '600',
   },
 
@@ -1118,7 +1661,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   attachmentRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 10,
     borderRadius: 12,
@@ -1134,40 +1677,62 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   attachmentMeta: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
 
   // ── RSVP
+  rsvpCardElevated: {
+    zIndex: 2,
+    elevation: 4,
+    gap: 10,
+  },
   rsvpTitle: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
+    alignSelf: 'stretch',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   rsvpRow: {
-    flexDirection: 'row',
-    gap: 8,
+    flexDirection: HEB_ROW,
+    gap: 6,
+    alignItems: 'stretch',
+    alignSelf: 'stretch',
+    width: '100%',
   },
   rsvpBtn: {
     flex: 1,
-    height: 44,
-    borderRadius: 12,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  rsvpBtnSelected: {
+    elevation: 3,
+    shadowOpacity: 0.12,
   },
   rsvpBtnText: {
-    fontSize: 15,
-    color: '#6b7280',
-    fontWeight: '600',
-  },
-  rsvpBtnTextActive: {
-    color: '#fff',
+    fontSize: 14,
+    color: '#334155',
     fontWeight: '700',
+    lineHeight: 18,
+    textAlign: 'center',
+    includeFontPadding: false,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   rsvpDisabled: { opacity: 0.4 },
 
@@ -1180,21 +1745,21 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   cancelledBannerRow: {
-    flexDirection: 'row',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 6,
-    justifyContent: 'flex-end',
+    width: '100%',
   },
   cancelledBannerTitle: {
     fontSize: 15,
     fontWeight: '700',
     color: '#dc2626',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   cancelledBannerReason: {
     fontSize: 13,
     color: '#dc2626',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
 
   // ── Cancel dialog
@@ -1211,14 +1776,14 @@ const styles = StyleSheet.create({
   cancelDialogTitle: {
     fontSize: 18,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     color: '#111827',
   },
   cancelDialogBody: {
     marginTop: 8,
     fontSize: 14,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   cancelDialogInput: {
     marginTop: 16,
@@ -1269,8 +1834,132 @@ const styles = StyleSheet.create({
   passiveText: {
     fontSize: 14,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
     flex: 1,
+  },
+  openCalendarBtn: {
+    marginTop: 14,
+    backgroundColor: PRIMARY,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  openCalendarBtnSecondary: {
+    marginTop: 14,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderWidth: 2,
+    borderColor: '#7dd3fc',
+  },
+  openCalendarBtnPressed: {
+    opacity: 0.9,
+  },
+  openCalendarBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  openCalendarBtnTextSecondary: {
+    color: '#0369a1',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
+  // ── Important items
+  importantItemsList: {
+    gap: 8,
+    width: '100%',
+  },
+  importantItemsHeaderChip: {
+    alignSelf: HEB_FLEX_END,
+    backgroundColor: '#E6F4FB',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#BAE6FD',
+  },
+  importantItemsHeaderChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0369a1',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  importantItemRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'flex-start',
+    gap: 8,
+    width: '100%',
+  },
+  importantItemBullet: {
+    fontSize: 16,
+    color: PRIMARY,
+    lineHeight: 22,
+  },
+  importantItemText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#374151',
+    textAlign: HEB_TEXT_ALIGN,
+    lineHeight: 22,
+    fontWeight: '500',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  importantItemsCopyBtn: {
+    marginTop: 4,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderWidth: 2,
+    borderColor: PRIMARY,
+  },
+  importantItemsCopiedBtn: {
+    marginTop: 4,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderWidth: 2,
+    borderColor: '#7dd3fc',
+  },
+  importantItemsCopyBtnPressed: {
+    opacity: 0.9,
+  },
+  importantItemsCopyBtnDisabled: {
+    opacity: 0.55,
+  },
+  importantItemsCopyBtnText: {
+    color: '#0369a1',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  importantItemsCopiedBtnText: {
+    color: '#64748b',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  importantItemsCopyError: {
+    fontSize: 13,
+    color: '#ef4444',
+    textAlign: HEB_TEXT_ALIGN,
   },
 
   // ── Participants
@@ -1278,7 +1967,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
   },
   pillsRow: {
     flexDirection: 'row',
@@ -1330,44 +2019,170 @@ const styles = StyleSheet.create({
 
   // ── Tasks
   taskSectionHeader: {
+    flexDirection: HEB_ROW,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+  },
+  taskSectionTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: HEB_TEXT_ALIGN,
+  },
+  taskVisibilitySection: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f3f4f6',
+    marginBottom: 4,
+  },
+  taskVisibilityTextBlock: {
+    flex: 1,
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  taskVisibilityTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: HEB_TEXT_ALIGN,
+  },
+  taskVisibilityHelper: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: HEB_TEXT_ALIGN,
+  },
+  taskVisibilityToggleTouch: {
+    minWidth: 52,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskVisibilityToggleTrack: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#d1d5db',
+    padding: 3,
+    justifyContent: 'center',
+  },
+  taskVisibilityToggleTrackOn: {
+    backgroundColor: PRIMARY,
+  },
+  taskVisibilityToggleThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    alignSelf: 'flex-start',
+  },
+  taskVisibilityToggleThumbOn: {
+    alignSelf: 'flex-end',
   },
   taskSummary: {
     fontSize: 13,
     color: '#9ca3af',
     fontWeight: '600',
+    textAlign: 'left',
   },
   taskSummaryAllDone: {
     color: '#16a34a',
   },
   tasksList: { gap: 0 },
   taskRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 10,
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f3f4f6',
+    width: '100%',
   },
-  taskContent: { flex: 1, gap: 3 },
+  taskContent: {
+    flex: 1,
+    alignItems: 'stretch',
+    gap: 6,
+    minWidth: 0,
+  },
   taskTitle: {
+    alignSelf: 'stretch',
     fontSize: 14,
     fontWeight: '500',
     color: '#374151',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskAssignedLabel: {
+    alignSelf: 'stretch',
     fontSize: 12,
     color: PRIMARY,
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  taskAssignedOtherLabel: {
+    alignSelf: 'stretch',
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '600',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskUnassignedLabel: {
+    alignSelf: 'stretch',
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  taskAssignmentAction: {
+    minHeight: 32,
+    justifyContent: 'center',
+    alignSelf: HEB_FLEX_END,
+    alignItems: HEB_FLEX_END,
+  },
+  taskAssignmentStatusRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    alignSelf: 'stretch',
+    gap: 10,
+  },
+  taskClaimBtn: {
+    minHeight: 32,
+    alignSelf: HEB_FLEX_END,
+    alignItems: HEB_FLEX_END,
+    justifyContent: 'center',
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 0,
+    paddingVertical: 4,
+  },
+  taskClaimBtnText: {
+    color: PRIMARY,
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  taskUnassignBtn: {
+    minHeight: 32,
+    justifyContent: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  taskUnassignBtnText: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskActions: {
     flexDirection: 'row',
@@ -1427,6 +2242,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f3f4f6',
   },
-  popoverLabel: { fontSize: 15, color: '#374151', textAlign: 'right', flex: 1 },
+  popoverLabel: {
+    fontSize: 15,
+    color: '#374151',
+    textAlign: HEB_TEXT_ALIGN,
+    flex: 1,
+  },
   popoverDanger: { color: '#ef4444' },
 });

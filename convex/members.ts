@@ -60,8 +60,12 @@ export async function resolveMySpaceId(
     .query('members')
     .withIndex('by_user', (q) => q.eq('userId', userId))
     .collect();
-  const memberRow = rows.find((r) => r.role === 'member' && resolveKind(r) === 'access');
-  const adminRow = rows.find((r) => r.role === 'admin' && resolveKind(r) === 'access');
+  const memberRow = rows.find(
+    (r) => r.role === 'member' && resolveKind(r) === 'access'
+  );
+  const adminRow = rows.find(
+    (r) => r.role === 'admin' && resolveKind(r) === 'access'
+  );
   const spaceRow = memberRow ?? adminRow;
   return spaceRow?.spaceId ?? null;
 }
@@ -137,7 +141,9 @@ export const matchOnPhone = internalMutation({
 
     // Also update the familyContacts blob on each affected space owner so
     // OnboardingContext hydration (getMyProfile) still works without a migration.
-    const affectedSpaceIds = [...new Set(matchingMembers.map((m) => m.spaceId))];
+    const affectedSpaceIds = [
+      ...new Set(matchingMembers.map((m) => m.spaceId)),
+    ];
     for (const spaceId of affectedSpaceIds) {
       const space = await ctx.db.get(spaceId);
       if (!space?.ownerId) continue;
@@ -191,16 +197,29 @@ export const listMyFamilyContacts = query({
       .query('members')
       .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
       .collect();
-    console.log('[DEBUG] ALL rows in space (no filter):', JSON.stringify(allRowsInSpace.map(r => ({
-      _id: r._id,
-      kind: r.kind,
-      role: r.role,
-      displayName: r.displayName,
-      userId: r.userId,
-    }))));
-    console.log('[DEBUG YANIV] ALL rows in Yaniv space:', JSON.stringify(
-      allRowsInSpace.map(r => ({ _id: r._id, kind: r.kind, role: r.role, displayName: r.displayName }))
-    ));
+    console.log(
+      '[DEBUG] ALL rows in space (no filter):',
+      JSON.stringify(
+        allRowsInSpace.map((r) => ({
+          _id: r._id,
+          kind: r.kind,
+          role: r.role,
+          displayName: r.displayName,
+          userId: r.userId,
+        }))
+      )
+    );
+    console.log(
+      '[DEBUG YANIV] ALL rows in Yaniv space:',
+      JSON.stringify(
+        allRowsInSpace.map((r) => ({
+          _id: r._id,
+          kind: r.kind,
+          role: r.role,
+          displayName: r.displayName,
+        }))
+      )
+    );
 
     // Primary path: use by_kind index for rows that have kind stamped
     const indexedEntities = await ctx.db
@@ -211,9 +230,17 @@ export const listMyFamilyContacts = query({
       .collect();
 
     console.log('[DEBUG YANIV] by_kind entity rows:', indexedEntities.length);
-    console.log('[DEBUG YANIV] entity rows detail:', JSON.stringify(
-      indexedEntities.map(r => ({ _id: r._id, displayName: r.displayName, kind: r.kind, spaceId: r.spaceId }))
-    ));
+    console.log(
+      '[DEBUG YANIV] entity rows detail:',
+      JSON.stringify(
+        indexedEntities.map((r) => ({
+          _id: r._id,
+          displayName: r.displayName,
+          kind: r.kind,
+          spaceId: r.spaceId,
+        }))
+      )
+    );
 
     // Fallback path: rows without kind field — resolve inline for backward-compat
     // (will be empty after backfillKind runs once)
@@ -221,7 +248,17 @@ export const listMyFamilyContacts = query({
       .query('members')
       .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
       .collect();
-    console.log('[DEBUG] all rows in space:', JSON.stringify(allRows.map(r => ({ _id: r._id, kind: r.kind, role: r.role, displayName: r.displayName }))));
+    console.log(
+      '[DEBUG] all rows in space:',
+      JSON.stringify(
+        allRows.map((r) => ({
+          _id: r._id,
+          kind: r.kind,
+          role: r.role,
+          displayName: r.displayName,
+        }))
+      )
+    );
 
     const unstampedEntities = allRows.filter(
       (r) => r.kind === undefined && resolveKind(r) === 'entity'
@@ -268,13 +305,20 @@ export const listMyFamilyContacts = query({
         ? await ctx.db.get(adminAccessRow.userId)
         : null;
       if (adminUser) {
-        const adminPhone = (adminUser as unknown as { phone?: string }).phone ?? undefined;
+        const adminPhone =
+          (adminUser as unknown as { phone?: string }).phone ?? undefined;
         // FIXED: phone numbers converted to local Israeli format before masking
-        const adminPhoneLocal = adminPhone ? e164ToLocal(adminPhone) : undefined;
+        const adminPhoneLocal = adminPhone
+          ? e164ToLocal(adminPhone)
+          : undefined;
         adminEntry = {
           _id: adminAccessRow._id,
-          displayName: (adminUser as unknown as { fullName?: string }).fullName ?? 'מנהל/ת המשפחה',
-          color: (adminUser as unknown as { profileColor?: string }).profileColor ?? '#36a9e2',
+          displayName:
+            (adminUser as unknown as { fullName?: string }).fullName ??
+            'מנהל/ת המשפחה',
+          color:
+            (adminUser as unknown as { profileColor?: string }).profileColor ??
+            '#36a9e2',
           selectedPhoneNumber: adminPhone,
           maskedPhone: adminPhoneLocal ? maskPhone(adminPhoneLocal) : undefined,
           matchedUserId: adminAccessRow.userId,
@@ -370,7 +414,10 @@ export const getMySpaceRole = query({
 // ── requireSpaceAdmin ─────────────────────────────────────────────────────────
 // FIXED: permission guard helper for admin-only mutations
 // Throws PERMISSION_DENIED if the caller is not an admin-kind access row for the space.
-async function requireSpaceAdmin(ctx: MutationCtx, spaceId: string): Promise<void> {
+async function requireSpaceAdmin(
+  ctx: MutationCtx,
+  spaceId: string
+): Promise<void> {
   const userId = await getAuthUserId(ctx);
   if (!userId) throw new Error(PERMISSION_DENIED);
 
@@ -381,9 +428,7 @@ async function requireSpaceAdmin(ctx: MutationCtx, spaceId: string): Promise<voi
 
   const accessRow = rows.find(
     (r) =>
-      r.spaceId === spaceId &&
-      resolveKind(r) === 'access' &&
-      r.role === 'admin'
+      r.spaceId === spaceId && resolveKind(r) === 'access' && r.role === 'admin'
   );
 
   if (!accessRow) throw new Error(PERMISSION_DENIED);
@@ -506,17 +551,23 @@ export const backfillEntityRows = internalMutation({
     const now = Date.now();
 
     for (const user of allUsers) {
-      const contacts = (user as unknown as { familyContacts?: unknown }).familyContacts;
+      const contacts = (user as unknown as { familyContacts?: unknown })
+        .familyContacts;
       if (!Array.isArray(contacts) || contacts.length === 0) continue;
 
       // Find this user's admin access row to get their spaceId
       const adminRow = allMemberRows.find(
-        (r) => r.userId === user._id && r.role === 'admin' && resolveKind(r) === 'access'
+        (r) =>
+          r.userId === user._id &&
+          r.role === 'admin' &&
+          resolveKind(r) === 'access'
       );
       if (!adminRow?.spaceId) continue;
 
       const spaceId = adminRow.spaceId;
-      const existingInSpace = allMemberRows.filter((r) => r.spaceId === spaceId);
+      const existingInSpace = allMemberRows.filter(
+        (r) => r.spaceId === spaceId
+      );
 
       usersProcessed++;
 
@@ -524,12 +575,20 @@ export const backfillEntityRows = internalMutation({
         const isManual = !contact.selectedPhoneNumber;
 
         if (isManual) {
-          const displayName = (contact.name ?? contact.displayName) as string | undefined;
+          const displayName = (contact.name ?? contact.displayName) as
+            | string
+            | undefined;
           if (!displayName) continue;
           const exists = existingInSpace.find(
-            (m) => resolveKind(m) === 'entity' && !m.selectedPhoneNumber && m.displayName === displayName
+            (m) =>
+              resolveKind(m) === 'entity' &&
+              !m.selectedPhoneNumber &&
+              m.displayName === displayName
           );
-          if (exists) { alreadyExisted++; continue; }
+          if (exists) {
+            alreadyExisted++;
+            continue;
+          }
           await ctx.db.insert('members', {
             spaceId,
             role: 'member',
@@ -541,14 +600,23 @@ export const backfillEntityRows = internalMutation({
           });
           entityRowsCreated++;
         } else {
-          const normalizedPhone = normalizeToE164(contact.selectedPhoneNumber as string);
+          const normalizedPhone = normalizeToE164(
+            contact.selectedPhoneNumber as string
+          );
           if (!normalizedPhone) continue;
           const exists = existingInSpace.find(
-            (m) => resolveKind(m) === 'entity' && m.selectedPhoneNumber === normalizedPhone
+            (m) =>
+              resolveKind(m) === 'entity' &&
+              m.selectedPhoneNumber === normalizedPhone
           );
-          if (exists) { alreadyExisted++; continue; }
+          if (exists) {
+            alreadyExisted++;
+            continue;
+          }
           const matchedId = contact.matchedUserId as Id<'users'> | undefined;
-          const displayName = (contact.name ?? contact.displayName) as string | undefined;
+          const displayName = (contact.name ?? contact.displayName) as
+            | string
+            | undefined;
           await ctx.db.insert('members', {
             spaceId,
             role: 'member',
@@ -557,7 +625,8 @@ export const backfillEntityRows = internalMutation({
             displayName,
             color: contact.color as string | undefined,
             selectedPhoneNumber: normalizedPhone,
-            inviteStatus: (contact.inviteStatus as 'none' | 'invited' | 'joined') ?? 'none',
+            inviteStatus:
+              (contact.inviteStatus as 'none' | 'invited' | 'joined') ?? 'none',
             matchedUserId: matchedId,
             userId: matchedId,
           });

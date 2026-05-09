@@ -22,9 +22,7 @@
         "ITSAppUsesNonExemptEncryption": false,
         "LSApplicationQueriesSchemes": ["whatsapp"]
       },
-      "associatedDomains": [
-        "applinks:inyomi.app"
-      ]
+      "associatedDomains": ["applinks:inyomi.app"]
     },
     "android": {
       "package": "com.shakedkr.inyomi",
@@ -46,6 +44,11 @@
               "scheme": "https",
               "host": "inyomi.app",
               "pathPrefix": "/join/"
+            },
+            {
+              "scheme": "https",
+              "host": "inyomi.app",
+              "pathPrefix": "/e/"
             }
           ],
           "category": ["BROWSABLE", "DEFAULT"]

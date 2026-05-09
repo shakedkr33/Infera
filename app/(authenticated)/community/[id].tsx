@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation, useQuery } from 'convex/react';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useConvex, useMutation, useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -17,17 +16,33 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  type GestureResponderEvent,
+  type StyleProp,
+  type TextStyle,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import {
+  getOpenCommunityCalendarActionLabel,
+  isOpenCommunityCalendarActionVisible,
+} from '@/lib/openCommunityCalendarUi';
+import { getConvexErrorCode } from '@/lib/utils/convexError';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRIMARY = '#36a9e2';
 const NOW_PLUS_60_DAYS = () => Date.now() + 60 * 24 * 60 * 60 * 1000;
+const CALENDAR_REMOVE_CONFIRM_TITLE = 'להסיר מהיומן?';
+const CALENDAR_REMOVE_CONFIRM_MESSAGE =
+  'שימי לב, הוקצו לך משימות באירוע הזה. האירוע יוסר מהיומן שלך, אבל המשימות עדיין יופיעו במסך המשימות.';
+const CALENDAR_REMOVE_CONFIRMATION_CODE =
+  'CALENDAR_REMOVE_REQUIRES_ACTIVE_TASK_CONFIRMATION';
 
 const TABS = ['הכל', 'אירועים', 'תזכורות', 'פעילות'] as const;
 type Tab = (typeof TABS)[number];
@@ -44,11 +59,19 @@ const EVENT_COLORS = [
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type RsvpStatus = 'yes' | 'no' | 'maybe' | 'none';
-type TaskSummary = { total: number; assigned: number };
+type TaskSummary = {
+  total: number;
+  assigned: number;
+  totalTasksCount: number;
+  assignedTasksCount: number;
+  myAssignedTasks: Array<{ id: Id<'eventTasks'>; title: string }>;
+  hasMyAssignedTasks: boolean;
+};
 
 interface EventDoc {
   _id: Id<'events'>;
   title: string;
+  category?: string;
   startTime: number;
   endTime: number;
   allDay?: boolean;
@@ -56,10 +79,14 @@ interface EventDoc {
   description?: string;
   communityId?: Id<'communities'>;
   requiresRsvp?: boolean;
+  tasksVisibleToParticipants?: boolean;
   createdBy?: Id<'users'>;
   status?: 'active' | 'cancelled';
   cancelledAt?: number;
   cancelReason?: string;
+  /** Open community events: personal calendar / "הסר מהיומן" (from Convex) */
+  isSavedToMyCalendar?: boolean;
+  importantItems?: Array<{ id: string; title: string }>;
 }
 
 interface TaskDoc {
@@ -91,6 +118,18 @@ function isEventPast(event: EventDoc): boolean {
   return event.endTime < now;
 }
 
+function uniqueById<T>(items: readonly T[], getId: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    const id = getId(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(item);
+  }
+  return unique;
+}
+
 function formatEventDate(ts: number, allDay?: boolean): string {
   const d = new Date(ts);
   if (allDay) {
@@ -104,15 +143,24 @@ function formatEventDate(ts: number, allDay?: boolean): string {
   });
 }
 
-function formatEventDateTime(ts: number, allDay?: boolean): string {
-  const d = new Date(ts);
-  const day = d.toLocaleDateString('he-IL', { day: 'numeric', month: 'long' });
-  if (allDay) return day;
-  const time = d.toLocaleTimeString('he-IL', {
+function formatFlyerDate(ts: number): string {
+  return new Date(ts).toLocaleDateString('he-IL', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+function formatFlyerTime(event: EventDoc): string {
+  if (event.allDay) return 'כל היום';
+  return `${new Date(event.startTime).toLocaleTimeString('he-IL', {
     hour: '2-digit',
     minute: '2-digit',
-  });
-  return `${day} • ${time}`;
+  })} — ${new Date(event.endTime).toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })}`;
 }
 
 function formatDueDate(ts: number): string {
@@ -128,6 +176,118 @@ function formatDueDate(ts: number): string {
     day: 'numeric',
     month: 'short',
   });
+}
+
+interface TaskSummaryLineProps {
+  taskSummary: TaskSummary;
+  copy: 'full' | 'compact';
+  style: StyleProp<TextStyle>;
+  doneStyle?: StyleProp<TextStyle>;
+}
+
+function TaskSummaryLine({
+  taskSummary,
+  copy,
+  style,
+  doneStyle,
+}: TaskSummaryLineProps) {
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const assignedTasksCount =
+    taskSummary.assignedTasksCount ?? taskSummary.assigned;
+  const totalTasksCount = taskSummary.totalTasksCount ?? taskSummary.total;
+  const myTaskTitles = taskSummary.myAssignedTasks
+    .map((task) => task.title.trim())
+    .filter((title) => title.length > 0);
+  const hasMyAssignedTasks =
+    taskSummary.hasMyAssignedTasks && myTaskTitles.length > 0;
+  const baseText =
+    copy === 'full'
+      ? `${assignedTasksCount}/${totalTasksCount} משימות הוקצו`
+      : `${assignedTasksCount}/${totalTasksCount} הוקצו`;
+
+  const handleTaskLinePress = useCallback(
+    (event: GestureResponderEvent): void => {
+      event.stopPropagation();
+      setTooltipVisible((visible) => !visible);
+    },
+    []
+  );
+
+  const handleTooltipPress = useCallback(
+    (event: GestureResponderEvent): void => {
+      event.stopPropagation();
+    },
+    []
+  );
+
+  const lineText = (
+    <Text
+      numberOfLines={1}
+      style={[style, assignedTasksCount === totalTasksCount ? doneStyle : null]}
+    >
+      {baseText}
+      {hasMyAssignedTasks ? ' · ' : ''}
+      {hasMyAssignedTasks ? (
+        <Text style={styles.myTasksIndicator}>גם לך</Text>
+      ) : null}
+    </Text>
+  );
+
+  return (
+    <>
+      {hasMyAssignedTasks ? (
+        <Pressable
+          accessibilityHint="פותח את המשימות שלך באירוע"
+          accessibilityLabel="גם לך יש משימות באירוע"
+          accessibilityRole="button"
+          hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
+          onPress={handleTaskLinePress}
+          style={styles.taskSummaryPressable}
+        >
+          {lineText}
+        </Pressable>
+      ) : (
+        lineText
+      )}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setTooltipVisible(false)}
+        transparent
+        visible={tooltipVisible}
+      >
+        <Pressable
+          onPress={() => setTooltipVisible(false)}
+          style={styles.myTasksTooltipBackdrop}
+        >
+          <Pressable
+            accessible={true}
+            accessibilityLabel="המשימות שלך"
+            onPress={handleTooltipPress}
+            style={styles.myTasksTooltip}
+          >
+            {myTaskTitles.length === 1 ? (
+              <Text numberOfLines={3} style={styles.myTasksTooltipText}>
+                {`המשימה שלך: ${myTaskTitles[0]}`}
+              </Text>
+            ) : (
+              <>
+                <Text style={styles.myTasksTooltipTitle}>המשימות שלך:</Text>
+                {myTaskTitles.map((title, index) => (
+                  <Text
+                    key={`${title}-${index}`}
+                    numberOfLines={2}
+                    style={styles.myTasksTooltipText}
+                  >
+                    {`• ${title}`}
+                  </Text>
+                ))}
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </>
+  );
 }
 
 // ─── RSVP Bottom Sheet ────────────────────────────────────────────────────────
@@ -227,6 +387,7 @@ interface AddPopoverMenuProps {
   visible: boolean;
   position: { x: number; y: number };
   communityId: string;
+  canCreateCommunityEvent: boolean;
   onClose: () => void;
 }
 
@@ -234,6 +395,7 @@ function AddPopoverMenu({
   visible,
   position,
   communityId,
+  canCreateCommunityEvent,
   onClose,
 }: AddPopoverMenuProps) {
   const router = useRouter();
@@ -242,25 +404,31 @@ function AddPopoverMenu({
     <Modal visible transparent animationType="none" onRequestClose={onClose}>
       <Pressable style={styles.popoverBackdrop} onPress={onClose} />
       <View style={[styles.popover, { top: position.y, left: position.x }]}>
+        {canCreateCommunityEvent ? (
+          <Pressable
+            style={[styles.popoverItem, styles.popoverBorder]}
+            onPress={() => {
+              onClose();
+              router.push(
+                `/(authenticated)/event/new?communityId=${communityId}` as Parameters<
+                  typeof router.push
+                >[0]
+              );
+            }}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="אירוע חדש"
+          >
+            <Text style={styles.popoverLabel}>אירוע חדש</Text>
+            <Ionicons name="calendar-outline" size={18} color="#374151" />
+          </Pressable>
+        ) : null}
         <Pressable
-          style={[styles.popoverItem, styles.popoverBorder]}
-          onPress={() => {
-            onClose();
-            router.push(
-              `/(authenticated)/event/new?communityId=${communityId}` as Parameters<
-                typeof router.push
-              >[0]
-            );
-          }}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="אירוע חדש"
-        >
-          <Text style={styles.popoverLabel}>אירוע חדש</Text>
-          <Ionicons name="calendar-outline" size={18} color="#374151" />
-        </Pressable>
-        <Pressable
-          style={styles.popoverItem}
+          style={
+            canCreateCommunityEvent
+              ? styles.popoverItem
+              : [styles.popoverItem, styles.popoverSingleItem]
+          }
           onPress={() => {
             onClose();
             router.push(
@@ -281,118 +449,328 @@ function AddPopoverMenu({
   );
 }
 
-// ─── EventCard ────────────────────────────────────────────────────────────────
+type FlyerVariant = {
+  bg: string;
+  border: string;
+  pillBg: string;
+  pillText: string;
+  divider: string;
+  meta: string;
+  buttonBg: string;
+  buttonText: string;
+};
 
-interface EventCardProps {
+const FLYER_VARIANTS: FlyerVariant[] = [
+  {
+    bg: '#f8f2ec',
+    border: '#eadfce',
+    pillBg: '#efe3d5',
+    pillText: '#7a5c3f',
+    divider: '#9a8268',
+    meta: '#7c6b5a',
+    buttonBg: '#e9ddd0',
+    buttonText: '#5f4a35',
+  },
+  {
+    bg: '#f6eef2',
+    border: '#ead7e1',
+    pillBg: '#eedde7',
+    pillText: '#7a4b63',
+    divider: '#9a6f84',
+    meta: '#7a5d6d',
+    buttonBg: '#eadbe4',
+    buttonText: '#5f3f52',
+  },
+  {
+    bg: '#eff4f6',
+    border: '#dbe6eb',
+    pillBg: '#dde9ee',
+    pillText: '#4a6878',
+    divider: '#6a8593',
+    meta: '#5e7480',
+    buttonBg: '#dce8ee',
+    buttonText: '#32505d',
+  },
+  {
+    bg: '#f5f3ef',
+    border: '#e8e3db',
+    pillBg: '#ebe6dd',
+    pillText: '#6d6558',
+    divider: '#8a8276',
+    meta: '#6f695f',
+    buttonBg: '#e8e3db',
+    buttonText: '#554f45',
+  },
+];
+
+interface CommunityEventFlyerCardProps {
   event: EventDoc;
   rsvpStatus: RsvpStatus;
-  currentUserId?: Id<'users'>;
-  isCancelled?: boolean;
   taskSummary?: TaskSummary;
+  cardWidth: number;
   onOpenDetails: (eventId: Id<'events'>) => void;
+  onRsvpSelect: (eventId: Id<'events'>, status: RsvpStatus) => Promise<void>;
+  /** Owner/admin/creator: always "לפרטים", no inline RSVP */
+  flyerDetailsOnly?: boolean;
+  /** When false for participants, hide X/Y task counts (tasks not visible to them). */
+  showTaskMetrics?: boolean;
+  isSavedToMyCalendar?: boolean;
+  onCalendarToggle?: (eventId: Id<'events'>) => void | Promise<void>;
+  /** false for pending / non-active members (no personal calendar for community events) */
+  viewerIsActiveCommunityMember?: boolean;
+  communityArchived?: boolean;
 }
 
-function EventCard({
+function CommunityEventFlyerCard({
   event,
   rsvpStatus,
-  currentUserId,
-  isCancelled,
   taskSummary,
+  cardWidth,
   onOpenDetails,
-}: EventCardProps) {
-  const color = getEventColor(event._id);
-  const isCreator =
-    currentUserId !== undefined && event.createdBy === currentUserId;
+  onRsvpSelect,
+  flyerDetailsOnly = false,
+  isSavedToMyCalendar = false,
+  onCalendarToggle,
+  viewerIsActiveCommunityMember = true,
+  communityArchived = false,
+}: CommunityEventFlyerCardProps) {
+  const [showInlineChoices, setShowInlineChoices] = useState(false);
+  const variant =
+    FLYER_VARIANTS[Math.abs(event._id.length) % FLYER_VARIANTS.length];
+  const isOpenCommunityEvent = event.requiresRsvp === false;
+  /** Invitee has not chosen yet — CTA ממתין לאישור opens inline choices */
+  const showInviteePendingCta =
+    !flyerDetailsOnly && !isOpenCommunityEvent && rsvpStatus === 'none';
+  /** Invitee chose yes/maybe/no — can change inline without locking after yes */
+  const showMemberChangeRsvpCta =
+    !flyerDetailsOnly && !isOpenCommunityEvent && rsvpStatus !== 'none';
+  const showInlineRsvpRow =
+    showInlineChoices && (showInviteePendingCta || showMemberChangeRsvpCta);
+  const rawCategory = event.category?.trim();
+  const showCategoryPill = Boolean(rawCategory && rawCategory.length > 0);
+  const dateLabel = formatFlyerDate(event.startTime);
+  const timeLabel = formatFlyerTime(event);
+  const locationLabel = event.location?.trim() || 'מיקום יתעדכן בהמשך';
+  const importantItemsCount = event.importantItems?.length ?? 0;
+  const showImportantItemsChip = importantItemsCount > 0;
+  const rsvpMeta = isOpenCommunityEvent
+    ? 'פתוח לחברי הקהילה'
+    : rsvpStatus === 'yes'
+      ? 'אישרת הגעה'
+      : rsvpStatus === 'no'
+        ? 'סימנת לא'
+        : rsvpStatus === 'maybe'
+          ? 'סימנת אולי'
+          : 'נדרש אישור הגעה';
+  const taskTotal = taskSummary?.totalTasksCount ?? taskSummary?.total ?? 0;
+  const taskCopy = cardWidth < 176 ? 'compact' : 'full';
+  useEffect(() => {
+    if (rsvpStatus !== 'none') setShowInlineChoices(false);
+  }, [rsvpStatus]);
 
-  // Badge — when isCancelled: always "בוטל"; else when requiresRsvp and not creator: RSVP badge
-  let badgeLabel = '';
-  let badgeColor = '';
-  if (isCancelled) {
-    badgeLabel = 'בוטל';
-    badgeColor = '#fee2e2';
-  } else if (event.requiresRsvp && !isCreator) {
-    if (rsvpStatus === 'yes') {
-      badgeLabel = 'נוסף ליומן ✓';
-      badgeColor = '#22c55e';
-    } else if (rsvpStatus === 'maybe') {
-      badgeLabel = 'אולי';
-      badgeColor = '#eab308';
-    } else {
-      badgeLabel = 'ממתין לאישור';
-      badgeColor = '#eab308';
-    }
-  }
-
-  const dateStr = formatEventDateTime(event.startTime, event.allDay);
+  const isCancelledEvent = event.status === 'cancelled';
+  const openCalendarActionLabel =
+    getOpenCommunityCalendarActionLabel(isSavedToMyCalendar);
+  const showOpenCalendarCta =
+    onCalendarToggle !== undefined &&
+    isOpenCommunityCalendarActionVisible({
+      event: {
+        communityId: event.communityId ?? null,
+        requiresRsvp: event.requiresRsvp,
+        status: event.status,
+      },
+      hasValidConvexEventId: true,
+      communityArchived,
+      viewerIsActiveMember: viewerIsActiveCommunityMember,
+    });
 
   return (
-    <Pressable
-      style={[styles.eventCard, isCancelled && { opacity: 0.6 }]}
-      onPress={() => onOpenDetails(event._id)}
-      accessible
-      accessibilityRole="button"
-      accessibilityLabel={event.title}
+    <View
+      style={[
+        styles.flyerCard,
+        {
+          width: cardWidth,
+          backgroundColor: variant.bg,
+          borderColor: variant.border,
+        },
+        isCancelledEvent ? { opacity: 0.68 } : null,
+      ]}
     >
-      {/* Solid color base */}
-      <View
-        style={[StyleSheet.absoluteFillObject, { backgroundColor: color }]}
-      />
-
-      {/* Gradient overlay — transparent top to dark bottom */}
-      <LinearGradient
-        colors={['transparent', 'rgba(0,0,0,0.82)']}
-        locations={[0.4, 1]}
-        style={StyleSheet.absoluteFillObject}
-      />
-
-      {/* Badge — absolute top-right */}
-      {badgeLabel !== '' && (
-        <View
-          style={[
-            styles.eventCardBadge,
-            { backgroundColor: badgeColor },
-            isCancelled && styles.eventCardBadgeCancelled,
-          ]}
-        >
-          <Text
-            style={[
-              styles.eventCardBadgeText,
-              isCancelled && styles.eventCardBadgeTextCancelled,
-            ]}
-          >
-            {badgeLabel}
-          </Text>
-        </View>
-      )}
-
-      {/* Bottom content */}
-      <View style={styles.eventCardBottom}>
-        <Text style={styles.eventCardTitle} numberOfLines={2}>
+      <Pressable
+        style={styles.flyerCardBody}
+        onPress={() => onOpenDetails(event._id)}
+        accessible
+        accessibilityRole="button"
+        accessibilityLabel={`פרטי אירוע ${event.title}`}
+      >
+        {showCategoryPill ? (
+          <View style={[styles.flyerPill, { backgroundColor: variant.pillBg }]}>
+            <Text
+              style={[styles.flyerPillText, { color: variant.pillText }]}
+              numberOfLines={1}
+            >
+              {rawCategory}
+            </Text>
+          </View>
+        ) : null}
+        <Text style={styles.flyerTitle} numberOfLines={2}>
           {event.title}
         </Text>
-        <Text style={styles.eventCardMeta}>{dateStr}</Text>
-        {event.location ? (
-          <Text style={styles.eventCardMeta} numberOfLines={1}>
-            {event.location}
-          </Text>
-        ) : null}
-        {rsvpStatus === 'yes' ? (
-          <Text style={styles.eventCardConfirmed}>אישרת הגעה ✓</Text>
-        ) : null}
-        {taskSummary && taskSummary.total > 0 ? (
-          <Text
+        <View style={styles.flyerImportantItemsSlot}>
+          {showImportantItemsChip ? (
+            <View style={styles.flyerImportantItemsChip}>
+              <Text style={styles.flyerImportantItemsChipText}>
+                {`📌 חשוב לזכור · ${importantItemsCount}`}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.flyerDividerRow}>
+          <View
             style={[
-              styles.eventCardTaskSummary,
-              taskSummary.assigned === taskSummary.total
-                ? styles.eventCardTaskSummaryDone
-                : null,
+              styles.flyerDividerLine,
+              { backgroundColor: variant.divider },
+            ]}
+          />
+          <Text
+            style={[styles.flyerDividerDiamond, { color: variant.divider }]}
+          >
+            ✦
+          </Text>
+          <View
+            style={[
+              styles.flyerDividerLine,
+              { backgroundColor: variant.divider },
+            ]}
+          />
+        </View>
+        <Text style={styles.flyerDate}>{dateLabel}</Text>
+        <Text style={styles.flyerTime}>{timeLabel}</Text>
+        <Text style={styles.flyerLocation} numberOfLines={1}>
+          {locationLabel}
+        </Text>
+        <Text
+          style={[
+            styles.flyerMeta,
+            !isOpenCommunityEvent &&
+              rsvpStatus === 'maybe' &&
+              styles.flyerMetaEmphasis,
+            { color: variant.meta },
+          ]}
+          numberOfLines={1}
+        >
+          {rsvpMeta}
+        </Text>
+        {taskSummary && taskTotal > 0 ? (
+          <TaskSummaryLine
+            copy={taskCopy}
+            doneStyle={styles.flyerMetaDone}
+            style={[
+              styles.flyerMeta,
+              styles.flyerMetaLast,
+              { color: variant.meta },
+            ]}
+            taskSummary={taskSummary}
+          />
+        ) : (
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.flyerMeta,
+              styles.flyerMetaLast,
+              { color: variant.meta },
             ]}
           >
-            {`${taskSummary.assigned}/${taskSummary.total} הוקצו`}
+            ללא משימות פעילות
           </Text>
-        ) : null}
+        )}
+      </Pressable>
+
+      <View style={styles.flyerCtaWrap}>
+        {showInlineRsvpRow ? (
+          <View style={styles.flyerInlineRsvpRow}>
+            {(
+              [
+                { status: 'yes', label: 'כן' },
+                { status: 'maybe', label: 'אולי' },
+                { status: 'no', label: 'לא' },
+              ] as { status: RsvpStatus; label: string }[]
+            ).map((opt) => (
+              <TouchableOpacity
+                key={`${event._id}-${opt.status}`}
+                style={styles.flyerInlineRsvpBtn}
+                onPress={() => {
+                  onRsvpSelect(event._id, opt.status).finally(() => {
+                    setShowInlineChoices(false);
+                  });
+                }}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel={opt.label}
+              >
+                <Text style={styles.flyerInlineRsvpText}>{opt.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : showOpenCalendarCta ? (
+          <TouchableOpacity
+            style={[styles.flyerCtaBtn, { backgroundColor: variant.buttonBg }]}
+            onPress={(pressEvent) => {
+              pressEvent.stopPropagation();
+              onCalendarToggle(event._id);
+            }}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={openCalendarActionLabel}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+          >
+            <Text style={[styles.flyerCtaText, { color: variant.buttonText }]}>
+              {openCalendarActionLabel}
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[styles.flyerCtaBtn, { backgroundColor: variant.buttonBg }]}
+            onPress={() => {
+              if (flyerDetailsOnly) {
+                onOpenDetails(event._id);
+                return;
+              }
+              if (showInviteePendingCta || showMemberChangeRsvpCta) {
+                setShowInlineChoices(true);
+                return;
+              }
+              onOpenDetails(event._id);
+            }}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={
+              flyerDetailsOnly
+                ? 'לפרטים'
+                : showInviteePendingCta
+                  ? 'ממתין לאישור'
+                  : showMemberChangeRsvpCta
+                    ? rsvpStatus === 'yes'
+                      ? 'שינוי אישור'
+                      : 'שינוי תגובה'
+                    : 'לפרטים'
+            }
+          >
+            <Text style={[styles.flyerCtaText, { color: variant.buttonText }]}>
+              {flyerDetailsOnly
+                ? 'לפרטים'
+                : showInviteePendingCta
+                  ? 'ממתין לאישור'
+                  : showMemberChangeRsvpCta
+                    ? rsvpStatus === 'yes'
+                      ? 'שינוי אישור'
+                      : 'שינוי תגובה'
+                    : 'לפרטים'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -435,8 +813,12 @@ function EventRow({
     badgeColor = '#ef4444';
   }
 
+  const isOpenCommunityEvent = event.requiresRsvp === false;
   const showRsvpBadge =
-    !isCancelled && !past && (event.requiresRsvp || rsvpStatus !== 'none');
+    !isOpenCommunityEvent &&
+    !isCancelled &&
+    !past &&
+    (event.requiresRsvp !== false || rsvpStatus !== 'none');
   const showCancelledBadge = isCancelled;
 
   return (
@@ -517,17 +899,13 @@ function EventRow({
             </Text>
           </TouchableOpacity>
         ) : null}
-        {taskSummary && taskSummary.total > 0 ? (
-          <Text
-            style={[
-              styles.eventRowTaskSummary,
-              taskSummary.assigned === taskSummary.total
-                ? styles.eventRowTaskSummaryDone
-                : null,
-            ]}
-          >
-            {`${taskSummary.assigned}/${taskSummary.total} הוקצו`}
-          </Text>
+        {taskSummary && (taskSummary.totalTasksCount ?? taskSummary.total) > 0 ? (
+          <TaskSummaryLine
+            copy="compact"
+            doneStyle={styles.eventRowTaskSummaryDone}
+            style={styles.eventRowTaskSummary}
+            taskSummary={taskSummary}
+          />
         ) : null}
       </View>
     </Pressable>
@@ -783,6 +1161,8 @@ interface TabAllProps {
   setIsRemindersOpen: React.Dispatch<React.SetStateAction<boolean>>;
   currentUserId?: Id<'users'>;
   taskCountsMap: Record<string, TaskSummary>;
+  onInlineRsvp: (eventId: Id<'events'>, status: RsvpStatus) => Promise<void>;
+  communityMyRole?: 'owner' | 'admin' | 'member';
 }
 
 function TabAll({
@@ -800,7 +1180,16 @@ function TabAll({
   setIsRemindersOpen,
   currentUserId,
   taskCountsMap,
+  onInlineRsvp,
+  communityMyRole,
 }: TabAllProps) {
+  const { width: screenWidth } = useWindowDimensions();
+  const flyerColumns = screenWidth < 360 ? 1 : 2;
+  const horizontalPadding = 32; // TabAll horizontal margins
+  const gridGap = 12;
+  const availableWidth = screenWidth - horizontalPadding;
+  const flyerCardWidth =
+    flyerColumns === 1 ? availableWidth : (availableWidth - gridGap) / 2;
   // Stable timestamps — computed once on mount, never change
   const windowStart = useMemo(() => {
     const d = new Date();
@@ -848,6 +1237,78 @@ function TabAll({
 
   const activeEvents = events.filter((ev) => ev.status !== 'cancelled');
 
+  const addCommunityEventToMyCalendar = useMutation(
+    api.communityEventCalendar.addCommunityEventToMyCalendar
+  );
+  const removeCommunityEventFromMyCalendar = useMutation(
+    api.communityEventCalendar.removeCommunityEventFromMyCalendar
+  );
+  const [calendarRemoveConfirmationEventId, setCalendarRemoveConfirmationEventId] =
+    useState<Id<'events'> | null>(null);
+
+  const showCalendarRemoveConfirmation = useCallback(
+    (eventId: Id<'events'>): void => {
+      setCalendarRemoveConfirmationEventId(eventId);
+    },
+    []
+  );
+
+  const handleConfirmCalendarRemoval = useCallback((): void => {
+    if (!calendarRemoveConfirmationEventId) return;
+    const eventId = calendarRemoveConfirmationEventId;
+    setCalendarRemoveConfirmationEventId(null);
+    removeCommunityEventFromMyCalendar({
+      eventId,
+      confirmRemoveWithActiveTask: true,
+    }).catch(() => Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן'));
+  }, [calendarRemoveConfirmationEventId, removeCommunityEventFromMyCalendar]);
+
+  const handleCancelCalendarRemoval = useCallback(
+    (): void => setCalendarRemoveConfirmationEventId(null),
+    []
+  );
+
+  const handleCalendarToggle = useCallback(
+    async (eventId: Id<'events'>) => {
+      const ev = activeEvents.find((e) => e._id === eventId);
+      const saved = ev?.isSavedToMyCalendar === true;
+      const hasMyAssignedTasks =
+        taskCountsMap[eventId]?.hasMyAssignedTasks === true &&
+        taskCountsMap[eventId]?.myAssignedTasks.length > 0;
+
+      if (saved && hasMyAssignedTasks) {
+        showCalendarRemoveConfirmation(eventId);
+        return;
+      }
+
+      try {
+        if (saved) {
+          await removeCommunityEventFromMyCalendar({ eventId });
+          return;
+        }
+        await addCommunityEventToMyCalendar({ eventId });
+      } catch (error) {
+        const errorCode = getConvexErrorCode(error);
+        if (
+          saved &&
+          (errorCode === CALENDAR_REMOVE_CONFIRMATION_CODE ||
+            errorCode === 'CALENDAR_REMOVE_BLOCKED_BY_ACTIVE_TASK')
+        ) {
+          showCalendarRemoveConfirmation(eventId);
+          return;
+        }
+        Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן');
+      }
+    },
+    [
+      activeEvents,
+      addCommunityEventToMyCalendar,
+      removeCommunityEventFromMyCalendar,
+      showCalendarRemoveConfirmation,
+      taskCountsMap,
+    ]
+  );
+
   const recentlyCancelledEvents = events.filter(
     (ev) =>
       ev.status === 'cancelled' &&
@@ -855,17 +1316,25 @@ function TabAll({
       Date.now() - ev.cancelledAt < 24 * 60 * 60 * 1000
   );
 
-  // Section 1: events the user already RSVPed to OR created by current user
-  const myEvents = activeEvents.filter(
-    (ev) =>
-      (rsvpMap[ev._id] ?? 'none') !== 'none' || ev.createdBy === currentUserId
-  );
+  // Section 1: events the user created, or RSVPed "yes", or open events in personal calendar
+  const myEvents = activeEvents.filter((ev) => {
+    if (currentUserId !== undefined && ev.createdBy === currentUserId)
+      return true;
+    if (ev.requiresRsvp === false) {
+      return ev.isSavedToMyCalendar === true;
+    }
+    return (rsvpMap[ev._id] ?? 'none') === 'yes';
+  });
 
-  // Section 3: events the user hasn't responded to AND not created by current user
-  const pendingEvents = activeEvents.filter(
-    (ev) =>
-      (rsvpMap[ev._id] ?? 'none') === 'none' && ev.createdBy !== currentUserId
-  );
+  // Section 3: other members' events not in the user's personal calendar
+  const pendingEvents = activeEvents.filter((ev) => {
+    if (currentUserId !== undefined && ev.createdBy === currentUserId)
+      return false;
+    if (ev.requiresRsvp === false) {
+      return !ev.isSavedToMyCalendar;
+    }
+    return (rsvpMap[ev._id] ?? 'none') !== 'yes';
+  });
 
   // Section 2: merge query results with locally-completed tasks + pending-transition tasks
   const allRemindersForSection = useMemo(() => {
@@ -888,7 +1357,10 @@ function TabAll({
         const snap = pendingSnapshots.get(id);
         return snap ? [{ ...snap, completed: false }] : [];
       });
-    return [...fromQuery, ...fromLocalCache, ...fromPendingCache];
+    return uniqueById(
+      [...fromQuery, ...fromLocalCache, ...fromPendingCache],
+      (task) => task._id as string
+    );
   }, [
     reminders,
     localCompletedIds,
@@ -993,16 +1465,17 @@ function TabAll({
   );
 
   return (
-    <ScrollView
-      style={styles.tabScroll}
-      contentContainerStyle={styles.tabContent}
-      showsVerticalScrollIndicator={false}
-    >
+    <>
+      <ScrollView
+        style={styles.tabScroll}
+        contentContainerStyle={styles.tabContent}
+        showsVerticalScrollIndicator={false}
+      >
       {/* ── Section 1: האירועים שלי */}
       <View>
         <SectionHeader
           title="האירועים שלי"
-          subtitle="אירועים שכבר הצטרפת אליהם או יצרת"
+          subtitle="אירועים שיצרת או שאישרת הגעה"
         />
         {isLoadingEvents ? (
           <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
@@ -1014,16 +1487,29 @@ function TabAll({
           </View>
         ) : (
           <View style={styles.eventsGrid}>
-            {myEvents.map((ev) => (
-              <EventCard
-                key={ev._id}
-                event={ev}
-                rsvpStatus={rsvpMap[ev._id] ?? 'none'}
-                currentUserId={currentUserId}
-                taskSummary={taskCountsMap[ev._id]}
-                onOpenDetails={onOpenEventDetails}
-              />
-            ))}
+            {myEvents.map((ev) => {
+              const privilegedFlyer =
+                communityMyRole === 'owner' ||
+                communityMyRole === 'admin' ||
+                ev.createdBy === currentUserId;
+              const showTaskMetrics =
+                privilegedFlyer || ev.tasksVisibleToParticipants === true;
+              return (
+                <CommunityEventFlyerCard
+                  key={ev._id}
+                  event={ev}
+                  isSavedToMyCalendar={ev.isSavedToMyCalendar}
+                  onCalendarToggle={handleCalendarToggle}
+                  rsvpStatus={rsvpMap[ev._id] ?? 'none'}
+                  taskSummary={taskCountsMap[ev._id]}
+                  cardWidth={flyerCardWidth}
+                  flyerDetailsOnly={privilegedFlyer}
+                  showTaskMetrics={showTaskMetrics}
+                  onOpenDetails={onOpenEventDetails}
+                  onRsvpSelect={onInlineRsvp}
+                />
+              );
+            })}
           </View>
         )}
       </View>
@@ -1125,16 +1611,27 @@ function TabAll({
           </View>
         ) : (
           <View style={styles.eventsGrid}>
-            {pendingEvents.map((ev) => (
-              <EventCard
-                key={ev._id}
-                event={ev}
-                rsvpStatus={rsvpMap[ev._id] ?? 'none'}
-                currentUserId={currentUserId}
-                taskSummary={taskCountsMap[ev._id]}
-                onOpenDetails={onOpenEventDetails}
-              />
-            ))}
+            {pendingEvents.map((ev) => {
+              const privilegedFlyer =
+                communityMyRole === 'owner' || communityMyRole === 'admin';
+              const showTaskMetrics =
+                privilegedFlyer || ev.tasksVisibleToParticipants === true;
+              return (
+                <CommunityEventFlyerCard
+                  key={ev._id}
+                  event={ev}
+                  isSavedToMyCalendar={ev.isSavedToMyCalendar}
+                  onCalendarToggle={handleCalendarToggle}
+                  rsvpStatus={rsvpMap[ev._id] ?? 'none'}
+                  taskSummary={taskCountsMap[ev._id]}
+                  cardWidth={flyerCardWidth}
+                  flyerDetailsOnly={privilegedFlyer}
+                  showTaskMetrics={showTaskMetrics}
+                  onOpenDetails={onOpenEventDetails}
+                  onRsvpSelect={onInlineRsvp}
+                />
+              );
+            })}
           </View>
         )}
       </View>
@@ -1156,20 +1653,42 @@ function TabAll({
         <View style={styles.cancelledEventsSection}>
           <Text style={styles.cancelledEventsTitle}>אירועים שבוטלו</Text>
           <View style={styles.eventsGrid}>
-            {recentlyCancelledEvents.map((ev) => (
-              <EventCard
-                key={ev._id}
-                event={ev}
-                rsvpStatus="none"
-                currentUserId={currentUserId}
-                isCancelled
-                onOpenDetails={onOpenEventDetails}
-              />
-            ))}
+            {recentlyCancelledEvents.map((ev) => {
+              const privilegedCancelled =
+                communityMyRole === 'owner' ||
+                communityMyRole === 'admin' ||
+                ev.createdBy === currentUserId;
+              const showTaskMetrics =
+                privilegedCancelled || ev.tasksVisibleToParticipants === true;
+              return (
+                <CommunityEventFlyerCard
+                  key={ev._id}
+                  event={ev}
+                  rsvpStatus="none"
+                  taskSummary={taskCountsMap[ev._id]}
+                  cardWidth={flyerCardWidth}
+                  flyerDetailsOnly
+                  showTaskMetrics={showTaskMetrics}
+                  onOpenDetails={onOpenEventDetails}
+                  onRsvpSelect={onInlineRsvp}
+                />
+              );
+            })}
           </View>
         </View>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+      <AppConfirmationDialog
+        cancelLabel="ביטול"
+        confirmDestructive
+        confirmLabel="להסיר בכל זאת"
+        message={CALENDAR_REMOVE_CONFIRM_MESSAGE}
+        onCancel={handleCancelCalendarRemoval}
+        onConfirm={handleConfirmCalendarRemoval}
+        title={CALENDAR_REMOVE_CONFIRM_TITLE}
+        visible={calendarRemoveConfirmationEventId !== null}
+      />
+    </>
   );
 }
 
@@ -1559,6 +2078,7 @@ function TabActivity() {
 export default function CommunityDetailScreen() {
   const { id, tab } = useLocalSearchParams<{ id: string; tab?: string }>();
   const router = useRouter();
+  const convex = useConvex();
   const communityId = id as Id<'communities'>;
 
   // ── Queries
@@ -1570,9 +2090,13 @@ export default function CommunityDetailScreen() {
 
   // ── Mutations
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
+  const setRsvpNoAndUnclaimMyEventTasks = useMutation(
+    api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
+  );
   const toggleCompleted = useMutation(api.tasks.toggleCompleted);
   const deleteCommunity = useMutation(api.communities.deleteCommunity);
   const toggleNotifications = useMutation(api.communities.toggleNotifications);
+  const markCommunityViewed = useMutation(api.communities.markCommunityViewed);
 
   // ── Local state
   const [activeTab, setActiveTab] = useState<Tab>(() => {
@@ -1591,16 +2115,29 @@ export default function CommunityDetailScreen() {
   const [selectedEventId, setSelectedEventId] = useState<Id<'events'> | null>(
     null
   );
+  const [blockedRsvpDialog, setBlockedRsvpDialog] = useState<{
+    eventId: Id<'events'>;
+    count: number;
+  } | null>(null);
   const lastDragCloseTime = useRef<number>(0);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionCanExpand, setDescriptionCanExpand] = useState(false);
   const menuBtnRef = useRef<View>(null);
 
-  // Reset description state when community changes
+  // Reset description when switching communities
   useEffect(() => {
     setDescriptionExpanded(false);
     setDescriptionCanExpand(false);
   }, [communityId]);
+
+  // Mark viewed for list "new events" hint — only for fully approved members
+  useEffect(() => {
+    if (community === undefined || community === null) return;
+    if (community.myMembershipStatus === 'pending') return;
+    markCommunityViewed({ communityId }).catch(() => {
+      // non-blocking
+    });
+  }, [communityId, community, markCommunityViewed]);
   const addBtnRef = useRef<View>(null);
 
   // ── Persisted TabAll state — lifted here so it survives tab switches
@@ -1634,14 +2171,64 @@ export default function CommunityDetailScreen() {
   }, [myRsvps]);
 
   // ── Handlers
-  const handleRsvpSelect = useCallback(
-    (status: RsvpStatus) => {
-      if (!rsvpSheet) return;
-      upsertRsvp({ eventId: rsvpSheet, status }).catch(() =>
-        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה')
-      );
+  const handleBlockedRsvpNo = useCallback(
+    (eventId: Id<'events'>, count: number) => {
+      setBlockedRsvpDialog({ eventId, count });
     },
-    [rsvpSheet, upsertRsvp]
+    []
+  );
+
+  const handleRsvpSelect = useCallback(
+    async (status: RsvpStatus) => {
+      if (!rsvpSheet) return;
+      if (status === 'no') {
+        const assignedState = await convex.query(
+          api.eventRsvps.hasMyAssignedEventTasksForEvent,
+          { eventId: rsvpSheet }
+        );
+        if (assignedState.hasAssignedTasks) {
+          handleBlockedRsvpNo(rsvpSheet, assignedState.count);
+          return;
+        }
+      }
+      upsertRsvp({ eventId: rsvpSheet, status }).catch((error) => {
+        if (
+          status === 'no' &&
+          getConvexErrorCode(error) === 'RSVP_NO_BLOCKED_BY_ACTIVE_TASK'
+        ) {
+          handleBlockedRsvpNo(rsvpSheet, 1);
+          return;
+        }
+        Alert.alert('שגיאה', 'לא ניתן לשמור תגובה');
+      });
+    },
+    [convex, handleBlockedRsvpNo, rsvpSheet, upsertRsvp]
+  );
+
+  const handleInlineRsvp = useCallback(
+    async (eventId: Id<'events'>, status: RsvpStatus) => {
+      if (status === 'no') {
+        const assignedState = await convex.query(
+          api.eventRsvps.hasMyAssignedEventTasksForEvent,
+          { eventId }
+        );
+        if (assignedState.hasAssignedTasks) {
+          handleBlockedRsvpNo(eventId, assignedState.count);
+          return;
+        }
+      }
+      await upsertRsvp({ eventId, status }).catch((error) => {
+        if (
+          status === 'no' &&
+          getConvexErrorCode(error) === 'RSVP_NO_BLOCKED_BY_ACTIVE_TASK'
+        ) {
+          handleBlockedRsvpNo(eventId, 1);
+          return;
+        }
+        Alert.alert('שגיאה', 'לא ניתן לעדכן אישור הגעה');
+      });
+    },
+    [convex, handleBlockedRsvpNo, upsertRsvp]
   );
 
   const handleOpenEventDetails = useCallback((eventId: Id<'events'>) => {
@@ -1846,15 +2433,52 @@ export default function CommunityDetailScreen() {
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.loadingCenter}>
           <Ionicons name="alert-circle-outline" size={48} color="#d1d5db" />
-          <Text style={styles.emptyText}>הקהילה לא נמצאה</Text>
+          <Text style={styles.emptyText}>אין לך גישה לקהילה הזו</Text>
+          <Text style={styles.emptySubText}>
+            יכול להיות שהוסרת מהקהילה או שהקישור כבר לא פעיל.
+          </Text>
           <TouchableOpacity
             style={styles.retryBtn}
-            onPress={() => router.back()}
+            onPress={() =>
+              router.replace(
+                '/(authenticated)/communities' as Parameters<
+                  typeof router.replace
+                >[0]
+              )
+            }
             accessible
             accessibilityRole="button"
           >
-            <Text style={styles.retryText}>חזור</Text>
+            <Text style={styles.retryText}>חזרה לקהילות</Text>
           </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (community.myMembershipStatus === 'pending') {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.pendingGateHeader}>
+          <View style={{ width: 40 }} />
+          <Text style={styles.pendingGateTitle} numberOfLines={1}>
+            {community.name}
+          </Text>
+          <TouchableOpacity
+            onPress={handleBack}
+            style={styles.headerIconBtn}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="חזרה לרשימת הקהילות"
+          >
+            <Ionicons name="chevron-forward" size={22} color="#374151" />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.loadingCenter}>
+          <Ionicons name="time-outline" size={52} color="#94a3b8" />
+          <Text style={[styles.emptyText, styles.pendingGateMessage]}>
+            בקשת ההצטרפות נשלחה וממתינה לאישור מנהל הקהילה
+          </Text>
         </View>
       </SafeAreaView>
     );
@@ -1999,6 +2623,8 @@ export default function CommunityDetailScreen() {
           setIsRemindersOpen={setIsRemindersOpen}
           currentUserId={currentUserId}
           taskCountsMap={taskCountsMap}
+          onInlineRsvp={handleInlineRsvp}
+          communityMyRole={community?.myRole ?? undefined}
         />
       )}
       {activeTab === 'אירועים' && (
@@ -2024,6 +2650,9 @@ export default function CommunityDetailScreen() {
         visible={addMenuOpen}
         position={addMenuPos}
         communityId={communityId}
+        canCreateCommunityEvent={
+          community?.myRole === 'owner' || community?.myRole === 'admin'
+        }
         onClose={() => setAddMenuOpen(false)}
       />
 
@@ -2056,6 +2685,19 @@ export default function CommunityDetailScreen() {
         value={searchQuery}
         onChange={setSearchQuery}
         onClose={() => setSearchOpen(false)}
+      />
+      <RsvpBlockedByTaskDialog
+        assignedTaskCount={blockedRsvpDialog?.count ?? 1}
+        onClose={() => setBlockedRsvpDialog(null)}
+        onConfirm={() => {
+          if (!blockedRsvpDialog) return;
+          const eventId = blockedRsvpDialog.eventId;
+          setBlockedRsvpDialog(null);
+          setRsvpNoAndUnclaimMyEventTasks({ eventId }).catch(() =>
+            Alert.alert('שגיאה', 'לא ניתן לעדכן אישור הגעה')
+          );
+        }}
+        visible={blockedRsvpDialog !== null}
       />
     </SafeAreaView>
   );
@@ -2196,6 +2838,204 @@ const styles = StyleSheet.create({
 
   // ── Events grid
   eventsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+
+  flyerCard: {
+    minHeight: 272,
+    borderRadius: 18,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+    overflow: 'hidden',
+  },
+  flyerCardBody: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 12,
+    paddingTop: 14,
+    paddingBottom: 6,
+  },
+  flyerPill: {
+    alignSelf: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginBottom: 10,
+  },
+  flyerPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  flyerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1f2937',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 8,
+    minHeight: 48,
+  },
+  flyerImportantItemsChip: {
+    alignSelf: 'center',
+    backgroundColor: '#E6F4FB',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#BAE6FD',
+  },
+  flyerImportantItemsSlot: {
+    height: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  flyerImportantItemsChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0369a1',
+    textAlign: 'center',
+  },
+  flyerDividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 9,
+    paddingHorizontal: 4,
+    gap: 8,
+  },
+  flyerDividerLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    maxHeight: 1,
+    opacity: 0.75,
+  },
+  flyerDividerDiamond: {
+    fontSize: 12,
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  flyerDate: {
+    fontSize: 13,
+    color: '#4b5563',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  flyerTime: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  flyerLocation: {
+    fontSize: 13,
+    color: '#4b5563',
+    textAlign: 'center',
+    marginBottom: 8,
+    width: '100%',
+  },
+  flyerMeta: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 3,
+    width: '100%',
+  },
+  flyerMetaEmphasis: {
+    fontWeight: '700',
+  },
+  flyerMetaDone: {
+    color: '#16a34a',
+  },
+  flyerMetaLast: {
+    marginBottom: 0,
+  },
+  taskSummaryPressable: {
+    width: '100%',
+  },
+  myTasksIndicator: {
+    color: PRIMARY,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
+  },
+  myTasksTooltipBackdrop: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: 'rgba(15,23,42,0.08)',
+  },
+  myTasksTooltip: {
+    minWidth: 220,
+    maxWidth: 300,
+    alignItems: 'flex-end',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 6,
+    gap: 6,
+  },
+  myTasksTooltipTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  myTasksTooltipText: {
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 19,
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  flyerCtaWrap: {
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+    paddingTop: 0,
+  },
+  flyerCtaBtn: {
+    minHeight: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  flyerCtaText: {
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  flyerInlineRsvpRow: {
+    minHeight: 44,
+    flexDirection: 'row-reverse',
+    gap: 8,
+  },
+  flyerInlineRsvpBtn: {
+    flex: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  flyerInlineRsvpText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#374151',
+  },
 
   // ── Event Card (הכל tab — full height redesign)
   eventCard: {
@@ -2421,7 +3261,38 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 32,
   },
+  pendingGateHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 6,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f1f5f9',
+  },
+  pendingGateTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
+  pendingGateMessage: {
+    marginTop: 18,
+    paddingHorizontal: 24,
+    lineHeight: 24,
+  },
   emptyText: { fontSize: 16, color: '#6b7280', textAlign: 'center' },
+  emptySubText: {
+    maxWidth: 300,
+    paddingHorizontal: 16,
+    fontSize: 14,
+    color: '#94a3b8',
+    lineHeight: 22,
+    textAlign: 'center',
+  },
 
   // ── Retry
   retryBtn: {
@@ -2544,6 +3415,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
     gap: 10,
+  },
+  popoverSingleItem: {
+    borderTopWidth: 0,
   },
   popoverBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
