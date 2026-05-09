@@ -27,6 +27,7 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -56,9 +57,7 @@ const _isExpoGo =
  *                        → use 'left'/'row' so OS corrects them to 'right'/'row-reverse'
  */
 const isAndroidExpoGo = Platform.OS === 'android' && _isExpoGo;
-const isAndroidNativeRTL =
-  Platform.OS === 'android' && I18nManager.isRTL && !_isExpoGo;
-const shouldSupplyInvertedRtlValues = isAndroidExpoGo || isAndroidNativeRTL;
+const shouldSupplyInvertedRtlValues = isAndroidExpoGo || I18nManager.isRTL;
 const HEB_TEXT_ALIGN: 'left' | 'right' = shouldSupplyInvertedRtlValues
   ? 'left'
   : 'right';
@@ -79,6 +78,11 @@ const SHEET_HEIGHT = screenHeight * 0.9;
 const RSVP_DETAIL_MODAL_MAX_HEIGHT = screenHeight * 0.62;
 const RSVP_DETAIL_SCROLL_MAX_HEIGHT = RSVP_DETAIL_MODAL_MAX_HEIGHT - 160;
 const INYOMI_EVENT_LINK_BASE = 'https://inyomi.app/e';
+const CALENDAR_REMOVE_CONFIRM_TITLE = 'להסיר מהיומן?';
+const CALENDAR_REMOVE_CONFIRM_MESSAGE =
+  'שימי לב, הוקצו לך משימות באירוע הזה. האירוע יוסר מהיומן שלך, אבל המשימות עדיין יופיעו במסך המשימות.';
+const CALENDAR_REMOVE_CONFIRMATION_CODE =
+  'CALENDAR_REMOVE_REQUIRES_ACTIVE_TASK_CONFIRMATION';
 
 /** RSVP — strong fills + borders so controls read as real buttons on light cards */
 const MEMBER_RSVP_OPTIONS = [
@@ -205,6 +209,10 @@ export function EventDetailsBottomSheet({
   const [pendingRsvpStatus, setPendingRsvpStatus] = useState<
     'yes' | 'no' | 'maybe' | null
   >(null);
+  const [
+    calendarRemoveConfirmationEventId,
+    setCalendarRemoveConfirmationEventId,
+  ] = useState<Id<'events'> | null>(null);
   const [participantRsvpDetailsOpen, setParticipantRsvpDetailsOpen] =
     useState(false);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
@@ -300,21 +308,6 @@ export function EventDetailsBottomSheet({
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
 
-  const handleOpenCalendarToggle = useCallback((): void => {
-    if (!convexEventId || eventDoc === undefined || eventDoc === null) return;
-    const isSaved = eventDoc.isSavedToMyCalendar === true;
-    const run = isSaved
-      ? removeCommunityEventFromMyCalendar
-      : addCommunityEventToMyCalendar;
-    run({ eventId: convexEventId }).catch(() =>
-      Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן')
-    );
-  }, [
-    convexEventId,
-    eventDoc,
-    addCommunityEventToMyCalendar,
-    removeCommunityEventFromMyCalendar,
-  ]);
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
     convexEventId ? { eventId: convexEventId } : 'skip'
@@ -332,6 +325,62 @@ export function EventDetailsBottomSheet({
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
+
+  const showCalendarRemoveConfirmation = useCallback(
+    (eventIdToRemove: Id<'events'>): void => {
+      setCalendarRemoveConfirmationEventId(eventIdToRemove);
+    },
+    []
+  );
+
+  const handleConfirmCalendarRemoval = useCallback((): void => {
+    if (!calendarRemoveConfirmationEventId) return;
+    const eventIdToRemove = calendarRemoveConfirmationEventId;
+    setCalendarRemoveConfirmationEventId(null);
+    removeCommunityEventFromMyCalendar({
+      eventId: eventIdToRemove,
+      confirmRemoveWithActiveTask: true,
+    }).catch(() => Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן'));
+  }, [
+    calendarRemoveConfirmationEventId,
+    removeCommunityEventFromMyCalendar,
+  ]);
+
+  const handleCancelCalendarRemoval = useCallback(
+    (): void => setCalendarRemoveConfirmationEventId(null),
+    []
+  );
+
+  const handleOpenCalendarToggle = useCallback((): void => {
+    if (!convexEventId || eventDoc === undefined || eventDoc === null) return;
+    const isSaved = eventDoc.isSavedToMyCalendar === true;
+    if (isSaved && myAssignedEventTasksState?.hasAssignedTasks === true) {
+      showCalendarRemoveConfirmation(convexEventId);
+      return;
+    }
+    const run = isSaved
+      ? removeCommunityEventFromMyCalendar
+      : addCommunityEventToMyCalendar;
+    run({ eventId: convexEventId }).catch((error) => {
+      const errorCode = getConvexErrorCode(error);
+      if (
+        isSaved &&
+        (errorCode === CALENDAR_REMOVE_CONFIRMATION_CODE ||
+          errorCode === 'CALENDAR_REMOVE_BLOCKED_BY_ACTIVE_TASK')
+      ) {
+        showCalendarRemoveConfirmation(convexEventId);
+        return;
+      }
+      Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן');
+    });
+  }, [
+    convexEventId,
+    eventDoc,
+    myAssignedEventTasksState,
+    addCommunityEventToMyCalendar,
+    removeCommunityEventFromMyCalendar,
+    showCalendarRemoveConfirmation,
+  ]);
   const showRsvpNoBlockedDialog = useCallback(
     (count: number): void => {
       if (!convexEventId) return;
@@ -1208,11 +1257,6 @@ export function EventDetailsBottomSheet({
                         const isClaimable = showSelfClaimAction && !hasAssignee;
                         const canUnclaimHere =
                           showSelfClaimAction && isAssignedToCurrentUser;
-                        const shouldShowActionChip =
-                          isClaimable || canUnclaimHere;
-                        const chipLabel = isClaimable
-                          ? 'אני אקח'
-                          : assignmentLabel;
                         return (
                           <View key={task._id} style={styles.detailListRow}>
                             <MaterialIcons
@@ -1224,37 +1268,53 @@ export function EventDetailsBottomSheet({
                               <Text style={styles.detailListTitle}>
                                 {task.title}
                               </Text>
-                              {shouldShowActionChip ? (
+                              {isClaimable ? (
                                 <Pressable
-                                  accessibilityLabel={chipLabel}
+                                  accessibilityLabel="אני אקח"
                                   accessibilityRole="button"
                                   accessible={true}
-                                  onPress={() => {
-                                    if (isClaimable) {
-                                      handleClaimEventTask(task._id);
-                                      return;
-                                    }
-                                    if (canUnclaimHere) {
-                                      handleUnclaimEventTask(task._id);
-                                    }
-                                  }}
+                                  onPress={() => handleClaimEventTask(task._id)}
                                   style={({ pressed }) => [
                                     styles.taskAssignmentAction,
-                                    canUnclaimHere && styles.taskAssignmentMine,
                                     pressed &&
                                       styles.taskAssignmentActionPressed,
                                   ]}
                                 >
                                   <Text
-                                    style={[
-                                      styles.taskAssignmentActionText,
-                                      canUnclaimHere &&
-                                        styles.taskAssignmentMineText,
-                                    ]}
+                                    style={[styles.taskAssignmentActionText]}
                                   >
-                                    {chipLabel}
+                                    אני אקח
                                   </Text>
                                 </Pressable>
+                              ) : canUnclaimHere ? (
+                                <View style={styles.taskAssignmentStatusRow}>
+                                  <Text
+                                    style={[
+                                      styles.taskAssignmentStatusText,
+                                      styles.taskAssignmentMineText,
+                                    ]}
+                                    numberOfLines={1}
+                                  >
+                                    הוקצה אליי
+                                  </Text>
+                                  <Pressable
+                                    accessibilityLabel="בטל הקצאה"
+                                    accessibilityRole="button"
+                                    accessible={true}
+                                    onPress={() =>
+                                      handleUnclaimEventTask(task._id)
+                                    }
+                                    style={({ pressed }) => [
+                                      styles.taskUnassignAction,
+                                      pressed &&
+                                        styles.taskAssignmentActionPressed,
+                                    ]}
+                                  >
+                                    <Text style={styles.taskUnassignActionText}>
+                                      בטל הקצאה
+                                    </Text>
+                                  </Pressable>
+                                </View>
                               ) : (
                                 <View
                                   style={[
@@ -1564,6 +1624,16 @@ export function EventDetailsBottomSheet({
           );
         }}
         visible={blockedRsvpTaskCount !== null}
+      />
+      <AppConfirmationDialog
+        cancelLabel="ביטול"
+        confirmDestructive
+        confirmLabel="להסיר בכל זאת"
+        message={CALENDAR_REMOVE_CONFIRM_MESSAGE}
+        onCancel={handleCancelCalendarRemoval}
+        onConfirm={handleConfirmCalendarRemoval}
+        title={CALENDAR_REMOVE_CONFIRM_TITLE}
+        visible={calendarRemoveConfirmationEventId !== null}
       />
     </Modal>
   );
@@ -2441,6 +2511,29 @@ const styles = StyleSheet.create({
   },
   taskAssignmentMineText: {
     color: '#166534',
+  },
+  taskAssignmentStatusRow: {
+    alignSelf: HEB_FLEX_END,
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    justifyContent: HEB_FLEX_END,
+    gap: 10,
+  },
+  taskUnassignAction: {
+    minHeight: 32,
+    justifyContent: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  taskUnassignActionText: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '700',
+    lineHeight: 16,
+    textAlign: HEB_TEXT_ALIGN,
+    includeFontPadding: false,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskAssignmentStatusChip: {
     alignSelf: HEB_FLEX_END,

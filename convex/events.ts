@@ -798,12 +798,24 @@ export const cancelEvent = mutation({
       throw new Error('אין הרשאה');
     }
 
+    const cancelledAt = Date.now();
+
     await ctx.db.patch(eventId, {
       status: 'cancelled',
-      cancelledAt: Date.now(),
+      cancelledAt,
       cancelledBy: cancelledBy ?? userId,
       cancelReason,
     });
+
+    if (event.communityId) {
+      const savedRows = await ctx.db.query('savedCommunityEvents').collect();
+      const activeRowsForEvent = savedRows.filter(
+        (row) => row.eventId === eventId && row.removedAt === undefined
+      );
+      for (const row of activeRowsForEvent) {
+        await ctx.db.patch(row._id, { removedAt: cancelledAt });
+      }
+    }
 
     // Propagate cancellation to all linked events saved by recipients
     const linked = await ctx.db
@@ -816,9 +828,8 @@ export const cancelEvent = mutation({
       }
     }
 
-    // TODO push notification:
-    // notify all participants that the event was cancelled
-    // include event.title and cancelReason if provided
+    // TODO(server-push): notify members that the event was cancelled.
+    // TODO(server-push): notify assigned users that their tasks were cancelled because the event was cancelled.
   },
 });
 

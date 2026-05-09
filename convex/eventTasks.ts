@@ -12,12 +12,28 @@ import { isActiveCommunityMember } from './communityMemberUtils';
 export const getTaskCountsByCommunity = query({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return {};
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!isActiveCommunityMember(membership)) return {};
+
     const events = await ctx.db
       .query('events')
       .withIndex('by_community_date', (q) => q.eq('communityId', communityId))
       .collect();
 
-    const counts: Record<string, { total: number; assigned: number }> = {};
+    const counts: Record<
+      string,
+      {
+        total: number;
+        assigned: number;
+        totalTasksCount: number;
+        assignedTasksCount: number;
+        myAssignedTasks: Array<{ id: Id<'eventTasks'>; title: string }>;
+        hasMyAssignedTasks: boolean;
+      }
+    > = {};
 
     await Promise.all(
       events.map(async (ev) => {
@@ -25,11 +41,23 @@ export const getTaskCountsByCommunity = query({
           .query('eventTasks')
           .withIndex('by_event', (q) => q.eq('eventId', ev._id))
           .collect();
+        const activeTasks =
+          ev.status === 'cancelled'
+            ? []
+            : tasks.filter((task) => task.completed !== true);
+        const assignedTasksCount = activeTasks.filter(
+          (t) => t.assignedToUserId || t.assignedToManual?.trim()
+        ).length;
+        const myAssignedTasks = activeTasks
+          .filter((t) => t.assignedToUserId === userId)
+          .map((t) => ({ id: t._id, title: t.title }));
         counts[ev._id] = {
-          total: tasks.length,
-          assigned: tasks.filter(
-            (t) => t.assignedToUserId || t.assignedToManual?.trim()
-          ).length,
+          total: activeTasks.length,
+          assigned: assignedTasksCount,
+          totalTasksCount: activeTasks.length,
+          assignedTasksCount,
+          myAssignedTasks,
+          hasMyAssignedTasks: myAssignedTasks.length > 0,
         };
       })
     );
@@ -204,6 +232,7 @@ export const toggleCompleted = mutation({
     if (!task) throw new Error('משימה לא נמצאה');
     const event = await ctx.db.get(task.eventId);
     if (!event) throw new Error('אירוע לא נמצא');
+    if (event.status === 'cancelled') throw new Error('האירוע בוטל');
 
     if (event.communityId) {
       const communityId = event.communityId;
@@ -246,6 +275,7 @@ export const setAssignee = mutation({
     if (!task) throw new Error('משימה לא נמצאה');
     const event = await ctx.db.get(task.eventId);
     if (!event) throw new Error('אירוע לא נמצא');
+    if (event.status === 'cancelled') throw new Error('האירוע בוטל');
 
     const hasUserId = !!task.assignedToUserId;
     const hasManual = !!task.assignedToManual?.trim();
@@ -299,6 +329,14 @@ export const setAssignee = mutation({
         assignedToUserId: assignee.userId,
         assignedToManual: undefined,
       });
+      if (event.communityId) {
+        await saveCommunityEventToPersonalCalendar(ctx, {
+          userId: assignee.userId,
+          eventId: event._id,
+          communityId: event.communityId,
+        });
+        // TODO(server-push): notify assignee that a task was assigned and event was added to their calendar.
+      }
     }
   },
 });
@@ -357,6 +395,7 @@ export const claimEventTask = mutation({
     const event = await ctx.db.get(task.eventId);
     if (!event || !event.communityId)
       throw new Error('פעולה זו זמינה רק באירוע קהילתי');
+    if (event.status === 'cancelled') throw new Error('האירוע בוטל');
     if (event.startTime <= Date.now()) {
       throw new ConvexError({
         code: 'EVENT_IS_PAST',
@@ -441,6 +480,7 @@ export const unclaimEventTask = mutation({
     const event = await ctx.db.get(task.eventId);
     if (!event || !event.communityId)
       throw new Error('פעולה זו זמינה רק באירוע קהילתי');
+    if (event.status === 'cancelled') throw new Error('האירוע בוטל');
 
     const membership = await getCommunityMembership(
       ctx,

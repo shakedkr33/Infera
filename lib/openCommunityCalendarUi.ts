@@ -49,7 +49,7 @@ export function isOpenCommunityCalendarActionVisible(args: {
   if (!event.communityId) {
     return false;
   }
-  if (event.requiresRsvp !== false) {
+  if (event.requiresRsvp === true) {
     return false;
   }
   if (event.status === 'cancelled') {
@@ -66,8 +66,8 @@ export function isOpenCommunityCalendarActionVisible(args: {
 
 export function getOpenCommunityCalendarActionLabel(
   isSavedToMyCalendar: boolean
-): 'להוסיף ליומן' | 'להסיר מהיומן' {
-  return isSavedToMyCalendar ? 'להסיר מהיומן' : 'להוסיף ליומן';
+): 'הוסף ליומן' | 'להסיר מהיומן' {
+  return isSavedToMyCalendar ? 'להסיר מהיומן' : 'הוסף ליומן';
 }
 
 /** Informational label "פתוח לחברי הקהילה" — not tied to RSVP UI or roles. */
@@ -80,7 +80,7 @@ export function isOpenCommunityInformationalLabelVisible(args: {
   if (!event.communityId) {
     return false;
   }
-  if (event.requiresRsvp !== false) {
+  if (event.requiresRsvp === true) {
     return false;
   }
   if (event.status === 'cancelled') {

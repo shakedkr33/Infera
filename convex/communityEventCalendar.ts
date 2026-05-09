@@ -22,7 +22,7 @@ async function getCommunityMembership(
     .unique();
 }
 
-async function getMyAssignedEventTasks(
+async function getMyActiveAssignedEventTasks(
   ctx: MutationCtx,
   eventId: Id<'events'>,
   userId: Id<'users'>
@@ -31,7 +31,9 @@ async function getMyAssignedEventTasks(
     .query('eventTasks')
     .withIndex('by_event', (q) => q.eq('eventId', eventId))
     .collect();
-  return tasks.filter((task) => task.assignedToUserId === userId);
+  return tasks.filter(
+    (task) => task.assignedToUserId === userId && task.completed !== true
+  );
 }
 
 export const addCommunityEventToMyCalendar = mutation({
@@ -42,7 +44,7 @@ export const addCommunityEventToMyCalendar = mutation({
 
     const event = await ctx.db.get(eventId);
     if (!event?.communityId) throw new Error('אירוע לא נמצא');
-    if (event.requiresRsvp !== false) {
+    if (event.requiresRsvp === true) {
       throw new Error('אירוע זה דורש אישור הגעה');
     }
     if (event.status === 'cancelled')
@@ -77,8 +79,11 @@ export const addCommunityEventToMyCalendar = mutation({
 });
 
 export const removeCommunityEventFromMyCalendar = mutation({
-  args: { eventId: v.id('events') },
-  handler: async (ctx, { eventId }) => {
+  args: {
+    eventId: v.id('events'),
+    confirmRemoveWithActiveTask: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { eventId, confirmRemoveWithActiveTask }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
 
@@ -94,11 +99,14 @@ export const removeCommunityEventFromMyCalendar = mutation({
       throw new Error('אין הרשאה');
     }
 
-    const assignedTasks = await getMyAssignedEventTasks(ctx, eventId, userId);
-    if (assignedTasks.length > 0) {
+    const assignedTasks =
+      event.status === 'cancelled'
+        ? []
+        : await getMyActiveAssignedEventTasks(ctx, eventId, userId);
+    if (assignedTasks.length > 0 && confirmRemoveWithActiveTask !== true) {
       throw new ConvexError({
-        code: 'CALENDAR_REMOVE_BLOCKED_BY_ACTIVE_TASK',
-        message: 'לא ניתן להסיר מהיומן בזמן שיש לך משימה באירוע',
+        code: 'CALENDAR_REMOVE_REQUIRES_ACTIVE_TASK_CONFIRMATION',
+        message: 'נדרש אישור להסרת אירוע עם משימה פעילה',
       });
     }
 
@@ -129,7 +137,11 @@ export const removeEventFromCalendarAndUnclaim = mutation({
       throw new Error('אין הרשאה');
     }
 
-    const assignedTasks = await getMyAssignedEventTasks(ctx, eventId, userId);
+    const assignedTasks = await getMyActiveAssignedEventTasks(
+      ctx,
+      eventId,
+      userId
+    );
     for (const task of assignedTasks) {
       await ctx.db.patch(task._id, {
         assignedToUserId: undefined,

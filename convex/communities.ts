@@ -210,6 +210,13 @@ export const getCommunity = query({
       .collect();
 
     const membership = memberships.find((m) => m.userId === userId);
+    const membershipStatus = membership
+      ? effectiveMemberStatus(membership.status)
+      : null;
+
+    if (membershipStatus === null || membershipStatus === 'left') {
+      return null;
+    }
 
     const approvedCount = memberships.filter((m) =>
       isActiveCommunityMember(m)
@@ -220,9 +227,7 @@ export const getCommunity = query({
       memberCount: approvedCount,
       joinApprovalMode: community.joinApprovalMode ?? 'automatic',
       myRole: membership?.role ?? null,
-      myMembershipStatus: membership
-        ? effectiveMemberStatus(membership.status)
-        : null,
+      myMembershipStatus: membershipStatus,
       myNotificationsEnabled: membership?.notificationsEnabled ?? true,
     };
   },
@@ -472,10 +477,11 @@ export const markCommunityViewed = mutation({
       .unique();
 
     if (!membership || !isActiveCommunityMember(membership)) {
-      throw new Error('אין הרשאה');
+      return { status: 'skipped' as const };
     }
 
     await ctx.db.patch(membership._id, { lastViewedAt: Date.now() });
+    return { status: 'marked' as const };
   },
 });
 

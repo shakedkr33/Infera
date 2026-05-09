@@ -158,6 +158,9 @@ export const hasMyAssignedEventTasksForEvent = query({
 
     const event = await ctx.db.get(eventId);
     if (!event) return { hasAssignedTasks: false, count: 0 };
+    if (event.status === 'cancelled') {
+      return { hasAssignedTasks: false, count: 0 };
+    }
 
     if (event.communityId) {
       const membership = await getCommunityMembership(
@@ -177,7 +180,7 @@ export const hasMyAssignedEventTasksForEvent = query({
       .withIndex('by_event', (q) => q.eq('eventId', eventId))
       .collect();
     const count = eventTasks.filter(
-      (task) => task.assignedToUserId === userId
+      (task) => task.assignedToUserId === userId && task.completed !== true
     ).length;
 
     return { hasAssignedTasks: count > 0, count };

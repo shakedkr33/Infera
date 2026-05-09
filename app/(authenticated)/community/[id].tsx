@@ -16,10 +16,14 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  type GestureResponderEvent,
+  type StyleProp,
+  type TextStyle,
   useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
@@ -34,6 +38,11 @@ import { getConvexErrorCode } from '@/lib/utils/convexError';
 
 const PRIMARY = '#36a9e2';
 const NOW_PLUS_60_DAYS = () => Date.now() + 60 * 24 * 60 * 60 * 1000;
+const CALENDAR_REMOVE_CONFIRM_TITLE = 'להסיר מהיומן?';
+const CALENDAR_REMOVE_CONFIRM_MESSAGE =
+  'שימי לב, הוקצו לך משימות באירוע הזה. האירוע יוסר מהיומן שלך, אבל המשימות עדיין יופיעו במסך המשימות.';
+const CALENDAR_REMOVE_CONFIRMATION_CODE =
+  'CALENDAR_REMOVE_REQUIRES_ACTIVE_TASK_CONFIRMATION';
 
 const TABS = ['הכל', 'אירועים', 'תזכורות', 'פעילות'] as const;
 type Tab = (typeof TABS)[number];
@@ -50,7 +59,14 @@ const EVENT_COLORS = [
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type RsvpStatus = 'yes' | 'no' | 'maybe' | 'none';
-type TaskSummary = { total: number; assigned: number };
+type TaskSummary = {
+  total: number;
+  assigned: number;
+  totalTasksCount: number;
+  assignedTasksCount: number;
+  myAssignedTasks: Array<{ id: Id<'eventTasks'>; title: string }>;
+  hasMyAssignedTasks: boolean;
+};
 
 interface EventDoc {
   _id: Id<'events'>;
@@ -160,6 +176,118 @@ function formatDueDate(ts: number): string {
     day: 'numeric',
     month: 'short',
   });
+}
+
+interface TaskSummaryLineProps {
+  taskSummary: TaskSummary;
+  copy: 'full' | 'compact';
+  style: StyleProp<TextStyle>;
+  doneStyle?: StyleProp<TextStyle>;
+}
+
+function TaskSummaryLine({
+  taskSummary,
+  copy,
+  style,
+  doneStyle,
+}: TaskSummaryLineProps) {
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const assignedTasksCount =
+    taskSummary.assignedTasksCount ?? taskSummary.assigned;
+  const totalTasksCount = taskSummary.totalTasksCount ?? taskSummary.total;
+  const myTaskTitles = taskSummary.myAssignedTasks
+    .map((task) => task.title.trim())
+    .filter((title) => title.length > 0);
+  const hasMyAssignedTasks =
+    taskSummary.hasMyAssignedTasks && myTaskTitles.length > 0;
+  const baseText =
+    copy === 'full'
+      ? `${assignedTasksCount}/${totalTasksCount} משימות הוקצו`
+      : `${assignedTasksCount}/${totalTasksCount} הוקצו`;
+
+  const handleTaskLinePress = useCallback(
+    (event: GestureResponderEvent): void => {
+      event.stopPropagation();
+      setTooltipVisible((visible) => !visible);
+    },
+    []
+  );
+
+  const handleTooltipPress = useCallback(
+    (event: GestureResponderEvent): void => {
+      event.stopPropagation();
+    },
+    []
+  );
+
+  const lineText = (
+    <Text
+      numberOfLines={1}
+      style={[style, assignedTasksCount === totalTasksCount ? doneStyle : null]}
+    >
+      {baseText}
+      {hasMyAssignedTasks ? ' · ' : ''}
+      {hasMyAssignedTasks ? (
+        <Text style={styles.myTasksIndicator}>גם לך</Text>
+      ) : null}
+    </Text>
+  );
+
+  return (
+    <>
+      {hasMyAssignedTasks ? (
+        <Pressable
+          accessibilityHint="פותח את המשימות שלך באירוע"
+          accessibilityLabel="גם לך יש משימות באירוע"
+          accessibilityRole="button"
+          hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
+          onPress={handleTaskLinePress}
+          style={styles.taskSummaryPressable}
+        >
+          {lineText}
+        </Pressable>
+      ) : (
+        lineText
+      )}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setTooltipVisible(false)}
+        transparent
+        visible={tooltipVisible}
+      >
+        <Pressable
+          onPress={() => setTooltipVisible(false)}
+          style={styles.myTasksTooltipBackdrop}
+        >
+          <Pressable
+            accessible={true}
+            accessibilityLabel="המשימות שלך"
+            onPress={handleTooltipPress}
+            style={styles.myTasksTooltip}
+          >
+            {myTaskTitles.length === 1 ? (
+              <Text numberOfLines={3} style={styles.myTasksTooltipText}>
+                {`המשימה שלך: ${myTaskTitles[0]}`}
+              </Text>
+            ) : (
+              <>
+                <Text style={styles.myTasksTooltipTitle}>המשימות שלך:</Text>
+                {myTaskTitles.map((title, index) => (
+                  <Text
+                    key={`${title}-${index}`}
+                    numberOfLines={2}
+                    style={styles.myTasksTooltipText}
+                  >
+                    {`• ${title}`}
+                  </Text>
+                ))}
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </>
+  );
 }
 
 // ─── RSVP Bottom Sheet ────────────────────────────────────────────────────────
@@ -387,7 +515,7 @@ interface CommunityEventFlyerCardProps {
   /** When false for participants, hide X/Y task counts (tasks not visible to them). */
   showTaskMetrics?: boolean;
   isSavedToMyCalendar?: boolean;
-  onCalendarToggle?: (eventId: Id<'events'>) => void;
+  onCalendarToggle?: (eventId: Id<'events'>) => void | Promise<void>;
   /** false for pending / non-active members (no personal calendar for community events) */
   viewerIsActiveCommunityMember?: boolean;
   communityArchived?: boolean;
@@ -401,7 +529,6 @@ function CommunityEventFlyerCard({
   onOpenDetails,
   onRsvpSelect,
   flyerDetailsOnly = false,
-  showTaskMetrics = true,
   isSavedToMyCalendar = false,
   onCalendarToggle,
   viewerIsActiveCommunityMember = true,
@@ -435,11 +562,8 @@ function CommunityEventFlyerCard({
         : rsvpStatus === 'maybe'
           ? 'סימנת אולי'
           : 'נדרש אישור הגעה';
-  const tasksMeta =
-    showTaskMetrics && taskSummary && taskSummary.total > 0
-      ? `${taskSummary.assigned}/${taskSummary.total} משימות הוקצו`
-      : 'ללא משימות פעילות';
-
+  const taskTotal = taskSummary?.totalTasksCount ?? taskSummary?.total ?? 0;
+  const taskCopy = cardWidth < 176 ? 'compact' : 'full';
   useEffect(() => {
     if (rsvpStatus !== 'none') setShowInlineChoices(false);
   }, [rsvpStatus]);
@@ -537,16 +661,29 @@ function CommunityEventFlyerCard({
         >
           {rsvpMeta}
         </Text>
-        <Text
-          style={[
-            styles.flyerMeta,
-            styles.flyerMetaLast,
-            { color: variant.meta },
-          ]}
-          numberOfLines={1}
-        >
-          {tasksMeta}
-        </Text>
+        {taskSummary && taskTotal > 0 ? (
+          <TaskSummaryLine
+            copy={taskCopy}
+            doneStyle={styles.flyerMetaDone}
+            style={[
+              styles.flyerMeta,
+              styles.flyerMetaLast,
+              { color: variant.meta },
+            ]}
+            taskSummary={taskSummary}
+          />
+        ) : (
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.flyerMeta,
+              styles.flyerMetaLast,
+              { color: variant.meta },
+            ]}
+          >
+            ללא משימות פעילות
+          </Text>
+        )}
       </Pressable>
 
       <View style={styles.flyerCtaWrap}>
@@ -578,7 +715,10 @@ function CommunityEventFlyerCard({
         ) : showOpenCalendarCta ? (
           <TouchableOpacity
             style={[styles.flyerCtaBtn, { backgroundColor: variant.buttonBg }]}
-            onPress={() => onCalendarToggle(event._id)}
+            onPress={(pressEvent) => {
+              pressEvent.stopPropagation();
+              onCalendarToggle(event._id);
+            }}
             accessible
             accessibilityRole="button"
             accessibilityLabel={openCalendarActionLabel}
@@ -759,17 +899,13 @@ function EventRow({
             </Text>
           </TouchableOpacity>
         ) : null}
-        {taskSummary && taskSummary.total > 0 ? (
-          <Text
-            style={[
-              styles.eventRowTaskSummary,
-              taskSummary.assigned === taskSummary.total
-                ? styles.eventRowTaskSummaryDone
-                : null,
-            ]}
-          >
-            {`${taskSummary.assigned}/${taskSummary.total} הוקצו`}
-          </Text>
+        {taskSummary && (taskSummary.totalTasksCount ?? taskSummary.total) > 0 ? (
+          <TaskSummaryLine
+            copy="compact"
+            doneStyle={styles.eventRowTaskSummaryDone}
+            style={styles.eventRowTaskSummary}
+            taskSummary={taskSummary}
+          />
         ) : null}
       </View>
     </Pressable>
@@ -1107,22 +1243,69 @@ function TabAll({
   const removeCommunityEventFromMyCalendar = useMutation(
     api.communityEventCalendar.removeCommunityEventFromMyCalendar
   );
+  const [calendarRemoveConfirmationEventId, setCalendarRemoveConfirmationEventId] =
+    useState<Id<'events'> | null>(null);
+
+  const showCalendarRemoveConfirmation = useCallback(
+    (eventId: Id<'events'>): void => {
+      setCalendarRemoveConfirmationEventId(eventId);
+    },
+    []
+  );
+
+  const handleConfirmCalendarRemoval = useCallback((): void => {
+    if (!calendarRemoveConfirmationEventId) return;
+    const eventId = calendarRemoveConfirmationEventId;
+    setCalendarRemoveConfirmationEventId(null);
+    removeCommunityEventFromMyCalendar({
+      eventId,
+      confirmRemoveWithActiveTask: true,
+    }).catch(() => Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן'));
+  }, [calendarRemoveConfirmationEventId, removeCommunityEventFromMyCalendar]);
+
+  const handleCancelCalendarRemoval = useCallback(
+    (): void => setCalendarRemoveConfirmationEventId(null),
+    []
+  );
 
   const handleCalendarToggle = useCallback(
-    (eventId: Id<'events'>) => {
+    async (eventId: Id<'events'>) => {
       const ev = activeEvents.find((e) => e._id === eventId);
       const saved = ev?.isSavedToMyCalendar === true;
-      const run = saved
-        ? removeCommunityEventFromMyCalendar
-        : addCommunityEventToMyCalendar;
-      return run({ eventId }).catch(() =>
-        Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן')
-      );
+      const hasMyAssignedTasks =
+        taskCountsMap[eventId]?.hasMyAssignedTasks === true &&
+        taskCountsMap[eventId]?.myAssignedTasks.length > 0;
+
+      if (saved && hasMyAssignedTasks) {
+        showCalendarRemoveConfirmation(eventId);
+        return;
+      }
+
+      try {
+        if (saved) {
+          await removeCommunityEventFromMyCalendar({ eventId });
+          return;
+        }
+        await addCommunityEventToMyCalendar({ eventId });
+      } catch (error) {
+        const errorCode = getConvexErrorCode(error);
+        if (
+          saved &&
+          (errorCode === CALENDAR_REMOVE_CONFIRMATION_CODE ||
+            errorCode === 'CALENDAR_REMOVE_BLOCKED_BY_ACTIVE_TASK')
+        ) {
+          showCalendarRemoveConfirmation(eventId);
+          return;
+        }
+        Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן');
+      }
     },
     [
       activeEvents,
       addCommunityEventToMyCalendar,
       removeCommunityEventFromMyCalendar,
+      showCalendarRemoveConfirmation,
+      taskCountsMap,
     ]
   );
 
@@ -1282,11 +1465,12 @@ function TabAll({
   );
 
   return (
-    <ScrollView
-      style={styles.tabScroll}
-      contentContainerStyle={styles.tabContent}
-      showsVerticalScrollIndicator={false}
-    >
+    <>
+      <ScrollView
+        style={styles.tabScroll}
+        contentContainerStyle={styles.tabContent}
+        showsVerticalScrollIndicator={false}
+      >
       {/* ── Section 1: האירועים שלי */}
       <View>
         <SectionHeader
@@ -1493,7 +1677,18 @@ function TabAll({
           </View>
         </View>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+      <AppConfirmationDialog
+        cancelLabel="ביטול"
+        confirmDestructive
+        confirmLabel="להסיר בכל זאת"
+        message={CALENDAR_REMOVE_CONFIRM_MESSAGE}
+        onCancel={handleCancelCalendarRemoval}
+        onConfirm={handleConfirmCalendarRemoval}
+        title={CALENDAR_REMOVE_CONFIRM_TITLE}
+        visible={calendarRemoveConfirmationEventId !== null}
+      />
+    </>
   );
 }
 
@@ -2238,14 +2433,23 @@ export default function CommunityDetailScreen() {
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.loadingCenter}>
           <Ionicons name="alert-circle-outline" size={48} color="#d1d5db" />
-          <Text style={styles.emptyText}>הקהילה לא נמצאה</Text>
+          <Text style={styles.emptyText}>אין לך גישה לקהילה הזו</Text>
+          <Text style={styles.emptySubText}>
+            יכול להיות שהוסרת מהקהילה או שהקישור כבר לא פעיל.
+          </Text>
           <TouchableOpacity
             style={styles.retryBtn}
-            onPress={() => router.back()}
+            onPress={() =>
+              router.replace(
+                '/(authenticated)/communities' as Parameters<
+                  typeof router.replace
+                >[0]
+              )
+            }
             accessible
             accessibilityRole="button"
           >
-            <Text style={styles.retryText}>חזור</Text>
+            <Text style={styles.retryText}>חזרה לקהילות</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -2743,8 +2947,57 @@ const styles = StyleSheet.create({
   flyerMetaEmphasis: {
     fontWeight: '700',
   },
+  flyerMetaDone: {
+    color: '#16a34a',
+  },
   flyerMetaLast: {
     marginBottom: 0,
+  },
+  taskSummaryPressable: {
+    width: '100%',
+  },
+  myTasksIndicator: {
+    color: PRIMARY,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
+  },
+  myTasksTooltipBackdrop: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: 'rgba(15,23,42,0.08)',
+  },
+  myTasksTooltip: {
+    minWidth: 220,
+    maxWidth: 300,
+    alignItems: 'flex-end',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 6,
+    gap: 6,
+  },
+  myTasksTooltipTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  myTasksTooltipText: {
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 19,
+    textAlign: 'right',
+    writingDirection: 'rtl',
   },
   flyerCtaWrap: {
     paddingHorizontal: 10,
@@ -3032,6 +3285,14 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   emptyText: { fontSize: 16, color: '#6b7280', textAlign: 'center' },
+  emptySubText: {
+    maxWidth: 300,
+    paddingHorizontal: 16,
+    fontSize: 14,
+    color: '#94a3b8',
+    lineHeight: 22,
+    textAlign: 'center',
+  },
 
   // ── Retry
   retryBtn: {

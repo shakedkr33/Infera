@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   Linking,
@@ -19,20 +20,18 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
-import {
-  getOpenCommunityCalendarActionLabel,
-  isOpenCommunityCalendarActionVisible,
-} from '@/lib/openCommunityCalendarUi';
-import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
-import { getFlexDirection, getTextAlign } from '@/lib/rtl';
+import { isOpenCommunityCalendarActionVisible } from '@/lib/openCommunityCalendarUi';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 
-const HEB_TEXT_ALIGN = getTextAlign() ?? 'right';
-const HEB_ROW = getFlexDirection();
+const HEB_TEXT_ALIGN = 'left';
+const HEB_ROW = 'row';
+const HEB_FLEX_END = 'flex-start';
+const HEB_WRITING_DIRECTION: undefined = undefined;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -116,9 +115,27 @@ function uniqueById<T>(items: readonly T[], getId: (item: T) => string): T[] {
 // ─── RSVP Options (module-level to avoid recreating in render) ────────────────
 
 const RSVP_OPTIONS = [
-  { status: 'yes' as const, label: 'כן', activeColor: '#22c55e' },
-  { status: 'maybe' as const, label: 'אולי', activeColor: '#eab308' },
-  { status: 'no' as const, label: 'לא', activeColor: '#ef4444' },
+  {
+    status: 'yes' as const,
+    label: 'כן',
+    selectedBg: '#dcfce7',
+    selectedBorder: '#16a34a',
+    selectedText: '#14532d',
+  },
+  {
+    status: 'maybe' as const,
+    label: 'אולי',
+    selectedBg: '#fef3c7',
+    selectedBorder: '#d97706',
+    selectedText: '#92400e',
+  },
+  {
+    status: 'no' as const,
+    label: 'לא',
+    selectedBg: '#fee2e2',
+    selectedBorder: '#dc2626',
+    selectedText: '#991b1b',
+  },
 ];
 
 // ─── Overflow Menu ────────────────────────────────────────────────────────────
@@ -225,9 +242,6 @@ export default function EventDetailScreen() {
   const addCommunityEventToMyCalendar = useMutation(
     api.communityEventCalendar.addCommunityEventToMyCalendar
   );
-  const removeCommunityEventFromMyCalendar = useMutation(
-    api.communityEventCalendar.removeCommunityEventFromMyCalendar
-  );
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const removeEventTask = useMutation(api.eventTasks.remove);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
@@ -271,9 +285,9 @@ export default function EventDetailScreen() {
   const [cancelReason, setCancelReason] = useState('');
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [isCopyingImportantItems, setIsCopyingImportantItems] = useState(false);
-  const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<number | null>(
-    null
-  );
+  const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<
+    number | null
+  >(null);
   const [importantItemsCopyError, setImportantItemsCopyError] = useState<
     string | null
   >(null);
@@ -320,27 +334,18 @@ export default function EventDetailScreen() {
       eventId,
       eventTasks,
       myAssignedEventTasksState,
-      setRsvpNoAndUnclaimMyEventTasks,
       showRsvpNoBlockedDialog,
       upsertRsvp,
     ]
   );
 
-  const handleOpenCalendarToggle = useCallback(() => {
+  const handleAddToCalendar = useCallback(() => {
     if (!eventId || !event) return;
-    const isSaved = event.isSavedToMyCalendar === true;
-    const run = isSaved
-      ? removeCommunityEventFromMyCalendar
-      : addCommunityEventToMyCalendar;
-    run({ eventId }).catch(() =>
-      Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן')
+    if (event.isSavedToMyCalendar === true) return;
+    addCommunityEventToMyCalendar({ eventId }).catch(() =>
+      Alert.alert('שגיאה', 'לא הצלחנו להוסיף ליומן. נסי שוב בעוד רגע.')
     );
-  }, [
-    event,
-    eventId,
-    addCommunityEventToMyCalendar,
-    removeCommunityEventFromMyCalendar,
-  ]);
+  }, [event, eventId, addCommunityEventToMyCalendar]);
 
   const handleCopyImportantItems = useCallback(async () => {
     if (!eventId || isCopyingImportantItems) return;
@@ -425,24 +430,54 @@ export default function EventDetailScreen() {
     }, 300);
   }, [event, eventId, createShareLinkMutation]);
 
-  // FIXED: make saved event addresses tappable without changing stored data.
-  const handleOpenLocation = useCallback(() => {
+  const openNavigationUrl = useCallback(
+    (app: 'apple' | 'google' | 'waze'): void => {
+      const location = event?.location?.trim();
+      if (!location) return;
+
+      const encodedLocation = encodeURIComponent(location);
+      const url =
+        app === 'apple'
+          ? `maps://?q=${encodedLocation}`
+          : app === 'google'
+            ? Platform.OS === 'ios'
+              ? `comgooglemaps://?q=${encodedLocation}`
+              : `https://www.google.com/maps/search/?api=1&query=${encodedLocation}`
+            : `waze://?q=${encodedLocation}&navigate=yes`;
+
+      Linking.openURL(url).catch(() => {
+        Alert.alert('שגיאה', 'לא הצלחנו לפתוח ניווט. נסי שוב בעוד רגע.');
+      });
+    },
+    [event?.location]
+  );
+
+  const handleOpenNavigationChooser = useCallback(() => {
     const location = event?.location?.trim();
     if (!location) return;
 
-    const encodedLocation = encodeURIComponent(location);
-    const primaryUrl =
-      Platform.OS === 'ios'
-        ? `maps://?q=${encodedLocation}`
-        : `geo:0,0?q=${encodedLocation}`;
-    const fallbackUrl = `https://maps.google.com/?q=${encodedLocation}`;
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Apple Maps', 'Google Maps', 'Waze', 'ביטול'],
+          cancelButtonIndex: 3,
+          userInterfaceStyle: 'light',
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 0) openNavigationUrl('apple');
+          if (buttonIndex === 1) openNavigationUrl('google');
+          if (buttonIndex === 2) openNavigationUrl('waze');
+        }
+      );
+      return;
+    }
 
-    Linking.openURL(primaryUrl).catch(() => {
-      Linking.openURL(fallbackUrl).catch(() => {
-        Alert.alert('שגיאה', 'לא ניתן לפתוח את המיקום');
-      });
-    });
-  }, [event?.location]);
+    Alert.alert('בחרי אפליקציית ניווט', undefined, [
+      { text: 'Google Maps', onPress: () => openNavigationUrl('google') },
+      { text: 'Waze', onPress: () => openNavigationUrl('waze') },
+      { text: 'ביטול', style: 'cancel' },
+    ]);
+  }, [event?.location, openNavigationUrl]);
 
   const overflowItems = useMemo<OverflowItem[]>(() => {
     const items: OverflowItem[] = [
@@ -572,15 +607,13 @@ export default function EventDetailScreen() {
     (task) => task._id as string
   );
 
-  const assignedCount =
-    eventTasksForDisplay.filter(
-      (t) => !!t.assignedToUserId || !!t.assignedToManual?.trim()
-    ).length;
+  const assignedCount = eventTasksForDisplay.filter(
+    (t) => !!t.assignedToUserId || !!t.assignedToManual?.trim()
+  ).length;
 
   const yesCount = rsvps?.filter((r) => r.status === 'yes').length ?? 0;
   const maybeCount = rsvps?.filter((r) => r.status === 'maybe').length ?? 0;
   const noCount = rsvps?.filter((r) => r.status === 'no').length ?? 0;
-  const hasAnyRsvps = yesCount > 0 || maybeCount > 0 || noCount > 0;
   const participantNames = (event.participants ?? [])
     .map((name) => name.trim())
     .filter((name) => name.length > 0);
@@ -602,6 +635,7 @@ export default function EventDetailScreen() {
   const importantItemsButtonLabel = allImportantItemsCopied
     ? IMPORTANT_ITEMS_COPY_SUCCESS
     : IMPORTANT_ITEMS_COPY_DEFAULT;
+  const eventRequiresRsvp = event.requiresRsvp === true;
 
   const openCommunityCalendarInfoReady =
     !event.communityId ||
@@ -741,16 +775,28 @@ export default function EventDetailScreen() {
 
           {/* Location — address text */}
           {event.location ? (
-            <TouchableOpacity
-              style={styles.detailRow}
-              onPress={handleOpenLocation}
-              accessible
-              accessibilityRole="link"
-              accessibilityLabel="פתח מיקום במפות"
-            >
-              <Ionicons name="location-outline" size={18} color={PRIMARY} />
-              <Text style={styles.linkText}>{event.location}</Text>
-            </TouchableOpacity>
+            <View style={styles.locationDetailRow}>
+              <TouchableOpacity
+                style={styles.locationTextPressable}
+                onPress={handleOpenNavigationChooser}
+                accessible
+                accessibilityRole="link"
+                accessibilityLabel="פתח מיקום במפות"
+              >
+                <Ionicons name="location-outline" size={18} color={PRIMARY} />
+                <Text style={styles.linkText}>{event.location}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.navigateInlineBtn}
+                onPress={handleOpenNavigationChooser}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="נווט למיקום האירוע"
+              >
+                <Ionicons name="navigate-outline" size={14} color="#0369a1" />
+                <Text style={styles.navigateInlineBtnText}>נווט</Text>
+              </TouchableOpacity>
+            </View>
           ) : null}
 
           {/* Online URL — meeting/video link */}
@@ -842,9 +888,11 @@ export default function EventDetailScreen() {
 
         {hasImportantItems ? (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>
-              {IMPORTANT_ITEMS_SECTION_TITLE}
-            </Text>
+            <View style={styles.importantItemsHeaderChip}>
+              <Text style={styles.importantItemsHeaderChipText}>
+                {`📌 ${IMPORTANT_ITEMS_SECTION_TITLE} · ${importantItems.length}`}
+              </Text>
+            </View>
             <View style={styles.importantItemsList}>
               {importantItems.map((item) => (
                 <View key={item.id} style={styles.importantItemRow}>
@@ -891,8 +939,7 @@ export default function EventDetailScreen() {
         ) : null}
 
         {/* ── Section 2: RSVP / passive state */}
-        {!skipCommunityRsvpPrompt && event.requiresRsvp !== false ? (
-          /* RSVP required (true or legacy undefined) */
+        {!skipCommunityRsvpPrompt && eventRequiresRsvp ? (
           <View
             style={[
               styles.card,
@@ -906,15 +953,24 @@ export default function EventDetailScreen() {
                 const isActive = currentStatus === opt.status;
                 const rsvpDisabled = event.status === 'cancelled';
                 return (
-                  <Pressable
+                  <TouchableOpacity
                     key={opt.status}
+                    activeOpacity={0.82}
                     disabled={rsvpDisabled}
-                    style={({ pressed }) => [
+                    hitSlop={{
+                      top: 8,
+                      bottom: 8,
+                      left: 6,
+                      right: 6,
+                    }}
+                    style={[
                       styles.rsvpBtn,
                       {
-                        backgroundColor: isActive ? opt.activeColor : '#f3f4f6',
-                        opacity: rsvpDisabled ? 0.45 : pressed ? 0.88 : 1,
+                        backgroundColor: isActive ? opt.selectedBg : '#f8fafc',
+                        borderColor: isActive ? opt.selectedBorder : '#64748b',
+                        opacity: rsvpDisabled ? 0.45 : 1,
                       },
+                      isActive && styles.rsvpBtnSelected,
                     ]}
                     onPress={() => handleRsvp(opt.status)}
                     accessible
@@ -928,12 +984,15 @@ export default function EventDetailScreen() {
                     <Text
                       style={[
                         styles.rsvpBtnText,
-                        isActive && styles.rsvpBtnTextActive,
+                        isActive && {
+                          color: opt.selectedText,
+                          fontWeight: '800',
+                        },
                       ]}
                     >
                       {opt.label}
                     </Text>
-                  </Pressable>
+                  </TouchableOpacity>
                 );
               })}
             </View>
@@ -948,17 +1007,23 @@ export default function EventDetailScreen() {
             </View>
             <Pressable
               accessibilityHint="מוסיף או מסיר את האירוע מהיומן האישי שלך"
-              accessibilityLabel={getOpenCommunityCalendarActionLabel(
-                event.isSavedToMyCalendar === true
-              )}
+              accessibilityLabel={
+                event.isSavedToMyCalendar === true ? 'נוסף ליומן' : 'הוסף ליומן'
+              }
               accessibilityRole="button"
+              accessibilityState={{
+                disabled: event.isSavedToMyCalendar === true,
+              }}
               accessible={true}
-              onPress={handleOpenCalendarToggle}
+              disabled={event.isSavedToMyCalendar === true}
+              onPress={handleAddToCalendar}
               style={({ pressed }) => [
                 event.isSavedToMyCalendar === true
                   ? styles.openCalendarBtnSecondary
                   : styles.openCalendarBtn,
-                pressed && styles.openCalendarBtnPressed,
+                pressed &&
+                  event.isSavedToMyCalendar !== true &&
+                  styles.openCalendarBtnPressed,
               ]}
             >
               <Text
@@ -968,9 +1033,9 @@ export default function EventDetailScreen() {
                     : styles.openCalendarBtnText
                 }
               >
-                {getOpenCommunityCalendarActionLabel(
-                  event.isSavedToMyCalendar === true
-                )}
+                {event.isSavedToMyCalendar === true
+                  ? 'נוסף ליומן'
+                  : 'הוסף ליומן'}
               </Text>
             </Pressable>
           </View>
@@ -981,6 +1046,7 @@ export default function EventDetailScreen() {
           <View style={styles.card}>
             {/* Header: title + assignment summary */}
             <View style={styles.taskSectionHeader}>
+              <Text style={styles.taskSectionTitle}>משימות לאירוע</Text>
               {eventTasksForDisplay.length > 0 ? (
                 <Text
                   style={[
@@ -993,7 +1059,6 @@ export default function EventDetailScreen() {
                   {`${assignedCount}/${eventTasksForDisplay.length} הוקצו`}
                 </Text>
               ) : null}
-              <Text style={styles.sectionTitle}>משימות לאירוע</Text>
             </View>
 
             {canManageTasks ? (
@@ -1055,14 +1120,20 @@ export default function EventDetailScreen() {
                   const assigneeDisplay = (
                     task as { assigneeDisplay?: string }
                   ).assigneeDisplay?.trim();
-                  const isAssigned = !!assigneeDisplay;
+                  const isAssigned = Boolean(
+                    assigneeDisplay ||
+                      task.assignedToUserId ||
+                      task.assignedToManual?.trim()
+                  );
                   const isAssignedToCurrentUser =
                     task.assignedToUserId === currentUserId;
                   const assignmentLabel = !isAssigned
-                    ? 'לא הוקצה'
+                    ? 'אני אקח'
                     : isAssignedToCurrentUser
                       ? 'הוקצה אליי'
-                      : `הוקצה ל־${assigneeDisplay}`;
+                      : assigneeDisplay
+                        ? `הוקצה ל־${assigneeDisplay}`
+                        : 'הוקצה';
                   return (
                     <View key={task._id} style={styles.taskRow}>
                       {/* Actions — left side in RTL (creator only) */}
@@ -1126,71 +1197,133 @@ export default function EventDetailScreen() {
                           {task.title}
                         </Text>
                         {canManageTasks ? (
-                          <Text
-                            style={
-                              isAssigned
-                                ? styles.taskAssignedLabel
-                                : styles.taskUnassignedLabel
-                            }
-                            numberOfLines={1}
-                          >
-                            {assignmentLabel}
-                          </Text>
-                        ) : (
-                          <TouchableOpacity
-                            style={styles.taskAssignmentAction}
-                            disabled={isAssigned && !isAssignedToCurrentUser}
-                            onPress={() => {
-                              if (!isAssigned) {
-                                Alert.alert('להשתבץ למשימה הזו?', '', [
-                                  { text: 'ביטול', style: 'cancel' },
-                                  {
-                                    text: 'כן, אני אקח את זה',
-                                    onPress: () =>
-                                      claimEventTask({ id: task._id }).catch(
-                                        () =>
-                                          Alert.alert(
-                                            'שגיאה',
-                                            'לא ניתן להשתבץ למשימה כרגע'
-                                          )
-                                      ),
-                                  },
-                                ]);
-                                return;
+                          isAssigned ? (
+                            <View style={styles.taskAssignmentStatusRow}>
+                              <Text
+                                style={
+                                  isAssignedToCurrentUser
+                                    ? styles.taskAssignedLabel
+                                    : styles.taskAssignedOtherLabel
+                                }
+                                numberOfLines={1}
+                              >
+                                {assignmentLabel}
+                              </Text>
+                              {isAssignedToCurrentUser ? (
+                                <TouchableOpacity
+                                  hitSlop={{
+                                    top: 8,
+                                    bottom: 8,
+                                    left: 8,
+                                    right: 8,
+                                  }}
+                                  onPress={() =>
+                                    unclaimEventTask({ id: task._id }).catch(
+                                      () =>
+                                        Alert.alert(
+                                          'שגיאה',
+                                          'לא ניתן להסיר הקצאה כרגע'
+                                        )
+                                    )
+                                  }
+                                  style={styles.taskUnassignBtn}
+                                  accessible
+                                  accessibilityRole="button"
+                                  accessibilityLabel="בטל הקצאה"
+                                >
+                                  <Text style={styles.taskUnassignBtnText}>
+                                    בטל הקצאה
+                                  </Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          ) : (
+                            <TouchableOpacity
+                              hitSlop={{
+                                top: 8,
+                                bottom: 8,
+                                left: 8,
+                                right: 8,
+                              }}
+                              style={styles.taskClaimBtn}
+                              onPress={() =>
+                                claimEventTask({ id: task._id }).catch(() =>
+                                  Alert.alert(
+                                    'שגיאה',
+                                    'לא ניתן להשתבץ למשימה כרגע'
+                                  )
+                                )
                               }
-                              if (isAssignedToCurrentUser) {
-                                Alert.alert('להסיר אותך מהמשימה?', '', [
-                                  { text: 'ביטול', style: 'cancel' },
-                                  {
-                                    text: 'כן, להסיר אותי',
-                                    onPress: () =>
-                                      unclaimEventTask({ id: task._id }).catch(
-                                        () =>
-                                          Alert.alert(
-                                            'שגיאה',
-                                            'לא ניתן להסיר הקצאה כרגע'
-                                          )
-                                      ),
-                                  },
-                                ]);
-                              }
-                            }}
-                            accessible
-                            accessibilityRole="button"
-                            accessibilityLabel={assignmentLabel}
-                          >
+                              accessible
+                              accessibilityRole="button"
+                              accessibilityLabel="אני אקח"
+                            >
+                              <Text style={styles.taskClaimBtnText}>
+                                אני אקח
+                              </Text>
+                            </TouchableOpacity>
+                          )
+                        ) : isAssigned ? (
+                          <View style={styles.taskAssignmentStatusRow}>
                             <Text
                               style={
                                 isAssignedToCurrentUser
                                   ? styles.taskAssignedLabel
-                                  : isAssigned
-                                    ? styles.taskAssignedOtherLabel
-                                    : styles.taskUnassignedLabel
+                                  : styles.taskAssignedOtherLabel
                               }
                               numberOfLines={1}
                             >
                               {assignmentLabel}
                             </Text>
+                            {isAssignedToCurrentUser ? (
+                              <TouchableOpacity
+                                hitSlop={{
+                                  top: 8,
+                                  bottom: 8,
+                                  left: 8,
+                                  right: 8,
+                                }}
+                                onPress={() =>
+                                  unclaimEventTask({ id: task._id }).catch(() =>
+                                    Alert.alert(
+                                      'שגיאה',
+                                      'לא ניתן להסיר הקצאה כרגע'
+                                    )
+                                  )
+                                }
+                                style={styles.taskUnassignBtn}
+                                accessible
+                                accessibilityRole="button"
+                                accessibilityLabel="בטל הקצאה"
+                              >
+                                <Text style={styles.taskUnassignBtnText}>
+                                  בטל הקצאה
+                                </Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        ) : (
+                          <TouchableOpacity
+                            hitSlop={{
+                              top: 8,
+                              bottom: 8,
+                              left: 8,
+                              right: 8,
+                            }}
+                            style={styles.taskClaimBtn}
+                            onPress={() =>
+                              claimEventTask({ id: task._id }).catch(() =>
+                                Alert.alert(
+                                  'שגיאה',
+                                  'לא ניתן להשתבץ למשימה כרגע'
+                                )
+                              )
+                            }
+                            accessible
+                            accessibilityRole="button"
+                            accessibilityLabel="אני אקח"
+                          >
+                            <Text style={styles.taskClaimBtnText}>אני אקח</Text>
                           </TouchableOpacity>
                         )}
                       </View>
@@ -1205,52 +1338,33 @@ export default function EventDetailScreen() {
         {/* ── Section 4: משתתפים */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>משתתפים</Text>
-          {hasAnyRsvps || hasParticipants ? (
-            <>
-              {hasAnyRsvps ? (
-                <View style={styles.pillsRow}>
-                  {yesCount > 0 && (
-                    <View style={[styles.pill, styles.pillYes]}>
-                      <Text
-                        style={[styles.pillText, styles.pillYesText]}
-                      >{`מגיעים (${yesCount})`}</Text>
-                    </View>
-                  )}
-                  {maybeCount > 0 && (
-                    <View style={[styles.pill, styles.pillMaybe]}>
-                      <Text
-                        style={[styles.pillText, styles.pillMaybeText]}
-                      >{`אולי (${maybeCount})`}</Text>
-                    </View>
-                  )}
-                  {noCount > 0 && (
-                    <View style={[styles.pill, styles.pillNo]}>
-                      <Text
-                        style={[styles.pillText, styles.pillNoText]}
-                      >{`לא מגיעים (${noCount})`}</Text>
-                    </View>
-                  )}
-                </View>
-              ) : null}
-
-              {hasParticipants ? (
-                <View style={styles.participantChips}>
-                  {participantNames.map((name) => (
-                    <View key={name} style={styles.participantChip}>
-                      <Text style={styles.participantChipText}>{name}</Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
-            </>
-          ) : (
-            <View style={styles.emptyParticipants}>
-              <Ionicons name="people-outline" size={32} color="#d1d5db" />
-              <Text style={styles.emptyParticipantsText}>
-                עדיין אין תגובות לאירוע זה
-              </Text>
+          <View style={styles.pillsRow}>
+            <View style={[styles.pill, styles.pillYes]}>
+              <Text
+                style={[styles.pillText, styles.pillYesText]}
+              >{`מגיעים (${yesCount})`}</Text>
             </View>
-          )}
+            <View style={[styles.pill, styles.pillMaybe]}>
+              <Text
+                style={[styles.pillText, styles.pillMaybeText]}
+              >{`אולי (${maybeCount})`}</Text>
+            </View>
+            <View style={[styles.pill, styles.pillNo]}>
+              <Text
+                style={[styles.pillText, styles.pillNoText]}
+              >{`לא (${noCount})`}</Text>
+            </View>
+          </View>
+
+          {hasParticipants ? (
+            <View style={styles.participantChips}>
+              {participantNames.map((name) => (
+                <View key={name} style={styles.participantChip}>
+                  <Text style={styles.participantChipText}>{name}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
         </View>
       </ScrollView>
 
@@ -1446,17 +1560,52 @@ const styles = StyleSheet.create({
     gap: 10,
     width: '100%',
   },
+  locationDetailRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+  },
+  locationTextPressable: {
+    flex: 1,
+    minHeight: 44,
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 10,
+  },
+  navigateInlineBtn: {
+    minHeight: 44,
+    minWidth: 68,
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: '#E6F4FB',
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+    paddingHorizontal: 10,
+  },
+  navigateInlineBtnText: {
+    color: '#0369a1',
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
   detailText: {
     fontSize: 14,
     color: '#374151',
     textAlign: HEB_TEXT_ALIGN,
     flex: 1,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   linkText: {
     fontSize: 14,
     color: PRIMARY,
     textAlign: HEB_TEXT_ALIGN,
     flex: 1,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   separator: {
     height: 1,
@@ -1540,32 +1689,50 @@ const styles = StyleSheet.create({
   rsvpCardElevated: {
     zIndex: 2,
     elevation: 4,
+    gap: 10,
   },
   rsvpTitle: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#111827',
     textAlign: HEB_TEXT_ALIGN,
+    alignSelf: 'stretch',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   rsvpRow: {
-    flexDirection: 'row',
-    gap: 8,
+    flexDirection: HEB_ROW,
+    gap: 6,
+    alignItems: 'stretch',
+    alignSelf: 'stretch',
+    width: '100%',
   },
   rsvpBtn: {
     flex: 1,
-    height: 44,
-    borderRadius: 12,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  rsvpBtnSelected: {
+    elevation: 3,
+    shadowOpacity: 0.12,
   },
   rsvpBtnText: {
-    fontSize: 15,
-    color: '#6b7280',
-    fontWeight: '600',
-  },
-  rsvpBtnTextActive: {
-    color: '#fff',
+    fontSize: 14,
+    color: '#334155',
     fontWeight: '700',
+    lineHeight: 18,
+    textAlign: 'center',
+    includeFontPadding: false,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   rsvpDisabled: { opacity: 0.4 },
 
@@ -1709,6 +1876,23 @@ const styles = StyleSheet.create({
   // ── Important items
   importantItemsList: {
     gap: 8,
+    width: '100%',
+  },
+  importantItemsHeaderChip: {
+    alignSelf: HEB_FLEX_END,
+    backgroundColor: '#E6F4FB',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#BAE6FD',
+  },
+  importantItemsHeaderChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0369a1',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   importantItemRow: {
     flexDirection: HEB_ROW,
@@ -1728,26 +1912,31 @@ const styles = StyleSheet.create({
     textAlign: HEB_TEXT_ALIGN,
     lineHeight: 22,
     fontWeight: '500',
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   importantItemsCopyBtn: {
     marginTop: 4,
-    backgroundColor: PRIMARY,
-    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
     paddingVertical: 14,
+    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 48,
+    borderWidth: 2,
+    borderColor: PRIMARY,
   },
   importantItemsCopiedBtn: {
     marginTop: 4,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
     paddingVertical: 14,
+    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 48,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderWidth: 2,
+    borderColor: '#7dd3fc',
   },
   importantItemsCopyBtnPressed: {
     opacity: 0.9,
@@ -1756,7 +1945,7 @@ const styles = StyleSheet.create({
     opacity: 0.55,
   },
   importantItemsCopyBtnText: {
-    color: '#fff',
+    color: '#0369a1',
     fontSize: 16,
     fontWeight: '700',
     textAlign: 'center',
@@ -1830,9 +2019,17 @@ const styles = StyleSheet.create({
 
   // ── Tasks
   taskSectionHeader: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     justifyContent: 'space-between',
     alignItems: 'center',
+    width: '100%',
+  },
+  taskSectionTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: HEB_TEXT_ALIGN,
   },
   taskVisibilitySection: {
     flexDirection: 'row-reverse',
@@ -1891,47 +2088,101 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#9ca3af',
     fontWeight: '600',
+    textAlign: 'left',
   },
   taskSummaryAllDone: {
     color: '#16a34a',
   },
   tasksList: { gap: 0 },
   taskRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: HEB_ROW,
     alignItems: 'center',
     gap: 10,
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f3f4f6',
+    width: '100%',
   },
-  taskContent: { flex: 1, gap: 3 },
+  taskContent: {
+    flex: 1,
+    alignItems: 'stretch',
+    gap: 6,
+    minWidth: 0,
+  },
   taskTitle: {
+    alignSelf: 'stretch',
     fontSize: 14,
     fontWeight: '500',
     color: '#374151',
     textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskAssignedLabel: {
+    alignSelf: 'stretch',
     fontSize: 12,
     color: PRIMARY,
     fontWeight: '600',
     textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskAssignedOtherLabel: {
+    alignSelf: 'stretch',
     fontSize: 12,
     color: '#6b7280',
     fontWeight: '600',
     textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskUnassignedLabel: {
+    alignSelf: 'stretch',
     fontSize: 12,
     color: '#9ca3af',
     textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskAssignmentAction: {
-    minHeight: 44,
+    minHeight: 32,
     justifyContent: 'center',
-    alignSelf: 'flex-end',
+    alignSelf: HEB_FLEX_END,
+    alignItems: HEB_FLEX_END,
+  },
+  taskAssignmentStatusRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    alignSelf: 'stretch',
+    gap: 10,
+  },
+  taskClaimBtn: {
+    minHeight: 32,
+    alignSelf: HEB_FLEX_END,
+    alignItems: HEB_FLEX_END,
+    justifyContent: 'center',
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 0,
+    paddingVertical: 4,
+  },
+  taskClaimBtnText: {
+    color: PRIMARY,
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  taskUnassignBtn: {
+    minHeight: 32,
+    justifyContent: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  taskUnassignBtnText: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
   },
   taskActions: {
     flexDirection: 'row',
