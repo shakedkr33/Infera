@@ -23,6 +23,7 @@ import {
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
+import { getAvatarInitials } from '@/lib/avatarInitials';
 
 // ============================================================================
 // מסך פרופיל
@@ -51,7 +52,12 @@ export default function ProfileScreen() {
     rawNickname.trim() ||
     [rawFirstName, rawLastName].filter(Boolean).join(' ').trim() ||
     'המשתמש שלי';
-  const avatarInitial = displayName.charAt(0) || 'מ';
+  const avatarInitial =
+    getAvatarInitials({
+      firstName: rawFirstName,
+      lastName: rawLastName,
+      fullName: displayName,
+    }) || 'מ';
   const avatarColor = onboardingData.personalColor || '#36a9e2';
 
   // ============================================================================

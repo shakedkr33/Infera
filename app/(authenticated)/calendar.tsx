@@ -25,6 +25,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -460,8 +461,6 @@ export default function CalendarScreen(): React.JSX.Element {
     communityId ? { communityId: communityId as Id<'communities'> } : 'skip'
   );
 
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const userFirstName = currentUser?.fullName?.split(' ')[0] ?? null;
   const spaceId = useQuery(api.users.getMySpace);
 
   const [viewMode, setViewMode] = useState<'timeline' | 'monthly'>('timeline');
@@ -1093,175 +1092,70 @@ export default function CalendarScreen(): React.JSX.Element {
           </View>
         ) : null}
 
-        {/* Header — Android RTL row: JS order is mirrored; reorder children to match iOS (bell left, avatar right). */}
+        {/* Header */}
         <View style={styles.header}>
-          <View style={styles.headerTop}>
-            {ANDROID_MATCH_IOS_LAYOUT ? (
+          <MainScreenHeader
+            title="היומן שלי"
+            onNotificationsPress={handleBellPress}
+            notificationsCount={unseenCount}
+          />
+
+          <View style={styles.monthNavRow}>
+            {viewMode === 'monthly' ? (
               <>
                 <Pressable
-                  onPress={() => router.push('/(authenticated)/profile')}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel="פתח פרופיל"
-                >
-                  <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>
-                      {userFirstName ? userFirstName[0].toUpperCase() : '?'}
-                    </Text>
-                  </View>
-                </Pressable>
-
-                <View style={styles.monthNavRow}>
-                  {viewMode === 'monthly' ? (
-                    <>
-                      <Pressable
-                        onPress={goToPrevMonth}
-                        hitSlop={12}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel="חודש קודם"
-                      >
-                        <MaterialIcons
-                          name="chevron-right"
-                          size={28}
-                          color="#647b87"
-                        />
-                      </Pressable>
-                      <Pressable
-                        onPress={goToToday}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel={`לחץ לחזור להיום, ${headerMonth}`}
-                      >
-                        <Text style={styles.monthYear}>{headerMonth}</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={goToNextMonth}
-                        hitSlop={12}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel="חודש הבא"
-                      >
-                        <MaterialIcons
-                          name="chevron-left"
-                          size={28}
-                          color="#647b87"
-                        />
-                      </Pressable>
-                    </>
-                  ) : (
-                    <Text style={styles.monthYear}>{headerMonth}</Text>
-                  )}
-                </View>
-
-                <Pressable
-                  style={styles.bellButton}
-                  onPress={handleBellPress}
+                  onPress={
+                    ANDROID_MATCH_IOS_LAYOUT ? goToPrevMonth : goToNextMonth
+                  }
+                  hitSlop={12}
                   accessible={true}
                   accessibilityRole="button"
                   accessibilityLabel={
-                    unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
+                    ANDROID_MATCH_IOS_LAYOUT ? 'חודש קודם' : 'חודש הבא'
                   }
                 >
                   <MaterialIcons
                     name={
-                      unseenCount > 0 ? 'notifications' : 'notifications-none'
+                      ANDROID_MATCH_IOS_LAYOUT
+                        ? 'chevron-right'
+                        : 'chevron-left'
                     }
-                    size={24}
-                    color="#111517"
+                    size={28}
+                    color="#647b87"
                   />
-                  {unseenCount > 0 && (
-                    <View style={styles.bellBadge}>
-                      <Text style={styles.bellBadgeText}>
-                        {unseenCount > 9 ? '9+' : unseenCount}
-                      </Text>
-                    </View>
-                  )}
+                </Pressable>
+                <Pressable
+                  onPress={goToToday}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={`לחץ לחזור להיום, ${headerMonth}`}
+                >
+                  <Text style={styles.monthYear}>{headerMonth}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={
+                    ANDROID_MATCH_IOS_LAYOUT ? goToNextMonth : goToPrevMonth
+                  }
+                  hitSlop={12}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    ANDROID_MATCH_IOS_LAYOUT ? 'חודש הבא' : 'חודש קודם'
+                  }
+                >
+                  <MaterialIcons
+                    name={
+                      ANDROID_MATCH_IOS_LAYOUT
+                        ? 'chevron-left'
+                        : 'chevron-right'
+                    }
+                    size={28}
+                    color="#647b87"
+                  />
                 </Pressable>
               </>
             ) : (
-              <>
-                <Pressable
-                  style={styles.bellButton}
-                  onPress={handleBellPress}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
-                  }
-                >
-                  <MaterialIcons
-                    name={
-                      unseenCount > 0 ? 'notifications' : 'notifications-none'
-                    }
-                    size={24}
-                    color="#111517"
-                  />
-                  {unseenCount > 0 && (
-                    <View style={styles.bellBadge}>
-                      <Text style={styles.bellBadgeText}>
-                        {unseenCount > 9 ? '9+' : unseenCount}
-                      </Text>
-                    </View>
-                  )}
-                </Pressable>
-
-                <View style={styles.monthNavRow}>
-                  {viewMode === 'monthly' ? (
-                    <>
-                      <Pressable
-                        onPress={goToNextMonth}
-                        hitSlop={12}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel="חודש הבא"
-                      >
-                        <MaterialIcons
-                          name="chevron-left"
-                          size={28}
-                          color="#647b87"
-                        />
-                      </Pressable>
-                      <Pressable
-                        onPress={goToToday}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel={`לחץ לחזור להיום, ${headerMonth}`}
-                      >
-                        <Text style={styles.monthYear}>{headerMonth}</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={goToPrevMonth}
-                        hitSlop={12}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel="חודש קודם"
-                      >
-                        <MaterialIcons
-                          name="chevron-right"
-                          size={28}
-                          color="#647b87"
-                        />
-                      </Pressable>
-                    </>
-                  ) : (
-                    <Text style={styles.monthYear}>{headerMonth}</Text>
-                  )}
-                </View>
-
-                <Pressable
-                  onPress={() => router.push('/(authenticated)/profile')}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel="פתח פרופיל"
-                >
-                  <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>
-                      {userFirstName ? userFirstName[0].toUpperCase() : '?'}
-                    </Text>
-                  </View>
-                </Pressable>
-              </>
+              <Text style={styles.monthYear}>{headerMonth}</Text>
             )}
           </View>
 

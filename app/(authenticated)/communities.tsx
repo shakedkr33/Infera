@@ -17,8 +17,11 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { MainScreenHeader } from '@/components/MainScreenHeader';
+import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -435,6 +438,11 @@ function PopoverMenu({ visible, position, onClose, items }: PopoverMenuProps) {
 export default function CommunitiesScreen() {
   const router = useRouter();
   const { width: screenWidth } = useWindowDimensions();
+  const {
+    unseenCount,
+    markAllSeen,
+    isLoading: notificationsLoading,
+  } = useNotifications();
 
   const [viewerNow, setViewerNow] = useState(() => Date.now());
   useEffect(() => {
@@ -467,6 +475,16 @@ export default function CommunitiesScreen() {
     'manual' | 'automatic'
   >('automatic');
   const [joinApprovalSaving, setJoinApprovalSaving] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+
+  const handleBellPress = (): void => {
+    if (!isNotificationsOpen) {
+      setIsNotificationsOpen(true);
+    }
+    if (!notificationsLoading) {
+      markAllSeen();
+    }
+  };
 
   const extractInviteCode = useCallback((rawInput: string): string => {
     const trimmed = rawInput.trim();
@@ -774,8 +792,6 @@ export default function CommunitiesScreen() {
       handleToggleNotifications,
       handleLeaveCommunity,
       router,
-      setJoinApprovalDraft,
-      setJoinApprovalModalItem,
     ]
   );
 
@@ -785,18 +801,14 @@ export default function CommunitiesScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* ── כותרת */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>הקהילות שלי</Text>
-        <Pressable
-          onPress={() => router.push('/(authenticated)/community-create')}
-          style={styles.addBtn}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="צור קהילה חדשה"
-        >
-          <MaterialIcons name="add" size={22} color="#fff" />
-        </Pressable>
+      <View style={styles.headerSurface}>
+        <MainScreenHeader
+          title="הקהילות שלי"
+          showAdd={true}
+          onAdd={() => router.push('/(authenticated)/community-create')}
+          onNotificationsPress={handleBellPress}
+          notificationsCount={unseenCount}
+        />
       </View>
 
       <View style={styles.secondaryActionRow}>
@@ -906,6 +918,12 @@ export default function CommunitiesScreen() {
         position={menuPos}
         onClose={() => setMenuItem(null)}
         items={menuItem ? buildMenuItems(menuItem) : []}
+      />
+
+      <NotificationsDrawer
+        isOpen={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+        direction="rtl"
       />
 
       <Modal
@@ -1089,13 +1107,11 @@ const styles = StyleSheet.create({
   },
 
   // ── Header
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+  headerSurface: {
     backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 2,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f1f5f9',
   },
@@ -1103,7 +1119,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign ?? 'right',
   },
   addBtn: {
     width: 38,
@@ -1115,10 +1131,10 @@ const styles = StyleSheet.create({
   },
   secondaryActionRow: {
     backgroundColor: '#fff',
+    flexDirection: rtl.flexDirection,
+    justifyContent: 'flex-start',
     paddingHorizontal: 20,
     paddingBottom: 10,
-    /* RTL: cross-axis start = physical right (flex-end was aligning children to the left). */
-    alignItems: 'flex-start',
   },
   joinByCodeBtn: {
     minHeight: 44,

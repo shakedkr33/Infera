@@ -1,24 +1,25 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Plus } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
   FlatList,
+  type GestureResponderEvent,
   Linking,
   Modal,
   Pressable,
   ScrollView,
   Share,
+  type StyleProp,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
-  type GestureResponderEvent,
-  type StyleProp,
   type TextStyle,
+  TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -2512,12 +2513,13 @@ export default function CommunityDetailScreen() {
           <View ref={addBtnRef}>
             <TouchableOpacity
               onPress={handleAddPress}
-              style={[styles.headerIconBtn, styles.headerAddBtn]}
+              activeOpacity={0.75}
               accessible
               accessibilityRole="button"
               accessibilityLabel="הוסף אירוע או תזכורת"
+              style={styles.communityHeaderAddButton}
             >
-              <Ionicons name="add" size={22} color="#fff" />
+              <Plus size={18} color="#36a9e2" strokeWidth={2.4} />
             </TouchableOpacity>
           </View>
           <View style={styles.headerTextBlock}>
@@ -2774,8 +2776,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: 18,
   },
-  headerAddBtn: {
-    backgroundColor: PRIMARY,
+  communityHeaderAddButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EAF7FD',
+    borderWidth: 1,
+    borderColor: '#BEE7F8',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // ── Tabs strip

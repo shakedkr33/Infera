@@ -11,8 +11,11 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { MainScreenHeader } from '@/components/MainScreenHeader';
+import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 
 const PRIMARY_BLUE = '#36a9e2';
 
@@ -68,6 +71,21 @@ export default function TasksScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('הכל');
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const {
+    unseenCount,
+    markAllSeen,
+    isLoading: notificationsLoading,
+  } = useNotifications();
+
+  const handleBellPress = (): void => {
+    if (!isNotificationsOpen) {
+      setIsNotificationsOpen(true);
+    }
+    if (!notificationsLoading) {
+      markAllSeen();
+    }
+  };
 
   // ── Convex: spaceId ──────────────────────────────────────────────────────
   // TODO: כאשר defaultSpaceId ייאכלס ב-onboarding, לעבור לשליפה ישירה מ-user.defaultSpaceId
@@ -147,7 +165,7 @@ export default function TasksScreen() {
     }
   };
 
-  const handleDeleteTask = async (taskId: string) => {
+  const _handleDeleteTask = async (taskId: string) => {
     try {
       await removeTaskMutation({ id: taskId as Id<'tasks'> });
     } catch (e) {
@@ -179,8 +197,7 @@ export default function TasksScreen() {
     [assignedEventTaskRows]
   );
   const filteredAssignedEventTasks = assignedEventTasks.filter((task) => {
-    const matchesFilter =
-      activeFilter === 'הכל' || activeFilter === 'אירועים';
+    const matchesFilter = activeFilter === 'הכל' || activeFilter === 'אירועים';
     const normalizedSearch = searchQuery.toLowerCase();
     const matchesSearch =
       task.title.toLowerCase().includes(normalizedSearch) ||
@@ -196,18 +213,14 @@ export default function TasksScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>המשימות שלי</Text>
-          <Pressable
-            style={styles.addButton}
-            onPress={() => router.push('/(authenticated)/task/new' as never)}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="הוסף משימה חדשה"
-          >
-            <MaterialIcons name="add" size={24} color="#ffffff" />
-          </Pressable>
+        <View style={styles.headerSurface}>
+          <MainScreenHeader
+            title="המשימות שלי"
+            showAdd={true}
+            onAdd={() => router.push('/(authenticated)/task/new' as never)}
+            onNotificationsPress={handleBellPress}
+            notificationsCount={unseenCount}
+          />
         </View>
 
         {/* Search Bar */}
@@ -316,6 +329,11 @@ export default function TasksScreen() {
           <View style={{ height: 40 }} />
         </ScrollView>
       </View>
+      <NotificationsDrawer
+        isOpen={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+        direction="rtl"
+      />
     </SafeAreaView>
   );
 }
@@ -483,7 +501,11 @@ function EventTaskCard({ task }: { task: AssignedEventTask }) {
     >
       <View style={styles.taskCardHeader}>
         <View style={styles.eventTaskIcon}>
-          <MaterialIcons name="event-available" size={20} color={PRIMARY_BLUE} />
+          <MaterialIcons
+            name="event-available"
+            size={20}
+            color={PRIMARY_BLUE}
+          />
         </View>
         <View style={styles.taskContent}>
           <Text
@@ -526,12 +548,10 @@ const styles = StyleSheet.create({
   },
 
   /* Header */
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  headerSurface: {
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingTop: 16,
+    paddingBottom: 0,
     backgroundColor: '#ffffff',
     shadowColor: '#000',
     shadowOpacity: 0.05,

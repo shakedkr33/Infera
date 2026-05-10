@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
@@ -219,7 +220,6 @@ export default function HomeScreen() {
   const [calendarMode, setCalendarMode] = useState<'carousel' | 'month'>(
     'carousel'
   );
-  const [devClearBirthdays, setDevClearBirthdays] = useState(false);
 
   // ── Insight card ───────────────────────────────────────────────────────────
   const [dismissedInsightDate, setDismissedInsightDate] = useState<
@@ -276,6 +276,9 @@ export default function HomeScreen() {
 
   // ── Computed values ────────────────────────────────────────────────────────
   const greeting = getGreetingByHour(new Date().getHours());
+  const homeGreeting = userFirstName
+    ? `${greeting}, ${userFirstName}`
+    : greeting;
   const todayLabel = new Date().toLocaleDateString('he-IL', {
     day: 'numeric',
     month: 'long',
@@ -684,7 +687,7 @@ export default function HomeScreen() {
 
   // ── Empty states ───────────────────────────────────────────────────────────
   const hasEventsOrTasks = allItems.length > 0 || undatedTasks.length > 0;
-  const hasBirthdays = devClearBirthdays ? false : contextBirthdays.length > 0;
+  const hasBirthdays = contextBirthdays.length > 0;
   const hasDayData = allItems.filter((i) => !i.allDay).length > 0;
 
   const shouldShowEventsEmptyState = !hasEventsOrTasks;
@@ -993,52 +996,14 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <View style={stylesRtl.header}>
-        {/* Bell — left */}
-        <Pressable
-          onPress={handleBellPress}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel={
-            unseenCount > 0 ? `התראות, ${unseenCount} חדשות` : 'התראות'
-          }
-          style={{ position: 'relative' }}
-        >
-          <MaterialIcons
-            name={unseenCount > 0 ? 'notifications' : 'notifications-none'}
-            size={26}
-            color="#111517"
-          />
-          {unseenCount > 0 && (
-            <View style={stylesRtl.bellBadge}>
-              <Text style={stylesRtl.bellBadgeText}>
-                {unseenCount > 9 ? '9+' : unseenCount}
-              </Text>
-            </View>
-          )}
-        </Pressable>
-
-        {/* Text stack + avatar — right */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={stylesRtl.headerDate}>{todayLabel}</Text>
-            <Text style={stylesRtl.headerGreeting}>
-              {userFirstName ? `${greeting}, ${userFirstName}` : greeting}
-            </Text>
-          </View>
-          <Pressable
-            onPress={() => router.push('/(authenticated)/profile')}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="פתח פרופיל"
-          >
-            <View style={stylesRtl.avatar}>
-              <Text style={stylesRtl.avatarText}>
-                {userFirstName ? userFirstName[0].toUpperCase() : '?'}
-              </Text>
-            </View>
-          </Pressable>
-        </View>
+      <View style={stylesRtl.headerSurface}>
+        <MainScreenHeader
+          title={homeGreeting}
+          subtitle={todayLabel}
+          variant="home"
+          onNotificationsPress={handleBellPress}
+          notificationsCount={unseenCount}
+        />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
@@ -2521,36 +2486,6 @@ export default function HomeScreen() {
           </Pressable>
         </View>
       </Modal>
-      {__DEV__ && (
-        <Pressable
-          onPress={() => {
-            if (devClearBirthdays) {
-              // TODO: כשאירועים יחוברו ל-Convex – לשחזר נתוני mock כאן
-              setItems([
-                /* הנתונים המקוריים שלך */
-              ]);
-              setDevClearBirthdays(false);
-            } else {
-              // undatedTasks מגיע מ-Convex – לא ניתן לנקות locally
-              // TODO: להוסיף dev toggle לנקות נתוני Convex
-              setItems([]);
-              setDevClearBirthdays(true);
-            }
-          }}
-          style={{
-            position: 'absolute',
-            top: 60,
-            left: 10,
-            backgroundColor: '#ff000033',
-            padding: 6,
-            borderRadius: 8,
-          }}
-        >
-          <Text style={{ fontSize: 10 }}>
-            {devClearBirthdays ? '↩️ שחזר' : '🧪 ריק'}
-          </Text>
-        </Pressable>
-      )}
     </SafeAreaView>
   );
 }
@@ -2559,6 +2494,12 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   // ── Header ─────────────────────────────────────────────────────────────────
+  headerSurface: {
+    backgroundColor: '#f6f7f8',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',

@@ -37,6 +37,7 @@ import {
   MAX_PETS,
   useFamilyProfileEditor,
 } from '../../hooks/useFamilyProfileEditor';
+import { getAvatarInitials } from '../../lib/avatarInitials';
 import { normalizeIsraeliPhone } from '../../lib/phoneUtils';
 import { maskPhone } from '../../lib/utils/contactPhone';
 
@@ -176,6 +177,8 @@ export default function FamilyProfileScreen() {
       ? `${fullName} (${nickname.trim()})`
       : fullName
     : 'הפרופיל שלך';
+  const profileInitials =
+    getAvatarInitials({ firstName, lastName, fullName: displayName }) || '?';
 
   // FIXED: family-profile now merges live Convex matchedUserId into local member state
   // personMembers comes from OnboardingContext (editing source of truth).
@@ -391,7 +394,7 @@ export default function FamilyProfileScreen() {
                   className="w-10 h-10 rounded-full items-center justify-center"
                 >
                   <Text className="text-xs font-bold text-white opacity-80">
-                    {displayName.substring(0, 2)}
+                    {profileInitials}
                   </Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
@@ -437,7 +440,7 @@ export default function FamilyProfileScreen() {
                   <Text
                     style={{ color: 'white', fontSize: 22, fontWeight: '700' }}
                   >
-                    {(firstName || '?').charAt(0)}
+                    {profileInitials}
                   </Text>
                 </View>
                 <View className="flex-1">
