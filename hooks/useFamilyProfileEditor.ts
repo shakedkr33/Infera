@@ -2,12 +2,11 @@ import { useMutation } from 'convex/react';
 import { useRef, useState } from 'react';
 import { Keyboard } from 'react-native';
 import { api } from '@/convex/_generated/api';
-
+import type { SelectedContactData } from '../components/onboarding/AddPersonBottomSheet';
 import {
   PET_COLORS,
   PROFILE_COLORS,
 } from '../components/onboarding/ColorPicker';
-import type { SelectedContactData } from '../components/onboarding/AddPersonBottomSheet';
 import type { FamilyMember } from '../contexts/OnboardingContext';
 import { useOnboarding } from '../contexts/OnboardingContext';
 // FIXED: added family-member status fields — maskPhone used when setting selectedPhoneNumber
@@ -35,7 +34,7 @@ export interface PendingMember {
  * Shared state + handler logic for the family profile editor.
  *
  * Used by:
- *  - app/onboarding-step4.tsx  (starts with empty familyMembers)
+ *  - post-auth profile setup (starts with empty familyMembers)
  *  - app/(authenticated)/family-profile.tsx  (initialised from saved context data)
  */
 export function useFamilyProfileEditor(
@@ -88,7 +87,9 @@ export function useFamilyProfileEditor(
   // FIXED: wired correct actions per family-member status
   // Tracks which existing member is being converted to a contact-linked record.
   // Null when adding a new member via the normal flow.
-  const [convertingToContactId, setConvertingToContactId] = useState<string | null>(null);
+  const [convertingToContactId, setConvertingToContactId] = useState<
+    string | null
+  >(null);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const personMembers = familyMembers.filter((m) => m.type !== 'pet');
@@ -207,13 +208,25 @@ export function useFamilyProfileEditor(
     if (editingId) {
       setFamilyMembers((prev) => {
         const updated = prev.map((m) => (m.id === editingId ? newMember : m));
-        updateMyProfile({ familyContacts: updated }).catch((e) => console.error('[CONFIRM] updateMyProfile error:', e));
+        updateMyProfile({ familyContacts: updated }).catch((e) =>
+          console.error('[CONFIRM] updateMyProfile error:', e)
+        );
         return updated;
       });
     } else {
       setFamilyMembers((prev) => {
         const updated = [...prev, newMember];
-        console.log('[CONFIRM] calling updateMyProfile with', updated.length, 'contacts:', JSON.stringify(updated.map(m => ({ name: (m as any).name, selectedPhoneNumber: (m as any).selectedPhoneNumber }))));
+        console.log(
+          '[CONFIRM] calling updateMyProfile with',
+          updated.length,
+          'contacts:',
+          JSON.stringify(
+            updated.map((m) => ({
+              name: (m as any).name,
+              selectedPhoneNumber: (m as any).selectedPhoneNumber,
+            }))
+          )
+        );
         updateMyProfile({ familyContacts: updated })
           .then(() => console.log('[CONFIRM] updateMyProfile success'))
           .catch((e) => console.error('[CONFIRM] updateMyProfile error:', e));
@@ -261,12 +274,22 @@ export function useFamilyProfileEditor(
     const updated = familyMembers.filter((m) => m.id !== id);
     setFamilyMembers(updated);
     // Prefer the explicit convexEntityId; fall back to id if it looks like a Convex ID
-    const entityIdToDelete = convexEntityId ?? (!/^\d+$/.test(id) ? id : undefined);
-    console.log('[REMOVE] calling removeEntityMember?', !!entityIdToDelete, 'id:', entityIdToDelete);
+    const entityIdToDelete =
+      convexEntityId ?? (!/^\d+$/.test(id) ? id : undefined);
+    console.log(
+      '[REMOVE] calling removeEntityMember?',
+      !!entityIdToDelete,
+      'id:',
+      entityIdToDelete
+    );
     if (entityIdToDelete) {
-      removeEntityMember({ memberId: entityIdToDelete as any }).catch((e) => console.error('[REMOVE] removeEntityMember error:', e));
+      removeEntityMember({ memberId: entityIdToDelete as any }).catch((e) =>
+        console.error('[REMOVE] removeEntityMember error:', e)
+      );
     }
-    updateMyProfile({ familyContacts: updated }).catch((e) => console.error('[REMOVE] updateMyProfile error:', e));
+    updateMyProfile({ familyContacts: updated }).catch((e) =>
+      console.error('[REMOVE] updateMyProfile error:', e)
+    );
   };
 
   // FIXED: markMemberInvited now persists inviteStatus=invited to Convex immediately
@@ -443,7 +466,7 @@ export function useFamilyProfileEditor(
       fullName: nameSource,
       profileColor: personalColor,
       familyContacts: deduped,
-    });
+    }).then(() => undefined);
   };
 
   return {

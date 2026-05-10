@@ -1,7 +1,12 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useConvexAuth, useMutation, useQuery } from 'convex/react';
-import { Redirect, Tabs, useRootNavigationState, useRouter } from 'expo-router';
+import {
+  Tabs,
+  useRootNavigationState,
+  useRouter,
+  useSegments,
+} from 'expo-router';
 import { useContext, useEffect, useRef, useState } from 'react';
 
 // Same key exported from app/shared/[token].tsx — kept here as a literal to avoid
@@ -24,6 +29,7 @@ import { ActionSheetContext } from '@/contexts/ActionSheetContext';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
+import { getHasSeenOnboarding } from '@/lib/onboardingState';
 import { PENDING_COMMUNITY_EVENT_ID_KEY } from '@/lib/pendingEventLink';
 
 // ─── Regular Tab Button (icon + label wrapped in selection pill) ──────────────
@@ -185,19 +191,41 @@ export default function AuthenticatedLayout() {
     hydrateFromServer,
   } = useOnboarding();
   const hasLocalOnboardingData = !!onboardingData.spaceType;
+  const [hasSeenOnboardingLocally, setHasSeenOnboardingLocally] =
+    useState(false);
+  const [isLocalOnboardingLoading, setIsLocalOnboardingLoading] =
+    useState(true);
+  const hasCompletedOnboardingLocally =
+    hasLocalOnboardingData || hasSeenOnboardingLocally;
   const finishOnboarding = useMutation(api.onboarding.finishOnboarding);
   // Ref guard prevents a second mutation call if a render occurs while the first is in-flight.
   const savingRef = useRef(false);
 
   const navigationState = useRootNavigationState();
   const router = useRouter();
+  const segments = useSegments();
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
+
+  useEffect(() => {
+    getHasSeenOnboarding()
+      .then(setHasSeenOnboardingLocally)
+      .catch(() => setHasSeenOnboardingLocally(false))
+      .finally(() => setIsLocalOnboardingLoading(false));
+  }, []);
 
   // Fetch onboarding status — skip the query while not yet authenticated to avoid
   // an unnecessary round-trip and potential auth errors
   const userStatus = useQuery(
     api.users.getCurrentUserStatus,
     isAuthenticated ? {} : 'skip'
+  );
+
+  const shouldCheckFamilyBootstrap =
+    isAuthenticated &&
+    (hasCompletedOnboardingLocally || userStatus?.onboardingComplete === true);
+  const familyBootstrapStatus = useQuery(
+    api.users.getFamilyBootstrapStatus,
+    shouldCheckFamilyBootstrap ? {} : 'skip'
   );
 
   // FIXED: context now rehydrates from Convex on authenticated app start.
@@ -242,7 +270,7 @@ export default function AuthenticatedLayout() {
       userStatus === undefined ||
       userStatus === null ||
       userStatus.onboardingComplete ||
-      !hasLocalOnboardingData ||
+      !hasCompletedOnboardingLocally ||
       onboardingData.onboardingCompleted ||
       savingRef.current
     )
@@ -270,7 +298,7 @@ export default function AuthenticatedLayout() {
   }, [
     isAuthenticated,
     userStatus,
-    hasLocalOnboardingData,
+    hasCompletedOnboardingLocally,
     onboardingData.onboardingCompleted,
     onboardingData.firstName,
     onboardingData.lastName,
@@ -321,6 +349,35 @@ export default function AuthenticatedLayout() {
 
   // Wait for: navigation tree, auth state, RevenueCat, and user profile to resolve
   const isUserStatusLoading = isAuthenticated && userStatus === undefined;
+  const isSyncingOnboarding =
+    isAuthenticated &&
+    hasCompletedOnboardingLocally &&
+    userStatus?.onboardingComplete !== true;
+  const isFamilyBootstrapLoading =
+    shouldCheckFamilyBootstrap &&
+    !isSyncingOnboarding &&
+    familyBootstrapStatus === undefined;
+  const segmentStrings = segments as string[];
+  const isFamilyBootstrapRoute = segmentStrings.includes('family-bootstrap');
+  const isProfileSetupRoute = segmentStrings.includes('family-profile-setup');
+  const needsOnboardingRedirect =
+    isAuthenticated &&
+    userStatus !== undefined &&
+    !userStatus?.onboardingComplete &&
+    !hasCompletedOnboardingLocally;
+  const needsProfileSetupRedirect =
+    isAuthenticated &&
+    !isFamilyBootstrapRoute &&
+    !isProfileSetupRoute &&
+    (isSyncingOnboarding ||
+      (userStatus?.onboardingComplete === true &&
+        familyBootstrapStatus !== undefined &&
+        familyBootstrapStatus !== null &&
+        !familyBootstrapStatus.hasConfiguredFamily &&
+        !familyBootstrapStatus.joinedExistingSpace &&
+        familyBootstrapStatus.familySetupSkippedAt === null));
+  const needsPaywallRedirect =
+    isAuthenticated && PAYMENT_SYSTEM_ENABLED && !isPremium;
   // FIXED: family profile persistence — for returning users, hold the spinner until hydrateFromServer
   // has actually run (onboardingCompleted flips true). Without this gate, tabs render with empty
   // OnboardingContext before the hydration effect fires, causing a flash of personal-only state in
@@ -332,33 +389,57 @@ export default function AuthenticatedLayout() {
     !onboardingData.onboardingCompleted &&
     myProfile !== null;
 
+  const isReadyToRoute =
+    !!navigationState?.key &&
+    !isLoading &&
+    !isRevenueCatLoading &&
+    !isLocalOnboardingLoading &&
+    !isUserStatusLoading &&
+    !isFamilyBootstrapLoading &&
+    !needsHydration;
+
+  useEffect(() => {
+    if (!isReadyToRoute) return;
+
+    if (!isAuthenticated) {
+      router.replace('/(auth)/sign-in');
+      return;
+    }
+
+    if (needsOnboardingRedirect) {
+      router.replace('/onboarding-hero');
+      return;
+    }
+
+    if (needsProfileSetupRedirect) {
+      router.replace('/(authenticated)/family-bootstrap');
+      return;
+    }
+
+    if (needsPaywallRedirect) {
+      router.replace('/(auth)/paywall');
+    }
+  }, [
+    isAuthenticated,
+    isReadyToRoute,
+    needsOnboardingRedirect,
+    needsPaywallRedirect,
+    needsProfileSetupRedirect,
+    router,
+  ]);
+
   if (
-    !navigationState?.key ||
-    isLoading ||
-    isRevenueCatLoading ||
-    isUserStatusLoading ||
-    needsHydration
+    !isReadyToRoute ||
+    !isAuthenticated ||
+    needsOnboardingRedirect ||
+    needsProfileSetupRedirect ||
+    needsPaywallRedirect
   ) {
     return (
       <View className="flex-1 bg-white items-center justify-center">
         <ActivityIndicator size="large" color="#4A9FE2" />
       </View>
     );
-  }
-
-  if (!isAuthenticated) {
-    return <Redirect href="/(auth)/sign-in" />;
-  }
-
-  // Route to onboarding if the user has never completed it (new user or profile missing).
-  // Bypass if the user just completed onboarding this session — finishOnboarding may not
-  // have propagated to Convex yet, but local context confirms they finished the flow.
-  if (!userStatus?.onboardingComplete && !hasLocalOnboardingData) {
-    return <Redirect href="/onboarding-hero" />;
-  }
-
-  if (PAYMENT_SYSTEM_ENABLED && !isPremium) {
-    return <Redirect href="/(auth)/paywall" />;
   }
 
   return (

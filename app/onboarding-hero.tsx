@@ -29,7 +29,7 @@ export default function OnboardingHero() {
 
       <View className="gap-4">
         <Pressable
-          onPress={() => router.push('/onboarding-step1')}
+          onPress={() => router.replace('/onboarding-step1')}
           className="w-full h-16 rounded-2xl items-center justify-center shadow-lg"
           style={{ backgroundColor: colors.sage }}
         >

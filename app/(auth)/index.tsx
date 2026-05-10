@@ -1,22 +1,40 @@
 import { useRouter } from 'expo-router';
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import { getHasSeenOnboarding } from '@/lib/onboardingState';
 
 export default function WelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const isNavigating = useRef(false);
+  const [isCheckingOnboarding, setIsCheckingOnboarding] = useState(true);
 
-  // FIXED: onboarding now precedes authentication — CTA enters onboarding flow first
-  const goToSignIn = () => {
+  useEffect(() => {
+    getHasSeenOnboarding()
+      .then((hasSeenOnboarding) => {
+        if (hasSeenOnboarding) {
+          router.replace('/(auth)/sign-in');
+          return;
+        }
+        setIsCheckingOnboarding(false);
+      })
+      .catch(() => setIsCheckingOnboarding(false));
+  }, [router]);
+
+  // Onboarding precedes authentication for users who have not seen it yet.
+  const goToOnboarding = () => {
     if (isNavigating.current) return;
     isNavigating.current = true;
     router.replace('/onboarding-step1');
   };
+
+  if (isCheckingOnboarding) {
+    return null;
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -44,7 +62,7 @@ export default function WelcomeScreen() {
       </View>
 
       <Pressable
-        onPress={goToSignIn}
+        onPress={goToOnboarding}
         style={[styles.cta, { bottom: insets.bottom + 24 }]}
         accessibilityRole="button"
         accessibilityLabel="בואו נתחיל"

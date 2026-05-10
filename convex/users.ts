@@ -283,7 +283,14 @@ export const updateMyProfile = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר');
 
-    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error('משתמש לא נמצא');
+
+    const now = Date.now();
+    const patch: Record<string, unknown> = {
+      updatedAt: now,
+      profileSetupCompletedAt: user.profileSetupCompletedAt ?? now,
+    };
     if (args.fullName !== undefined) patch.fullName = args.fullName;
     if (args.profileColor !== undefined) patch.profileColor = args.profileColor;
 
@@ -471,6 +478,7 @@ export const getFamilyBootstrapStatus = query({
 
     const onboardingComplete = user.onboardingCompleted === true;
     const familySetupSkippedAt = user.familySetupSkippedAt ?? null;
+    const profileSetupCompletedAt = user.profileSetupCompletedAt ?? null;
 
     const contactsBlob = user.familyContacts;
     const hasContactsBlob =
@@ -481,7 +489,9 @@ export const getFamilyBootstrapStatus = query({
       return {
         onboardingComplete,
         familySetupSkippedAt,
-        hasConfiguredFamily: hasContactsBlob,
+        profileSetupCompletedAt,
+        hasConfiguredFamily:
+          profileSetupCompletedAt !== null || hasContactsBlob,
         joinedExistingSpace: false,
       };
     }
@@ -495,11 +505,13 @@ export const getFamilyBootstrapStatus = query({
       .collect();
     const entityCount = rows.filter((r) => resolveKind(r) === 'entity').length;
 
-    const hasConfiguredFamily = entityCount > 0 || hasContactsBlob;
+    const hasConfiguredFamily =
+      profileSetupCompletedAt !== null || entityCount > 0 || hasContactsBlob;
 
     return {
       onboardingComplete,
       familySetupSkippedAt,
+      profileSetupCompletedAt,
       hasConfiguredFamily,
       joinedExistingSpace,
     };

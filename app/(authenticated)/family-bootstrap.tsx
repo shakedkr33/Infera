@@ -1,10 +1,11 @@
 import { useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { api } from '@/convex/_generated/api';
+import { getHasSeenOnboarding } from '@/lib/onboardingState';
 
 /**
  * Post-OTP routing: Home if family exists / invite join / skipped setup;
@@ -14,6 +15,12 @@ export default function FamilyBootstrapScreen(): React.JSX.Element {
   const router = useRouter();
   const { data: onboardingData } = useOnboarding();
   const hasLocalOnboardingData = Boolean(onboardingData.spaceType);
+  const [hasSeenOnboardingLocally, setHasSeenOnboardingLocally] =
+    useState(false);
+  const [isLocalOnboardingLoading, setIsLocalOnboardingLoading] =
+    useState(true);
+  const hasCompletedOnboardingLocally =
+    hasLocalOnboardingData || hasSeenOnboardingLocally;
 
   const userStatus = useQuery(api.users.getCurrentUserStatus, {});
   const bootstrap = useQuery(api.users.getFamilyBootstrapStatus, {});
@@ -21,8 +28,20 @@ export default function FamilyBootstrapScreen(): React.JSX.Element {
   const redirectedRef = useRef(false);
 
   useEffect(() => {
+    getHasSeenOnboarding()
+      .then(setHasSeenOnboardingLocally)
+      .catch(() => setHasSeenOnboardingLocally(false))
+      .finally(() => setIsLocalOnboardingLoading(false));
+  }, []);
+
+  useEffect(() => {
     if (redirectedRef.current) return;
-    if (userStatus === undefined || bootstrap === undefined) return;
+    if (
+      isLocalOnboardingLoading ||
+      userStatus === undefined ||
+      bootstrap === undefined
+    )
+      return;
 
     if (userStatus === null || bootstrap === null) {
       redirectedRef.current = true;
@@ -31,11 +50,11 @@ export default function FamilyBootstrapScreen(): React.JSX.Element {
     }
 
     const syncingOnboarding =
-      hasLocalOnboardingData && !userStatus.onboardingComplete;
+      hasCompletedOnboardingLocally && !userStatus.onboardingComplete;
 
     if (syncingOnboarding) return;
 
-    if (!hasLocalOnboardingData && !userStatus.onboardingComplete) {
+    if (!hasCompletedOnboardingLocally && !userStatus.onboardingComplete) {
       redirectedRef.current = true;
       router.replace('/onboarding-hero');
       return;
@@ -56,7 +75,13 @@ export default function FamilyBootstrapScreen(): React.JSX.Element {
     }
 
     router.replace('/(authenticated)/family-profile-setup');
-  }, [bootstrap, userStatus, hasLocalOnboardingData, router]);
+  }, [
+    bootstrap,
+    userStatus,
+    hasCompletedOnboardingLocally,
+    isLocalOnboardingLoading,
+    router,
+  ]);
 
   return (
     <View className="flex-1 items-center justify-center bg-white px-8">

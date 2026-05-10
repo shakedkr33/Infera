@@ -2,7 +2,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { colors, shadows } from '../../constants/theme';
 import type { FamilyMember } from '../../contexts/OnboardingContext';
-import { ColorPicker, TakenColor } from './ColorPicker';
+import { ColorPicker, type TakenColor } from './ColorPicker';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIXED: manual members no longer show a status badge — descriptive secondary line shown instead
@@ -13,21 +13,18 @@ import { ColorPicker, TakenColor } from './ColorPicker';
 // Only 3 real badge values — manual members return null (no badge rendered)
 type FamilyMemberBadge = 'מחובר' | 'שלח שוב' | 'שלח הזמנה' | null;
 
-const BADGE_STYLES: Record<NonNullable<FamilyMemberBadge>, { bg: string; text: string }> = {
-  'מחובר':      { bg: '#dcfce7', text: '#16a34a' },
-  'שלח הזמנה': { bg: '#ede9fe', text: '#7c3aed' },
-  'שלח שוב':   { bg: '#fff7ed', text: '#ea580c' },
-};
-
 // FIXED: deriveFamilyMemberBadge returns null for manual members (no badge shown)
 // Backward compat: members without sourceType are inferred from phone/contactId presence.
 function deriveFamilyMemberBadge(member: FamilyMember): FamilyMemberBadge {
   if (member.matchedUserId) return 'מחובר';
   const effectiveSourceType =
-    member.sourceType ?? (member.phone || member.contactId ? 'contact' : 'manual');
+    member.sourceType ??
+    (member.phone || member.contactId ? 'contact' : 'manual');
   const effectivePhone =
-    member.selectedPhoneNumber ?? (effectiveSourceType === 'contact' ? member.phone : undefined);
-  if (effectiveSourceType === 'contact' && member.inviteStatus === 'invited') return 'שלח שוב';
+    member.selectedPhoneNumber ??
+    (effectiveSourceType === 'contact' ? member.phone : undefined);
+  if (effectiveSourceType === 'contact' && member.inviteStatus === 'invited')
+    return 'שלח שוב';
   if (effectiveSourceType === 'contact' && effectivePhone) return 'שלח הזמנה';
   return null; // manual member — no badge
 }
@@ -66,7 +63,10 @@ export function FamilyMemberDisplayCard({
       )}
 
       {/* Name + avatar — right side (RTL start) */}
-      <View className="flex-row items-center gap-3" style={{ flex: isAdmin ? 0 : 1, flexDirection: 'row' }}>
+      <View
+        className="flex-row items-center gap-3"
+        style={{ flex: isAdmin ? 0 : 1, flexDirection: 'row' }}
+      >
         <Text className="font-bold text-[15px] text-gray-900">
           {member.name}
         </Text>
@@ -214,7 +214,7 @@ export function FamilyMemberEditCard({
 // FIXED: wired correct actions per family-member status
 // FIXED: role-aware management card — forbidden actions hidden for members
 // Used exclusively in family-profile.tsx (settings screen).
-// FamilyMemberDisplayCard is kept for onboarding-step4.tsx too.
+// FamilyMemberDisplayCard is shared by profile setup and settings.
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface ManagementCardProps {
@@ -247,7 +247,8 @@ export function FamilyMemberManagementCard({
   // FIXED: card now renders correct secondary line per member type
   // Contact → masked phone; Manual → descriptive text, no badge
   const effectiveSourceType =
-    member.sourceType ?? (member.phone || member.contactId ? 'contact' : 'manual');
+    member.sourceType ??
+    (member.phone || member.contactId ? 'contact' : 'manual');
   const secondaryLabel =
     effectiveSourceType === 'contact' && (member.maskedPhone ?? member.phone)
       ? (member.maskedPhone ?? member.phone)
@@ -267,7 +268,9 @@ export function FamilyMemberManagementCard({
   return (
     <View className="bg-white rounded-2xl p-4 mb-3" style={shadows.soft}>
       {/* ── Top area: avatar | name+secondary | admin badge ── */}
-      <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 12 }}>
+      <View
+        style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 12 }}
+      >
         {/* Avatar — rightmost in RTL */}
         <View
           className="w-11 h-11 rounded-full items-center justify-center"
@@ -291,7 +294,14 @@ export function FamilyMemberManagementCard({
             accessibilityLabel={`ערוך את ${member.name}`}
             style={{ flex: 1 }}
           >
-            <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <View
+              style={{
+                flexDirection: 'row-reverse',
+                alignItems: 'center',
+                gap: 6,
+                flexWrap: 'wrap',
+              }}
+            >
               <Text
                 className="font-bold text-[15px] text-gray-900"
                 numberOfLines={1}
@@ -300,13 +310,21 @@ export function FamilyMemberManagementCard({
               </Text>
               {/* FIXED: admin badge shown on entity row matching admin userId */}
               {isAdminEntity && (
-                <View style={{
-                  paddingHorizontal: 7,
-                  paddingVertical: 2,
-                  borderRadius: 99,
-                  backgroundColor: '#e8f5fd',
-                }}>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#36a9e2' }}>
+                <View
+                  style={{
+                    paddingHorizontal: 7,
+                    paddingVertical: 2,
+                    borderRadius: 99,
+                    backgroundColor: '#e8f5fd',
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 10,
+                      fontWeight: '700',
+                      color: '#36a9e2',
+                    }}
+                  >
                     מנהל/ת המשפחה
                   </Text>
                 </View>
@@ -321,7 +339,14 @@ export function FamilyMemberManagementCard({
           </Pressable>
         ) : (
           <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <View
+              style={{
+                flexDirection: 'row-reverse',
+                alignItems: 'center',
+                gap: 6,
+                flexWrap: 'wrap',
+              }}
+            >
               <Text
                 className="font-bold text-[15px] text-gray-900"
                 numberOfLines={1}
@@ -330,13 +355,21 @@ export function FamilyMemberManagementCard({
               </Text>
               {/* FIXED: admin badge shown on entity row matching admin userId */}
               {isAdminEntity && (
-                <View style={{
-                  paddingHorizontal: 7,
-                  paddingVertical: 2,
-                  borderRadius: 99,
-                  backgroundColor: '#e8f5fd',
-                }}>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#36a9e2' }}>
+                <View
+                  style={{
+                    paddingHorizontal: 7,
+                    paddingVertical: 2,
+                    borderRadius: 99,
+                    backgroundColor: '#e8f5fd',
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 10,
+                      fontWeight: '700',
+                      color: '#36a9e2',
+                    }}
+                  >
                     מנהל/ת המשפחה
                   </Text>
                 </View>
@@ -380,7 +413,9 @@ export function FamilyMemberManagementCard({
                 alignItems: 'center',
               }}
             >
-              <Text style={{ fontSize: 13, fontWeight: '600', color: '#36a9e2' }}>
+              <Text
+                style={{ fontSize: 13, fontWeight: '600', color: '#36a9e2' }}
+              >
                 {badge}
               </Text>
             </Pressable>
@@ -401,7 +436,9 @@ export function FamilyMemberManagementCard({
                 alignItems: 'center',
               }}
             >
-              <Text style={{ fontSize: 13, fontWeight: '600', color: '#334155' }}>
+              <Text
+                style={{ fontSize: 13, fontWeight: '600', color: '#334155' }}
+              >
                 הפוך לאיש קשר
               </Text>
             </Pressable>
@@ -418,7 +455,9 @@ export function FamilyMemberManagementCard({
                 alignItems: 'center',
               }}
             >
-              <Text style={{ fontSize: 13, fontWeight: '600', color: '#16a34a' }}>
+              <Text
+                style={{ fontSize: 13, fontWeight: '600', color: '#16a34a' }}
+              >
                 מחובר
               </Text>
             </View>

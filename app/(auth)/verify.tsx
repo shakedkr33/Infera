@@ -17,6 +17,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
+const CODE_DIGIT_POSITIONS = Array.from(
+  { length: CODE_LENGTH },
+  (_, index) => ({
+    id: `code-digit-${index}`,
+    index,
+  })
+);
 
 // FIXED: handle OTP verification failure gracefully with inline Hebrew error
 // Maps @convex-dev/auth error messages to human Hebrew copy
@@ -96,7 +103,7 @@ export default function VerifyScreen() {
         await signIn('phone', { phone, code: digits });
         // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition
         // finishOnboarding is called in (authenticated)/_layout.tsx once the Convex session is confirmed.
-        router.replace('/(authenticated)');
+        router.replace('/(authenticated)/family-bootstrap');
       } catch (err) {
         // FIXED: downgraded to warn so Expo dev overlay does not appear on expected auth errors
         console.warn('[Auth] OTP verify failed:', err);
@@ -107,7 +114,7 @@ export default function VerifyScreen() {
         setIsVerifying(false);
       }
     },
-    [phone, isVerifying, signIn]
+    [phone, isVerifying, signIn, router]
   );
 
   const handleCodeChange = (text: string) => {
@@ -215,12 +222,12 @@ export default function VerifyScreen() {
 
             {/* Visual digit boxes — always LTR for numeric codes */}
             <View style={styles.boxesRow}>
-              {Array.from({ length: CODE_LENGTH }).map((_, i) => {
+              {CODE_DIGIT_POSITIONS.map(({ id, index: i }) => {
                 const isFocused = !isSubmitting && code.length === i;
                 const isFilled = i < code.length;
                 return (
                   <View
-                    key={i}
+                    key={id}
                     style={[
                       styles.digitBox,
                       isFocused && styles.digitBoxFocused,

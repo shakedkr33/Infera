@@ -27,6 +27,8 @@ export default defineSchema({
     defaultSpaceId: v.optional(v.id('spaces')),
     // FIXED: family profile persistence — stores onboarding family contacts as JSON blob
     familyContacts: v.optional(v.any()),
+    /** Optional post-auth profile setup was completed */
+    profileSetupCompletedAt: v.optional(v.number()),
     /** Post-auth optional family setup was skipped; prevents nag on every launch */
     familySetupSkippedAt: v.optional(v.number()),
   })

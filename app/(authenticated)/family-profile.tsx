@@ -52,7 +52,7 @@ export default function FamilyProfileScreen() {
   const { data } = useOnboarding();
 
   const screenTitle = isOptionalPostAuthSetup
-    ? 'נגדיר את המשפחה?'
+    ? 'רוצה להשלים את הפרופיל שלך?'
     : 'ניהול פרופיל';
 
   // Initialise from previously saved context data (unlike onboarding which starts empty)
@@ -121,6 +121,20 @@ export default function FamilyProfileScreen() {
     markFamilySetupSkipped()
       .then(() => router.replace('/(authenticated)'))
       .catch(() => router.replace('/(authenticated)'));
+  };
+
+  const [isSavingOptionalSetup, setIsSavingOptionalSetup] = useState(false);
+
+  const handleSaveOptionalSetup = (): void => {
+    if (isSavingOptionalSetup) return;
+
+    setIsSavingOptionalSetup(true);
+    saveProfile()
+      .then(() => router.replace('/(authenticated)'))
+      .catch(() => {
+        Alert.alert('שגיאה', 'לא הצלחנו לשמור כרגע. אפשר לנסות שוב.');
+      })
+      .finally(() => setIsSavingOptionalSetup(false));
   };
 
   // FIXED: profile form now collapses to saved display card after save
@@ -341,8 +355,7 @@ export default function FamilyProfileScreen() {
         {isOptionalPostAuthSetup ? (
           <View className="px-5 pb-3">
             <Text className="text-right text-sm leading-relaxed text-gray-600">
-              כדי ש־InYomi תוכל להציג צבעים, משתתפים ותזכורות לפי בני המשפחה,
-              אפשר להגדיר עכשיו את הפרופיל המשפחתי.
+              אפשר לדלג עכשיו ולהשלים את זה בהמשך דרך ההגדרות.
             </Text>
           </View>
         ) : null}
@@ -755,25 +768,26 @@ export default function FamilyProfileScreen() {
         {isOptionalPostAuthSetup ? (
           <View className="border-t border-gray-200 bg-[#f6f7f8] px-5 pb-4 pt-4">
             <Pressable
-              onPress={() => openAddPersonSheet()}
+              onPress={handleSaveOptionalSetup}
+              disabled={isSavingOptionalSetup}
               accessible={true}
               accessibilityRole="button"
-              accessibilityLabel="הגדרת המשפחה"
+              accessibilityLabel="שמירה והמשך"
               className="mb-3 h-12 items-center justify-center rounded-2xl bg-[#36a9e2]"
             >
               <Text className="font-bold text-base text-white">
-                הגדרת המשפחה
+                שמירה והמשך
               </Text>
             </Pressable>
             <Pressable
               onPress={handleSkipOptionalSetup}
               accessible={true}
               accessibilityRole="button"
-              accessibilityLabel="לא עכשיו, אפשר להשלים אחר כך"
+              accessibilityLabel="דלגי עכשיו"
               className="h-12 items-center justify-center rounded-xl py-2"
             >
               <Text className="text-center text-base text-gray-600">
-                לא עכשיו, אפשר להשלים אחר כך
+                דלגי עכשיו
               </Text>
             </Pressable>
           </View>

@@ -1,6 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
@@ -40,7 +40,7 @@ export default function OnboardingStep2() {
 
   const handleContinue = () => {
     updateData({ challenges: selected });
-    router.push('/onboarding-step3');
+    router.replace('/onboarding-step3');
   };
 
   return (
@@ -48,7 +48,10 @@ export default function OnboardingStep2() {
       {/* Header */}
       <View className="pt-4 px-6">
         <View className="flex-row-reverse items-center justify-between mb-4">
-          <Pressable onPress={() => router.back()} className="p-2">
+          <Pressable
+            onPress={() => router.replace('/onboarding-step1')}
+            className="p-2"
+          >
             <MaterialIcons
               name="arrow-forward"
               size={24}
@@ -56,13 +59,13 @@ export default function OnboardingStep2() {
             />
           </Pressable>
           <Text style={{ color: colors.sage }} className="font-bold">
-            שלב 2 מתוך 4
+            שלב 2 מתוך 3
           </Text>
           <View className="w-10" />
         </View>
         <View className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
           <View
-            className="h-full w-2/4 rounded-full"
+            className="h-full w-2/3 rounded-full"
             style={{ backgroundColor: colors.sage }}
           />
         </View>
