@@ -3,6 +3,7 @@ import { ConvexError, v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import { insertCommunityActivity } from './communityActivities';
 import { saveCommunityEventToPersonalCalendar } from './communityEventCalendarHelpers';
 import { isActiveCommunityMember } from './communityMemberUtils';
 
@@ -77,6 +78,14 @@ async function getCommunityMembership(
       q.eq('communityId', communityId).eq('userId', userId)
     )
     .unique();
+}
+
+async function getUserDisplayName(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<'users'>
+): Promise<string> {
+  const user = await ctx.db.get(userId);
+  return user?.fullName?.trim() || 'משתמש';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -243,7 +252,9 @@ export const toggleCompleted = mutation({
           q.eq('communityId', communityId).eq('userId', userId)
         )
         .unique();
-      if (!member) throw new Error('רק חברי הקהילה יכולים לעדכן משימות');
+      if (!isActiveCommunityMember(member)) {
+        throw new Error('רק חברי הקהילה יכולים לעדכן משימות');
+      }
     }
 
     const nowCompleted = !task.completed;
@@ -251,6 +262,17 @@ export const toggleCompleted = mutation({
       completed: nowCompleted,
       completedAt: nowCompleted ? Date.now() : undefined,
     });
+
+    if (event.communityId && nowCompleted) {
+      await insertCommunityActivity(ctx, {
+        communityId: event.communityId,
+        actorUserId: userId,
+        type: 'task_completed',
+        entityType: 'task',
+        entityId: id,
+        title: `המשימה הושלמה: ${task.title}`,
+      });
+    }
   },
 });
 
@@ -313,10 +335,33 @@ export const setAssignee = mutation({
     if (assignee.type === 'manual') {
       if (!canManageAssignments)
         throw new Error('רק מנהלי האירוע יכולים להקצות שם ידני');
+      const manualName = assignee.name.trim();
+      if (!manualName) {
+        await ctx.db.patch(id, {
+          assignedToUserId: undefined,
+          assignedToManual: undefined,
+        });
+        return;
+      }
+      if (
+        !task.assignedToUserId &&
+        task.assignedToManual?.trim() === manualName
+      )
+        return;
       await ctx.db.patch(id, {
         assignedToUserId: undefined,
-        assignedToManual: assignee.name.trim() || undefined,
+        assignedToManual: manualName,
       });
+      if (event.communityId) {
+        await insertCommunityActivity(ctx, {
+          communityId: event.communityId,
+          actorUserId: userId,
+          type: 'task_assigned',
+          entityType: 'task',
+          entityId: id,
+          title: `${manualName} לקח/ה על עצמו/ה: ${task.title}`,
+        });
+      }
       return;
     }
 
@@ -325,6 +370,7 @@ export const setAssignee = mutation({
         throw new Error('רק יוצר האירוע או הממונה הנוכחי יכולים לשנות הקצאה');
       if (!canManageAssignments && !isAssigned && assignee.userId !== userId)
         throw new Error('משימה לא מוקצית – ניתן להקצות רק את עצמך');
+      if (task.assignedToUserId === assignee.userId && !hasManual) return;
       await ctx.db.patch(id, {
         assignedToUserId: assignee.userId,
         assignedToManual: undefined,
@@ -336,6 +382,17 @@ export const setAssignee = mutation({
           communityId: event.communityId,
         });
         // TODO(server-push): notify assignee that a task was assigned and event was added to their calendar.
+      }
+      if (event.communityId) {
+        const memberName = await getUserDisplayName(ctx, assignee.userId);
+        await insertCommunityActivity(ctx, {
+          communityId: event.communityId,
+          actorUserId: userId,
+          type: 'task_assigned',
+          entityType: 'task',
+          entityId: id,
+          title: `${memberName} לקח/ה על עצמו/ה: ${task.title}`,
+        });
       }
     }
   },
@@ -430,12 +487,14 @@ export const claimEventTask = mutation({
       assignedToManual: undefined,
     });
 
-    const { wasAddedToCalendar } =
-      await saveCommunityEventToPersonalCalendar(ctx, {
+    const { wasAddedToCalendar } = await saveCommunityEventToPersonalCalendar(
+      ctx,
+      {
         userId,
         eventId: event._id,
         communityId: event.communityId,
-      });
+      }
+    );
 
     let rsvpChanged: 'set_to_yes' | 'unchanged' | 'not_applicable' =
       'not_applicable';
@@ -464,6 +523,16 @@ export const claimEventTask = mutation({
         rsvpChanged = 'set_to_yes';
       }
     }
+
+    const memberName = await getUserDisplayName(ctx, userId);
+    await insertCommunityActivity(ctx, {
+      communityId: event.communityId,
+      actorUserId: userId,
+      type: 'task_assigned',
+      entityType: 'task',
+      entityId: id,
+      title: `${memberName} לקח/ה על עצמו/ה: ${task.title}`,
+    });
 
     return { taskId: id, wasAddedToCalendar, rsvpChanged };
   },
@@ -648,9 +717,7 @@ export const listMyAssignedEventTasks = query({
       })
     );
 
-    return results
-      .flat()
-      .sort((a, b) => a.eventStartTime - b.eventStartTime);
+    return results.flat().sort((a, b) => a.eventStartTime - b.eventStartTime);
   },
 });
 

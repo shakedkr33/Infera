@@ -3,6 +3,7 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import { insertCommunityActivity } from './communityActivities';
 import {
   effectiveMemberStatus,
   isActiveCommunityMember,
@@ -393,6 +394,14 @@ export const joinCommunityByCode = mutation({
       };
       if (mode === 'automatic') {
         await ctx.db.patch(rowId, { ...basePatch, status: 'active' });
+        await insertCommunityActivity(ctx, {
+          communityId: community._id,
+          actorUserId: user._id,
+          type: 'member_joined',
+          entityType: 'member',
+          entityId: rowId,
+          title: `${user.fullName?.trim() || 'משתמש'} הצטרף/ה לקהילה`,
+        });
         return { status: 'joined' as const, communityId: community._id };
       }
       await ctx.db.patch(rowId, { ...basePatch, status: 'pending' });
@@ -411,6 +420,13 @@ export const joinCommunityByCode = mutation({
         notificationsEnabled: true,
         joinedAt: Date.now(),
         status: 'active',
+      });
+      await insertCommunityActivity(ctx, {
+        communityId: community._id,
+        actorUserId: user._id,
+        type: 'member_joined',
+        entityType: 'member',
+        title: `${user.fullName?.trim() || 'משתמש'} הצטרף/ה לקהילה`,
       });
       return { status: 'joined' as const, communityId: community._id };
     }
@@ -526,14 +542,33 @@ export const updateCommunity = mutation({
     }
 
     const patch: Record<string, unknown> = {};
-    if (trimmedName !== undefined) patch.name = trimmedName;
-    if (description !== undefined)
-      patch.description = description.trim() || undefined;
-    if (tags !== undefined) patch.tags = tags;
-    if (color !== undefined) patch.color = color;
+    if (trimmedName !== undefined && trimmedName !== community.name) {
+      patch.name = trimmedName;
+    }
+    if (description !== undefined) {
+      const nextDescription = description.trim() || undefined;
+      if (nextDescription !== community.description) {
+        patch.description = nextDescription;
+      }
+    }
+    if (
+      tags !== undefined &&
+      JSON.stringify(tags) !== JSON.stringify(community.tags ?? [])
+    ) {
+      patch.tags = tags;
+    }
+    if (color !== undefined && color !== community.color) patch.color = color;
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(communityId, patch);
+      await insertCommunityActivity(ctx, {
+        communityId,
+        actorUserId: user._id,
+        type: 'community_updated',
+        entityType: 'community',
+        entityId: communityId,
+        title: 'פרטי הקהילה עודכנו',
+      });
     }
   },
 });
@@ -583,6 +618,15 @@ export const approvePendingMember = mutation({
     }
 
     await ctx.db.patch(memberId, { status: 'active' });
+    const targetUser = await ctx.db.get(target.userId);
+    await insertCommunityActivity(ctx, {
+      communityId,
+      actorUserId: target.userId,
+      type: 'member_joined',
+      entityType: 'member',
+      entityId: memberId,
+      title: `${targetUser?.fullName?.trim() || 'משתמש'} הצטרף/ה לקהילה`,
+    });
     return { success: true as const };
   },
 });

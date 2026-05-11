@@ -4,6 +4,7 @@ import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import { insertCommunityActivity } from './communityActivities';
 import {
   computeIsSavedToMyCalendar,
   enrichEventsWithCalendarFlags,
@@ -44,6 +45,10 @@ function getImportantItemDueDate(eventStart: number): number | undefined {
     return undefined;
   }
   return eventStart;
+}
+
+function didFieldChange(previousValue: unknown, nextValue: unknown): boolean {
+  return JSON.stringify(previousValue) !== JSON.stringify(nextValue);
 }
 
 async function syncCommunityEventImportantItemTasks(
@@ -647,6 +652,14 @@ export const create = mutation({
         }
       );
       await ctx.db.patch(eventId, { importantItems: syncedImportantItems });
+      await insertCommunityActivity(ctx, {
+        communityId: args.communityId,
+        actorUserId: userId,
+        type: 'event_created',
+        entityType: 'event',
+        entityId: eventId,
+        title: `נוצר אירוע חדש: ${args.title}`,
+      });
     }
 
     return eventId;
@@ -754,7 +767,7 @@ export const update = mutation({
             importantItems: sanitizedImportantItems,
           })
         : sanitizedImportantItems;
-    await ctx.db.patch(id, {
+    const patch = {
       ...fields,
       ...(stampedAttachments !== undefined
         ? { attachments: stampedAttachments }
@@ -762,7 +775,30 @@ export const update = mutation({
       ...(importantItems !== undefined
         ? { importantItems: syncedImportantItems }
         : {}),
-    });
+    };
+    const hasActualChange = Object.entries(patch).some(([key, value]) =>
+      didFieldChange(
+        (existing as Record<string, unknown>)[key],
+        value as unknown
+      )
+    );
+
+    await ctx.db.patch(id, patch);
+
+    if (existing.communityId && hasActualChange) {
+      const activityTitle =
+        typeof fields.title === 'string' && fields.title.trim()
+          ? fields.title.trim()
+          : existing.title;
+      await insertCommunityActivity(ctx, {
+        communityId: existing.communityId,
+        actorUserId: userId,
+        type: 'event_updated',
+        entityType: 'event',
+        entityId: id,
+        title: `עודכן האירוע: ${activityTitle}`,
+      });
+    }
   },
 });
 
@@ -826,6 +862,17 @@ export const cancelEvent = mutation({
       if (row.sourceStatus !== 'cancelled') {
         await ctx.db.patch(row._id, { sourceStatus: 'cancelled' });
       }
+    }
+
+    if (event.communityId) {
+      await insertCommunityActivity(ctx, {
+        communityId: event.communityId,
+        actorUserId: userId,
+        type: 'event_cancelled',
+        entityType: 'event',
+        entityId: eventId,
+        title: `האירוע בוטל: ${event.title}`,
+      });
     }
 
     // TODO(server-push): notify members that the event was cancelled.

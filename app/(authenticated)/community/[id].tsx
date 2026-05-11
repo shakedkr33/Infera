@@ -2,7 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Plus } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ComponentProps,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -26,6 +33,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import {
+  type JoinApprovalMode,
+  JoinApprovalSettingsModal,
+} from '@/components/JoinApprovalSettingsModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -97,6 +108,37 @@ interface TaskDoc {
   completed: boolean;
   completedAt?: number;
 }
+
+type CommunityActivityType =
+  | 'event_created'
+  | 'event_updated'
+  | 'event_cancelled'
+  | 'reminder_created'
+  | 'task_assigned'
+  | 'task_completed'
+  | 'member_joined'
+  | 'community_updated';
+
+type CommunityActivityEntityType =
+  | 'event'
+  | 'reminder'
+  | 'task'
+  | 'community'
+  | 'member';
+
+interface CommunityActivityItem {
+  id: Id<'communityActivities'>;
+  type: CommunityActivityType;
+  title: string;
+  description?: string;
+  actorDisplayName?: string;
+  createdAt: number;
+  entityType?: CommunityActivityEntityType;
+  entityId?: string;
+}
+
+type IoniconName = ComponentProps<typeof Ionicons>['name'];
+type ActivityDateGroup = 'היום' | 'אתמול' | 'השבוע' | 'מוקדם יותר';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -177,6 +219,73 @@ function formatDueDate(ts: number): string {
     day: 'numeric',
     month: 'short',
   });
+}
+
+function getActivityIcon(type: CommunityActivityType): IoniconName {
+  const icons: Record<CommunityActivityType, IoniconName> = {
+    event_created: 'calendar-outline',
+    event_updated: 'create-outline',
+    event_cancelled: 'close-circle-outline',
+    reminder_created: 'notifications-outline',
+    task_assigned: 'person-add-outline',
+    task_completed: 'checkmark-circle-outline',
+    member_joined: 'people-outline',
+    community_updated: 'information-circle-outline',
+  };
+  return icons[type];
+}
+
+function formatRelativeActivityTime(createdAt: number): string {
+  const diffMs = Date.now() - createdAt;
+  const diffMinutes = Math.max(0, Math.floor(diffMs / 60_000));
+  if (diffMinutes < 1) return 'עכשיו';
+  if (diffMinutes < 60) return `לפני ${diffMinutes} דק׳`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours === 1) return 'לפני שעה';
+  if (diffHours < 24) return `לפני ${diffHours} שעות`;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const activityDate = new Date(createdAt);
+  activityDate.setHours(0, 0, 0, 0);
+  const diffDays = Math.round(
+    (today.getTime() - activityDate.getTime()) / 86_400_000
+  );
+  if (diffDays === 1) return 'אתמול';
+
+  return new Date(createdAt).toLocaleDateString('he-IL', {
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+function getActivityDateGroup(createdAt: number): ActivityDateGroup {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const activityDate = new Date(createdAt);
+  activityDate.setHours(0, 0, 0, 0);
+  const diffDays = Math.round(
+    (today.getTime() - activityDate.getTime()) / 86_400_000
+  );
+  if (diffDays === 0) return 'היום';
+  if (diffDays === 1) return 'אתמול';
+  if (diffDays < 7) return 'השבוע';
+  return 'מוקדם יותר';
+}
+
+function groupActivitiesByDate(
+  activities: CommunityActivityItem[]
+): Array<{ title: ActivityDateGroup; items: CommunityActivityItem[] }> {
+  const groups: ActivityDateGroup[] = ['היום', 'אתמול', 'השבוע', 'מוקדם יותר'];
+  return groups
+    .map((title) => ({
+      title,
+      items: activities.filter(
+        (activity) => getActivityDateGroup(activity.createdAt) === title
+      ),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 interface TaskSummaryLineProps {
@@ -900,7 +1009,8 @@ function EventRow({
             </Text>
           </TouchableOpacity>
         ) : null}
-        {taskSummary && (taskSummary.totalTasksCount ?? taskSummary.total) > 0 ? (
+        {taskSummary &&
+        (taskSummary.totalTasksCount ?? taskSummary.total) > 0 ? (
           <TaskSummaryLine
             copy="compact"
             doneStyle={styles.eventRowTaskSummaryDone}
@@ -1142,6 +1252,109 @@ function ReminderRowAll({ task, onToggle, onHide }: ReminderRowAllProps) {
   );
 }
 
+interface ActivityRowProps {
+  activity: CommunityActivityItem;
+  onOpenEventDetails: (eventId: Id<'events'>) => void;
+}
+
+function ActivityRow({ activity, onOpenEventDetails }: ActivityRowProps) {
+  const canOpenEvent =
+    activity.entityType === 'event' && activity.entityId !== undefined;
+
+  const handlePress = useCallback((): void => {
+    if (!canOpenEvent || !activity.entityId) return;
+    onOpenEventDetails(activity.entityId as Id<'events'>);
+  }, [activity.entityId, canOpenEvent, onOpenEventDetails]);
+
+  return (
+    <Pressable
+      onPress={canOpenEvent ? handlePress : undefined}
+      style={({ pressed }) => [
+        styles.activityRow,
+        canOpenEvent && pressed ? styles.activityRowPressed : null,
+      ]}
+      accessible
+      accessibilityRole={canOpenEvent ? 'button' : 'text'}
+      accessibilityLabel={activity.title}
+      accessibilityHint={canOpenEvent ? 'פותח את פרטי האירוע' : undefined}
+    >
+      <View style={styles.activityIconWrap}>
+        <Ionicons
+          name={getActivityIcon(activity.type)}
+          size={18}
+          color={PRIMARY}
+        />
+      </View>
+      <View style={styles.activityTextBlock}>
+        <Text style={styles.activityTitle} numberOfLines={2}>
+          {activity.title}
+        </Text>
+        {activity.description ? (
+          <Text style={styles.activityDescription} numberOfLines={2}>
+            {activity.description}
+          </Text>
+        ) : null}
+      </View>
+      <Text style={styles.activityTime}>
+        {formatRelativeActivityTime(activity.createdAt)}
+      </Text>
+    </Pressable>
+  );
+}
+
+interface ActivityListProps {
+  activities: CommunityActivityItem[];
+  grouped?: boolean;
+  onOpenEventDetails: (eventId: Id<'events'>) => void;
+}
+
+function ActivityList({
+  activities,
+  grouped = false,
+  onOpenEventDetails,
+}: ActivityListProps) {
+  if (!grouped) {
+    return (
+      <View style={styles.activityCard}>
+        {activities.map((activity, index) => (
+          <View key={activity.id}>
+            <ActivityRow
+              activity={activity}
+              onOpenEventDetails={onOpenEventDetails}
+            />
+            {index < activities.length - 1 ? (
+              <View style={styles.activityDivider} />
+            ) : null}
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.activityTimeline}>
+      {groupActivitiesByDate(activities).map((group) => (
+        <View key={group.title} style={styles.activityGroup}>
+          <Text style={styles.activityGroupTitle}>{group.title}</Text>
+          <View style={styles.activityCard}>
+            {group.items.map((activity, index) => (
+              <View key={activity.id}>
+                <ActivityRow
+                  activity={activity}
+                  onOpenEventDetails={onOpenEventDetails}
+                />
+                {index < group.items.length - 1 ? (
+                  <View style={styles.activityDivider} />
+                ) : null}
+              </View>
+            ))}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 // ─── Tab: הכל ────────────────────────────────────────────────────────────────
 
 interface TabAllProps {
@@ -1214,18 +1427,27 @@ function TabAll({
     () => ({ communityId, cursor: null as null, numItems: 8 }),
     [communityId]
   );
+  const activityPreviewArgs = useMemo(
+    () => ({ communityId, limit: 3 }),
+    [communityId]
+  );
 
   const eventsPage = useQuery(api.events.listByCommunityPaged, eventsArgs);
   const remindersPage = useQuery(
     api.tasks.listCommunityRemindersPaged,
     remindersArgs
   );
+  const activityPreview = useQuery(
+    api.communityActivities.listCommunityActivities,
+    activityPreviewArgs
+  ) as CommunityActivityItem[] | undefined;
 
   const events = (eventsPage?.page ?? []) as EventDoc[];
   const reminders = (remindersPage?.page ?? []) as TaskDoc[];
 
   const isLoadingEvents = eventsPage === undefined;
   const isLoadingReminders = remindersPage === undefined;
+  const isLoadingActivityPreview = activityPreview === undefined;
 
   // hiddenReminderIds, localCompletedIds, localTaskCache come from parent props
   // so they survive tab switches
@@ -1244,8 +1466,10 @@ function TabAll({
   const removeCommunityEventFromMyCalendar = useMutation(
     api.communityEventCalendar.removeCommunityEventFromMyCalendar
   );
-  const [calendarRemoveConfirmationEventId, setCalendarRemoveConfirmationEventId] =
-    useState<Id<'events'> | null>(null);
+  const [
+    calendarRemoveConfirmationEventId,
+    setCalendarRemoveConfirmationEventId,
+  ] = useState<Id<'events'> | null>(null);
 
   const showCalendarRemoveConfirmation = useCallback(
     (eventId: Id<'events'>): void => {
@@ -1472,212 +1696,223 @@ function TabAll({
         contentContainerStyle={styles.tabContent}
         showsVerticalScrollIndicator={false}
       >
-      {/* ── Section 1: האירועים שלי */}
-      <View>
-        <SectionHeader
-          title="האירועים שלי"
-          subtitle="אירועים שיצרת או שאישרת הגעה"
-        />
-        {isLoadingEvents ? (
-          <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
-        ) : myEvents.length === 0 ? (
-          <View style={styles.emptySmall}>
-            <Text style={styles.emptySmallText}>
-              עדיין לא הצטרפת לאירועים בקהילה זו
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.eventsGrid}>
-            {myEvents.map((ev) => {
-              const privilegedFlyer =
-                communityMyRole === 'owner' ||
-                communityMyRole === 'admin' ||
-                ev.createdBy === currentUserId;
-              const showTaskMetrics =
-                privilegedFlyer || ev.tasksVisibleToParticipants === true;
-              return (
-                <CommunityEventFlyerCard
-                  key={ev._id}
-                  event={ev}
-                  isSavedToMyCalendar={ev.isSavedToMyCalendar}
-                  onCalendarToggle={handleCalendarToggle}
-                  rsvpStatus={rsvpMap[ev._id] ?? 'none'}
-                  taskSummary={taskCountsMap[ev._id]}
-                  cardWidth={flyerCardWidth}
-                  flyerDetailsOnly={privilegedFlyer}
-                  showTaskMetrics={showTaskMetrics}
-                  onOpenDetails={onOpenEventDetails}
-                  onRsvpSelect={onInlineRsvp}
-                />
-              );
-            })}
-          </View>
-        )}
-      </View>
-
-      {/* ── Section 2: כדאי לזכור (accordion) */}
-      <View>
-        {/* Header — always visible */}
-        <Pressable
-          onPress={() => setIsRemindersOpen((v) => !v)}
-          style={styles.accordionHeader}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel={`כדאי לזכור, ${remindersSummaryText}`}
-          accessibilityState={{ expanded: isRemindersOpen }}
-        >
-          {/* Left: chevron + summary badge */}
-          <View style={styles.accordionLeft}>
-            <Ionicons
-              name={isRemindersOpen ? 'chevron-up' : 'chevron-down'}
-              size={18}
-              color="#6b7280"
-            />
-            {!isLoadingReminders && (
-              <View style={styles.reminderSummaryBadge}>
-                <Text style={styles.reminderSummaryText}>
-                  {remindersSummaryText}
-                </Text>
-              </View>
-            )}
-          </View>
-          {/* Right: title */}
-          <Text style={styles.accordionTitle}>כדאי לזכור</Text>
-        </Pressable>
-
-        {/* Body — visible only when open */}
-        {isRemindersOpen &&
-          (isLoadingReminders ? (
+        {/* ── Section 1: האירועים שלי */}
+        <View>
+          <SectionHeader
+            title="האירועים שלי"
+            subtitle="אירועים שיצרת או שאישרת הגעה"
+          />
+          {isLoadingEvents ? (
             <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
-          ) : (
-            <View style={{ gap: 8, marginTop: 4 }}>
-              {/* Group 1: open (not completed) */}
-              {openReminderItems.map((t) => (
-                <ReminderRowAll
-                  key={t._id}
-                  task={t}
-                  onToggle={handleToggleInSection}
-                />
-              ))}
-              {/* Group 1: pending items (transitioning to completed — visually shown as completed) */}
-              {pendingMoveItems.map((t) => (
-                <ReminderRowAll
-                  key={t._id}
-                  task={{ ...t, completed: true }}
-                  onToggle={handleToggleInSection}
-                />
-              ))}
-              {/* Group 2: completed */}
-              {completedReminderItems.length > 0 && (
-                <>
-                  <Text style={styles.completedGroupTitle}>הושלמו</Text>
-                  {completedReminderItems.map((t) => (
-                    <ReminderRowAll
-                      key={t._id}
-                      task={t}
-                      onToggle={handleToggleInSection}
-                      onHide={handleHideReminder}
-                    />
-                  ))}
-                </>
-              )}
-              {/* Empty state */}
-              {openReminderItems.length === 0 &&
-                pendingMoveItems.length === 0 &&
-                completedReminderItems.length === 0 && (
-                  <View style={styles.emptySmall}>
-                    <Text style={styles.emptySmallText}>
-                      אין תזכורות לקהילה זו
-                    </Text>
-                  </View>
-                )}
+          ) : myEvents.length === 0 ? (
+            <View style={styles.emptySmall}>
+              <Text style={styles.emptySmallText}>
+                עדיין לא הצטרפת לאירועים בקהילה זו
+              </Text>
             </View>
-          ))}
-      </View>
-
-      {/* ── Section 3: אירועים נוספים */}
-      <View>
-        <SectionHeader
-          title="אירועים נוספים"
-          subtitle="אירועים בקהילה שעדיין לא הגבת אליהם"
-        />
-        {isLoadingEvents ? (
-          <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
-        ) : pendingEvents.length === 0 ? (
-          <View style={[styles.emptySmall, { alignItems: 'center', gap: 8 }]}>
-            <Ionicons name="calendar-outline" size={36} color="#d1d5db" />
-            <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
-              אין אירועים נוספים להצגה
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.eventsGrid}>
-            {pendingEvents.map((ev) => {
-              const privilegedFlyer =
-                communityMyRole === 'owner' || communityMyRole === 'admin';
-              const showTaskMetrics =
-                privilegedFlyer || ev.tasksVisibleToParticipants === true;
-              return (
-                <CommunityEventFlyerCard
-                  key={ev._id}
-                  event={ev}
-                  isSavedToMyCalendar={ev.isSavedToMyCalendar}
-                  onCalendarToggle={handleCalendarToggle}
-                  rsvpStatus={rsvpMap[ev._id] ?? 'none'}
-                  taskSummary={taskCountsMap[ev._id]}
-                  cardWidth={flyerCardWidth}
-                  flyerDetailsOnly={privilegedFlyer}
-                  showTaskMetrics={showTaskMetrics}
-                  onOpenDetails={onOpenEventDetails}
-                  onRsvpSelect={onInlineRsvp}
-                />
-              );
-            })}
-          </View>
-        )}
-      </View>
-
-      {/* ── Section 4: פעילות בקהילה */}
-      <View>
-        <SectionHeader title="פעילות בקהילה" />
-        <View style={styles.activityPlaceholder}>
-          <Ionicons name="pulse-outline" size={36} color="#d1d5db" />
-          <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
-            פעילות אחרונה תופיע כאן בקרוב
-          </Text>
-          {/* TODO: create activityFeed query in convex/communities.ts */}
+          ) : (
+            <View style={styles.eventsGrid}>
+              {myEvents.map((ev) => {
+                const privilegedFlyer =
+                  communityMyRole === 'owner' ||
+                  communityMyRole === 'admin' ||
+                  ev.createdBy === currentUserId;
+                const showTaskMetrics =
+                  privilegedFlyer || ev.tasksVisibleToParticipants === true;
+                return (
+                  <CommunityEventFlyerCard
+                    key={ev._id}
+                    event={ev}
+                    isSavedToMyCalendar={ev.isSavedToMyCalendar}
+                    onCalendarToggle={handleCalendarToggle}
+                    rsvpStatus={rsvpMap[ev._id] ?? 'none'}
+                    taskSummary={taskCountsMap[ev._id]}
+                    cardWidth={flyerCardWidth}
+                    flyerDetailsOnly={privilegedFlyer}
+                    showTaskMetrics={showTaskMetrics}
+                    onOpenDetails={onOpenEventDetails}
+                    onRsvpSelect={onInlineRsvp}
+                  />
+                );
+              })}
+            </View>
+          )}
         </View>
-      </View>
 
-      {/* ── Section 5: אירועים שבוטלו (24h window) */}
-      {recentlyCancelledEvents.length > 0 ? (
-        <View style={styles.cancelledEventsSection}>
-          <Text style={styles.cancelledEventsTitle}>אירועים שבוטלו</Text>
-          <View style={styles.eventsGrid}>
-            {recentlyCancelledEvents.map((ev) => {
-              const privilegedCancelled =
-                communityMyRole === 'owner' ||
-                communityMyRole === 'admin' ||
-                ev.createdBy === currentUserId;
-              const showTaskMetrics =
-                privilegedCancelled || ev.tasksVisibleToParticipants === true;
-              return (
-                <CommunityEventFlyerCard
-                  key={ev._id}
-                  event={ev}
-                  rsvpStatus="none"
-                  taskSummary={taskCountsMap[ev._id]}
-                  cardWidth={flyerCardWidth}
-                  flyerDetailsOnly
-                  showTaskMetrics={showTaskMetrics}
-                  onOpenDetails={onOpenEventDetails}
-                  onRsvpSelect={onInlineRsvp}
-                />
-              );
-            })}
-          </View>
+        {/* ── Section 2: כדאי לזכור (accordion) */}
+        <View>
+          {/* Header — always visible */}
+          <Pressable
+            onPress={() => setIsRemindersOpen((v) => !v)}
+            style={styles.accordionHeader}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={`כדאי לזכור, ${remindersSummaryText}`}
+            accessibilityState={{ expanded: isRemindersOpen }}
+          >
+            {/* Left: chevron + summary badge */}
+            <View style={styles.accordionLeft}>
+              <Ionicons
+                name={isRemindersOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color="#6b7280"
+              />
+              {!isLoadingReminders && (
+                <View style={styles.reminderSummaryBadge}>
+                  <Text style={styles.reminderSummaryText}>
+                    {remindersSummaryText}
+                  </Text>
+                </View>
+              )}
+            </View>
+            {/* Right: title */}
+            <Text style={styles.accordionTitle}>כדאי לזכור</Text>
+          </Pressable>
+
+          {/* Body — visible only when open */}
+          {isRemindersOpen &&
+            (isLoadingReminders ? (
+              <ActivityIndicator
+                color={PRIMARY}
+                style={{ marginVertical: 16 }}
+              />
+            ) : (
+              <View style={{ gap: 8, marginTop: 4 }}>
+                {/* Group 1: open (not completed) */}
+                {openReminderItems.map((t) => (
+                  <ReminderRowAll
+                    key={t._id}
+                    task={t}
+                    onToggle={handleToggleInSection}
+                  />
+                ))}
+                {/* Group 1: pending items (transitioning to completed — visually shown as completed) */}
+                {pendingMoveItems.map((t) => (
+                  <ReminderRowAll
+                    key={t._id}
+                    task={{ ...t, completed: true }}
+                    onToggle={handleToggleInSection}
+                  />
+                ))}
+                {/* Group 2: completed */}
+                {completedReminderItems.length > 0 && (
+                  <>
+                    <Text style={styles.completedGroupTitle}>הושלמו</Text>
+                    {completedReminderItems.map((t) => (
+                      <ReminderRowAll
+                        key={t._id}
+                        task={t}
+                        onToggle={handleToggleInSection}
+                        onHide={handleHideReminder}
+                      />
+                    ))}
+                  </>
+                )}
+                {/* Empty state */}
+                {openReminderItems.length === 0 &&
+                  pendingMoveItems.length === 0 &&
+                  completedReminderItems.length === 0 && (
+                    <View style={styles.emptySmall}>
+                      <Text style={styles.emptySmallText}>
+                        אין תזכורות לקהילה זו
+                      </Text>
+                    </View>
+                  )}
+              </View>
+            ))}
         </View>
-      ) : null}
+
+        {/* ── Section 3: אירועים נוספים */}
+        <View>
+          <SectionHeader
+            title="אירועים נוספים"
+            subtitle="אירועים בקהילה שעדיין לא הגבת אליהם"
+          />
+          {isLoadingEvents ? (
+            <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
+          ) : pendingEvents.length === 0 ? (
+            <View style={[styles.emptySmall, { alignItems: 'center', gap: 8 }]}>
+              <Ionicons name="calendar-outline" size={36} color="#d1d5db" />
+              <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
+                אין אירועים נוספים להצגה
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.eventsGrid}>
+              {pendingEvents.map((ev) => {
+                const privilegedFlyer =
+                  communityMyRole === 'owner' || communityMyRole === 'admin';
+                const showTaskMetrics =
+                  privilegedFlyer || ev.tasksVisibleToParticipants === true;
+                return (
+                  <CommunityEventFlyerCard
+                    key={ev._id}
+                    event={ev}
+                    isSavedToMyCalendar={ev.isSavedToMyCalendar}
+                    onCalendarToggle={handleCalendarToggle}
+                    rsvpStatus={rsvpMap[ev._id] ?? 'none'}
+                    taskSummary={taskCountsMap[ev._id]}
+                    cardWidth={flyerCardWidth}
+                    flyerDetailsOnly={privilegedFlyer}
+                    showTaskMetrics={showTaskMetrics}
+                    onOpenDetails={onOpenEventDetails}
+                    onRsvpSelect={onInlineRsvp}
+                  />
+                );
+              })}
+            </View>
+          )}
+        </View>
+
+        {/* ── Section 4: פעילות בקהילה */}
+        <View>
+          <SectionHeader title="פעילות בקהילה" />
+          {isLoadingActivityPreview ? (
+            <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
+          ) : activityPreview.length === 0 ? (
+            <View style={styles.activityPlaceholder}>
+              <Ionicons name="pulse-outline" size={36} color="#d1d5db" />
+              <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
+                פעילות אחרונה תופיע כאן בקרוב
+              </Text>
+            </View>
+          ) : (
+            <ActivityList
+              activities={activityPreview}
+              onOpenEventDetails={onOpenEventDetails}
+            />
+          )}
+        </View>
+
+        {/* ── Section 5: אירועים שבוטלו (24h window) */}
+        {recentlyCancelledEvents.length > 0 ? (
+          <View style={styles.cancelledEventsSection}>
+            <Text style={styles.cancelledEventsTitle}>אירועים שבוטלו</Text>
+            <View style={styles.eventsGrid}>
+              {recentlyCancelledEvents.map((ev) => {
+                const privilegedCancelled =
+                  communityMyRole === 'owner' ||
+                  communityMyRole === 'admin' ||
+                  ev.createdBy === currentUserId;
+                const showTaskMetrics =
+                  privilegedCancelled || ev.tasksVisibleToParticipants === true;
+                return (
+                  <CommunityEventFlyerCard
+                    key={ev._id}
+                    event={ev}
+                    rsvpStatus="none"
+                    taskSummary={taskCountsMap[ev._id]}
+                    cardWidth={flyerCardWidth}
+                    flyerDetailsOnly
+                    showTaskMetrics={showTaskMetrics}
+                    onOpenDetails={onOpenEventDetails}
+                    onRsvpSelect={onInlineRsvp}
+                  />
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
       <AppConfirmationDialog
         cancelLabel="ביטול"
@@ -2064,13 +2299,50 @@ function TabReminders({ communityId, onToggle }: TabRemindersProps) {
 
 // ─── Tab: פעילות ─────────────────────────────────────────────────────────────
 
-function TabActivity() {
+interface TabActivityProps {
+  communityId: Id<'communities'>;
+  onOpenEventDetails: (eventId: Id<'events'>) => void;
+}
+
+function TabActivity({ communityId, onOpenEventDetails }: TabActivityProps) {
+  const activityArgs = useMemo(
+    () => ({ communityId, limit: 50 }),
+    [communityId]
+  );
+  const activities = useQuery(
+    api.communityActivities.listCommunityActivities,
+    activityArgs
+  ) as CommunityActivityItem[] | undefined;
+
+  if (activities === undefined) {
+    return (
+      <View style={styles.loadingCenter}>
+        <ActivityIndicator size="large" color={PRIMARY} />
+      </View>
+    );
+  }
+
+  if (activities.length === 0) {
+    return (
+      <View style={styles.emptyFull}>
+        <Ionicons name="pulse-outline" size={48} color="#d1d5db" />
+        <Text style={styles.emptyText}>פעילות הקהילה תופיע כאן בקרוב</Text>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.emptyFull}>
-      <Ionicons name="pulse-outline" size={48} color="#d1d5db" />
-      <Text style={styles.emptyText}>פעילות הקהילה תופיע כאן בקרוב</Text>
-      {/* TODO: create activityFeed query in convex/communities.ts */}
-    </View>
+    <ScrollView
+      style={styles.tabScroll}
+      contentContainerStyle={styles.tabContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <ActivityList
+        activities={activities}
+        grouped
+        onOpenEventDetails={onOpenEventDetails}
+      />
+    </ScrollView>
   );
 }
 
@@ -2096,8 +2368,10 @@ export default function CommunityDetailScreen() {
   );
   const toggleCompleted = useMutation(api.tasks.toggleCompleted);
   const deleteCommunity = useMutation(api.communities.deleteCommunity);
-  const toggleNotifications = useMutation(api.communities.toggleNotifications);
   const markCommunityViewed = useMutation(api.communities.markCommunityViewed);
+  const updateJoinApprovalMode = useMutation(
+    api.communities.updateCommunityJoinApprovalMode
+  );
 
   // ── Local state
   const [activeTab, setActiveTab] = useState<Tab>(() => {
@@ -2112,6 +2386,10 @@ export default function CommunityDetailScreen() {
   const [addMenuPos, setAddMenuPos] = useState({ x: 8, y: 80 });
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [joinApprovalOpen, setJoinApprovalOpen] = useState(false);
+  const [joinApprovalDraft, setJoinApprovalDraft] =
+    useState<JoinApprovalMode>('automatic');
+  const [joinApprovalSaving, setJoinApprovalSaving] = useState(false);
   const [rsvpSheet, setRsvpSheet] = useState<Id<'events'> | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<Id<'events'> | null>(
     null
@@ -2129,7 +2407,7 @@ export default function CommunityDetailScreen() {
   useEffect(() => {
     setDescriptionExpanded(false);
     setDescriptionCanExpand(false);
-  }, [communityId]);
+  }, [communityId, community?.description]);
 
   // Mark viewed for list "new events" hint — only for fully approved members
   useEffect(() => {
@@ -2281,17 +2559,25 @@ export default function CommunityDetailScreen() {
     );
   }, [deleteCommunity, communityId, router]);
 
-  const handleToggleNotifications = useCallback(async () => {
+  const handleOpenJoinApprovalSettings = useCallback(() => {
+    setJoinApprovalDraft(community?.joinApprovalMode ?? 'automatic');
+    setJoinApprovalOpen(true);
+  }, [community?.joinApprovalMode]);
+
+  const handleSaveJoinApproval = useCallback(async () => {
     try {
-      const result = await toggleNotifications({ communityId });
-      const msg = result?.notificationsEnabled
-        ? 'מעכשיו תקבל/י התראות על אירועים ושינויים בקהילה'
-        : 'ההתראות בוטלו לקהילה זו';
-      Alert.alert('התראות', msg, [{ text: 'אישור' }]);
+      setJoinApprovalSaving(true);
+      await updateJoinApprovalMode({
+        communityId,
+        joinApprovalMode: joinApprovalDraft,
+      });
+      setJoinApprovalOpen(false);
     } catch {
-      Alert.alert('שגיאה', 'לא ניתן לשנות הגדרות התראות');
+      Alert.alert('שגיאה', 'לא ניתן לשמור את ההגדרות');
+    } finally {
+      setJoinApprovalSaving(false);
     }
-  }, [toggleNotifications, communityId]);
+  }, [communityId, joinApprovalDraft, updateJoinApprovalMode]);
 
   const handleSeeMoreEvents = useCallback(() => setActiveTab('אירועים'), []);
   const handleSeeMoreReminders = useCallback(() => setActiveTab('תזכורות'), []);
@@ -2342,14 +2628,6 @@ export default function CommunityDetailScreen() {
   const overflowItems = useMemo<OverflowItem[]>(
     () => [
       {
-        label: 'חיפוש אירוע',
-        iconName: 'search-outline',
-        onPress: () => {
-          setActiveTab('אירועים');
-          setSearchOpen(true);
-        },
-      },
-      {
         label: 'הצג ביומן',
         iconName: 'calendar-outline',
         onPress: () => {
@@ -2384,17 +2662,15 @@ export default function CommunityDetailScreen() {
             >[0]
           ),
       },
-      {
-        label:
-          community?.myNotificationsEnabled !== false
-            ? 'בטל התראות'
-            : 'הפעל התראות',
-        iconName:
-          community?.myNotificationsEnabled !== false
-            ? 'notifications-off-outline'
-            : 'notifications-outline',
-        onPress: handleToggleNotifications,
-      },
+      ...(community?.myRole === 'owner' || community?.myRole === 'admin'
+        ? [
+            {
+              label: 'הגדרות הצטרפות',
+              iconName: 'settings-outline' as const,
+              onPress: handleOpenJoinApprovalSettings,
+            },
+          ]
+        : []),
       {
         label: 'שיתוף קישור',
         iconName: 'share-outline',
@@ -2412,7 +2688,7 @@ export default function CommunityDetailScreen() {
       communityId,
       router,
       activeTab,
-      handleToggleNotifications,
+      handleOpenJoinApprovalSettings,
       handleDeleteCommunity,
       handleShare,
     ]
@@ -2536,32 +2812,36 @@ export default function CommunityDetailScreen() {
                   ]}
                   onTextLayout={(e) => {
                     const n = e.nativeEvent.lines.length;
-                    if (n > 2) setDescriptionCanExpand(true);
+                    setDescriptionCanExpand(n > 1);
                   }}
                 >
                   {descriptionTrimmed}
                 </Text>
-                <Text
-                  style={styles.headerDescription}
-                  numberOfLines={descriptionExpanded ? undefined : 2}
-                >
-                  {descriptionTrimmed}
-                </Text>
-                {descriptionCanExpand ? (
-                  <TouchableOpacity
-                    onPress={() => setDescriptionExpanded((s) => !s)}
-                    style={styles.headerDescriptionToggleWrap}
-                    accessible
-                    accessibilityRole="button"
-                    accessibilityLabel={
-                      descriptionExpanded ? 'הצג פחות' : 'הצג עוד'
-                    }
+                <View style={styles.headerDescriptionRow}>
+                  <Text
+                    style={[
+                      styles.headerDescription,
+                      descriptionCanExpand &&
+                        styles.headerDescriptionWithToggle,
+                    ]}
+                    numberOfLines={descriptionExpanded ? 4 : 1}
                   >
-                    <Text style={styles.headerDescriptionToggle}>
-                      {descriptionExpanded ? 'הצג פחות' : 'הצג עוד'}
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
+                    {descriptionTrimmed}
+                  </Text>
+                  {descriptionCanExpand ? (
+                    <TouchableOpacity
+                      onPress={() => setDescriptionExpanded((s) => !s)}
+                      style={styles.headerDescriptionToggleWrap}
+                      accessible
+                      accessibilityRole="button"
+                      accessibilityLabel={descriptionExpanded ? 'פחות' : 'עוד'}
+                    >
+                      <Text style={styles.headerDescriptionToggle}>
+                        {descriptionExpanded ? 'פחות' : 'עוד'}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
               </View>
             ) : null}
           </View>
@@ -2645,7 +2925,12 @@ export default function CommunityDetailScreen() {
       {activeTab === 'תזכורות' && (
         <TabReminders communityId={communityId} onToggle={handleToggleTask} />
       )}
-      {activeTab === 'פעילות' && <TabActivity />}
+      {activeTab === 'פעילות' && (
+        <TabActivity
+          communityId={communityId}
+          onOpenEventDetails={handleOpenEventDetails}
+        />
+      )}
 
       {/* ── Modals */}
       <AddPopoverMenu
@@ -2680,6 +2965,15 @@ export default function CommunityDetailScreen() {
         position={menuPos}
         items={overflowItems}
         onClose={() => setMenuOpen(false)}
+      />
+
+      <JoinApprovalSettingsModal
+        visible={joinApprovalOpen}
+        value={joinApprovalDraft}
+        saving={joinApprovalSaving}
+        onChange={setJoinApprovalDraft}
+        onClose={() => setJoinApprovalOpen(false)}
+        onSave={handleSaveJoinApproval}
       />
 
       <SearchModal
@@ -2750,24 +3044,30 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   headerDescriptionWrap: { marginTop: 6, width: '100%' },
+  headerDescriptionRow: {
+    alignItems: 'flex-end',
+  },
   headerDescription: {
     fontSize: 13,
     color: '#6b7280',
     textAlign: 'right',
     lineHeight: 18,
+    writingDirection: 'rtl',
   },
+  headerDescriptionWithToggle: { width: '100%' },
   headerDescriptionMeasurer: {
     position: 'absolute',
     opacity: 0,
     width: '100%',
     maxWidth: '100%',
   },
-  headerDescriptionToggleWrap: { marginTop: 4, alignSelf: 'flex-end' },
+  headerDescriptionToggleWrap: { marginTop: 2, minHeight: 18 },
   headerDescriptionToggle: {
     fontSize: 12,
     color: '#36a9e2',
     fontWeight: '600',
     textAlign: 'right',
+    writingDirection: 'rtl',
   },
   headerIconBtn: {
     width: 36,
@@ -3487,6 +3787,69 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 1,
+  },
+  activityCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  activityRow: {
+    minHeight: 56,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#fff',
+  },
+  activityRowPressed: { backgroundColor: '#f8fafc' },
+  activityIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#e8f6fd',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activityTextBlock: { flex: 1, gap: 2 },
+  activityTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  activityDescription: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  activityTime: {
+    minWidth: 64,
+    fontSize: 11,
+    color: '#9ca3af',
+    textAlign: 'left',
+  },
+  activityDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#eef2f7',
+    marginLeft: 14,
+    marginRight: 58,
+  },
+  activityTimeline: { gap: 14 },
+  activityGroup: { gap: 8 },
+  activityGroupTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6b7280',
+    textAlign: 'right',
+    paddingHorizontal: 2,
   },
 
   // ── Accordion (כדאי לזכור)

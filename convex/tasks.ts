@@ -1,9 +1,23 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
-import type { Doc } from './_generated/dataModel';
-import type { QueryCtx } from './_generated/server';
+import type { Doc, Id } from './_generated/dataModel';
+import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import { insertCommunityActivity } from './communityActivities';
 import { isActiveCommunityMember } from './communityMemberUtils';
+
+async function getCommunityMembership(
+  ctx: QueryCtx | MutationCtx,
+  communityId: Id<'communities'>,
+  userId: Id<'users'>
+) {
+  return await ctx.db
+    .query('communityMembers')
+    .withIndex('by_community_user', (q) =>
+      q.eq('communityId', communityId).eq('userId', userId)
+    )
+    .unique();
+}
 
 async function resolveCurrentEventImportantItemTask(
   ctx: QueryCtx,
@@ -267,7 +281,18 @@ export const create = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
 
-    return await ctx.db.insert('tasks', {
+    if (args.communityId) {
+      const membership = await getCommunityMembership(
+        ctx,
+        args.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) {
+        throw new Error('רק חברי קהילה פעילים יכולים ליצור תזכורת');
+      }
+    }
+
+    const taskId = await ctx.db.insert('tasks', {
       ...args,
       spaceId: args.spaceId ?? undefined,
       completed: false,
@@ -275,6 +300,19 @@ export const create = mutation({
       createdBy: userId,
       createdAt: Date.now(),
     });
+
+    if (args.communityId && args.assignedTo === undefined) {
+      await insertCommunityActivity(ctx, {
+        communityId: args.communityId,
+        actorUserId: userId,
+        type: 'reminder_created',
+        entityType: 'reminder',
+        entityId: taskId,
+        title: `נוספה תזכורת: ${args.title.trim()}`,
+      });
+    }
+
+    return taskId;
   },
 });
 

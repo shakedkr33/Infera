@@ -11,6 +11,7 @@
 import type * as auth from "../auth.js";
 import type * as birthdays from "../birthdays.js";
 import type * as communities from "../communities.js";
+import type * as communityActivities from "../communityActivities.js";
 import type * as communityCalendarState from "../communityCalendarState.js";
 import type * as communityEventCalendar from "../communityEventCalendar.js";
 import type * as communityEventCalendarHelpers from "../communityEventCalendarHelpers.js";
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   birthdays: typeof birthdays;
   communities: typeof communities;
+  communityActivities: typeof communityActivities;
   communityCalendarState: typeof communityCalendarState;
   communityEventCalendar: typeof communityEventCalendar;
   communityEventCalendarHelpers: typeof communityEventCalendarHelpers;

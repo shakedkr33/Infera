@@ -359,6 +359,39 @@ export default defineSchema({
     .index('by_community_user', ['communityId', 'userId']),
 
   // ═══════════════════════════════════════════════════════
+  // פעילות אוטומטית בקהילה
+  // ═══════════════════════════════════════════════════════
+  communityActivities: defineTable({
+    communityId: v.id('communities'),
+    actorUserId: v.optional(v.id('users')),
+    type: v.union(
+      v.literal('event_created'),
+      v.literal('event_updated'),
+      v.literal('event_cancelled'),
+      v.literal('reminder_created'),
+      v.literal('task_assigned'),
+      v.literal('task_completed'),
+      v.literal('member_joined'),
+      v.literal('community_updated')
+    ),
+    entityType: v.optional(
+      v.union(
+        v.literal('event'),
+        v.literal('reminder'),
+        v.literal('task'),
+        v.literal('community'),
+        v.literal('member')
+      )
+    ),
+    entityId: v.optional(v.string()),
+    title: v.string(),
+    description: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index('by_community_createdAt', ['communityId', 'createdAt'])
+    .index('by_entity', ['entityType', 'entityId']),
+
+  // ═══════════════════════════════════════════════════════
   // שיתוף אירועים אישיים — קישורי שיתוף
   // FIXED: one active link per event (enforced in createShareLink mutation)
   // ═══════════════════════════════════════════════════════
