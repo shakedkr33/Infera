@@ -478,10 +478,12 @@ export default function CommunityReminderNewScreen() {
                 <Switch
                   value={timeEnabled}
                   onValueChange={setTimeEnabled}
-                  trackColor={{ true: PRIMARY, false: '#e5e7eb' }}
+                  trackColor={{ true: PRIMARY, false: '#d7e3ef' }}
                   thumbColor="#fff"
+                  ios_backgroundColor="#d7e3ef"
                   accessible
                   accessibilityLabel="הפעל שעה"
+                  accessibilityRole="switch"
                 />
                 <FieldLabel text="שעה" />
               </View>
@@ -798,7 +800,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 2,
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
 
   timePickerBtn: {

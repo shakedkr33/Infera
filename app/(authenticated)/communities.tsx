@@ -17,6 +17,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  type JoinApprovalMode,
+  JoinApprovalSettingsModal,
+} from '@/components/JoinApprovalSettingsModal';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
@@ -471,9 +475,8 @@ export default function CommunitiesScreen() {
   const [joinLoading, setJoinLoading] = useState(false);
   const [joinApprovalModalItem, setJoinApprovalModalItem] =
     useState<CommunityItem | null>(null);
-  const [joinApprovalDraft, setJoinApprovalDraft] = useState<
-    'manual' | 'automatic'
-  >('automatic');
+  const [joinApprovalDraft, setJoinApprovalDraft] =
+    useState<JoinApprovalMode>('automatic');
   const [joinApprovalSaving, setJoinApprovalSaving] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
@@ -980,120 +983,14 @@ export default function CommunitiesScreen() {
         </View>
       </Modal>
 
-      <Modal
+      <JoinApprovalSettingsModal
         visible={joinApprovalModalItem !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setJoinApprovalModalItem(null)}
-      >
-        <Pressable
-          style={styles.joinModalBackdrop}
-          onPress={() => setJoinApprovalModalItem(null)}
-        />
-        <View style={styles.joinApprovalModalCard}>
-          <Text style={styles.joinModalTitle}>הגדרות הצטרפות</Text>
-          <Text style={styles.joinApprovalSubtitle}>
-            בחרי איך אנשים שמקבלים קישור לקהילה יצטרפו אליה
-          </Text>
-
-          <Pressable
-            onPress={() => setJoinApprovalDraft('manual')}
-            style={[
-              styles.approvalOption,
-              { flexDirection: rtl.flexDirection },
-              joinApprovalDraft === 'manual' && styles.approvalOptionSelected,
-            ]}
-            accessible
-            accessibilityRole="radio"
-            accessibilityState={{ selected: joinApprovalDraft === 'manual' }}
-            accessibilityLabel="אישור ידני"
-          >
-            <View
-              style={[
-                styles.radioOuter,
-                joinApprovalDraft === 'manual' && styles.radioOuterSelected,
-              ]}
-            >
-              {joinApprovalDraft === 'manual' ? (
-                <View style={styles.radioInner} />
-              ) : null}
-            </View>
-            <View style={styles.approvalOptionTextCol}>
-              <Text style={styles.approvalOptionTitle}>אישור ידני</Text>
-              <Text style={styles.approvalOptionDesc}>
-                כל מי שמצטרף דרך הקישור ימתין לאישור שלך לפני שיוכל להיכנס
-                לקהילה. מתאים לגנים, כיתות וקבוצות פרטיות.
-              </Text>
-            </View>
-          </Pressable>
-
-          <Pressable
-            onPress={() => setJoinApprovalDraft('automatic')}
-            style={[
-              styles.approvalOption,
-              { flexDirection: rtl.flexDirection },
-              joinApprovalDraft === 'automatic' &&
-                styles.approvalOptionSelected,
-            ]}
-            accessible
-            accessibilityRole="radio"
-            accessibilityState={{ selected: joinApprovalDraft === 'automatic' }}
-            accessibilityLabel="אישור אוטומטי"
-          >
-            <View
-              style={[
-                styles.radioOuter,
-                joinApprovalDraft === 'automatic' && styles.radioOuterSelected,
-              ]}
-            >
-              {joinApprovalDraft === 'automatic' ? (
-                <View style={styles.radioInner} />
-              ) : null}
-            </View>
-            <View style={styles.approvalOptionTextCol}>
-              <Text style={styles.approvalOptionTitle}>אישור אוטומטי</Text>
-              <Text style={styles.approvalOptionDesc}>
-                כל מי שמקבל את הקישור ייכנס מיד לקהילה, בלי אישור מנהל. מתאים
-                לקהילות פתוחות כמו עירייה או שכונה.
-              </Text>
-            </View>
-          </Pressable>
-
-          <View style={styles.joinModalButtons}>
-            <TouchableOpacity
-              style={styles.joinCancelBtn}
-              onPress={() => setJoinApprovalModalItem(null)}
-              disabled={joinApprovalSaving}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="ביטול"
-            >
-              <Text style={styles.joinCancelText}>ביטול</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.joinSubmitBtn,
-                joinApprovalSaving && styles.joinSubmitBtnDisabled,
-              ]}
-              onPress={() => {
-                void handleSaveJoinApproval();
-              }}
-              disabled={joinApprovalSaving}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel={
-                joinApprovalDraft === 'manual'
-                  ? 'שמירה, נבחר אישור ידני'
-                  : 'שמירה, נבחר אישור אוטומטי'
-              }
-            >
-              <Text style={styles.joinSubmitText}>
-                {joinApprovalSaving ? 'שומר...' : 'שמירה'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+        value={joinApprovalDraft}
+        saving={joinApprovalSaving}
+        onChange={setJoinApprovalDraft}
+        onClose={() => setJoinApprovalModalItem(null)}
+        onSave={handleSaveJoinApproval}
+      />
     </SafeAreaView>
   );
 }
@@ -1510,80 +1407,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#fff',
     fontWeight: '700',
-  },
-  joinApprovalModalCard: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
-    top: '15%',
-    maxHeight: '85%',
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 10,
-  },
-  joinApprovalSubtitle: {
-    fontSize: 14,
-    color: MUTED_TEXT,
-    textAlign: 'right',
-    marginBottom: 14,
-    lineHeight: 20,
-    writingDirection: 'rtl',
-  },
-  approvalOption: {
-    alignItems: 'flex-start',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: '#e5e7eb',
-    marginBottom: 10,
-    gap: 10,
-  },
-  approvalOptionSelected: {
-    borderColor: PRIMARY,
-    backgroundColor: '#f5fbfe',
-  },
-  approvalOptionTextCol: {
-    flex: 1,
-    minWidth: 0,
-  },
-  approvalOptionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: TITLE_COLOR,
-    textAlign: 'right',
-    writingDirection: 'rtl',
-  },
-  approvalOptionDesc: {
-    fontSize: 12,
-    color: '#9ca3af',
-    textAlign: 'right',
-    marginTop: 6,
-    lineHeight: 18,
-    writingDirection: 'rtl',
-  },
-  radioOuter: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: '#cbd5e1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 2,
-  },
-  radioOuterSelected: {
-    borderColor: PRIMARY,
-  },
-  radioInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: PRIMARY,
   },
 });
