@@ -1278,26 +1278,28 @@ function ActivityRow({ activity, onOpenEventDetails }: ActivityRowProps) {
       accessibilityLabel={activity.title}
       accessibilityHint={canOpenEvent ? 'פותח את פרטי האירוע' : undefined}
     >
-      <View style={styles.activityIconWrap}>
-        <Ionicons
-          name={getActivityIcon(activity.type)}
-          size={18}
-          color={PRIMARY}
-        />
-      </View>
-      <View style={styles.activityTextBlock}>
-        <Text style={styles.activityTitle} numberOfLines={2}>
-          {activity.title}
-        </Text>
-        {activity.description ? (
-          <Text style={styles.activityDescription} numberOfLines={2}>
-            {activity.description}
+      <View style={styles.activityRowContent}>
+        <View style={styles.activityIconWrap}>
+          <Ionicons
+            name={getActivityIcon(activity.type)}
+            size={18}
+            color={PRIMARY}
+          />
+        </View>
+        <View style={styles.activityTextBlock}>
+          <Text style={styles.activityTitle} numberOfLines={2}>
+            {activity.title}
           </Text>
-        ) : null}
+          {activity.description ? (
+            <Text style={styles.activityDescription} numberOfLines={2}>
+              {activity.description}
+            </Text>
+          ) : null}
+          <Text style={styles.activityTime}>
+            {formatRelativeActivityTime(activity.createdAt)}
+          </Text>
+        </View>
       </View>
-      <Text style={styles.activityTime}>
-        {formatRelativeActivityTime(activity.createdAt)}
-      </Text>
     </Pressable>
   );
 }
@@ -3802,12 +3804,14 @@ const styles = StyleSheet.create({
     minHeight: 56,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 10,
     backgroundColor: '#fff',
   },
   activityRowPressed: { backgroundColor: '#f8fafc' },
+  activityRowContent: {
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
   activityIconWrap: {
     width: 34,
     height: 34,
@@ -3815,8 +3819,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#e8f6fd',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  activityTextBlock: { flex: 1, gap: 2 },
+  activityTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+    alignItems: 'flex-end',
+  },
   activityTitle: {
     fontSize: 14,
     fontWeight: '600',
@@ -3831,10 +3841,13 @@ const styles = StyleSheet.create({
     writingDirection: 'rtl',
   },
   activityTime: {
-    minWidth: 64,
     fontSize: 11,
     color: '#9ca3af',
-    textAlign: 'left',
+    textAlign: 'right',
+    writingDirection: 'rtl',
+    alignSelf: 'flex-end',
+    flexShrink: 1,
+    marginTop: 2,
   },
   activityDivider: {
     height: StyleSheet.hairlineWidth,
