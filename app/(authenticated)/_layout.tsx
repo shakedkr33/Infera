@@ -14,7 +14,6 @@ import { useContext, useEffect, useRef, useState } from 'react';
 const PENDING_SHARE_TOKEN_KEY = 'pendingShareToken';
 
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -24,6 +23,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { InYomiSplashScreen } from '@/components/InYomiSplashScreen';
 import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import { ActionSheetContext } from '@/contexts/ActionSheetContext';
 import { useOnboarding } from '@/contexts/OnboardingContext';
@@ -435,11 +435,7 @@ export default function AuthenticatedLayout() {
     needsProfileSetupRedirect ||
     needsPaywallRedirect
   ) {
-    return (
-      <View className="flex-1 bg-white items-center justify-center">
-        <ActivityIndicator size="large" color="#4A9FE2" />
-      </View>
-    );
+    return <InYomiSplashScreen />;
   }
 
   return (

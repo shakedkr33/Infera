@@ -1,6 +1,7 @@
 import { useConvexAuth } from 'convex/react';
 import { Redirect, Slot, useLocalSearchParams, useSegments } from 'expo-router';
 
+import { InYomiSplashScreen } from '@/components/InYomiSplashScreen';
 import { IS_DEV_MODE } from '@/config/appConfig';
 
 export default function AuthRoutesLayout() {
@@ -10,7 +11,7 @@ export default function AuthRoutesLayout() {
 
   // Wait for auth state to hydrate from SecureStore before making routing decisions
   if (isLoading) {
-    return null;
+    return <InYomiSplashScreen />;
   }
 
   // Preview mode lets authenticated developers access auth screens for debugging
