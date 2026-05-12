@@ -1,124 +1,848 @@
 import { MaterialIcons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useMutation, useQuery } from 'convex/react';
-import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
-import type { TaskDraft } from '@/lib/types/task';
-import { AssigneesChips } from './AssigneesChips';
-import { ReminderChips } from './ReminderChips';
-import { RepeatSection } from './RepeatSection';
+import { uploadAttachmentDraftsForConvex } from '@/lib/attachmentUpload';
+import { EventAttachmentsSection } from '@/lib/components/event/EventAttachmentsSection';
+import type { EventAttachmentDraft } from '@/lib/types/event';
+import type {
+  PersistedTaskReminderType,
+  SubTask,
+  TaskCategory,
+  TaskDateOption,
+  TaskDraft,
+  TaskRecurrenceType,
+  TaskReminder,
+  TaskReminderType,
+  TaskReminderUnit,
+} from '@/lib/types/task';
+import { TASK_CATEGORIES } from '@/lib/types/task';
 import { SubtasksSection } from './SubtasksSection';
 
-const PRIMARY = '#308ce8';
+const PRIMARY = '#36a9e2';
+const TINT = '#e8f5fd';
+const DEFAULT_TASKS_ROUTE = '/(authenticated)/tasks';
+const NUMBERS = Array.from({ length: 100 }, (_, index) => index + 1);
+const NUM_ITEM_H = 48;
 
-const MOCK_ASSIGNEES = [
-  { id: 'me', name: 'אני', initial: 'א', color: PRIMARY },
-  { id: '1', name: 'יוסי', initial: 'י', color: '#3b82f6' },
-  { id: '2', name: 'מיכל', initial: 'מ', color: '#ec4899' },
+const WEEKDAYS = [
+  { label: 'א', value: 0 },
+  { label: 'ב', value: 1 },
+  { label: 'ג', value: 2 },
+  { label: 'ד', value: 3 },
+  { label: 'ה', value: 4 },
+  { label: 'ו', value: 5 },
+  { label: 'ש', value: 6 },
+] as const;
+
+const DATE_OPTIONS: { key: TaskDateOption; label: string }[] = [
+  { key: 'none', label: 'ללא תאריך' },
+  { key: 'today', label: 'היום' },
+  { key: 'tomorrow', label: 'מחר' },
+  { key: 'other', label: 'יום אחר' },
+  { key: 'in_one_hour', label: 'בעוד שעה' },
+  { key: 'in_two_hours', label: 'בעוד שעתיים' },
 ];
 
-const MOCK_EVENTS = [
-  { id: 'none', label: 'ללא אירוע' },
-  { id: '1', label: 'ארוחת ערב משפחתית' },
-  { id: '2', label: 'טיול יום הולדת' },
+const RECURRENCE_OPTIONS: {
+  key: Exclude<TaskRecurrenceType, 'none'>;
+  label: string;
+}[] = [
+  { key: 'daily', label: 'כל יום' },
+  { key: 'weekly', label: 'כל שבוע' },
+  { key: 'specific_days', label: 'ימים מסוימים' },
 ];
+
+const DATE_REMINDERS: { key: TaskReminderType; label: string }[] = [
+  { key: 'morning', label: 'בבוקר' },
+  { key: 'evening', label: 'בערב' },
+  { key: 'none', label: 'ללא' },
+  { key: 'custom', label: 'מותאם אישית' },
+];
+
+const TIME_REMINDERS: { key: TaskReminderType; label: string }[] = [
+  { key: 'at_time', label: 'בזמן' },
+  { key: 'hour_before', label: 'שעה לפני' },
+  { key: 'none', label: 'ללא' },
+  { key: 'custom', label: 'מותאם אישית' },
+];
+
+const UNIT_LABELS: Record<TaskReminderUnit, string> = {
+  minutes: 'דקות',
+  hours: 'שעות',
+  days: 'ימים',
+};
+
+const REMINDER_LABELS: Record<PersistedTaskReminderType, string> = {
+  morning: 'בבוקר',
+  evening: 'בערב',
+  at_time: 'בזמן',
+  hour_before: 'שעה לפני',
+  custom: 'מותאם אישית',
+};
 
 const EMPTY_DRAFT: TaskDraft = {
   title: '',
-  dateOption: 'today',
+  dateOption: 'none',
+  selectedDate: undefined,
   selectedTime: '09:00',
-  reminder: 'none',
-  assignees: ['me'],
+  hasTime: false,
+  reminders: [],
+  recurrenceType: 'none',
+  selectedWeekdays: [],
+  category: 'personal',
+  assignedTo: undefined,
+  assignedToMemberId: undefined,
+  assignedToUserIds: [],
+  assignedToMemberIds: [],
   subtasks: [],
-  allowSubtaskEditing: true,
+  allowParticipantEditing: false,
   notes: '',
-  isRoutine: false,
+  attachments: [],
 };
 
 interface TaskEditorProps {
   mode: 'create' | 'edit';
   taskId?: string;
+  returnTo?: string;
+}
+
+type EditableSubtaskRow = {
+  id: string;
+  title: string;
+  completed: boolean;
+  image?: {
+    storageId: Id<'_storage'>;
+    mimeType: string;
+    sizeBytes: number;
+    createdAt: number;
+  };
+  attachment?: {
+    id: string;
+    type: 'image' | 'file';
+    storageId: Id<'_storage'>;
+    mimeType: string;
+    sizeBytes: number;
+    createdAt: number;
+    originalName?: string;
+    displayName?: string;
+  };
+};
+
+type EditableTask = {
+  title: string;
+  description?: string;
+  dueDate?: number;
+  hasTime?: boolean;
+  dueAt?: number;
+  reminderType?: TaskReminderType;
+  customReminderAt?: number;
+  reminders?: TaskReminder[];
+  recurrenceType?: TaskRecurrenceType;
+  selectedWeekdays?: number[];
+  category?: string;
+  assignedTo?: Id<'users'>;
+  assignedToMemberId?: Id<'members'>;
+  assignedToUserIds?: Id<'users'>[];
+  assignedToMemberIds?: Id<'members'>[];
+  subtasks?: EditableSubtaskRow[];
+  allowParticipantEditing?: boolean;
+  attachments?: EventAttachmentFromDoc[];
+};
+
+/** Persisted task attachment (Convex document shape). */
+type EventAttachmentFromDoc = {
+  storageId: Id<'_storage'>;
+  originalName: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedAt: number;
+  uploadedBy: Id<'users'>;
+};
+
+type ClearableTaskField =
+  | 'description'
+  | 'dueDate'
+  | 'assignedTo'
+  | 'assignedToMemberId'
+  | 'assignedToUserIds'
+  | 'assignedToMemberIds'
+  | 'hasTime'
+  | 'dueAt'
+  | 'reminderType'
+  | 'customReminderAt'
+  | 'reminders'
+  | 'recurrenceType'
+  | 'selectedWeekdays'
+  | 'subtasks'
+  | 'allowParticipantEditing'
+  | 'attachments';
+
+type AssigneeOption = {
+  id: string;
+  label: string;
+  initials: string;
+  color: string;
+  userId?: Id<'users'>;
+  memberId?: Id<'members'>;
+};
+
+function fmt2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function midnightOf(date: Date): number {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  ).getTime();
+}
+
+function addDays(days: number): number {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return midnightOf(date);
+}
+
+function dateToTimeString(date: Date): string {
+  return `${fmt2(date.getHours())}:${fmt2(date.getMinutes())}`;
+}
+
+function timestampFromDateAndTime(dateMs: number, time: string): number {
+  const [hours, minutes] = time.split(':').map(Number);
+  const date = new Date(dateMs);
+  date.setHours(hours ?? 9, minutes ?? 0, 0, 0);
+  return date.getTime();
+}
+
+function roundUpToNextQuarterHour(now = new Date()): string {
+  const rounded = new Date(now);
+  const minutes = rounded.getMinutes();
+  const nextMinutes = Math.ceil(minutes / 15) * 15;
+  rounded.setMinutes(nextMinutes, 0, 0);
+  if (nextMinutes >= 60) {
+    rounded.setHours(rounded.getHours() + 1, 0, 0, 0);
+  }
+  return dateToTimeString(rounded);
+}
+
+function formatDate(dateMs: number | undefined): string {
+  if (!dateMs) return 'בחרי תאריך';
+  return new Date(dateMs).toLocaleDateString('he-IL', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+function formatTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function createId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function isToday(dateMs: number | undefined): boolean {
+  if (!dateMs) return false;
+  return midnightOf(new Date(dateMs)) === midnightOf(new Date());
+}
+
+function isTaskRecurrenceType(value: unknown): value is TaskRecurrenceType {
+  return (
+    value === 'none' ||
+    value === 'daily' ||
+    value === 'weekly' ||
+    value === 'specific_days'
+  );
+}
+
+function isTaskCategory(value: unknown): value is TaskCategory {
+  return (
+    value === 'personal' ||
+    value === 'shopping' ||
+    value === 'family' ||
+    value === 'work'
+  );
+}
+
+function normalizeSubtasks(subtasks: SubTask[]): SubTask[] {
+  return subtasks
+    .map((subtask) => ({
+      id: subtask.id || createId('subtask'),
+      title: subtask.title.trim(),
+      completed: subtask.completed,
+      ...(subtask.attachment ? { attachment: { ...subtask.attachment } } : {}),
+    }))
+    .filter((subtask) => subtask.title.length > 0);
+}
+
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}` || '??';
+  }
+  const compact = name.trim().replace(/\s/g, '');
+  return compact.slice(0, 2) || '??';
+}
+
+function unitToMinutes(amount: number, unit: TaskReminderUnit): number {
+  if (unit === 'hours') return amount * 60;
+  if (unit === 'days') return amount * 1440;
+  return amount;
+}
+
+function customReminderTimestamp(
+  baseTimestamp: number,
+  amount: number,
+  unit: TaskReminderUnit
+): number {
+  return baseTimestamp - unitToMinutes(amount, unit) * 60 * 1000;
+}
+
+function reminderFromOldFields(task: EditableTask): TaskReminder[] {
+  if (!task.reminderType || task.reminderType === 'none') return [];
+  if (task.reminderType === 'custom') {
+    return [
+      {
+        id: createId('reminder'),
+        type: 'custom',
+        customAmount: 30,
+        customUnit: 'minutes',
+        customReminderAt: task.customReminderAt,
+        label: 'תזכורת: 30 דקות לפני המשימה',
+      },
+    ];
+  }
+  return [
+    {
+      id: createId('reminder'),
+      type: task.reminderType,
+      label: REMINDER_LABELS[task.reminderType],
+    },
+  ];
+}
+
+function createEmptyDraft(currentUserId: Id<'users'> | undefined): TaskDraft {
+  return {
+    ...EMPTY_DRAFT,
+    assignedTo: currentUserId,
+    assignedToUserIds: currentUserId ? [currentUserId] : [],
+    attachments: [],
+  };
+}
+
+function stableSerializeTaskDraft(d: TaskDraft): string {
+  const snapshot = {
+    title: d.title,
+    dateOption: d.dateOption,
+    selectedDate: d.selectedDate,
+    selectedTime: d.selectedTime ?? '09:00',
+    hasTime: d.hasTime,
+    reminders: d.reminders,
+    recurrenceType: d.recurrenceType,
+    selectedWeekdays: [...d.selectedWeekdays].sort((a, b) => a - b),
+    category: d.category,
+    assignedTo: d.assignedTo,
+    assignedToMemberId: d.assignedToMemberId,
+    assignedToUserIds: [...d.assignedToUserIds].sort(),
+    assignedToMemberIds: [...d.assignedToMemberIds].sort(),
+    subtasks: d.subtasks.map((s) => ({
+      id: s.id,
+      title: s.title,
+      completed: s.completed,
+      attachment: s.attachment
+        ? {
+            id: s.attachment.id,
+            type: s.attachment.type,
+            storageId: s.attachment.storageId,
+            localUri: s.attachment.localUri,
+            mimeType: s.attachment.mimeType,
+            sizeBytes: s.attachment.sizeBytes,
+            createdAt: s.attachment.createdAt,
+            originalName: s.attachment.originalName,
+            displayName: s.attachment.displayName,
+          }
+        : undefined,
+    })),
+    allowParticipantEditing: d.allowParticipantEditing,
+    notes: d.notes,
+    attachments: (d.attachments ?? []).map((a) => ({
+      storageId: a.storageId,
+      originalName: a.originalName,
+      displayName: a.displayName,
+      mimeType: a.mimeType,
+      sizeBytes: a.sizeBytes,
+      localUri: a.localUri,
+    })),
+  };
+  return JSON.stringify(snapshot);
+}
+
+function resolveDateOption(task: EditableTask): TaskDateOption {
+  if (!task.dueDate) return 'none';
+  return 'other';
+}
+
+function draftFromTask(task: EditableTask): TaskDraft {
+  const hasTime = task.hasTime === true || task.dueAt !== undefined;
+  const sourceTimestamp = task.dueAt ?? task.dueDate;
+  return {
+    title: task.title,
+    dateOption: resolveDateOption(task),
+    selectedDate: task.dueDate,
+    selectedTime: sourceTimestamp
+      ? dateToTimeString(new Date(sourceTimestamp))
+      : '09:00',
+    hasTime,
+    reminders: task.reminders ?? reminderFromOldFields(task),
+    recurrenceType: isTaskRecurrenceType(task.recurrenceType)
+      ? task.recurrenceType
+      : 'none',
+    selectedWeekdays: task.selectedWeekdays ?? [],
+    category: isTaskCategory(task.category) ? task.category : 'personal',
+    assignedTo: task.assignedTo,
+    assignedToMemberId: task.assignedToMemberId,
+    assignedToUserIds:
+      task.assignedToUserIds ?? (task.assignedTo ? [task.assignedTo] : []),
+    assignedToMemberIds:
+      task.assignedToMemberIds ??
+      (task.assignedToMemberId ? [task.assignedToMemberId] : []),
+    subtasks: (task.subtasks ?? []).map((st) => {
+      const base: SubTask = {
+        id: st.id,
+        title: st.title,
+        completed: st.completed,
+      };
+      if (st.attachment?.storageId) {
+        return {
+          ...base,
+          attachment: {
+            id: st.attachment.id,
+            type: st.attachment.type,
+            storageId: st.attachment.storageId as string,
+            mimeType: st.attachment.mimeType,
+            sizeBytes: st.attachment.sizeBytes,
+            createdAt: st.attachment.createdAt,
+            originalName: st.attachment.originalName ?? 'file',
+            displayName:
+              st.attachment.displayName ?? st.attachment.originalName ?? 'קובץ',
+          },
+        };
+      }
+      if (st.image) {
+        return {
+          ...base,
+          attachment: {
+            id: `legacy-${st.id}`,
+            type: 'image' as const,
+            storageId: st.image.storageId as unknown as string,
+            mimeType: st.image.mimeType,
+            sizeBytes: st.image.sizeBytes,
+            createdAt: st.image.createdAt,
+            originalName: 'image',
+            displayName: 'תמונה',
+          },
+        };
+      }
+      return base;
+    }),
+    allowParticipantEditing: task.allowParticipantEditing ?? false,
+    notes: task.description ?? '',
+    attachments: (task.attachments ?? []).map((a) => ({
+      storageId: a.storageId,
+      originalName: a.originalName,
+      displayName: a.displayName,
+      mimeType: a.mimeType,
+      sizeBytes: a.sizeBytes,
+    })),
+  };
+}
+
+function isTimedShortcut(option: TaskDateOption): boolean {
+  return option === 'in_one_hour' || option === 'in_two_hours';
+}
+
+function normalizeReturnRoute(returnTo: string | undefined): string {
+  if (returnTo?.startsWith('/(authenticated)/')) return returnTo;
+  return DEFAULT_TASKS_ROUTE;
 }
 
 export default function TaskEditorScreen({
   mode,
-  taskId: _taskId,
+  taskId,
+  returnTo,
 }: TaskEditorProps): React.JSX.Element {
   const isCreate = mode === 'create';
-
   const [draft, setDraft] = useState<TaskDraft>(EMPTY_DRAFT);
   const [titleError, setTitleError] = useState(false);
-  const [linkedEvent, setLinkedEvent] = useState('none');
-  const [eventPickerOpen, setEventPickerOpen] = useState(false);
+  const [timeError, setTimeError] = useState<string | null>(null);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [customReminderOpen, setCustomReminderOpen] = useState(false);
+  const [customAmount, setCustomAmount] = useState(30);
+  const [customUnit, setCustomUnit] = useState<TaskReminderUnit>('minutes');
+  const [isSaving, setIsSaving] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const numListRef = useRef<FlatList<number>>(null);
+  const editSnapshotRef = useRef<string | null>(null);
 
-  // ── Convex: spaceId ─────────────────────────────────────────────────────
-  // getMySpace מחזיר את ה-spaceId ישירות (Id<'spaces'> | null | undefined)
-  // undefined = עדיין טוען | null = אין מרחב פעיל | string = ה-ID
+  const destination = normalizeReturnRoute(returnTo);
   const mySpace = useQuery(api.users.getMySpace);
-  const spaceId = mySpace ?? undefined; // ממיר null ל-undefined עבור mutatio
-
-  // ── Convex: edit mode – load existing task ───────────────────────────────
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const familyContacts = useQuery(api.members.listMyFamilyContacts);
   const existingTask = useQuery(
     api.tasks.getById,
-    !isCreate && _taskId ? { id: _taskId as Id<'tasks'> } : 'skip'
+    !isCreate && taskId ? { id: taskId as Id<'tasks'> } : 'skip'
+  );
+  const createTask = useMutation(api.tasks.create);
+  const updateTask = useMutation(api.tasks.update);
+  const generateUploadUrl = useMutation(api.events.generateUploadUrl);
+
+  const currentUserId = currentUser?._id as Id<'users'> | undefined;
+  const currentUserIdRef = useRef(currentUserId);
+  currentUserIdRef.current = currentUserId;
+  const selfEntity = familyContacts?.selfEntity as
+    | { displayName?: string; color?: string }
+    | null
+    | undefined;
+  const currentUserName =
+    selfEntity?.displayName?.trim() ||
+    (currentUser as { fullName?: string } | null)?.fullName?.trim() ||
+    'אני';
+  const currentUserColor =
+    selfEntity?.color ??
+    (currentUser as { profileColor?: string } | null)?.profileColor ??
+    PRIMARY;
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isCreate) return;
+      editSnapshotRef.current = null;
+      setTitleError(false);
+      setTimeError(null);
+      setDiscardOpen(false);
+      setDraft(createEmptyDraft(currentUserIdRef.current));
+    }, [isCreate])
   );
 
   useEffect(() => {
     if (existingTask) {
-      // ממלא את הטופס בנתוני המשימה הקיימת
-      const hasDueDate = existingTask.dueDate != null;
-      const dueDate = existingTask.dueDate
-        ? new Date(existingTask.dueDate)
-        : null;
-      setDraft((prev) => ({
-        ...prev,
-        title: existingTask.title,
-        notes: existingTask.description ?? '',
-        dateOption: hasDueDate ? 'today' : 'none', // TODO: להבחין בין היום לתאריך אחר
-        selectedTime: dueDate
-          ? dueDate.toLocaleTimeString('he-IL', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-          : '09:00',
-      }));
+      const nextDraft = draftFromTask(existingTask as EditableTask);
+      setDraft(nextDraft);
+      editSnapshotRef.current = stableSerializeTaskDraft(nextDraft);
     }
   }, [existingTask]);
 
-  // ── Convex: mutations ────────────────────────────────────────────────────
-  const createTaskMutation = useMutation(api.tasks.create);
-  const updateTaskMutation = useMutation(api.tasks.update);
+  useEffect(() => {
+    if (customReminderOpen) {
+      const index = Math.max(0, customAmount - 1);
+      setTimeout(() => {
+        numListRef.current?.scrollToIndex({ index, animated: false });
+      }, 80);
+    }
+  }, [customReminderOpen, customAmount]);
 
-  const update = (updates: Partial<TaskDraft>): void => {
-    setDraft((prev) => {
-      const next = { ...prev, ...updates };
-      next.isRoutine = next.repeat != null || next.subtasks.length > 0;
-      return next;
+  const assignees: AssigneeOption[] = useMemo(() => {
+    const options: AssigneeOption[] = currentUserId
+      ? [
+          {
+            id: `user:${currentUserId}`,
+            label: 'אני',
+            initials: initialsFromName(currentUserName),
+            color: currentUserColor,
+            userId: currentUserId,
+          },
+        ]
+      : [];
+
+    const selfEntityId = familyContacts?.selfEntityId;
+    const familyOptions = (familyContacts?.members ?? [])
+      .filter((member) => member._id !== selfEntityId)
+      .map((member) => {
+        const label = member.displayName?.trim() || 'בן משפחה';
+        const userId = member.matchedUserId as Id<'users'> | undefined;
+        return {
+          id: userId ? `user:${userId}` : `member:${member._id}`,
+          label,
+          initials: initialsFromName(label),
+          color: member.color ?? PRIMARY,
+          userId,
+          memberId: member._id as Id<'members'>,
+        };
+      });
+
+    const seen = new Set(options.map((option) => option.id));
+    for (const option of familyOptions) {
+      if (!seen.has(option.id)) {
+        options.push(option);
+        seen.add(option.id);
+      }
+    }
+    return options;
+  }, [
+    currentUserColor,
+    currentUserId,
+    currentUserName,
+    familyContacts?.members,
+    familyContacts?.selfEntityId,
+  ]);
+
+  const hasDueDate = draft.dateOption !== 'none';
+  const showTimeToggle = ['today', 'tomorrow', 'other'].includes(
+    draft.dateOption
+  );
+  const shouldShowTimePicker = showTimeToggle && draft.hasTime;
+  const selectedDate = draft.selectedDate ?? addDays(0);
+  const previewDueAt = useMemo(() => {
+    if (draft.dateOption === 'in_one_hour') return Date.now() + 60 * 60 * 1000;
+    if (draft.dateOption === 'in_two_hours')
+      return Date.now() + 2 * 60 * 60 * 1000;
+    if (draft.hasTime && draft.selectedDate) {
+      return timestampFromDateAndTime(
+        draft.selectedDate,
+        draft.selectedTime ?? '09:00'
+      );
+    }
+    return undefined;
+  }, [draft.dateOption, draft.hasTime, draft.selectedDate, draft.selectedTime]);
+  const reminderBaseTimestamp =
+    previewDueAt ?? timestampFromDateAndTime(selectedDate, '09:00');
+  const customReminderAt = customReminderTimestamp(
+    reminderBaseTimestamp,
+    customAmount,
+    customUnit
+  );
+  const customReminderError = useMemo(() => {
+    if (!hasDueDate) {
+      return 'בחרי מועד למשימה לפני תזכורת מותאמת אישית';
+    }
+    if (customReminderAt < Date.now()) {
+      return 'התזכורת שבחרת כבר עברה';
+    }
+    if (customReminderAt > reminderBaseTimestamp) {
+      return 'אי אפשר לבחור תזכורת אחרי מועד המשימה';
+    }
+    return null;
+  }, [customReminderAt, hasDueDate, reminderBaseTimestamp]);
+  const visibleAssigneeIds = useMemo(
+    () => assignees.map((assignee) => assignee.id),
+    [assignees]
+  );
+  const selectedAssigneeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const userId of draft.assignedToUserIds) {
+      ids.add(`user:${userId}`);
+    }
+    for (const memberId of draft.assignedToMemberIds) {
+      ids.add(`member:${memberId}`);
+    }
+    if (draft.assignedTo) ids.add(`user:${draft.assignedTo}`);
+    if (draft.assignedToMemberId) ids.add(`member:${draft.assignedToMemberId}`);
+    return ids;
+  }, [
+    draft.assignedTo,
+    draft.assignedToMemberId,
+    draft.assignedToMemberIds,
+    draft.assignedToUserIds,
+  ]);
+  const allAssigneesSelected =
+    visibleAssigneeIds.length > 0 &&
+    visibleAssigneeIds.every((id) => selectedAssigneeIds.has(id));
+  const isDirty = useMemo(() => {
+    if (isSaving) return false;
+    if (isCreate) {
+      const baseline = stableSerializeTaskDraft(
+        createEmptyDraft(currentUserId)
+      );
+      return stableSerializeTaskDraft(draft) !== baseline;
+    }
+    return (
+      editSnapshotRef.current !== null &&
+      stableSerializeTaskDraft(draft) !== editSnapshotRef.current
+    );
+  }, [currentUserId, draft, isCreate, isSaving]);
+
+  const updateDraft = useCallback((updates: Partial<TaskDraft>): void => {
+    setDraft((prev) => ({ ...prev, ...updates, reminderError: undefined }));
+  }, []);
+
+  const navigateToDestination = useCallback((): void => {
+    router.replace(destination as never);
+  }, [destination]);
+
+  const handleBack = (): void => {
+    if (isDirty) {
+      setDiscardOpen(true);
+      return;
+    }
+    navigateToDestination();
+  };
+
+  const selectDateOption = (option: TaskDateOption): void => {
+    setTimeError(null);
+    if (option === 'none') {
+      updateDraft({
+        dateOption: option,
+        selectedDate: undefined,
+        hasTime: false,
+        reminders: [],
+        recurrenceType: 'none',
+        selectedWeekdays: [],
+      });
+      return;
+    }
+    if (option === 'today') {
+      updateDraft({
+        dateOption: option,
+        selectedDate: addDays(0),
+        hasTime: false,
+        selectedTime: roundUpToNextQuarterHour(),
+      });
+      return;
+    }
+    if (option === 'tomorrow') {
+      updateDraft({
+        dateOption: option,
+        selectedDate: addDays(1),
+        hasTime: false,
+        selectedTime: '09:00',
+      });
+      return;
+    }
+    if (option === 'other') {
+      updateDraft({
+        dateOption: option,
+        selectedDate: draft.selectedDate ?? addDays(0),
+        hasTime: false,
+        selectedTime: '09:00',
+      });
+      setDatePickerOpen(true);
+      return;
+    }
+    updateDraft({
+      dateOption: option,
+      selectedDate: undefined,
+      hasTime: true,
+      reminders: [],
+      recurrenceType: 'none',
+      selectedWeekdays: [],
     });
   };
 
-  // ממיר dateOption + selectedTime ל-Unix timestamp (ms)
-  const resolveDueDate = (): number | undefined => {
-    if (draft.dateOption === 'none') return undefined;
-    const base = new Date(); // TODO: לתמוך ב-dateOption === 'other' עם date picker
-    const timeParts = (draft.selectedTime ?? '09:00').split(':');
-    const hours = Number(timeParts[0] ?? '9');
-    const minutes = Number(timeParts[1] ?? '0');
-    base.setHours(hours, minutes, 0, 0);
-    return base.getTime();
+  const setHasTime = (hasTime: boolean): void => {
+    setTimeError(null);
+    const selectedTime =
+      hasTime && draft.dateOption === 'today'
+        ? roundUpToNextQuarterHour()
+        : '09:00';
+    updateDraft({
+      hasTime,
+      selectedTime: hasTime ? selectedTime : draft.selectedTime,
+      reminders: [],
+    });
+  };
+
+  const hasReminder = (type: PersistedTaskReminderType): boolean =>
+    draft.reminders.some((reminder) => reminder.type === type);
+
+  const toggleReminder = (type: TaskReminderType): void => {
+    if (type === 'none') {
+      updateDraft({ reminders: [] });
+      return;
+    }
+    if (type === 'custom') {
+      openCustomReminder();
+      return;
+    }
+    const nextReminders = hasReminder(type)
+      ? draft.reminders.filter((reminder) => reminder.type !== type)
+      : [
+          ...draft.reminders,
+          {
+            id: createId('reminder'),
+            type,
+            label: REMINDER_LABELS[type],
+          },
+        ];
+    updateDraft({ reminders: nextReminders });
+  };
+
+  const validateCustomReminder = (reminders: TaskReminder[]): string | null => {
+    for (const reminder of reminders) {
+      if (reminder.type !== 'custom') continue;
+      if (!hasDueDate) {
+        return 'בחרי מועד למשימה לפני תזכורת מותאמת אישית';
+      }
+      if (!reminder.customReminderAt) return 'בחרי זמן לתזכורת מותאמת';
+      if (reminder.customReminderAt < Date.now()) {
+        return 'התזכורת שבחרת כבר עברה';
+      }
+      if (reminder.customReminderAt > reminderBaseTimestamp) {
+        return 'אי אפשר לבחור תזכורת אחרי מועד המשימה';
+      }
+    }
+    return null;
+  };
+
+  const buildSavePayload = (): {
+    dueDate?: number;
+    dueAt?: number;
+    hasTime: boolean;
+    clearFields: ClearableTaskField[];
+  } => {
+    const clearFields: ClearableTaskField[] = [];
+    if (draft.dateOption === 'none') {
+      clearFields.push('dueDate', 'dueAt', 'selectedWeekdays');
+      return { hasTime: false, clearFields };
+    }
+    if (
+      draft.dateOption === 'in_one_hour' ||
+      draft.dateOption === 'in_two_hours'
+    ) {
+      const offset = draft.dateOption === 'in_one_hour' ? 1 : 2;
+      const dueAt = Date.now() + offset * 60 * 60 * 1000;
+      return {
+        dueDate: midnightOf(new Date(dueAt)),
+        dueAt,
+        hasTime: true,
+        clearFields,
+      };
+    }
+    const dueDate = selectedDate;
+    if (!draft.hasTime) {
+      clearFields.push('dueAt');
+      return { dueDate, hasTime: false, clearFields };
+    }
+    const dueAt = timestampFromDateAndTime(
+      dueDate,
+      draft.selectedTime ?? '09:00'
+    );
+    return { dueDate, dueAt, hasTime: true, clearFields };
   };
 
   const handleSave = async (): Promise<void> => {
@@ -126,584 +850,1321 @@ export default function TaskEditorScreen({
       setTitleError(true);
       return;
     }
+    if (!isCreate && !taskId) return;
+    if (isCreate && !mySpace) {
+      Alert.alert('שגיאה', 'לא נמצא מרחב פעיל. נסי שוב.');
+      return;
+    }
 
-    if (isCreate) {
-      if (!spaceId) {
-        Alert.alert('שגיאה', 'לא ניתן לאתר את המרחב שלך. נסה שוב מאוחר יותר.');
-        return;
-      }
-      try {
-        await createTaskMutation({
-          title: draft.title.trim(),
-          description: draft.notes || undefined,
-          dueDate: resolveDueDate(),
-          spaceId: spaceId as Id<'spaces'>,
-          // TODO: להוסיף assignedTo מ-AssigneesChips כשיחובר ל-Convex
+    const schedule = buildSavePayload();
+    if (
+      schedule.dueAt !== undefined &&
+      isToday(schedule.dueDate) &&
+      schedule.dueAt < Date.now()
+    ) {
+      setTimeError('אי אפשר לבחור שעה שכבר עברה');
+      return;
+    }
+    const normalizedReminders = hasDueDate ? draft.reminders : [];
+    const reminderError = validateCustomReminder(normalizedReminders);
+    if (reminderError) {
+      updateDraft({ reminderError });
+      return;
+    }
+
+    const recurrenceType = hasDueDate ? draft.recurrenceType : 'none';
+    const normalizedSubtasks = normalizeSubtasks(draft.subtasks);
+
+    setIsSaving(true);
+    try {
+      const resolvedAttachments = await uploadAttachmentDraftsForConvex(
+        draft.attachments ?? [],
+        generateUploadUrl
+      );
+
+      type SubtaskConvexRow = {
+        id: string;
+        title: string;
+        completed: boolean;
+        attachment?: {
+          id: string;
+          type: 'image' | 'file';
+          storageId: Id<'_storage'>;
+          mimeType: string;
+          sizeBytes: number;
+          createdAt: number;
+          originalName?: string;
+          displayName?: string;
+        };
+      };
+
+      const subtasksForConvex: SubtaskConvexRow[] = [];
+      for (const st of normalizedSubtasks) {
+        const att = st.attachment;
+        let attachmentRow: SubtaskConvexRow['attachment'];
+        if (att?.localUri && !att.storageId) {
+          const [uploaded] = await uploadAttachmentDraftsForConvex(
+            [
+              {
+                originalName: att.originalName,
+                displayName: att.displayName,
+                mimeType: att.mimeType,
+                sizeBytes: att.sizeBytes,
+                localUri: att.localUri,
+              },
+            ],
+            generateUploadUrl
+          );
+          attachmentRow = {
+            id: att.id,
+            type: att.type,
+            storageId: uploaded.storageId,
+            mimeType: uploaded.mimeType,
+            sizeBytes: uploaded.sizeBytes,
+            createdAt: Date.now(),
+            originalName: att.originalName,
+            displayName: att.displayName,
+          };
+        } else if (att?.storageId) {
+          attachmentRow = {
+            id: att.id,
+            type: att.type,
+            storageId: att.storageId as Id<'_storage'>,
+            mimeType: att.mimeType,
+            sizeBytes: att.sizeBytes,
+            createdAt: att.createdAt ?? Date.now(),
+            originalName: att.originalName,
+            displayName: att.displayName,
+          };
+        }
+        subtasksForConvex.push({
+          id: st.id,
+          title: st.title,
+          completed: st.completed,
+          ...(attachmentRow ? { attachment: attachmentRow } : {}),
         });
-        router.back();
-      } catch (e) {
-        console.error('createTask error:', e);
-        Alert.alert('שגיאה', 'לא ניתן היה לשמור את המשימה.');
       }
-    } else {
-      if (!_taskId) return;
-      try {
-        await updateTaskMutation({
-          id: _taskId as Id<'tasks'>,
-          title: draft.title.trim(),
-          description: draft.notes || undefined,
-          dueDate: resolveDueDate(),
+
+      const clearFields: ClearableTaskField[] = [
+        ...schedule.clearFields,
+        ...(subtasksForConvex.length === 0
+          ? (['subtasks'] satisfies ClearableTaskField[])
+          : []),
+        ...(normalizedReminders.length === 0
+          ? ([
+              'reminders',
+              'reminderType',
+              'customReminderAt',
+            ] satisfies ClearableTaskField[])
+          : []),
+        ...(recurrenceType !== 'specific_days'
+          ? (['selectedWeekdays'] satisfies ClearableTaskField[])
+          : []),
+        ...(draft.assignedTo === undefined
+          ? (['assignedTo'] satisfies ClearableTaskField[])
+          : []),
+        ...(draft.assignedToMemberId === undefined
+          ? (['assignedToMemberId'] satisfies ClearableTaskField[])
+          : []),
+        ...(draft.assignedToUserIds.length === 0
+          ? (['assignedToUserIds'] satisfies ClearableTaskField[])
+          : []),
+        ...(draft.assignedToMemberIds.length === 0
+          ? (['assignedToMemberIds'] satisfies ClearableTaskField[])
+          : []),
+      ];
+
+      const firstReminder = normalizedReminders[0];
+      const payload = {
+        title: draft.title.trim(),
+        description: draft.notes.trim() || undefined,
+        dueDate: schedule.dueDate,
+        hasTime: schedule.hasTime,
+        dueAt: schedule.dueAt,
+        reminderType: firstReminder?.type ?? 'none',
+        customReminderAt:
+          firstReminder?.type === 'custom'
+            ? firstReminder.customReminderAt
+            : undefined,
+        reminders:
+          normalizedReminders.length > 0 ? normalizedReminders : undefined,
+        recurrenceType,
+        selectedWeekdays:
+          recurrenceType === 'specific_days'
+            ? draft.selectedWeekdays
+            : undefined,
+        category: draft.category,
+        assignedTo: draft.assignedTo as Id<'users'> | undefined,
+        assignedToMemberId: draft.assignedToMemberId as
+          | Id<'members'>
+          | undefined,
+        assignedToUserIds:
+          draft.assignedToUserIds.length > 0
+            ? (draft.assignedToUserIds as Id<'users'>[])
+            : undefined,
+        assignedToMemberIds:
+          draft.assignedToMemberIds.length > 0
+            ? (draft.assignedToMemberIds as Id<'members'>[])
+            : undefined,
+        subtasks: subtasksForConvex.length > 0 ? subtasksForConvex : undefined,
+        allowParticipantEditing: draft.allowParticipantEditing,
+      };
+
+      if (isCreate) {
+        await createTask({
+          ...payload,
+          spaceId: mySpace as Id<'spaces'>,
+          attachments:
+            resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
         });
-        router.back();
-      } catch (e) {
-        console.error('updateTask error:', e);
-        Alert.alert('שגיאה', 'לא ניתן היה לעדכן את המשימה.');
+        setDraft(createEmptyDraft(currentUserId));
+      } else {
+        await updateTask({
+          id: taskId as Id<'tasks'>,
+          ...payload,
+          attachments: resolvedAttachments,
+          clearFields,
+        });
       }
+      navigateToDestination();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'לא ניתן לשמור כרגע';
+      Alert.alert('שגיאה', message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleBack = (): void => {
-    if (isCreate && draft.title.trim()) {
-      Alert.alert('לצאת בלי לשמור?', 'השינויים לא יישמרו', [
-        { text: 'ביטול', style: 'cancel' },
-        { text: 'צא', style: 'destructive', onPress: () => router.back() },
-      ]);
-    } else {
-      router.back();
-    }
+  const toggleWeekday = (weekday: number): void => {
+    updateDraft({
+      selectedWeekdays: draft.selectedWeekdays.includes(weekday)
+        ? draft.selectedWeekdays.filter((day) => day !== weekday)
+        : [...draft.selectedWeekdays, weekday],
+    });
   };
 
-  const showDateFields = draft.dateOption !== 'none';
-
-  // ── spaceId loading / error states ────────────────────────────────────────
-  // mySpace === undefined  → still loading
-  // mySpace === null       → loaded but no space found
-  if (isCreate && mySpace === undefined) {
-    return (
-      <SafeAreaView style={s.safe}>
-        <View style={s.header}>
-          <Pressable
-            onPress={handleBack}
-            style={s.closeBtn}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="סגור"
-          >
-            <MaterialIcons name="close" size={22} color="#9ca3af" />
-          </Pressable>
-          <Text style={s.headerTitle}>יצירת משימה חדשה</Text>
-          <View style={{ width: 40 }} />
-        </View>
-        <View style={s.spaceLoadingContainer}>
-          <ActivityIndicator size="large" color={PRIMARY} />
-          <Text style={s.spaceLoadingText}>טוען פרטי מרחב...</Text>
-        </View>
-      </SafeAreaView>
+  const openCustomReminder = (): void => {
+    const currentCustom = draft.reminders.find(
+      (reminder) => reminder.type === 'custom'
     );
-  }
+    setCustomAmount(currentCustom?.customAmount ?? 30);
+    setCustomUnit(currentCustom?.customUnit ?? 'minutes');
+    setCustomReminderOpen(true);
+  };
 
-  if (isCreate && mySpace === null) {
+  const confirmCustomReminder = (): void => {
+    if (customReminderError) {
+      updateDraft({ reminderError: customReminderError });
+      return;
+    }
+    const nextCustom: TaskReminder = {
+      id:
+        draft.reminders.find((reminder) => reminder.type === 'custom')?.id ??
+        createId('reminder'),
+      type: 'custom',
+      customAmount,
+      customUnit,
+      customReminderAt,
+      label: `תזכורת: ${customAmount} ${UNIT_LABELS[customUnit]} לפני המשימה`,
+    };
+    const nextReminders = [
+      ...draft.reminders.filter((reminder) => reminder.type !== 'custom'),
+      nextCustom,
+    ];
+    const reminderError = validateCustomReminder(nextReminders);
+    if (reminderError) {
+      updateDraft({ reminderError });
+      return;
+    }
+    updateDraft({ reminders: nextReminders });
+    setCustomReminderOpen(false);
+  };
+
+  const applyAssigneeSelection = (ids: Set<string>): void => {
+    const userIds: Id<'users'>[] = [];
+    const memberIds: Id<'members'>[] = [];
+    for (const option of assignees) {
+      if (!ids.has(option.id)) continue;
+      if (option.userId) {
+        userIds.push(option.userId);
+      } else if (option.memberId) {
+        memberIds.push(option.memberId);
+      }
+    }
+    const firstUserId = userIds[0];
+    const firstMemberId = firstUserId ? undefined : memberIds[0];
+    updateDraft({
+      assignedTo: firstUserId,
+      assignedToMemberId: firstMemberId,
+      assignedToUserIds: userIds,
+      assignedToMemberIds: memberIds,
+    });
+  };
+
+  const toggleAssignee = (assignee: AssigneeOption): void => {
+    const nextIds = new Set(selectedAssigneeIds);
+    if (nextIds.has(assignee.id)) {
+      nextIds.delete(assignee.id);
+    } else {
+      nextIds.add(assignee.id);
+    }
+    applyAssigneeSelection(nextIds);
+  };
+
+  const selectEveryone = (): void => {
+    if (allAssigneesSelected) {
+      applyAssigneeSelection(new Set());
+      return;
+    }
+    applyAssigneeSelection(new Set(visibleAssigneeIds));
+  };
+
+  const isCtaDisabled = !draft.title.trim() || isSaving;
+
+  if (isCreate && (mySpace === undefined || currentUserId === undefined)) {
     return (
-      <SafeAreaView style={s.safe}>
-        <View style={s.header}>
-          <Pressable
-            onPress={handleBack}
-            style={s.closeBtn}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="סגור"
-          >
-            <MaterialIcons name="close" size={22} color="#9ca3af" />
-          </Pressable>
-          <Text style={s.headerTitle}>יצירת משימה חדשה</Text>
-          <View style={{ width: 40 }} />
-        </View>
-        <View style={s.spaceLoadingContainer}>
-          <MaterialIcons name="error-outline" size={48} color="#d1d5db" />
-          <Text style={s.spaceErrorText}>לא נמצא מרחב פעיל</Text>
-          <Text style={s.spaceErrorSubtext}>
-            נדרש מרחב (space) כדי ליצור משימות. אנא השלם את תהליך ה-Onboarding.
-          </Text>
-          <TouchableOpacity
-            style={s.retryBtn}
-            onPress={() => router.back()}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="חזור"
-          >
-            <Text style={s.retryBtnText}>חזור</Text>
-          </TouchableOpacity>
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.centerState}>
+          <ActivityIndicator color={PRIMARY} size="large" />
+          <Text style={styles.centerText}>טוען נתונים...</Text>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={s.safe}>
-      {/* Header */}
-      <View style={s.header}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <View style={styles.header}>
+        <View style={styles.headerSpacer} />
+        <Text style={styles.headerTitle}>
+          {isCreate ? 'יצירת משימה' : 'עריכת משימה'}
+        </Text>
         <Pressable
           onPress={handleBack}
-          style={s.closeBtn}
+          style={styles.backButton}
           accessible={true}
           accessibilityRole="button"
-          accessibilityLabel="סגור"
+          accessibilityLabel="חזרה"
         >
-          <MaterialIcons name="close" size={22} color="#9ca3af" />
+          <MaterialIcons name="arrow-forward" size={22} color="#111517" />
         </Pressable>
-        <Text style={s.headerTitle}>
-          {isCreate ? 'יצירת משימה חדשה' : 'עריכת משימה'}
-        </Text>
-        <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView
-        style={s.scroll}
-        contentContainerStyle={s.scrollContent}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        {/* 1. Task Title */}
-        <View style={s.section}>
-          <Text style={s.label}>שם המשימה (חובה)</Text>
-          <TextInput
-            style={[s.titleInput, titleError && s.inputError]}
-            value={draft.title}
-            onChangeText={(t) => {
-              setTitleError(false);
-              update({ title: t });
-            }}
-            placeholder="מה צריך לעשות?"
-            placeholderTextColor="#9ca3af"
-            textAlign="right"
-            autoFocus={isCreate}
-            accessible={true}
-            accessibilityLabel="שם המשימה"
-          />
-          {titleError && <Text style={s.errorText}>נא להזין שם משימה</Text>}
-        </View>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>שם המשימה</Text>
+            <TextInput
+              value={draft.title}
+              onChangeText={(title) => {
+                setTitleError(false);
+                updateDraft({ title });
+              }}
+              placeholder="מה צריך לעשות?"
+              placeholderTextColor="#94a3b8"
+              style={[styles.titleInput, titleError && styles.inputError]}
+              textAlign="right"
+              accessible={true}
+              accessibilityLabel="שם המשימה"
+            />
+            {titleError ? (
+              <Text style={styles.errorText}>נא להזין שם משימה</Text>
+            ) : null}
+          </View>
 
-        {/* 2. When */}
-        <View style={s.section}>
-          <Text style={s.label}>מתי לבצע?</Text>
-          <View style={s.dateRow}>
-            {(
-              [
-                { key: 'today', label: 'היום', icon: 'today' },
-                { key: 'other', label: 'יום אחר', icon: 'calendar-month' },
-                { key: 'none', label: 'ללא תאריך', icon: 'event-busy' },
-              ] as const
-            ).map((opt) => (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>מתי לבצע?</Text>
+            <View style={styles.chipsWrap}>
+              {DATE_OPTIONS.map((option) => (
+                <Chip
+                  key={option.key}
+                  label={option.label}
+                  active={draft.dateOption === option.key}
+                  onPress={() => selectDateOption(option.key)}
+                />
+              ))}
+            </View>
+            {draft.dateOption === 'other' ? (
               <Pressable
-                key={opt.key}
-                style={[
-                  s.dateBtn,
-                  draft.dateOption === opt.key && s.dateBtnActive,
-                ]}
-                onPress={() => update({ dateOption: opt.key })}
+                style={styles.selectionRow}
+                onPress={() => setDatePickerOpen(true)}
                 accessible={true}
                 accessibilityRole="button"
-                accessibilityState={{ selected: draft.dateOption === opt.key }}
-                accessibilityLabel={opt.label}
+                accessibilityLabel="בחירת תאריך"
               >
                 <MaterialIcons
-                  name={opt.icon}
-                  size={22}
-                  color={draft.dateOption === opt.key ? PRIMARY : '#6b7280'}
+                  name="calendar-today"
+                  size={18}
+                  color={PRIMARY}
+                />
+                <Text style={styles.selectionText}>
+                  {formatDate(selectedDate)}
+                </Text>
+              </Pressable>
+            ) : null}
+            {showTimeToggle ? (
+              <View style={styles.toggleRow}>
+                <Switch
+                  value={draft.hasTime}
+                  onValueChange={setHasTime}
+                  trackColor={{ true: PRIMARY, false: '#d7e3ef' }}
+                  thumbColor="#fff"
+                  accessible={true}
+                  accessibilityLabel="הוסף שעה"
+                />
+                <Text style={styles.toggleLabel}>הוסף שעה</Text>
+              </View>
+            ) : null}
+            {shouldShowTimePicker ? (
+              <Pressable
+                style={styles.selectionRow}
+                onPress={() => setTimePickerOpen(true)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="בחירת שעה"
+              >
+                <MaterialIcons name="schedule" size={18} color={PRIMARY} />
+                <Text style={styles.selectionText}>{draft.selectedTime}</Text>
+              </Pressable>
+            ) : null}
+            {timeError ? (
+              <Text style={styles.errorText}>{timeError}</Text>
+            ) : null}
+            {isTimedShortcut(draft.dateOption) && previewDueAt ? (
+              <Text style={styles.helperText}>
+                {`המשימה תופיע היום ב־${formatTime(previewDueAt)}`}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>שיוך</Text>
+            <View style={styles.chipsWrap}>
+              {TASK_CATEGORIES.map((category) => (
+                <Chip
+                  key={category.key}
+                  label={category.label}
+                  active={draft.category === category.key}
+                  onPress={() => updateDraft({ category: category.key })}
+                />
+              ))}
+            </View>
+          </View>
+
+          {hasDueDate ? (
+            <View style={styles.card}>
+              <View style={styles.toggleRow}>
+                <Switch
+                  value={draft.recurrenceType !== 'none'}
+                  onValueChange={(active) =>
+                    updateDraft({
+                      recurrenceType: active ? 'daily' : 'none',
+                      selectedWeekdays: active ? draft.selectedWeekdays : [],
+                    })
+                  }
+                  trackColor={{ true: PRIMARY, false: '#d7e3ef' }}
+                  thumbColor="#fff"
+                  accessible={true}
+                  accessibilityLabel="משימה חוזרת"
+                />
+                <Text style={styles.sectionTitleNoMargin}>משימה חוזרת</Text>
+              </View>
+              {draft.recurrenceType !== 'none' ? (
+                <>
+                  <View style={styles.chipsWrap}>
+                    {RECURRENCE_OPTIONS.map((option) => (
+                      <Chip
+                        key={option.key}
+                        label={option.label}
+                        active={draft.recurrenceType === option.key}
+                        onPress={() =>
+                          updateDraft({
+                            recurrenceType: option.key,
+                            selectedWeekdays:
+                              option.key === 'specific_days'
+                                ? draft.selectedWeekdays
+                                : [],
+                          })
+                        }
+                      />
+                    ))}
+                  </View>
+                  {draft.recurrenceType === 'specific_days' ? (
+                    <View style={styles.weekdaysRow}>
+                      {WEEKDAYS.map((weekday) => (
+                        <Pressable
+                          key={weekday.value}
+                          style={[
+                            styles.weekdayChip,
+                            draft.selectedWeekdays.includes(weekday.value) &&
+                              styles.weekdayChipActive,
+                          ]}
+                          onPress={() => toggleWeekday(weekday.value)}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityState={{
+                            selected: draft.selectedWeekdays.includes(
+                              weekday.value
+                            ),
+                          }}
+                          accessibilityLabel={weekday.label}
+                        >
+                          <Text
+                            style={[
+                              styles.weekdayText,
+                              draft.selectedWeekdays.includes(weekday.value) &&
+                                styles.weekdayTextActive,
+                            ]}
+                          >
+                            {weekday.label}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+            </View>
+          ) : null}
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>תזכורת</Text>
+            {!hasDueDate ? (
+              <Text style={styles.helperText}>בחרי מועד כדי להפעיל תזכורת</Text>
+            ) : (
+              <>
+                <View style={styles.chipsWrap}>
+                  {(draft.hasTime ? TIME_REMINDERS : DATE_REMINDERS).map(
+                    (option) => (
+                      <Chip
+                        key={option.key}
+                        label={option.label}
+                        active={
+                          option.key === 'none'
+                            ? draft.reminders.length === 0
+                            : hasReminder(option.key)
+                        }
+                        onPress={() => toggleReminder(option.key)}
+                      />
+                    )
+                  )}
+                </View>
+                {draft.reminders
+                  .filter((reminder) => reminder.type === 'custom')
+                  .map((reminder) => (
+                    <Pressable
+                      key={reminder.id}
+                      style={styles.selectionRow}
+                      onPress={openCustomReminder}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel="תזכורת מותאמת אישית"
+                    >
+                      <MaterialIcons
+                        name="more-time"
+                        size={18}
+                        color={PRIMARY}
+                      />
+                      <Text style={styles.selectionText}>
+                        {reminder.label ?? 'תזכורת מותאמת אישית'}
+                      </Text>
+                    </Pressable>
+                  ))}
+                {draft.reminderError ? (
+                  <Text style={styles.errorText}>{draft.reminderError}</Text>
+                ) : null}
+              </>
+            )}
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>משויך ל...</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.assigneesRow}
+            >
+              <Pressable
+                style={[
+                  styles.assigneeChip,
+                  styles.everyoneChip,
+                  allAssigneesSelected && styles.assigneeChipActive,
+                ]}
+                onPress={selectEveryone}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityState={{ selected: allAssigneesSelected }}
+                accessibilityLabel="כולם"
+              >
+                <MaterialIcons
+                  name="groups"
+                  size={20}
+                  color={allAssigneesSelected ? PRIMARY : '#64748b'}
                 />
                 <Text
                   style={[
-                    s.dateBtnText,
-                    draft.dateOption === opt.key && s.dateBtnTextActive,
+                    styles.assigneeText,
+                    allAssigneesSelected && styles.assigneeTextActive,
                   ]}
                 >
-                  {opt.label}
+                  כולם
                 </Text>
               </Pressable>
-            ))}
+              {assignees.map((assignee) => {
+                const active = selectedAssigneeIds.has(assignee.id);
+                return (
+                  <Pressable
+                    key={assignee.id}
+                    style={[
+                      styles.assigneeChip,
+                      active && styles.assigneeChipActive,
+                    ]}
+                    onPress={() => toggleAssignee(assignee)}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={assignee.label}
+                  >
+                    <View
+                      style={[
+                        styles.avatarCircle,
+                        { backgroundColor: assignee.color },
+                      ]}
+                    >
+                      <Text style={styles.avatarText}>{assignee.initials}</Text>
+                    </View>
+                    <Text
+                      style={[
+                        styles.assigneeText,
+                        active && styles.assigneeTextActive,
+                      ]}
+                    >
+                      {assignee.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
 
-          {showDateFields && (
-            <View style={s.timeRow}>
-              <Text style={s.timeLabel}>שעה:</Text>
-              <TextInput
-                style={s.timeInput}
-                value={draft.selectedTime}
-                onChangeText={(t) => update({ selectedTime: t })}
-                placeholder="09:00"
-                placeholderTextColor="#9ca3af"
-                keyboardType="numbers-and-punctuation"
-                accessible={true}
-                accessibilityLabel="שעת ביצוע"
-              />
-            </View>
-          )}
-        </View>
-
-        {/* 3. Reminders */}
-        {showDateFields && (
-          <View style={s.section}>
-            <Text style={s.label}>תזכורת</Text>
-            <ReminderChips
-              value={draft.reminder}
-              onChange={(r) => update({ reminder: r })}
+          <View style={styles.card}>
+            <SubtasksSection
+              subtasks={draft.subtasks}
+              allowEditing={draft.allowParticipantEditing}
+              onSubtasksChange={(subtasks) => updateDraft({ subtasks })}
+              onAllowEditingChange={(allowParticipantEditing) =>
+                updateDraft({ allowParticipantEditing })
+              }
             />
           </View>
-        )}
 
-        {/* 4. Repeat */}
-        {showDateFields && (
-          <View style={s.section}>
-            <RepeatSection
-              value={draft.repeat}
-              onChange={(r) => update({ repeat: r })}
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>קבצים ותמונות</Text>
+            <EventAttachmentsSection
+              attachments={draft.attachments}
+              maxAttachments={4}
+              onChange={(attachments: EventAttachmentDraft[]) =>
+                updateDraft({ attachments })
+              }
             />
           </View>
-        )}
 
-        {/* 5. Linked Event */}
-        <View style={s.section}>
-          <Text style={s.label}>שיוך לאירוע</Text>
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>הערות</Text>
+            <TextInput
+              value={draft.notes}
+              onChangeText={(notes) => updateDraft({ notes })}
+              placeholder="הוסיפי הערה אם צריך"
+              placeholderTextColor="#94a3b8"
+              style={styles.notesInput}
+              multiline
+              textAlign="right"
+              textAlignVertical="top"
+              accessible={true}
+              accessibilityLabel="הערות"
+            />
+          </View>
+        </ScrollView>
+
+        <View style={styles.footer}>
           <Pressable
-            style={s.selectContainer}
-            onPress={() => setEventPickerOpen(!eventPickerOpen)}
+            style={[
+              styles.ctaButton,
+              isCtaDisabled && styles.ctaButtonDisabled,
+            ]}
+            onPress={handleSave}
+            disabled={isCtaDisabled}
             accessible={true}
             accessibilityRole="button"
-            accessibilityLabel={`שיוך לאירוע: ${MOCK_EVENTS.find((e) => e.id === linkedEvent)?.label ?? 'ללא אירוע'}`}
+            accessibilityLabel={isCreate ? 'צור משימה' : 'שמור שינויים'}
           >
-            <MaterialIcons name="expand-more" size={22} color="#9ca3af" />
-            <Text style={s.selectText}>
-              {MOCK_EVENTS.find((e) => e.id === linkedEvent)?.label ??
-                'ללא אירוע'}
+            <Text
+              style={[styles.ctaText, isCtaDisabled && styles.ctaTextDisabled]}
+            >
+              {isSaving ? 'שומרת...' : isCreate ? 'צור משימה' : 'שמור שינויים'}
             </Text>
           </Pressable>
-          {eventPickerOpen && (
-            <View style={s.pickerDropdown}>
-              {MOCK_EVENTS.map((ev) => (
-                <Pressable
-                  key={ev.id}
-                  style={[
-                    s.pickerOption,
-                    linkedEvent === ev.id && s.pickerOptionActive,
-                  ]}
-                  onPress={() => {
-                    setLinkedEvent(ev.id);
-                    setEventPickerOpen(false);
-                  }}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel={ev.label}
-                >
-                  <Text
-                    style={[
-                      s.pickerOptionText,
-                      linkedEvent === ev.id && s.pickerOptionTextActive,
-                    ]}
-                  >
-                    {ev.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
         </View>
+      </KeyboardAvoidingView>
 
-        {/* 6. Assignees */}
-        <View style={s.section}>
-          <Text style={s.label}>אחראי</Text>
-          <AssigneesChips
-            assignees={MOCK_ASSIGNEES}
-            selected={draft.assignees}
-            onChange={(ids) => update({ assignees: ids })}
+      <Modal
+        visible={datePickerOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDatePickerOpen(false)}
+      >
+        <PickerSheet onClose={() => setDatePickerOpen(false)}>
+          <Text style={styles.sheetTitle}>בחירת תאריך</Text>
+          <DateTimePicker
+            value={new Date(selectedDate)}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            locale="he"
+            themeVariant="light"
+            textColor="#111827"
+            onChange={(_, selected) => {
+              if (Platform.OS === 'android') setDatePickerOpen(false);
+              if (selected) updateDraft({ selectedDate: midnightOf(selected) });
+            }}
           />
-        </View>
+        </PickerSheet>
+      </Modal>
 
-        {/* 7. Subtasks */}
-        <View style={s.section}>
-          <SubtasksSection
-            subtasks={draft.subtasks}
-            allowEditing={draft.allowSubtaskEditing}
-            onSubtasksChange={(st) => update({ subtasks: st })}
-            onAllowEditingChange={(v) => update({ allowSubtaskEditing: v })}
+      <Modal
+        visible={timePickerOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setTimePickerOpen(false)}
+      >
+        <PickerSheet onClose={() => setTimePickerOpen(false)}>
+          <Text style={styles.sheetTitle}>בחירת שעה</Text>
+          <DateTimePicker
+            value={
+              new Date(
+                timestampFromDateAndTime(
+                  selectedDate,
+                  draft.selectedTime ?? '09:00'
+                )
+              )
+            }
+            mode="time"
+            is24Hour={true}
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            themeVariant="light"
+            textColor="#111827"
+            onChange={(_, selected) => {
+              if (Platform.OS === 'android') setTimePickerOpen(false);
+              if (!selected) return;
+              const selectedTime = dateToTimeString(selected);
+              const selectedTimestamp = timestampFromDateAndTime(
+                selectedDate,
+                selectedTime
+              );
+              if (isToday(selectedDate) && selectedTimestamp < Date.now()) {
+                setTimeError('אי אפשר לבחור שעה שכבר עברה');
+                return;
+              }
+              setTimeError(null);
+              updateDraft({ selectedTime });
+            }}
           />
-        </View>
+        </PickerSheet>
+      </Modal>
 
-        {/* 8. Notes */}
-        <View style={s.section}>
-          <Text style={s.label}>הערות</Text>
-          <TextInput
-            style={s.notesInput}
-            value={draft.notes}
-            onChangeText={(t) => update({ notes: t })}
-            placeholder="הוספת פרטים נוספים או הערות..."
-            placeholderTextColor="#9ca3af"
-            multiline
-            numberOfLines={4}
-            textAlign="right"
-            maxLength={300}
-            accessible={true}
-            accessibilityLabel="הערות"
-          />
-        </View>
-
-        {/* 9. AI Tags Banner */}
-        <View style={s.aiBanner}>
-          <View style={s.aiIconBox}>
-            <MaterialIcons name="auto-awesome" size={22} color={PRIMARY} />
-          </View>
-          <View style={s.aiContent}>
-            <View style={s.aiTags}>
-              {draft.title.length > 0 && (
-                <>
-                  <View style={[s.aiTag, { backgroundColor: '#fee2e2' }]}>
-                    <Text style={[s.aiTagText, { color: '#dc2626' }]}>
-                      דחוף
-                    </Text>
-                  </View>
-                  <View style={[s.aiTag, { backgroundColor: '#dbeafe' }]}>
-                    <Text style={[s.aiTagText, { color: '#2563eb' }]}>
-                      היום
-                    </Text>
-                  </View>
-                  <View style={[s.aiTag, { backgroundColor: '#ede9fe' }]}>
-                    <Text style={[s.aiTagText, { color: '#7c3aed' }]}>
-                      אישי
-                    </Text>
-                  </View>
-                </>
-              )}
-            </View>
-            <Text style={s.aiText}>
-              המערכת מייצרת תיוגים חכמים באופן אוטומטי לזיהוי מהיר.
-            </Text>
-          </View>
-        </View>
-
-        <View style={{ height: 120 }} />
-      </ScrollView>
-
-      {/* Sticky Footer */}
-      <View style={s.footer}>
+      <Modal
+        visible={customReminderOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCustomReminderOpen(false)}
+      >
         <Pressable
-          style={[s.saveBtn, isCreate && !spaceId && s.saveBtnDisabled]}
-          onPress={handleSave}
-          disabled={isCreate && !spaceId}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel={isCreate ? 'צור משימה' : 'שמור משימה'}
+          style={styles.modalOverlay}
+          onPress={() => setCustomReminderOpen(false)}
         >
-          <Text style={s.saveBtnText}>
-            {isCreate ? 'צור משימה' : 'שמור משימה'}
-          </Text>
-          <MaterialIcons name="check-circle" size={22} color="#fff" />
+          <Pressable style={styles.customSheet} onPress={() => undefined}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>תזכורת מותאמת אישית</Text>
+            <View style={styles.customPickerRow}>
+              <View style={styles.numberList}>
+                <FlatList
+                  ref={numListRef}
+                  data={NUMBERS}
+                  keyExtractor={(item) => String(item)}
+                  showsVerticalScrollIndicator={false}
+                  snapToInterval={NUM_ITEM_H}
+                  decelerationRate="fast"
+                  getItemLayout={(_, index) => ({
+                    length: NUM_ITEM_H,
+                    offset: NUM_ITEM_H * index,
+                    index,
+                  })}
+                  contentContainerStyle={{
+                    paddingTop: NUM_ITEM_H,
+                    paddingBottom: NUM_ITEM_H,
+                  }}
+                  onMomentumScrollEnd={(event) => {
+                    const index = Math.round(
+                      event.nativeEvent.contentOffset.y / NUM_ITEM_H
+                    );
+                    setCustomAmount(Math.max(1, Math.min(100, index + 1)));
+                  }}
+                  renderItem={({ item }) => {
+                    const selected = customAmount === item;
+                    return (
+                      <Pressable
+                        style={[
+                          styles.numberItem,
+                          selected && styles.numberItemSelected,
+                        ]}
+                        onPress={() => {
+                          setCustomAmount(item);
+                          numListRef.current?.scrollToIndex({
+                            index: item - 1,
+                            animated: true,
+                          });
+                        }}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={String(item)}
+                      >
+                        <Text
+                          style={[
+                            styles.numberText,
+                            selected && styles.numberTextSelected,
+                          ]}
+                        >
+                          {item}
+                        </Text>
+                      </Pressable>
+                    );
+                  }}
+                />
+              </View>
+              <View style={styles.unitColumn}>
+                {(['minutes', 'hours', 'days'] as TaskReminderUnit[]).map(
+                  (unit) => (
+                    <Pressable
+                      key={unit}
+                      style={[
+                        styles.unitChip,
+                        customUnit === unit && styles.unitChipActive,
+                      ]}
+                      onPress={() => setCustomUnit(unit)}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: customUnit === unit }}
+                      accessibilityLabel={UNIT_LABELS[unit]}
+                    >
+                      <Text
+                        style={[
+                          styles.unitText,
+                          customUnit === unit && styles.unitTextActive,
+                        ]}
+                      >
+                        {UNIT_LABELS[unit]}
+                      </Text>
+                    </Pressable>
+                  )
+                )}
+              </View>
+              <Text style={styles.beforeLabel}>לפני</Text>
+            </View>
+            <Text style={styles.customPreview}>
+              {`תזכורת: ${customAmount} ${UNIT_LABELS[customUnit]} לפני המשימה`}
+            </Text>
+            {customReminderError ? (
+              <Text style={styles.errorText}>{customReminderError}</Text>
+            ) : null}
+            <Pressable
+              style={[
+                styles.sheetSaveButton,
+                customReminderError && styles.sheetSaveButtonDisabled,
+              ]}
+              onPress={confirmCustomReminder}
+              disabled={customReminderError !== null}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="שמור תזכורת"
+            >
+              <Text
+                style={[
+                  styles.sheetSaveText,
+                  customReminderError && styles.sheetSaveTextDisabled,
+                ]}
+              >
+                שמור
+              </Text>
+            </Pressable>
+          </Pressable>
         </Pressable>
-      </View>
+      </Modal>
+
+      <Modal
+        visible={discardOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDiscardOpen(false)}
+      >
+        <View style={styles.discardOverlay}>
+          <View style={styles.discardModal}>
+            <Text style={styles.discardTitle}>יציאה ללא שמירה</Text>
+            <Text style={styles.discardMessage}>
+              האם ברצונך למחוק את הנתונים שהכנסת?
+            </Text>
+            <View style={styles.discardActions}>
+              <Pressable
+                style={styles.discardKeepButton}
+                onPress={() => setDiscardOpen(false)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="המשך עריכה"
+              >
+                <Text style={styles.discardKeepText}>המשך עריכה</Text>
+              </Pressable>
+              <Pressable
+                style={styles.discardDeleteButton}
+                onPress={() => {
+                  setDiscardOpen(false);
+                  navigateToDestination();
+                }}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="מחק וצא"
+              >
+                <Text style={styles.discardDeleteText}>מחק וצא</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
+function Chip({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}): React.JSX.Element {
+  return (
+    <Pressable
+      style={[styles.chip, active && styles.chipActive]}
+      onPress={onPress}
+      accessible={true}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={label}
+    >
+      <Text style={[styles.chipText, active && styles.chipTextActive]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function PickerSheet({
+  children,
+  onClose,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+}): React.JSX.Element {
+  return (
+    <Pressable style={styles.modalOverlay} onPress={onClose}>
+      <Pressable style={styles.sheet} onPress={() => undefined}>
+        <View style={styles.sheetHandle} />
+        {children}
+        {Platform.OS === 'ios' ? (
+          <Pressable
+            style={styles.sheetDoneButton}
+            onPress={onClose}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="אישור"
+          >
+            <Text style={styles.sheetDoneText}>בחר</Text>
+          </Pressable>
+        ) : null}
+      </Pressable>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#f6f8f8' },
+  flex: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#f6f8f8',
   },
-  closeBtn: {
+  headerSpacer: { width: 40 },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111517',
+    textAlign: 'center',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 16, paddingBottom: 120 },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: 'right',
+    marginBottom: 10,
+  },
+  sectionTitleNoMargin: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: 'right',
+  },
+  titleInput: {
+    minHeight: 52,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 16,
+    fontSize: 16,
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+  inputError: { borderWidth: 1.5, borderColor: '#ef4444' },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 12,
+    textAlign: 'right',
+    marginTop: 8,
+  },
+  chipsWrap: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  chipActive: {
+    backgroundColor: TINT,
+    borderColor: PRIMARY,
+  },
+  chipText: { color: '#64748b', fontSize: 13, fontWeight: '700' },
+  chipTextActive: { color: PRIMARY },
+  selectionRow: {
+    marginTop: 12,
+    minHeight: 46,
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 10,
+  },
+  selectionText: {
+    flex: 1,
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  toggleRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  toggleLabel: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  helperText: {
+    marginTop: 12,
+    color: '#64748b',
+    fontSize: 13,
+    textAlign: 'right',
+    lineHeight: 20,
+  },
+  weekdaysRow: {
+    marginTop: 12,
+    flexDirection: 'row-reverse',
+    gap: 8,
+  },
+  weekdayChip: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  weekdayChipActive: { backgroundColor: PRIMARY },
+  weekdayText: { color: '#64748b', fontWeight: '800' },
+  weekdayTextActive: { color: '#fff' },
+  assigneesRow: {
+    flexDirection: 'row-reverse',
+    gap: 10,
+    paddingLeft: 4,
+  },
+  everyoneChip: {
+    justifyContent: 'center',
+  },
+  assigneeChip: {
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minWidth: 74,
+  },
+  assigneeChipActive: {
+    borderColor: PRIMARY,
+    backgroundColor: TINT,
+  },
+  avatarCircle: {
     width: 40,
     height: 40,
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
-    fontSize: 17,
+  avatarText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  assigneeText: {
+    color: '#64748b',
     fontWeight: '700',
-    color: '#111418',
-  },
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingTop: 8 },
-  section: { marginBottom: 28 },
-  label: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#111418',
-    textAlign: 'right',
-    marginBottom: 10,
-  },
-  titleInput: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 16,
-    height: 54,
-    paddingHorizontal: 20,
-    fontSize: 15,
-    color: '#111418',
-  },
-  inputError: { borderWidth: 2, borderColor: '#ef4444' },
-  errorText: {
     fontSize: 12,
-    color: '#ef4444',
-    textAlign: 'right',
-    marginTop: 4,
+    maxWidth: 90,
+    textAlign: 'center',
   },
-  dateRow: { flexDirection: 'row', gap: 8 },
-  dateBtn: {
-    flex: 1,
-    height: 64,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    backgroundColor: '#fff',
-  },
-  dateBtnActive: {
-    borderWidth: 2,
-    borderColor: PRIMARY,
-    backgroundColor: `${PRIMARY}0d`,
-  },
-  dateBtnText: { fontSize: 11, fontWeight: '500', color: '#6b7280' },
-  dateBtnTextActive: { color: PRIMARY, fontWeight: '700' },
-  timeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 10,
-  },
-  timeLabel: { fontSize: 12, color: '#6b7280', fontWeight: '500' },
-  timeInput: {
-    backgroundColor: '#f3f4f6',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    fontSize: 13,
-    fontWeight: '700',
-    color: PRIMARY,
-  },
-  selectContainer: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 16,
-    height: 54,
-    paddingHorizontal: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  selectText: { fontSize: 15, color: '#374151' },
-  pickerDropdown: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    marginTop: 8,
-    overflow: 'hidden',
-  },
-  pickerOption: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-  },
-  pickerOptionActive: {
-    backgroundColor: `${PRIMARY}0d`,
-  },
-  pickerOptionText: {
-    fontSize: 14,
-    color: '#374151',
-    textAlign: 'right',
-  },
-  pickerOptionTextActive: {
-    color: PRIMARY,
-    fontWeight: '700',
-  },
+  assigneeTextActive: { color: PRIMARY },
   notesInput: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 16,
-    minHeight: 110,
-    padding: 16,
-    fontSize: 14,
-    color: '#111418',
-    textAlignVertical: 'top',
-  },
-  aiBanner: {
-    flexDirection: 'row',
-    gap: 12,
-    backgroundColor: '#eff6ff',
-    borderRadius: 16,
+    minHeight: 92,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
     padding: 14,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-    alignItems: 'center',
+    fontSize: 15,
+    color: '#0f172a',
+    textAlign: 'right',
   },
-  aiIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: `${PRIMARY}20`,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  aiContent: { flex: 1 },
-  aiTags: { flexDirection: 'row', gap: 6, marginBottom: 6 },
-  aiTag: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  aiTagText: { fontSize: 10, fontWeight: '900' },
-  aiText: { fontSize: 11, color: '#64748b', lineHeight: 16 },
   footer: {
     padding: 16,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    backgroundColor: 'rgba(246,248,248,0.96)',
     borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
+    borderTopColor: '#e2e8f0',
   },
-  saveBtn: {
-    backgroundColor: PRIMARY,
-    borderRadius: 16,
+  ctaButton: {
     height: 54,
+    borderRadius: 16,
+    backgroundColor: PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ctaButtonDisabled: { backgroundColor: '#e2e8f0' },
+  ctaText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  ctaTextDisabled: { color: '#94a3b8' },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.32)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+  },
+  customSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: 28,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#e2e8f0',
+    marginBottom: 16,
+  },
+  sheetTitle: {
+    color: '#111827',
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  sheetDoneButton: {
+    alignSelf: 'center',
+    paddingHorizontal: 28,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: TINT,
+    marginTop: 8,
+  },
+  sheetDoneText: { color: PRIMARY, fontWeight: '800' },
+  sheetSaveButton: {
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  sheetSaveButtonDisabled: { backgroundColor: '#e2e8f0' },
+  sheetSaveText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  sheetSaveTextDisabled: { color: '#94a3b8' },
+  customPickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    shadowColor: PRIMARY,
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    elevation: 4,
+    gap: 18,
+    marginTop: 6,
   },
-  saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  saveBtnDisabled: { opacity: 0.45 },
-  spaceLoadingContainer: {
+  beforeLabel: {
+    color: '#111827',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  unitColumn: { gap: 8 },
+  unitChip: {
+    minWidth: 70,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  unitChipActive: { backgroundColor: TINT },
+  unitText: { color: '#64748b', fontWeight: '700' },
+  unitTextActive: { color: PRIMARY },
+  numberList: {
+    width: 86,
+    height: NUM_ITEM_H * 3,
+    borderRadius: 18,
+    backgroundColor: '#f8fafc',
+    overflow: 'hidden',
+  },
+  numberItem: {
+    height: NUM_ITEM_H,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  numberItemSelected: { backgroundColor: TINT },
+  numberText: { color: '#94a3b8', fontSize: 18, fontWeight: '700' },
+  numberTextSelected: { color: PRIMARY, fontSize: 22, fontWeight: '900' },
+  customPreview: {
+    color: '#64748b',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 16,
+    marginBottom: 4,
+  },
+  discardOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.36)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  discardModal: {
+    width: '100%',
+    borderRadius: 24,
+    backgroundColor: '#fff',
+    padding: 22,
+  },
+  discardTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '900',
+    textAlign: 'right',
+    marginBottom: 8,
+  },
+  discardMessage: {
+    color: '#475569',
+    fontSize: 14,
+    lineHeight: 22,
+    textAlign: 'right',
+  },
+  discardActions: {
+    flexDirection: 'row-reverse',
+    gap: 10,
+    marginTop: 20,
+  },
+  discardKeepButton: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: TINT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  discardKeepText: {
+    color: PRIMARY,
+    fontWeight: '800',
+  },
+  discardDeleteButton: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: '#fee2e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  discardDeleteText: {
+    color: '#dc2626',
+    fontWeight: '800',
+  },
+  centerState: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
-    padding: 32,
   },
-  spaceLoadingText: { fontSize: 15, color: '#6b7280', textAlign: 'center' },
-  spaceErrorText: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#374151',
-    textAlign: 'center',
-  },
-  spaceErrorSubtext: {
-    fontSize: 14,
-    color: '#9ca3af',
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  retryBtn: {
-    marginTop: 8,
-    backgroundColor: PRIMARY,
-    paddingHorizontal: 28,
-    paddingVertical: 12,
-    borderRadius: 14,
-  },
-  retryBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  centerText: { color: '#64748b', fontSize: 15 },
 });

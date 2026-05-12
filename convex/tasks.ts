@@ -6,6 +6,339 @@ import { mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
 import { isActiveCommunityMember } from './communityMemberUtils';
 
+const taskReminderTypeValidator = v.union(
+  v.literal('none'),
+  v.literal('morning'),
+  v.literal('evening'),
+  v.literal('at_time'),
+  v.literal('hour_before'),
+  v.literal('custom')
+);
+
+const taskPersistedReminderTypeValidator = v.union(
+  v.literal('morning'),
+  v.literal('evening'),
+  v.literal('at_time'),
+  v.literal('hour_before'),
+  v.literal('custom')
+);
+
+const taskReminderUnitValidator = v.union(
+  v.literal('minutes'),
+  v.literal('hours'),
+  v.literal('days')
+);
+
+const taskReminderValidator = v.object({
+  id: v.string(),
+  type: taskPersistedReminderTypeValidator,
+  customAmount: v.optional(v.number()),
+  customUnit: v.optional(taskReminderUnitValidator),
+  customReminderAt: v.optional(v.number()),
+  label: v.optional(v.string()),
+});
+
+const taskRecurrenceTypeValidator = v.union(
+  v.literal('none'),
+  v.literal('daily'),
+  v.literal('weekly'),
+  v.literal('specific_days')
+);
+
+const MAX_TASK_ATTACHMENTS = 4;
+
+/** Client sends same shape as events.create attachments (no uploadedBy/uploadedAt). */
+const taskAttachmentArgValidator = v.object({
+  storageId: v.id('_storage'),
+  originalName: v.string(),
+  displayName: v.string(),
+  mimeType: v.string(),
+  sizeBytes: v.number(),
+});
+
+const taskSubtaskImageValidator = v.object({
+  storageId: v.id('_storage'),
+  mimeType: v.string(),
+  sizeBytes: v.number(),
+  createdAt: v.number(),
+});
+
+const taskSubtaskAttachmentValidator = v.object({
+  id: v.string(),
+  type: v.union(v.literal('image'), v.literal('file')),
+  storageId: v.id('_storage'),
+  mimeType: v.string(),
+  sizeBytes: v.number(),
+  createdAt: v.number(),
+  originalName: v.optional(v.string()),
+  displayName: v.optional(v.string()),
+});
+
+const taskSubtaskValidator = v.object({
+  id: v.string(),
+  title: v.string(),
+  completed: v.boolean(),
+  /** @deprecated prefer attachment */
+  image: v.optional(taskSubtaskImageValidator),
+  attachment: v.optional(taskSubtaskAttachmentValidator),
+});
+
+const clearableTaskFieldValidator = v.union(
+  v.literal('description'),
+  v.literal('dueDate'),
+  v.literal('hasTime'),
+  v.literal('dueAt'),
+  v.literal('reminderType'),
+  v.literal('customReminderAt'),
+  v.literal('recurrenceType'),
+  v.literal('selectedWeekdays'),
+  v.literal('subtasks'),
+  v.literal('allowParticipantEditing'),
+  v.literal('assignedTo'),
+  v.literal('assignedToMemberId'),
+  v.literal('assignedToUserIds'),
+  v.literal('assignedToMemberIds'),
+  v.literal('reminders'),
+  v.literal('attachments')
+);
+
+const editableTaskCategories = new Set([
+  'personal',
+  'shopping',
+  'family',
+  'work',
+]);
+
+function validateTaskCategory(category: string | undefined): void {
+  if (category !== undefined && !editableTaskCategories.has(category)) {
+    throw new Error('קטגוריית משימה לא תקינה');
+  }
+}
+
+function validateTaskSchedule(args: {
+  dueDate?: number;
+  hasTime?: boolean;
+  dueAt?: number;
+  recurrenceType?: 'none' | 'daily' | 'weekly' | 'specific_days';
+  customReminderAt?: number;
+  reminders?: {
+    customReminderAt?: number;
+  }[];
+}): void {
+  if (args.recurrenceType && args.recurrenceType !== 'none' && !args.dueDate) {
+    throw new Error('אי אפשר להגדיר חזרה ללא תאריך');
+  }
+  if (args.dueAt !== undefined && args.hasTime !== true) {
+    throw new Error('שעה למשימה דורשת סימון שעה');
+  }
+  const reminderBaseTimestamp =
+    args.dueAt ??
+    (args.dueDate !== undefined
+      ? args.dueDate + 9 * 60 * 60 * 1000
+      : undefined);
+  if (args.customReminderAt !== undefined) {
+    const now = Date.now();
+    if (args.customReminderAt < now) {
+      throw new Error('התזכורת לא יכולה להיות בעבר');
+    }
+    if (
+      reminderBaseTimestamp !== undefined &&
+      args.customReminderAt > reminderBaseTimestamp
+    ) {
+      throw new Error('התזכורת חייבת להיות לפני מועד המשימה');
+    }
+  }
+  for (const reminder of args.reminders ?? []) {
+    if (reminder.customReminderAt === undefined) continue;
+    const now = Date.now();
+    if (reminder.customReminderAt < now) {
+      throw new Error('התזכורת לא יכולה להיות בעבר');
+    }
+    if (
+      reminderBaseTimestamp !== undefined &&
+      reminder.customReminderAt > reminderBaseTimestamp
+    ) {
+      throw new Error('התזכורת חייבת להיות לפני מועד המשימה');
+    }
+  }
+}
+
+function sanitizeReminders(
+  reminders:
+    | {
+        id: string;
+        type: 'morning' | 'evening' | 'at_time' | 'hour_before' | 'custom';
+        customAmount?: number;
+        customUnit?: 'minutes' | 'hours' | 'days';
+        customReminderAt?: number;
+        label?: string;
+      }[]
+    | undefined
+):
+  | {
+      id: string;
+      type: 'morning' | 'evening' | 'at_time' | 'hour_before' | 'custom';
+      customAmount?: number;
+      customUnit?: 'minutes' | 'hours' | 'days';
+      customReminderAt?: number;
+      label?: string;
+    }[]
+  | undefined {
+  if (!reminders) return undefined;
+  const cleaned = reminders.filter((reminder) => reminder.type !== undefined);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function storageIdsFromTaskAttachments(
+  attachments: { storageId: Id<'_storage'> }[] | null | undefined
+): Set<string> {
+  const s = new Set<string>();
+  for (const a of attachments ?? []) {
+    s.add(a.storageId as string);
+  }
+  return s;
+}
+
+function storageIdsFromSubtaskImages(
+  subtasks:
+    | {
+        image?: { storageId: Id<'_storage'> } | undefined;
+        attachment?: { storageId: Id<'_storage'> } | undefined;
+      }[]
+    | null
+    | undefined
+): Set<string> {
+  const s = new Set<string>();
+  for (const st of subtasks ?? []) {
+    if (st.image?.storageId) {
+      s.add(st.image.storageId as string);
+    }
+    if (st.attachment?.storageId) {
+      s.add(st.attachment.storageId as string);
+    }
+  }
+  return s;
+}
+
+function sanitizeSubtasks(
+  subtasks:
+    | {
+        id: string;
+        title: string;
+        completed: boolean;
+        image?: {
+          storageId: Id<'_storage'>;
+          mimeType: string;
+          sizeBytes: number;
+          createdAt: number;
+        };
+        attachment?: {
+          id: string;
+          type: 'image' | 'file';
+          storageId: Id<'_storage'>;
+          mimeType: string;
+          sizeBytes: number;
+          createdAt: number;
+          originalName?: string;
+          displayName?: string;
+        };
+      }[]
+    | undefined
+):
+  | {
+      id: string;
+      title: string;
+      completed: boolean;
+      image?: {
+        storageId: Id<'_storage'>;
+        mimeType: string;
+        sizeBytes: number;
+        createdAt: number;
+      };
+      attachment?: {
+        id: string;
+        type: 'image' | 'file';
+        storageId: Id<'_storage'>;
+        mimeType: string;
+        sizeBytes: number;
+        createdAt: number;
+        originalName?: string;
+        displayName?: string;
+      };
+    }[]
+  | undefined {
+  if (!subtasks) return undefined;
+  const cleaned = subtasks
+    .map((subtask) => {
+      const row: {
+        id: string;
+        title: string;
+        completed: boolean;
+        image?: {
+          storageId: Id<'_storage'>;
+          mimeType: string;
+          sizeBytes: number;
+          createdAt: number;
+        };
+        attachment?: {
+          id: string;
+          type: 'image' | 'file';
+          storageId: Id<'_storage'>;
+          mimeType: string;
+          sizeBytes: number;
+          createdAt: number;
+          originalName?: string;
+          displayName?: string;
+        };
+      } = {
+        id: subtask.id,
+        title: subtask.title.trim(),
+        completed: subtask.completed,
+      };
+      if (subtask.attachment) {
+        row.attachment = subtask.attachment;
+      } else if (subtask.image) {
+        row.image = subtask.image;
+      }
+      return row;
+    })
+    .filter((subtask) => subtask.title.length > 0);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function stampTaskAttachments(
+  attachments: {
+    storageId: Id<'_storage'>;
+    originalName: string;
+    displayName: string;
+    mimeType: string;
+    sizeBytes: number;
+  }[],
+  userId: Id<'users'>,
+  existing: Doc<'tasks'> | null,
+  now: number
+): {
+  storageId: Id<'_storage'>;
+  originalName: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedAt: number;
+  uploadedBy: Id<'users'>;
+}[] {
+  const existingByStorageId = new Map(
+    (existing?.attachments ?? []).map((a) => [a.storageId as string, a])
+  );
+  return attachments.map((a) => {
+    const prev = existingByStorageId.get(a.storageId as string);
+    return {
+      ...a,
+      uploadedBy: prev?.uploadedBy ?? userId,
+      uploadedAt: prev?.uploadedAt ?? now,
+    };
+  });
+}
+
 async function getCommunityMembership(
   ctx: QueryCtx | MutationCtx,
   communityId: Id<'communities'>,
@@ -65,15 +398,86 @@ function isPersonalTaskForUser(
   task: Doc<'tasks'>,
   userId: Doc<'users'>['_id']
 ): boolean {
+  if (task.createdBy === userId) {
+    return true;
+  }
+
   if (task.assignedTo === userId) {
+    return true;
+  }
+
+  if ((task.assignedToUserIds ?? []).some((id) => id === userId)) {
     return true;
   }
 
   return (
     task.assignedTo === undefined &&
-    task.createdBy === userId &&
     task.communityId === undefined &&
     task.sourceType === undefined
+  );
+}
+
+/** When no assignee was chosen in the UI, persist creator as assignee (no orphan tasks). */
+function normalizeAssigneesForWrite(
+  fallbackUserId: Id<'users'>,
+  input: {
+    assignedTo?: Id<'users'>;
+    assignedToMemberId?: Id<'members'>;
+    assignedToUserIds?: Id<'users'>[];
+    assignedToMemberIds?: Id<'members'>[];
+  }
+): {
+  assignedTo: Id<'users'> | undefined;
+  assignedToMemberId: Id<'members'> | undefined;
+  assignedToUserIds: Id<'users'>[];
+  assignedToMemberIds: Id<'members'>[];
+} {
+  const userIds = Array.from(new Set(input.assignedToUserIds ?? []));
+  const memberIds = Array.from(new Set(input.assignedToMemberIds ?? []));
+  let assignedTo = input.assignedTo;
+  let assignedToMemberId = input.assignedToMemberId;
+
+  const empty =
+    userIds.length === 0 &&
+    memberIds.length === 0 &&
+    assignedTo === undefined &&
+    assignedToMemberId === undefined;
+
+  if (empty) {
+    return {
+      assignedTo: fallbackUserId,
+      assignedToMemberId: undefined,
+      assignedToUserIds: [fallbackUserId],
+      assignedToMemberIds: [],
+    };
+  }
+
+  if (userIds.length > 0 && assignedTo === undefined) {
+    assignedTo = userIds[0];
+  }
+  if (memberIds.length > 0 && assignedToMemberId === undefined) {
+    assignedToMemberId = memberIds[0];
+  }
+
+  return {
+    assignedTo,
+    assignedToMemberId,
+    assignedToUserIds: userIds,
+    assignedToMemberIds: memberIds,
+  };
+}
+
+function hadExplicitAssigneeForCommunityActivity(args: {
+  assignedTo?: Id<'users'>;
+  assignedToMemberId?: Id<'members'>;
+  assignedToUserIds?: Id<'users'>[];
+  assignedToMemberIds?: Id<'members'>[];
+}): boolean {
+  return (
+    (args.assignedToUserIds ?? []).length > 0 ||
+    (args.assignedToMemberIds ?? []).length > 0 ||
+    args.assignedTo !== undefined ||
+    args.assignedToMemberId !== undefined
   );
 }
 
@@ -274,12 +678,41 @@ export const create = mutation({
     dueDate: v.optional(v.number()), // undefined = ללא תאריך
     spaceId: v.optional(v.id('spaces')),
     assignedTo: v.optional(v.id('users')),
+    assignedToMemberId: v.optional(v.id('members')),
+    assignedToUserIds: v.optional(v.array(v.id('users'))),
+    assignedToMemberIds: v.optional(v.array(v.id('members'))),
     category: v.optional(v.string()),
+    hasTime: v.optional(v.boolean()),
+    dueAt: v.optional(v.number()),
+    reminderType: v.optional(taskReminderTypeValidator),
+    customReminderAt: v.optional(v.number()),
+    reminders: v.optional(v.array(taskReminderValidator)),
+    recurrenceType: v.optional(taskRecurrenceTypeValidator),
+    selectedWeekdays: v.optional(v.array(v.number())),
+    subtasks: v.optional(v.array(taskSubtaskValidator)),
+    allowParticipantEditing: v.optional(v.boolean()),
+    attachments: v.optional(v.array(taskAttachmentArgValidator)),
     communityId: v.optional(v.id('communities')),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
+
+    if (args.attachments && args.attachments.length > MAX_TASK_ATTACHMENTS) {
+      throw new Error(
+        `לא ניתן לצרף יותר מ-${MAX_TASK_ATTACHMENTS} קבצים למשימה`
+      );
+    }
+
+    const now = Date.now();
+    const stampedAttachments =
+      args.attachments && args.attachments.length > 0
+        ? args.attachments.map((a) => ({
+            ...a,
+            uploadedBy: userId,
+            uploadedAt: now,
+          }))
+        : undefined;
 
     if (args.communityId) {
       const membership = await getCommunityMembership(
@@ -291,17 +724,48 @@ export const create = mutation({
         throw new Error('רק חברי קהילה פעילים יכולים ליצור תזכורת');
       }
     }
+    validateTaskCategory(args.category);
+    validateTaskSchedule(args);
+
+    const {
+      assignedTo: argAssignedTo,
+      assignedToMemberId: argAssignedToMemberId,
+      assignedToUserIds: argAssignedToUserIds,
+      assignedToMemberIds: argAssignedToMemberIds,
+      ...restInsertArgs
+    } = args;
+
+    const normalizedAssignees = normalizeAssigneesForWrite(userId, {
+      assignedTo: argAssignedTo,
+      assignedToMemberId: argAssignedToMemberId,
+      assignedToUserIds: argAssignedToUserIds,
+      assignedToMemberIds: argAssignedToMemberIds,
+    });
 
     const taskId = await ctx.db.insert('tasks', {
-      ...args,
+      ...restInsertArgs,
       spaceId: args.spaceId ?? undefined,
+      assignedTo: normalizedAssignees.assignedTo,
+      assignedToMemberId: normalizedAssignees.assignedToMemberId,
+      assignedToUserIds:
+        normalizedAssignees.assignedToUserIds.length > 0
+          ? normalizedAssignees.assignedToUserIds
+          : undefined,
+      assignedToMemberIds:
+        normalizedAssignees.assignedToMemberIds.length > 0
+          ? normalizedAssignees.assignedToMemberIds
+          : undefined,
+      attachments: stampedAttachments,
+      reminders: sanitizeReminders(args.reminders),
+      subtasks: sanitizeSubtasks(args.subtasks),
       completed: false,
       isAiGenerated: false,
       createdBy: userId,
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     });
 
-    if (args.communityId && args.assignedTo === undefined) {
+    if (args.communityId && !hadExplicitAssigneeForCommunityActivity(args)) {
       await insertCommunityActivity(ctx, {
         communityId: args.communityId,
         actorUserId: userId,
@@ -357,19 +821,173 @@ export const update = mutation({
     description: v.optional(v.string()),
     dueDate: v.optional(v.number()),
     assignedTo: v.optional(v.id('users')),
+    assignedToMemberId: v.optional(v.id('members')),
+    assignedToUserIds: v.optional(v.array(v.id('users'))),
+    assignedToMemberIds: v.optional(v.array(v.id('members'))),
     category: v.optional(v.string()),
+    hasTime: v.optional(v.boolean()),
+    dueAt: v.optional(v.number()),
+    reminderType: v.optional(taskReminderTypeValidator),
+    customReminderAt: v.optional(v.number()),
+    reminders: v.optional(v.array(taskReminderValidator)),
+    recurrenceType: v.optional(taskRecurrenceTypeValidator),
+    selectedWeekdays: v.optional(v.array(v.number())),
+    subtasks: v.optional(v.array(taskSubtaskValidator)),
+    allowParticipantEditing: v.optional(v.boolean()),
+    archivedAt: v.optional(v.number()),
+    attachments: v.optional(v.array(taskAttachmentArgValidator)),
+    clearFields: v.optional(v.array(clearableTaskFieldValidator)),
   },
-  handler: async (ctx, { id, ...fields }) => {
+  handler: async (
+    ctx,
+    { id, clearFields, attachments, subtasks, ...fields }
+  ) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
 
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
 
-    const patch = Object.fromEntries(
-      Object.entries(fields).filter(([, v]) => v !== undefined)
-    );
+    validateTaskCategory(fields.category);
+    validateTaskSchedule({
+      dueDate: fields.dueDate ?? existing.dueDate,
+      hasTime: fields.hasTime ?? existing.hasTime,
+      dueAt: fields.dueAt ?? existing.dueAt,
+      recurrenceType: fields.recurrenceType ?? existing.recurrenceType,
+      customReminderAt: fields.customReminderAt ?? existing.customReminderAt,
+      reminders: fields.reminders ?? existing.reminders,
+    });
+
+    if (
+      attachments !== undefined &&
+      attachments.length > MAX_TASK_ATTACHMENTS
+    ) {
+      throw new Error(
+        `לא ניתן לצרף יותר מ-${MAX_TASK_ATTACHMENTS} קבצים למשימה`
+      );
+    }
+
+    const now = Date.now();
+
+    const clearingAttachments = clearFields?.includes('attachments') ?? false;
+    const clearingSubtasks = clearFields?.includes('subtasks') ?? false;
+
+    const nextAttachments = (() => {
+      if (clearingAttachments) return undefined;
+      if (attachments !== undefined) {
+        if (attachments.length === 0) return undefined;
+        return stampTaskAttachments(attachments, userId, existing, now);
+      }
+      return existing.attachments;
+    })();
+
+    const nextSubtasks = (() => {
+      if (clearingSubtasks) return undefined;
+      if (subtasks !== undefined) {
+        return sanitizeSubtasks(subtasks);
+      }
+      return existing.subtasks;
+    })();
+
+    const storageBefore = new Set([
+      ...storageIdsFromTaskAttachments(existing.attachments),
+      ...storageIdsFromSubtaskImages(existing.subtasks),
+    ]);
+    const storageAfter = new Set([
+      ...storageIdsFromTaskAttachments(nextAttachments),
+      ...storageIdsFromSubtaskImages(nextSubtasks),
+    ]);
+    for (const sid of storageBefore) {
+      if (!storageAfter.has(sid)) {
+        await ctx.storage.delete(sid as Id<'_storage'>);
+      }
+    }
+
+    const patch: Partial<Doc<'tasks'>> = Object.fromEntries(
+      Object.entries({
+        ...fields,
+        reminders: sanitizeReminders(fields.reminders),
+        updatedAt: now,
+      }).filter(([, value]) => value !== undefined)
+    ) as Partial<Doc<'tasks'>>;
+
+    if (attachments !== undefined || clearingAttachments) {
+      patch.attachments = nextAttachments;
+    }
+    if (subtasks !== undefined || clearingSubtasks) {
+      patch.subtasks = nextSubtasks;
+    }
+
+    for (const field of clearFields ?? []) {
+      (patch as Record<string, undefined>)[field] = undefined;
+    }
+
+    const cleared = new Set(clearFields ?? []);
+    const nextUserIds = cleared.has('assignedToUserIds')
+      ? []
+      : 'assignedToUserIds' in fields
+        ? (fields.assignedToUserIds ?? [])
+        : (existing.assignedToUserIds ?? []);
+    const nextMemberIds = cleared.has('assignedToMemberIds')
+      ? []
+      : 'assignedToMemberIds' in fields
+        ? (fields.assignedToMemberIds ?? [])
+        : (existing.assignedToMemberIds ?? []);
+    const nextAssignedTo = cleared.has('assignedTo')
+      ? undefined
+      : 'assignedTo' in fields
+        ? fields.assignedTo
+        : existing.assignedTo;
+    const nextAssignedToMemberId = cleared.has('assignedToMemberId')
+      ? undefined
+      : 'assignedToMemberId' in fields
+        ? fields.assignedToMemberId
+        : existing.assignedToMemberId;
+
+    if (
+      nextUserIds.length === 0 &&
+      nextMemberIds.length === 0 &&
+      nextAssignedTo === undefined &&
+      nextAssignedToMemberId === undefined
+    ) {
+      const fb = existing.createdBy;
+      patch.assignedTo = fb;
+      patch.assignedToMemberId = undefined;
+      patch.assignedToUserIds = [fb];
+      patch.assignedToMemberIds = undefined;
+    } else {
+      patch.assignedTo = nextAssignedTo;
+      patch.assignedToMemberId = nextAssignedToMemberId;
+      patch.assignedToUserIds =
+        nextUserIds.length > 0 ? nextUserIds : undefined;
+      patch.assignedToMemberIds =
+        nextMemberIds.length > 0 ? nextMemberIds : undefined;
+    }
+
     await ctx.db.patch(id, patch);
+  },
+});
+
+export const toggleSubtaskCompleted = mutation({
+  args: { id: v.id('tasks'), subtaskId: v.string() },
+  handler: async (ctx, { id, subtaskId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const existing = await ctx.db.get(id);
+    if (!existing) throw new Error('משימה לא נמצאה');
+
+    const subtasks = existing.subtasks ?? [];
+    const nextSubtasks = subtasks.map((subtask) =>
+      subtask.id === subtaskId
+        ? { ...subtask, completed: !subtask.completed }
+        : subtask
+    );
+
+    await ctx.db.patch(id, {
+      subtasks: nextSubtasks,
+      updatedAt: Date.now(),
+    });
   },
 });
 

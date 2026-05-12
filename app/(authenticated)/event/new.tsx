@@ -4,8 +4,9 @@ import { useCallback, useMemo, useState } from 'react';
 import { Alert } from 'react-native';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { uploadAttachmentDraftsForConvex } from '@/lib/attachmentUpload';
 import EventScreen from '@/lib/components/event/EventScreen';
-import type { EventAttachmentDraft, EventData } from '@/lib/types/event';
+import type { EventData } from '@/lib/types/event';
 
 // ─── Community Event Form ─────────────────────────────────────────────────────
 
@@ -66,7 +67,7 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
               d.setHours(Number(hStr ?? '10'), Number(mStr ?? '0'), 0, 0);
               return d.getTime();
             })();
-      const resolvedAttachments = await uploadDraftAttachments(
+      const resolvedAttachments = await uploadAttachmentDraftsForConvex(
         data.attachments ?? [],
         generateUploadUrl
       );
@@ -155,72 +156,6 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
   );
 }
 
-// ─── Upload helper ────────────────────────────────────────────────────────────
-// FIXED: uploads draft attachments (localUri) to Convex Storage before saving.
-// Returns the final list with storageId set and localUri stripped.
-// uploadedBy is stamped by the backend mutation; we pass a placeholder here
-// and let the mutation fill it using getAuthUserId(ctx).
-
-// Shape accepted by the create/update mutation args (uploadedBy/uploadedAt stamped by backend)
-type ConvexAttachment = {
-  storageId: Id<'_storage'>;
-  originalName: string;
-  displayName: string;
-  mimeType: string;
-  sizeBytes: number;
-};
-
-async function uploadDraftAttachments(
-  drafts: EventAttachmentDraft[],
-  generateUrl: () => Promise<string>
-): Promise<ConvexAttachment[]> {
-  const results: ConvexAttachment[] = [];
-
-  for (const draft of drafts) {
-    if (draft.storageId && !draft.localUri) {
-      // Already saved — pass through (storageId already typed as Id<'_storage'>)
-      results.push({
-        storageId: draft.storageId,
-        originalName: draft.originalName,
-        displayName: draft.displayName,
-        mimeType: draft.mimeType,
-        sizeBytes: draft.sizeBytes,
-      });
-      continue;
-    }
-
-    if (!draft.localUri) continue; // skip anything with neither
-
-    const uploadUrl = await generateUrl();
-    const response = await fetch(draft.localUri);
-    const blob = await response.blob();
-
-    const uploadResponse = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': draft.mimeType },
-      body: blob,
-    });
-
-    if (!uploadResponse.ok) {
-      throw new Error(`העלאת הקובץ נכשלה: ${draft.originalName}`);
-    }
-
-    const { storageId } = (await uploadResponse.json()) as {
-      storageId: string;
-    };
-
-    results.push({
-      storageId: storageId as Id<'_storage'>,
-      originalName: draft.originalName,
-      displayName: draft.displayName,
-      mimeType: draft.mimeType,
-      sizeBytes: draft.sizeBytes,
-    });
-  }
-
-  return results;
-}
-
 // ─── Route Entry ──────────────────────────────────────────────────────────────
 
 export default function NewEventScreen(): React.JSX.Element {
@@ -285,7 +220,7 @@ export default function NewEventScreen(): React.JSX.Element {
       }
 
       // Upload any new draft attachments (localUri set, storageId not yet set)
-      const resolvedAttachments = await uploadDraftAttachments(
+      const resolvedAttachments = await uploadAttachmentDraftsForConvex(
         data.attachments ?? [],
         generateUploadUrl
       );

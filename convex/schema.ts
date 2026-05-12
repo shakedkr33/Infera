@@ -155,7 +155,98 @@ export default defineSchema({
     completed: v.boolean(), // החליף את status
     spaceId: v.optional(v.id('spaces')),
     assignedTo: v.optional(v.id('users')),
+    assignedToMemberId: v.optional(v.id('members')),
+    assignedToUserIds: v.optional(v.array(v.id('users'))),
+    assignedToMemberIds: v.optional(v.array(v.id('members'))),
     category: v.optional(v.string()),
+    hasTime: v.optional(v.boolean()),
+    dueAt: v.optional(v.number()),
+    reminderType: v.optional(
+      v.union(
+        v.literal('none'),
+        v.literal('morning'),
+        v.literal('evening'),
+        v.literal('at_time'),
+        v.literal('hour_before'),
+        v.literal('custom')
+      )
+    ),
+    customReminderAt: v.optional(v.number()),
+    reminders: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          type: v.union(
+            v.literal('morning'),
+            v.literal('evening'),
+            v.literal('at_time'),
+            v.literal('hour_before'),
+            v.literal('custom')
+          ),
+          customAmount: v.optional(v.number()),
+          customUnit: v.optional(
+            v.union(v.literal('minutes'), v.literal('hours'), v.literal('days'))
+          ),
+          customReminderAt: v.optional(v.number()),
+          label: v.optional(v.string()),
+        })
+      )
+    ),
+    recurrenceType: v.optional(
+      v.union(
+        v.literal('none'),
+        v.literal('daily'),
+        v.literal('weekly'),
+        v.literal('specific_days')
+      )
+    ),
+    selectedWeekdays: v.optional(v.array(v.number())),
+    subtasks: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          title: v.string(),
+          completed: v.boolean(),
+          image: v.optional(
+            v.object({
+              storageId: v.id('_storage'),
+              mimeType: v.string(),
+              sizeBytes: v.number(),
+              createdAt: v.number(),
+            })
+          ),
+          attachment: v.optional(
+            v.object({
+              id: v.string(),
+              type: v.union(v.literal('image'), v.literal('file')),
+              storageId: v.id('_storage'),
+              mimeType: v.string(),
+              sizeBytes: v.number(),
+              createdAt: v.number(),
+              originalName: v.optional(v.string()),
+              displayName: v.optional(v.string()),
+            })
+          ),
+        })
+      )
+    ),
+    allowParticipantEditing: v.optional(v.boolean()),
+    // Same shape as events.attachments (uploadedBy/uploadedAt stamped in mutations)
+    attachments: v.optional(
+      v.array(
+        v.object({
+          storageId: v.id('_storage'),
+          originalName: v.string(),
+          displayName: v.string(),
+          mimeType: v.string(),
+          sizeBytes: v.number(),
+          uploadedAt: v.number(),
+          uploadedBy: v.id('users'),
+        })
+      )
+    ),
+    archivedAt: v.optional(v.number()),
+    updatedAt: v.optional(v.number()),
     isAiGenerated: v.boolean(),
     createdBy: v.id('users'),
     createdAt: v.number(),

@@ -28,8 +28,8 @@ function maskPhone(phone: string): string {
 // FIXED: phone numbers converted to local Israeli format before masking
 // E.164 (+972XXXXXXXXX) → local (0XXXXXXXXX) so mask shows 05X-XXXX not 972-XXXXXX
 function e164ToLocal(phone: string): string {
-  if (phone.startsWith('+972')) return '0' + phone.slice(4);
-  if (phone.startsWith('972')) return '0' + phone.slice(3);
+  if (phone.startsWith('+972')) return `0${phone.slice(4)}`;
+  if (phone.startsWith('972')) return `0${phone.slice(3)}`;
   return phone;
 }
 
@@ -329,6 +329,14 @@ export const listMyFamilyContacts = query({
 
     return {
       selfEntityId: selfEntityRow?._id ?? null,
+      selfEntity: selfEntityRow
+        ? {
+            _id: selfEntityRow._id,
+            displayName: selfEntityRow.displayName,
+            color: selfEntityRow.color,
+            matchedUserId: selfEntityRow.matchedUserId,
+          }
+        : null,
       members: [
         ...(adminEntry ? [adminEntry] : []),
         // FIXED: e164ToLocal applied to all entity rows, not just admin entry
@@ -493,7 +501,8 @@ export const backfillAccessRows = internalMutation({
     let alreadyExisted = 0;
 
     for (const entity of matchedEntities) {
-      const userId = entity.matchedUserId!;
+      const userId = entity.matchedUserId;
+      if (!userId) continue;
       const existing = all.find(
         (r) =>
           r.userId === userId &&

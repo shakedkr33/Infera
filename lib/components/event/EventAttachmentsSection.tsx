@@ -1,9 +1,7 @@
 // FIXED: EventAttachmentsSection — file attachment UI for personal events (max 2 per event)
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useQuery } from 'convex/react';
-import * as DocumentPicker from 'expo-document-picker';
-import * as ImagePicker from 'expo-image-picker';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -17,62 +15,15 @@ import {
 } from 'react-native';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { formatBytes } from '@/lib/attachmentDraftUtils';
+import { AttachmentSourceSheet } from '@/lib/components/attachments/AttachmentSourceSheet';
 import type { EventAttachmentDraft } from '@/lib/types/event';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRIMARY = '#36a9e2';
 const TINT = '#e8f5fd';
-const MAX_ATTACHMENTS = 2;
-const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function inferMimeType(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
-  const map: Record<string, string> = {
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    png: 'image/png',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    heic: 'image/heic',
-    heif: 'image/heif',
-    pdf: 'application/pdf',
-    doc: 'application/msword',
-    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    txt: 'text/plain',
-  };
-  return map[ext] ?? 'application/octet-stream';
-}
-
-function isAllowedMime(mime: string): boolean {
-  if (mime.startsWith('image/')) return true;
-  const allowed = new Set([
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'text/plain',
-    'application/octet-stream',
-  ]);
-  return allowed.has(mime);
-}
-
-function stripExtension(filename: string): string {
-  const idx = filename.lastIndexOf('.');
-  return idx > 0 ? filename.substring(0, idx) : filename;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+const DEFAULT_MAX_ATTACHMENTS = 2;
 
 // ─── SavedFileRow ─────────────────────────────────────────────────────────────
 // Separate component so useQuery is always called unconditionally at top-level.
@@ -234,36 +185,25 @@ function DraftFileRow({
 interface EventAttachmentsSectionProps {
   attachments: EventAttachmentDraft[];
   onChange: (attachments: EventAttachmentDraft[]) => void;
+  /** Defaults to 2 (events). Tasks may allow more. */
+  maxAttachments?: number;
 }
 
 export function EventAttachmentsSection({
   attachments,
   onChange,
+  maxAttachments = DEFAULT_MAX_ATTACHMENTS,
 }: EventAttachmentsSectionProps): React.JSX.Element {
   const [imageModalUrl, setImageModalUrl] = useState<string | null>(null);
+  const [sourceSheetOpen, setSourceSheetOpen] = useState(false);
+  const replaceIndexRef = useRef<number | undefined>(undefined);
 
-  const canAddMore = attachments.length < MAX_ATTACHMENTS;
+  const canAddMore = attachments.length < maxAttachments;
 
-  // ── Validation helpers ──
-
-  const validateAndAdd = (
-    draft: EventAttachmentDraft,
+  const applyPickedDraft = (
+    finalDraft: EventAttachmentDraft,
     replaceIndex?: number
   ): void => {
-    let { mimeType, sizeBytes } = draft;
-
-    if (!mimeType) mimeType = inferMimeType(draft.originalName);
-    if (!isAllowedMime(mimeType)) {
-      Alert.alert('סוג קובץ לא נתמך', 'סוג קובץ זה אינו נתמך');
-      return;
-    }
-    if (sizeBytes > 0 && sizeBytes > MAX_SIZE_BYTES) {
-      Alert.alert('קובץ גדול מדי', 'הקובץ גדול מדי. הגודל המקסימלי הוא 10MB');
-      return;
-    }
-
-    const finalDraft: EventAttachmentDraft = { ...draft, mimeType };
-
     if (replaceIndex !== undefined) {
       onChange(
         attachments.map((a, i) => (i === replaceIndex ? finalDraft : a))
@@ -273,70 +213,9 @@ export function EventAttachmentsSection({
     }
   };
 
-  // ── Pickers ──
-
-  const pickFromGallery = async (replaceIndex?: number): Promise<void> => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.9,
-    });
-    if (result.canceled) return;
-    const asset = result.assets[0];
-    if (!asset) return;
-
-    const filename = asset.fileName ?? asset.uri.split('/').pop() ?? 'image';
-    const mimeType = asset.mimeType ?? inferMimeType(filename);
-    const sizeBytes = asset.fileSize ?? 0;
-
-    validateAndAdd(
-      {
-        originalName: filename,
-        displayName: stripExtension(filename),
-        mimeType,
-        sizeBytes,
-        localUri: asset.uri,
-      },
-      replaceIndex
-    );
-  };
-
-  const pickFromDocuments = async (replaceIndex?: number): Promise<void> => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: '*/*',
-      copyToCacheDirectory: true,
-    });
-    if (result.canceled) return;
-    const asset = result.assets?.[0];
-    if (!asset) return;
-
-    const filename = asset.name ?? asset.uri.split('/').pop() ?? 'document';
-    const mimeType = asset.mimeType ?? inferMimeType(filename);
-    const sizeBytes = asset.size ?? 0;
-
-    validateAndAdd(
-      {
-        originalName: filename,
-        displayName: stripExtension(filename),
-        mimeType,
-        sizeBytes,
-        localUri: asset.uri,
-      },
-      replaceIndex
-    );
-  };
-
   const openPicker = (replaceIndex?: number): void => {
-    Alert.alert('בחירת קובץ', undefined, [
-      {
-        text: 'בחירה מהגלריה / תמונות',
-        onPress: () => void pickFromGallery(replaceIndex),
-      },
-      {
-        text: 'בחירה מקבצים',
-        onPress: () => void pickFromDocuments(replaceIndex),
-      },
-      { text: 'ביטול', style: 'cancel' },
-    ]);
+    replaceIndexRef.current = replaceIndex;
+    setSourceSheetOpen(true);
   };
 
   // ── Handlers ──
@@ -410,6 +289,22 @@ export function EventAttachmentsSection({
           />
         );
       })}
+
+      <AttachmentSourceSheet
+        visible={sourceSheetOpen}
+        onClose={() => {
+          replaceIndexRef.current = undefined;
+          setSourceSheetOpen(false);
+        }}
+        onPicked={(draft) => {
+          if (!canAddMore && replaceIndexRef.current === undefined) {
+            Alert.alert('מגבלה', 'לא ניתן לצרף קבצים נוספים');
+            return;
+          }
+          applyPickedDraft(draft, replaceIndexRef.current);
+          replaceIndexRef.current = undefined;
+        }}
+      />
 
       {/* Fullscreen image modal */}
       <Modal

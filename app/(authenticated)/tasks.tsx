@@ -16,6 +16,7 @@ import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
+import { getTaskCategoryLabel, TASK_FILTERS } from '@/lib/types/task';
 
 const PRIMARY_BLUE = '#36a9e2';
 
@@ -119,23 +120,30 @@ export default function TasksScreen() {
     const dated = (convexTasks ?? []).map((t) => ({
       id: t._id,
       title: t.title,
-      category: t.category ?? 'אישי', // TODO: להוסיף category לסכמה
+      category: getTaskCategoryLabel(t.category),
       completed: t.completed,
+      subtasks: t.subtasks ?? undefined,
     }));
     const undated = (convexUndated ?? []).map((t) => ({
       id: t._id,
       title: t.title,
-      category: t.category ?? 'אישי',
+      category: getTaskCategoryLabel(t.category),
       completed: t.completed,
+      subtasks: t.subtasks ?? undefined,
     }));
-    return [...dated, ...undated];
+    const byId = new Map<string, Task>();
+    for (const row of [...dated, ...undated]) {
+      byId.set(row.id, row);
+    }
+    return [...byId.values()];
   }, [convexTasks, convexUndated]);
 
   // ── Convex: mutations ────────────────────────────────────────────────────
   const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
+  const toggleSubtaskMutation = useMutation(api.tasks.toggleSubtaskCompleted);
   const removeTaskMutation = useMutation(api.tasks.remove);
 
-  const filters = ['הכל', 'אישי', 'אירועים'];
+  const filters = TASK_FILTERS;
 
   const toggleTaskExpansion = (taskId: string) => {
     setExpandedTasks((prev) => {
@@ -149,11 +157,18 @@ export default function TasksScreen() {
     });
   };
 
-  // subtasks הם local-only עד שנוסיף subtasks לסכמת Convex
-  // TODO: לחבר subtask toggle ל-Convex כשנוסיף שדה subtasks לטבלת tasks
-  const toggleSubtask = (_taskId: string, _subtaskId: string) => {
-    // TODO: לממש עם mutation כשיהיו subtasks ב-Convex
-    console.log('toggleSubtask: not yet connected to Convex');
+  const toggleSubtask = async (
+    taskId: string,
+    subtaskId: string
+  ): Promise<void> => {
+    try {
+      await toggleSubtaskMutation({
+        id: taskId as Id<'tasks'>,
+        subtaskId,
+      });
+    } catch (e) {
+      console.error('toggleSubtask error:', e);
+    }
   };
 
   const toggleTaskCompletion = async (taskId: string) => {
@@ -411,7 +426,7 @@ function TaskCard({
                 <Text style={styles.tagTextOverdue}>איחור</Text>
               </View>
             )}
-            <View style={styles.tag}>
+            <View style={[styles.tag, styles.categoryTag]}>
               <Text style={styles.tagText}>{task.category}</Text>
             </View>
           </View>
@@ -734,6 +749,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 6,
     backgroundColor: '#f0f0f0',
+  },
+  categoryTag: {
+    backgroundColor: '#e8f5fd',
   },
   tagOverdue: {
     backgroundColor: '#fee2e2',
