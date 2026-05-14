@@ -171,6 +171,26 @@ export function SubtasksSection({
     onSubtasksChange(subtasks.filter((st) => st.id !== id));
   };
 
+  const requestRemoveSubtask = (subtask: SubTask): void => {
+    const hasContent =
+      subtask.title.trim().length > 0 ||
+      subtask.attachment !== undefined ||
+      subtask.completed;
+    if (!hasContent) {
+      removeSubtask(subtask.id);
+      return;
+    }
+
+    Alert.alert('למחוק את תת-המשימה?', '', [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'מחיקה',
+        style: 'destructive',
+        onPress: () => removeSubtask(subtask.id),
+      },
+    ]);
+  };
+
   const setSubtaskAttachment = (
     id: string,
     attachment: SubTaskAttachment | undefined
@@ -316,13 +336,11 @@ export function SubtasksSection({
           <View key={st.id}>
             <View style={s.subtaskRow}>
               <Pressable
-                onLongPress={() => removeSubtask(st.id)}
                 onPress={() => toggleSubtask(st.id)}
                 style={[s.checkbox, st.completed && s.checkboxChecked]}
                 accessible={true}
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: st.completed }}
-                accessibilityHint="לחיצה ארוכה למחיקה"
                 accessibilityLabel={st.title || 'תת־משימה חדשה'}
               >
                 {st.completed ? (
@@ -364,6 +382,16 @@ export function SubtasksSection({
               >
                 <MaterialIcons name="attach-file" size={22} color={PRIMARY} />
               </Pressable>
+              <Pressable
+                onPress={() => requestRemoveSubtask(st)}
+                style={s.removeBtn}
+                hitSlop={10}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="מחיקת תת־משימה"
+              >
+                <MaterialIcons name="close" size={18} color="#94a3b8" />
+              </Pressable>
             </View>
             <View style={s.divider} />
           </View>
@@ -394,6 +422,7 @@ export function SubtasksSection({
             accessibilityLabel="הוסיפי תת־משימה"
           />
           <View style={s.imageBtnPlaceholder} />
+          <View style={s.removeBtnPlaceholder} />
         </View>
       </View>
     </View>
@@ -505,6 +534,15 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   imageBtnPlaceholder: { width: 40 },
+  removeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  removeBtnPlaceholder: { width: 32 },
   subtaskInput: {
     flex: 1,
     fontSize: 14,

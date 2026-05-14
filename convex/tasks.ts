@@ -163,30 +163,104 @@ function validateTaskSchedule(args: {
   }
 }
 
-function sanitizeReminders(
-  reminders:
-    | {
-        id: string;
-        type: 'morning' | 'evening' | 'at_time' | 'hour_before' | 'custom';
-        customAmount?: number;
-        customUnit?: 'minutes' | 'hours' | 'days';
-        customReminderAt?: number;
-        label?: string;
-      }[]
-    | undefined
-):
-  | {
-      id: string;
-      type: 'morning' | 'evening' | 'at_time' | 'hour_before' | 'custom';
-      customAmount?: number;
-      customUnit?: 'minutes' | 'hours' | 'days';
-      customReminderAt?: number;
-      label?: string;
-    }[]
-  | undefined {
-  if (!reminders) return undefined;
-  const cleaned = reminders.filter((reminder) => reminder.type !== undefined);
+type TaskReminderInput = {
+  id: string;
+  type: 'morning' | 'evening' | 'at_time' | 'hour_before' | 'custom';
+  customAmount?: number;
+  customUnit?: 'minutes' | 'hours' | 'days';
+  customReminderAt?: number;
+  label?: string;
+};
+
+type TaskScheduleInput = {
+  dueDate?: number;
+  hasTime?: boolean;
+  dueAt?: number;
+};
+
+function reminderBaseTimestamp(
+  schedule: TaskScheduleInput
+): number | undefined {
+  if (schedule.dueAt !== undefined) return schedule.dueAt;
+  if (schedule.dueDate !== undefined) {
+    return schedule.dueDate + 9 * 60 * 60 * 1000;
+  }
+  return undefined;
+}
+
+function reminderOffsetMinutes(
+  reminder: TaskReminderInput
+): number | undefined {
+  if (
+    reminder.customAmount === undefined ||
+    reminder.customUnit === undefined
+  ) {
+    return undefined;
+  }
+  if (reminder.customUnit === 'hours') return reminder.customAmount * 60;
+  if (reminder.customUnit === 'days') return reminder.customAmount * 1440;
+  return reminder.customAmount;
+}
+
+function resolveReminderTimestamp(
+  reminder: TaskReminderInput,
+  schedule: TaskScheduleInput
+): number | undefined {
+  if (reminder.type === 'morning') {
+    return schedule.dueDate !== undefined
+      ? schedule.dueDate + 9 * 60 * 60 * 1000
+      : undefined;
+  }
+  if (reminder.type === 'evening') {
+    return schedule.dueDate !== undefined
+      ? schedule.dueDate + 18 * 60 * 60 * 1000
+      : undefined;
+  }
+  if (reminder.type === 'at_time') {
+    return schedule.hasTime === true ? schedule.dueAt : undefined;
+  }
+  if (reminder.type === 'hour_before') {
+    return schedule.hasTime === true && schedule.dueAt !== undefined
+      ? schedule.dueAt - 60 * 60 * 1000
+      : undefined;
+  }
+
+  const offsetMinutes = reminderOffsetMinutes(reminder);
+  const baseTimestamp = reminderBaseTimestamp(schedule);
+  if (offsetMinutes !== undefined && baseTimestamp !== undefined) {
+    return baseTimestamp - offsetMinutes * 60 * 1000;
+  }
+  return reminder.customReminderAt;
+}
+
+function normalizeRemindersForSchedule(
+  reminders: TaskReminderInput[] | undefined,
+  schedule: TaskScheduleInput,
+  now: number
+): TaskReminderInput[] | undefined {
+  if (schedule.dueDate === undefined) return undefined;
+  const cleaned = (reminders ?? []).flatMap((reminder) => {
+    const reminderAt = resolveReminderTimestamp(reminder, schedule);
+    if (reminderAt === undefined || reminderAt < now) return [];
+    if (reminder.type !== 'custom') return [reminder];
+    return [{ ...reminder, customReminderAt: reminderAt }];
+  });
   return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function normalizeCustomReminderAtForSchedule(
+  customReminderAt: number | undefined,
+  schedule: TaskScheduleInput,
+  now: number
+): number | undefined {
+  if (customReminderAt === undefined || customReminderAt < now) {
+    return undefined;
+  }
+  const baseTimestamp = reminderBaseTimestamp(schedule);
+  if (baseTimestamp !== undefined && customReminderAt > baseTimestamp) {
+    return undefined;
+  }
+  return customReminderAt;
 }
 
 function storageIdsFromTaskAttachments(
@@ -714,6 +788,26 @@ export const create = mutation({
           }))
         : undefined;
 
+    const normalizedScheduleArgs = {
+      ...args,
+      dueAt: args.hasTime === true ? args.dueAt : undefined,
+    };
+    const normalizedReminders = normalizeRemindersForSchedule(
+      args.reminders,
+      normalizedScheduleArgs,
+      now
+    );
+    const normalizedCustomReminderAt =
+      normalizedReminders?.find((reminder) => reminder.type === 'custom')
+        ?.customReminderAt ??
+      (args.reminderType === 'custom'
+        ? normalizeCustomReminderAtForSchedule(
+            args.customReminderAt,
+            normalizedScheduleArgs,
+            now
+          )
+        : undefined);
+
     if (args.communityId) {
       const membership = await getCommunityMembership(
         ctx,
@@ -725,7 +819,11 @@ export const create = mutation({
       }
     }
     validateTaskCategory(args.category);
-    validateTaskSchedule(args);
+    validateTaskSchedule({
+      ...normalizedScheduleArgs,
+      customReminderAt: normalizedCustomReminderAt,
+      reminders: normalizedReminders,
+    });
 
     const {
       assignedTo: argAssignedTo,
@@ -744,6 +842,7 @@ export const create = mutation({
 
     const taskId = await ctx.db.insert('tasks', {
       ...restInsertArgs,
+      dueAt: normalizedScheduleArgs.dueAt,
       spaceId: args.spaceId ?? undefined,
       assignedTo: normalizedAssignees.assignedTo,
       assignedToMemberId: normalizedAssignees.assignedToMemberId,
@@ -756,7 +855,9 @@ export const create = mutation({
           ? normalizedAssignees.assignedToMemberIds
           : undefined,
       attachments: stampedAttachments,
-      reminders: sanitizeReminders(args.reminders),
+      reminderType: normalizedReminders?.[0]?.type ?? 'none',
+      customReminderAt: normalizedCustomReminderAt,
+      reminders: normalizedReminders,
       subtasks: sanitizeSubtasks(args.subtasks),
       completed: false,
       isAiGenerated: false,
@@ -849,13 +950,57 @@ export const update = mutation({
     if (!existing) throw new Error('משימה לא נמצאה');
 
     validateTaskCategory(fields.category);
+    const now = Date.now();
+    const cleared = new Set(clearFields ?? []);
+    const nextHasTime = cleared.has('hasTime')
+      ? fields.hasTime
+      : (fields.hasTime ?? existing.hasTime);
+    const nextDueAt =
+      nextHasTime === true && !cleared.has('dueAt')
+        ? (fields.dueAt ?? existing.dueAt)
+        : undefined;
+    const nextDueDate = cleared.has('dueDate')
+      ? undefined
+      : (fields.dueDate ?? existing.dueDate);
+    const nextReminders = cleared.has('reminders')
+      ? undefined
+      : normalizeRemindersForSchedule(
+          fields.reminders ?? existing.reminders,
+          {
+            dueDate: nextDueDate,
+            hasTime: nextHasTime,
+            dueAt: nextDueAt,
+          },
+          now
+        );
+    const nextReminderType = cleared.has('reminderType')
+      ? undefined
+      : (fields.reminderType ?? existing.reminderType);
+    const customReminderFromList = nextReminders?.find(
+      (reminder) => reminder.type === 'custom'
+    )?.customReminderAt;
+    const nextCustomReminderAt =
+      customReminderFromList ??
+      (cleared.has('customReminderAt') || nextReminders !== undefined
+        ? undefined
+        : nextReminderType === 'custom'
+          ? normalizeCustomReminderAtForSchedule(
+              fields.customReminderAt ?? existing.customReminderAt,
+              {
+                dueDate: nextDueDate,
+                hasTime: nextHasTime,
+                dueAt: nextDueAt,
+              },
+              now
+            )
+          : undefined);
     validateTaskSchedule({
-      dueDate: fields.dueDate ?? existing.dueDate,
-      hasTime: fields.hasTime ?? existing.hasTime,
-      dueAt: fields.dueAt ?? existing.dueAt,
+      dueDate: nextDueDate,
+      hasTime: nextHasTime,
+      dueAt: nextDueAt,
       recurrenceType: fields.recurrenceType ?? existing.recurrenceType,
-      customReminderAt: fields.customReminderAt ?? existing.customReminderAt,
-      reminders: fields.reminders ?? existing.reminders,
+      customReminderAt: nextCustomReminderAt,
+      reminders: nextReminders,
     });
 
     if (
@@ -866,8 +1011,6 @@ export const update = mutation({
         `לא ניתן לצרף יותר מ-${MAX_TASK_ATTACHMENTS} קבצים למשימה`
       );
     }
-
-    const now = Date.now();
 
     const clearingAttachments = clearFields?.includes('attachments') ?? false;
     const clearingSubtasks = clearFields?.includes('subtasks') ?? false;
@@ -906,10 +1049,13 @@ export const update = mutation({
     const patch: Partial<Doc<'tasks'>> = Object.fromEntries(
       Object.entries({
         ...fields,
-        reminders: sanitizeReminders(fields.reminders),
         updatedAt: now,
       }).filter(([, value]) => value !== undefined)
     ) as Partial<Doc<'tasks'>>;
+
+    patch.reminderType = nextReminders?.[0]?.type ?? 'none';
+    patch.customReminderAt = nextCustomReminderAt;
+    patch.reminders = nextReminders;
 
     if (attachments !== undefined || clearingAttachments) {
       patch.attachments = nextAttachments;
@@ -922,7 +1068,6 @@ export const update = mutation({
       (patch as Record<string, undefined>)[field] = undefined;
     }
 
-    const cleared = new Set(clearFields ?? []);
     const nextUserIds = cleared.has('assignedToUserIds')
       ? []
       : 'assignedToUserIds' in fields

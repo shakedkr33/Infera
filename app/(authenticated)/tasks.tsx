@@ -3,6 +3,10 @@ import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+  Alert,
+  Image,
+  Linking,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,62 +20,457 @@ import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
-import { getTaskCategoryLabel, TASK_FILTERS } from '@/lib/types/task';
+import { getTaskCategoryLabel } from '@/lib/types/task';
 
-const PRIMARY_BLUE = '#36a9e2';
+const PRIMARY_BLUE = '#36A9E2';
+const PRIMARY_BLUE_TINT = '#E8F5FD';
+const TEXT_DARK = '#111418';
+const TEXT_MUTED = '#637588';
+const CARD_BORDER = '#eef2f7';
+const COMPLETED_WINDOW_48_HOURS = 48 * 60 * 60 * 1000;
+const COMPLETED_WINDOW_7_DAYS = 7 * 24 * 60 * 60 * 1000;
 
-type Task = {
-  id: string;
-  title: string;
-  category: string;
-  isUrgent?: boolean;
-  isOverdue?: boolean;
-  completed?: boolean;
-  subtasks?: {
-    id: string;
-    title: string;
-    completed: boolean;
-  }[];
-};
+const TASK_TABS = [
+  'הכל',
+  'אישי',
+  'קניות',
+  'משפחה',
+  'עבודה',
+  'קהילות',
+  'אירועי יומן',
+] as const;
 
-type AssignedEventTask = {
+type TaskTab = (typeof TASK_TABS)[number];
+type TaskKind = 'task' | 'eventTask';
+type Placement = 'mine' | 'tracking' | 'completed' | 'hidden';
+type MineGroupKey = 'overdue' | 'today' | 'upcoming' | 'undated';
+
+type SubtaskRow = {
   id: string;
   title: string;
   completed: boolean;
-  eventTitle: string;
-  eventStartTime: number;
-  eventAllDay: boolean;
-  communityName: string;
+  attachment?: SubtaskAttachmentPreviewData;
+  image?: SubtaskAttachmentPreviewData;
 };
 
-function formatEventTaskDate(timestamp: number, allDay: boolean): string {
+type SubtaskAttachmentPreviewData = {
+  storageId?: Id<'_storage'> | string;
+  localUri?: string;
+  mimeType?: string;
+  displayName?: string;
+  originalName?: string;
+};
+
+type AssigneeDisplay = {
+  key: string;
+  name: string;
+  initials: string;
+  color: string;
+};
+
+type DisplayTask = {
+  uid: string;
+  id: string;
+  kind: TaskKind;
+  title: string;
+  completed: boolean;
+  category: TaskTab;
+  dueDate?: number;
+  dueAt?: number;
+  hasTime?: boolean;
+  completedAt?: number;
+  updatedAt?: number;
+  createdAt?: number;
+  createdBy?: string;
+  assignedTo?: string;
+  assignedToMemberId?: string;
+  assignedToUserIds: string[];
+  assignedToMemberIds: string[];
+  communityId?: string;
+  sourceType?: string;
+  sourceEventId?: string;
+  eventTitle?: string;
+  eventId?: string;
+  eventStartTime?: number;
+  eventAllDay?: boolean;
+  communityName?: string;
+  subtasks: SubtaskRow[];
+  hasAttachments: boolean;
+  hasReminders: boolean;
+  isEventTask: boolean;
+  placement: Placement;
+  mineGroup?: MineGroupKey;
+  responsibilityLabel?: 'הוקצה אליי' | 'כולם';
+  assigneeNames: string[];
+  assigneeDisplays: AssigneeDisplay[];
+  secondaryText: string;
+  searchText: string;
+  sortTimestamp: number;
+};
+
+type MemberOption = {
+  _id: string;
+  displayName?: string;
+  matchedUserId?: string;
+  color?: string;
+};
+
+type MemberMaps = {
+  selfEntityId?: string;
+  userNames: Map<string, string>;
+  memberNames: Map<string, string>;
+  userColors: Map<string, string>;
+  memberColors: Map<string, string>;
+  visibleAssigneeCount: number;
+};
+
+const EMPTY_STATES: Record<TaskTab, { title: string; helper?: string }> = {
+  הכל: { title: 'אין עדיין משימות פתוחות.' },
+  אישי: { title: 'אין עדיין משימות אישיות.' },
+  קניות: {
+    title: 'אין עדיין רשימות קניות.',
+    helper: 'אפשר ליצור רשימת קניות עם פריטים, תמונות ותזכורות.',
+  },
+  משפחה: {
+    title: 'אין עדיין משימות משפחתיות.',
+    helper: 'כאן יופיעו משימות שישויכו למשפחה.',
+  },
+  עבודה: { title: 'אין עדיין משימות עבודה.' },
+  קהילות: {
+    title: 'אין עדיין משימות מקהילות.',
+    helper: 'משימות מאירועי קהילה או מקבוצות יופיעו כאן.',
+  },
+  'אירועי יומן': {
+    title: 'אין עדיין משימות מאירועי יומן.',
+    helper: 'כשתיווצר משימה שמחוברת לאירוע, היא תופיע כאן.',
+  },
+};
+
+const MINE_GROUPS: {
+  key: MineGroupKey;
+  title: string;
+}[] = [
+  { key: 'overdue', title: 'באיחור' },
+  { key: 'today', title: 'להיום' },
+  { key: 'upcoming', title: 'בימים הקרובים' },
+  { key: 'undated', title: 'ללא מועד' },
+];
+
+function normalizeText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}` || '??';
+  }
+  return name.trim().replace(/\s/g, '').slice(0, 2) || '??';
+}
+
+function dayStart(timestamp: number): number {
   const date = new Date(timestamp);
-  const dateText = date.toLocaleDateString('he-IL', {
-    day: 'numeric',
-    month: 'long',
-  });
-  if (allDay) return `${dateText} · כל היום`;
-  const timeText = date.toLocaleTimeString('he-IL', {
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function dayEnd(timestamp: number): number {
+  const date = new Date(timestamp);
+  date.setHours(23, 59, 59, 999);
+  return date.getTime();
+}
+
+function addDaysFromToday(days: number): number {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return date.getTime();
+}
+
+function formatTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('he-IL', {
     hour: '2-digit',
     minute: '2-digit',
   });
-  return `${dateText} · ${timeText}`;
 }
 
-/* MOCK_TASKS – הוסר, נתונים מגיעים מ-Convex:
-const MOCK_TASKS: Task[] = [
-  { id: '1', title: 'לקבוע תור לרופא ילדים', category: 'אישי', isUrgent: true, isOverdue: true, completed: false },
-  { id: '2', title: 'קניית מצרכים לשבת', category: 'אישי', completed: false, subtasks: [...] },
-  { id: '3', title: 'סידור הבית לאורחים', category: 'אישי', completed: true },
-  { id: '4', title: 'שליחת דוח חודשי', category: 'עבודה', completed: true },
-];
-*/
+function formatDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString('he-IL', {
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+function formatDueText(task: {
+  dueDate?: number;
+  dueAt?: number;
+  hasTime?: boolean;
+  eventStartTime?: number;
+  eventAllDay?: boolean;
+}): string {
+  const timestamp = task.dueAt ?? task.dueDate ?? task.eventStartTime;
+  if (!timestamp) return 'ללא תאריך';
+
+  const today = addDaysFromToday(0);
+  const tomorrow = addDaysFromToday(1);
+  const taskDay = dayStart(timestamp);
+  const dayLabel =
+    taskDay === today
+      ? 'היום'
+      : taskDay === tomorrow
+        ? 'מחר'
+        : formatDate(timestamp);
+  const hasTime = task.dueAt !== undefined || task.eventAllDay === false;
+
+  if (!hasTime || task.eventAllDay) return dayLabel;
+  return `${dayLabel} ${formatTime(timestamp)}`;
+}
+
+function getDueSortTimestamp(task: {
+  dueDate?: number;
+  dueAt?: number;
+  eventStartTime?: number;
+  createdAt?: number;
+}): number {
+  return (
+    task.dueAt ?? task.dueDate ?? task.eventStartTime ?? task.createdAt ?? 0
+  );
+}
+
+function getEffectiveDueTimestamp(task: {
+  dueDate?: number;
+  dueAt?: number;
+  eventStartTime?: number;
+  hasTime?: boolean;
+  eventAllDay?: boolean;
+}): number | undefined {
+  if (task.dueAt !== undefined) return task.dueAt;
+  if (task.eventStartTime !== undefined) {
+    return task.eventAllDay ? dayEnd(task.eventStartTime) : task.eventStartTime;
+  }
+  if (task.dueDate !== undefined) return dayEnd(task.dueDate);
+  return undefined;
+}
+
+function getMineGroup(task: DisplayTask, now: number): MineGroupKey {
+  const effectiveDue = getEffectiveDueTimestamp(task);
+  if (!effectiveDue) return 'undated';
+  if (effectiveDue < now) return 'overdue';
+
+  const today = addDaysFromToday(0);
+  const tomorrow = addDaysFromToday(1);
+  const taskDay = dayStart(effectiveDue);
+  if (taskDay === today) return 'today';
+  if (taskDay >= tomorrow) return 'upcoming';
+  return 'undated';
+}
+
+function getTaskTabFromCategory(category?: string): TaskTab {
+  if (category === 'shopping') return 'קניות';
+  if (category === 'family') return 'משפחה';
+  if (category === 'work') return 'עבודה';
+  if (category === 'community') return 'קהילות';
+  if (category === 'calendar_event') return 'אירועי יומן';
+  return getTaskCategoryLabel(category) as TaskTab;
+}
+
+function resolveTaskCategory(task: {
+  category?: string;
+  communityId?: unknown;
+  sourceType?: string;
+}): TaskTab {
+  if (
+    task.communityId ||
+    task.sourceType === 'community_event_important_item'
+  ) {
+    return 'קהילות';
+  }
+  return getTaskTabFromCategory(task.category);
+}
+
+function resolveAssigneeNames(
+  task: Pick<
+    DisplayTask,
+    | 'assignedTo'
+    | 'assignedToMemberId'
+    | 'assignedToUserIds'
+    | 'assignedToMemberIds'
+  >,
+  currentUserId: string | undefined,
+  maps: MemberMaps
+): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const addName = (key: string, name: string): void => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    names.push(name);
+  };
+
+  const userIds = [...task.assignedToUserIds];
+  if (task.assignedTo) userIds.push(task.assignedTo);
+  for (const userId of userIds) {
+    addName(
+      `user:${userId}`,
+      userId === currentUserId
+        ? 'אני'
+        : (maps.userNames.get(userId) ?? 'בן משפחה')
+    );
+  }
+
+  const memberIds = [...task.assignedToMemberIds];
+  if (task.assignedToMemberId) memberIds.push(task.assignedToMemberId);
+  for (const memberId of memberIds) {
+    addName(`member:${memberId}`, maps.memberNames.get(memberId) ?? 'בן משפחה');
+  }
+
+  return names;
+}
+
+function resolveAssigneeDisplays(
+  task: Pick<
+    DisplayTask,
+    | 'assignedTo'
+    | 'assignedToMemberId'
+    | 'assignedToUserIds'
+    | 'assignedToMemberIds'
+  >,
+  currentUserId: string | undefined,
+  maps: MemberMaps
+): AssigneeDisplay[] {
+  const displays: AssigneeDisplay[] = [];
+  const seen = new Set<string>();
+  const addDisplay = (key: string, name: string, color?: string): void => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    displays.push({
+      key,
+      name,
+      initials: initialsFromName(name),
+      color: color ?? PRIMARY_BLUE,
+    });
+  };
+
+  const userIds = [...task.assignedToUserIds];
+  if (task.assignedTo) userIds.push(task.assignedTo);
+  for (const userId of userIds) {
+    const name =
+      userId === currentUserId
+        ? 'אני'
+        : (maps.userNames.get(userId) ?? 'בן משפחה');
+    addDisplay(`user:${userId}`, name, maps.userColors.get(userId));
+  }
+
+  const memberIds = [...task.assignedToMemberIds];
+  if (task.assignedToMemberId) memberIds.push(task.assignedToMemberId);
+  for (const memberId of memberIds) {
+    const name = maps.memberNames.get(memberId) ?? 'בן משפחה';
+    addDisplay(`member:${memberId}`, name, maps.memberColors.get(memberId));
+  }
+
+  return displays;
+}
+
+function isAssignedToCurrentUser(
+  task: Pick<
+    DisplayTask,
+    | 'assignedTo'
+    | 'assignedToMemberId'
+    | 'assignedToUserIds'
+    | 'assignedToMemberIds'
+  >,
+  currentUserId: string | undefined,
+  selfEntityId: string | undefined
+): boolean {
+  if (!currentUserId && !selfEntityId) return false;
+  return (
+    (currentUserId !== undefined &&
+      (task.assignedTo === currentUserId ||
+        task.assignedToUserIds.includes(currentUserId))) ||
+    (selfEntityId !== undefined &&
+      (task.assignedToMemberId === selfEntityId ||
+        task.assignedToMemberIds.includes(selfEntityId)))
+  );
+}
+
+function isAssignedToEveryone(task: DisplayTask, maps: MemberMaps): boolean {
+  const assignedKeys = new Set<string>();
+  for (const userId of task.assignedToUserIds)
+    assignedKeys.add(`user:${userId}`);
+  if (task.assignedTo) assignedKeys.add(`user:${task.assignedTo}`);
+  for (const memberId of task.assignedToMemberIds)
+    assignedKeys.add(`member:${memberId}`);
+  if (task.assignedToMemberId)
+    assignedKeys.add(`member:${task.assignedToMemberId}`);
+  return (
+    maps.visibleAssigneeCount > 1 &&
+    assignedKeys.size >= maps.visibleAssigneeCount
+  );
+}
+
+function hasAnyAssignee(task: DisplayTask): boolean {
+  return (
+    task.assignedTo !== undefined ||
+    task.assignedToMemberId !== undefined ||
+    task.assignedToUserIds.length > 0 ||
+    task.assignedToMemberIds.length > 0
+  );
+}
+
+function isCreatedForSelfOnly(
+  task: DisplayTask,
+  currentUserId: string | undefined
+): boolean {
+  return task.createdBy === currentUserId && !hasAnyAssignee(task);
+}
+
+function recentCompletedTimestamp(task: DisplayTask): number | undefined {
+  if (!task.completed) return undefined;
+  return task.completedAt ?? task.updatedAt ?? task.createdAt;
+}
+
+function buildSecondaryText(task: DisplayTask): string {
+  const dueText = formatDueText(task);
+  if (task.eventTitle) {
+    return `${task.eventTitle} · ${dueText}`;
+  }
+  if (task.communityName) {
+    return `${task.communityName} · ${dueText}`;
+  }
+  return dueText;
+}
+
+function sortTasks(a: DisplayTask, b: DisplayTask): number {
+  return (
+    a.sortTimestamp - b.sortTimestamp || a.title.localeCompare(b.title, 'he')
+  );
+}
+
+function taskMatchesTab(task: DisplayTask, activeFilter: TaskTab): boolean {
+  return activeFilter === 'הכל' || task.category === activeFilter;
+}
+
+function taskMatchesSearch(task: DisplayTask, searchQuery: string): boolean {
+  const normalizedSearch = normalizeText(searchQuery);
+  if (!normalizedSearch) return true;
+  return normalizeText(task.searchText).includes(normalizedSearch);
+}
+
+function getSubtaskAttachment(
+  subtask: SubtaskRow
+): SubtaskAttachmentPreviewData | undefined {
+  return subtask.attachment ?? subtask.image;
+}
 
 export default function TasksScreen() {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState('הכל');
-  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+  const [activeFilter, setActiveFilter] = useState<TaskTab>('הכל');
+  const [showMoreCompleted, setShowMoreCompleted] = useState(false);
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const {
     unseenCount,
@@ -92,6 +491,8 @@ export default function TasksScreen() {
   // TODO: כאשר defaultSpaceId ייאכלס ב-onboarding, לעבור לשליפה ישירה מ-user.defaultSpaceId
   // getMySpace מחזיר את ה-spaceId ישירות (Id<'spaces'> | null)
   const spaceId = useQuery(api.users.getMySpace);
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const familyContacts = useQuery(api.members.listMyFamilyContacts);
 
   // ── Convex: tasks queries ────────────────────────────────────────────────
   const convexTasks = useQuery(
@@ -115,115 +516,375 @@ export default function TasksScreen() {
     eventTaskRange
   );
 
-  // ממיר נתוני Convex לפורמט Task המקומי
-  const allConvexTasks: Task[] = useMemo(() => {
-    const dated = (convexTasks ?? []).map((t) => ({
-      id: t._id,
-      title: t.title,
-      category: getTaskCategoryLabel(t.category),
-      completed: t.completed,
-      subtasks: t.subtasks ?? undefined,
-    }));
-    const undated = (convexUndated ?? []).map((t) => ({
-      id: t._id,
-      title: t.title,
-      category: getTaskCategoryLabel(t.category),
-      completed: t.completed,
-      subtasks: t.subtasks ?? undefined,
-    }));
-    const byId = new Map<string, Task>();
-    for (const row of [...dated, ...undated]) {
-      byId.set(row.id, row);
-    }
-    return [...byId.values()];
-  }, [convexTasks, convexUndated]);
-
   // ── Convex: mutations ────────────────────────────────────────────────────
   const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
+  const toggleEventTaskCompletedMutation = useMutation(
+    api.eventTasks.toggleCompleted
+  );
   const toggleSubtaskMutation = useMutation(api.tasks.toggleSubtaskCompleted);
-  const removeTaskMutation = useMutation(api.tasks.remove);
 
-  const filters = TASK_FILTERS;
+  const currentUserId = currentUser?._id as string | undefined;
 
-  const toggleTaskExpansion = (taskId: string) => {
-    setExpandedTasks((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(taskId)) {
-        newSet.delete(taskId);
-      } else {
-        newSet.add(taskId);
+  const memberMaps = useMemo<MemberMaps>(() => {
+    const members = (familyContacts?.members ?? []) as MemberOption[];
+    const selfEntityId = familyContacts?.selfEntityId as string | undefined;
+    const userNames = new Map<string, string>();
+    const memberNames = new Map<string, string>();
+    const userColors = new Map<string, string>();
+    const memberColors = new Map<string, string>();
+
+    if (currentUserId) {
+      userNames.set(currentUserId, 'אני');
+      userColors.set(currentUserId, PRIMARY_BLUE);
+    }
+    for (const member of members) {
+      const name = member.displayName?.trim() || 'בן משפחה';
+      const color = member.color ?? PRIMARY_BLUE;
+      memberNames.set(member._id, name);
+      memberColors.set(member._id, color);
+      if (member.matchedUserId) {
+        userNames.set(member.matchedUserId, name);
+        userColors.set(member.matchedUserId, color);
       }
-      return newSet;
+    }
+
+    const visibleAssigneeCount =
+      1 + members.filter((member) => member._id !== selfEntityId).length;
+
+    return {
+      selfEntityId,
+      userNames,
+      memberNames,
+      userColors,
+      memberColors,
+      visibleAssigneeCount,
+    };
+  }, [currentUserId, familyContacts?.members, familyContacts?.selfEntityId]);
+
+  const allTasks: DisplayTask[] = useMemo(() => {
+    const byId = new Map<string, DisplayTask>();
+    const now = Date.now();
+
+    for (const row of [...(convexTasks ?? []), ...(convexUndated ?? [])]) {
+      const assignedToUserIds = ((row.assignedToUserIds ?? []) as string[]).map(
+        String
+      );
+      const assignedToMemberIds = (
+        (row.assignedToMemberIds ?? []) as string[]
+      ).map(String);
+      const task: DisplayTask = {
+        uid: `task:${row._id}`,
+        id: String(row._id),
+        kind: 'task',
+        title: row.title,
+        completed: row.completed,
+        category: resolveTaskCategory(row),
+        dueDate: row.dueDate,
+        dueAt: row.dueAt,
+        hasTime: row.hasTime,
+        completedAt: row.completedAt,
+        updatedAt: row.updatedAt,
+        createdAt: row.createdAt,
+        createdBy: String(row.createdBy),
+        assignedTo: row.assignedTo ? String(row.assignedTo) : undefined,
+        assignedToMemberId: row.assignedToMemberId
+          ? String(row.assignedToMemberId)
+          : undefined,
+        assignedToUserIds,
+        assignedToMemberIds,
+        communityId: row.communityId ? String(row.communityId) : undefined,
+        sourceType: row.sourceType,
+        sourceEventId: row.sourceEventId
+          ? String(row.sourceEventId)
+          : undefined,
+        subtasks: (row.subtasks ?? []) as SubtaskRow[],
+        hasAttachments: (row.attachments ?? []).length > 0,
+        hasReminders:
+          (row.reminders ?? []).length > 0 ||
+          (row.reminderType !== undefined && row.reminderType !== 'none'),
+        isEventTask: row.sourceType === 'community_event_important_item',
+        placement: 'hidden',
+        assigneeNames: [],
+        assigneeDisplays: [],
+        secondaryText: '',
+        searchText: '',
+        sortTimestamp: getDueSortTimestamp(row),
+      };
+      byId.set(task.uid, task);
+    }
+
+    for (const eventTask of assignedEventTaskRows ?? []) {
+      const task: DisplayTask = {
+        uid: `eventTask:${eventTask._id}`,
+        id: String(eventTask._id),
+        kind: 'eventTask',
+        title: eventTask.title,
+        completed: eventTask.completed,
+        category: 'קהילות',
+        eventId: String(eventTask.eventId),
+        eventTitle: eventTask.eventTitle,
+        communityId: String(eventTask.communityId),
+        eventStartTime: eventTask.eventStartTime,
+        eventAllDay: eventTask.eventAllDay,
+        communityName: eventTask.communityName,
+        assignedToUserIds: currentUserId ? [currentUserId] : [],
+        assignedToMemberIds: [],
+        subtasks: [],
+        hasAttachments: false,
+        hasReminders: false,
+        isEventTask: true,
+        placement: eventTask.completed ? 'completed' : 'mine',
+        responsibilityLabel: 'הוקצה אליי',
+        assigneeNames: ['אני'],
+        assigneeDisplays: [],
+        secondaryText: '',
+        searchText: '',
+        sortTimestamp: eventTask.eventStartTime,
+      };
+      byId.set(task.uid, task);
+    }
+
+    return [...byId.values()].map((task) => {
+      const assignedToSelf = isAssignedToCurrentUser(
+        task,
+        currentUserId,
+        memberMaps.selfEntityId
+      );
+      const assignedToEveryone = isAssignedToEveryone(task, memberMaps);
+      const createdBySelf = task.createdBy === currentUserId;
+      const placement: Placement = task.completed
+        ? 'completed'
+        : assignedToSelf ||
+            assignedToEveryone ||
+            isCreatedForSelfOnly(task, currentUserId)
+          ? 'mine'
+          : createdBySelf && hasAnyAssignee(task)
+            ? 'tracking'
+            : task.placement === 'mine'
+              ? 'mine'
+              : 'hidden';
+      const responsibilityLabel = assignedToEveryone
+        ? 'כולם'
+        : assignedToSelf && !createdBySelf
+          ? 'הוקצה אליי'
+          : undefined;
+      const assigneeNames = resolveAssigneeNames(
+        task,
+        currentUserId,
+        memberMaps
+      );
+      const assigneeDisplays = resolveAssigneeDisplays(
+        task,
+        currentUserId,
+        memberMaps
+      );
+      const mineGroup =
+        placement === 'mine' ? getMineGroup(task, now) : undefined;
+      const enrichedTask: DisplayTask = {
+        ...task,
+        placement,
+        responsibilityLabel,
+        assigneeNames,
+        assigneeDisplays,
+        mineGroup,
+      };
+      const secondaryText = buildSecondaryText(enrichedTask);
+      return {
+        ...enrichedTask,
+        secondaryText,
+        searchText: [
+          enrichedTask.title,
+          secondaryText,
+          enrichedTask.category,
+          enrichedTask.eventTitle,
+          enrichedTask.communityName,
+          ...assigneeNames,
+        ]
+          .filter(Boolean)
+          .join(' '),
+      };
+    });
+  }, [
+    assignedEventTaskRows,
+    convexTasks,
+    convexUndated,
+    currentUserId,
+    memberMaps,
+  ]);
+
+  const visibleTasks = useMemo(
+    () =>
+      allTasks
+        .filter((task) => task.placement !== 'hidden')
+        .filter((task) => taskMatchesTab(task, activeFilter))
+        .filter((task) => taskMatchesSearch(task, searchQuery)),
+    [activeFilter, allTasks, searchQuery]
+  );
+
+  const mineGroups = useMemo(() => {
+    const groups: Record<MineGroupKey, DisplayTask[]> = {
+      overdue: [],
+      today: [],
+      upcoming: [],
+      undated: [],
+    };
+    for (const task of visibleTasks) {
+      if (task.placement !== 'mine' || !task.mineGroup) continue;
+      groups[task.mineGroup].push(task);
+    }
+    for (const key of Object.keys(groups) as MineGroupKey[]) {
+      groups[key].sort(sortTasks);
+    }
+    return groups;
+  }, [visibleTasks]);
+
+  const trackingTasks = useMemo(
+    () =>
+      visibleTasks
+        .filter((task) => task.placement === 'tracking')
+        .sort(sortTasks),
+    [visibleTasks]
+  );
+
+  const completedCandidates = useMemo(
+    () =>
+      visibleTasks
+        .filter((task) => task.placement === 'completed')
+        .sort((a, b) => {
+          const completedA = recentCompletedTimestamp(a) ?? 0;
+          const completedB = recentCompletedTimestamp(b) ?? 0;
+          return completedB - completedA;
+        }),
+    [visibleTasks]
+  );
+
+  const hasMoreCompletedTasks = useMemo(() => {
+    const now = Date.now();
+    return completedCandidates.some((task) => {
+      const completedAt = recentCompletedTimestamp(task);
+      if (completedAt === undefined) return false;
+      const age = now - completedAt;
+      return age > COMPLETED_WINDOW_48_HOURS && age <= COMPLETED_WINDOW_7_DAYS;
+    });
+  }, [completedCandidates]);
+
+  const completedTasks = useMemo(() => {
+    const now = Date.now();
+    const windowMs = showMoreCompleted
+      ? COMPLETED_WINDOW_7_DAYS
+      : COMPLETED_WINDOW_48_HOURS;
+    return completedCandidates.filter((task) => {
+      const completedAt = recentCompletedTimestamp(task);
+      return completedAt === undefined || now - completedAt <= windowMs;
+    });
+  }, [completedCandidates, showMoreCompleted]);
+
+  const hasMineTasks = MINE_GROUPS.some(
+    (group) => mineGroups[group.key].length > 0
+  );
+  const hasVisibleContent =
+    hasMineTasks || trackingTasks.length > 0 || completedTasks.length > 0;
+
+  const toggleTaskCompletion = async (task: DisplayTask): Promise<void> => {
+    try {
+      if (task.kind === 'eventTask') {
+        await toggleEventTaskCompletedMutation({
+          id: task.id as Id<'eventTasks'>,
+        });
+        return;
+      }
+      await toggleCompletedMutation({ id: task.id as Id<'tasks'> });
+    } catch (error) {
+      console.error('toggleTaskCompletion error:', error);
+    }
+  };
+
+  const toggleTaskExpansion = (taskId: string): void => {
+    setExpandedTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      return next;
     });
   };
 
   const toggleSubtask = async (
-    taskId: string,
+    task: DisplayTask,
     subtaskId: string
   ): Promise<void> => {
+    if (task.kind !== 'task') return;
     try {
       await toggleSubtaskMutation({
-        id: taskId as Id<'tasks'>,
+        id: task.id as Id<'tasks'>,
         subtaskId,
       });
-    } catch (e) {
-      console.error('toggleSubtask error:', e);
+    } catch (error) {
+      console.error('toggleSubtask error:', error);
     }
   };
 
-  const toggleTaskCompletion = async (taskId: string) => {
-    try {
-      await toggleCompletedMutation({ id: taskId as Id<'tasks'> });
-    } catch (e) {
-      console.error('toggleTaskCompletion error:', e);
-      // TODO: להוסיף optimistic UI בעתיד
+  const openSourceInfo = (task: DisplayTask): void => {
+    const isEventSource =
+      task.isEventTask || task.sourceEventId || task.eventId;
+    const eventName = task.eventTitle ?? task.title;
+    const message = isEventSource
+      ? task.category === 'אירועי יומן'
+        ? `זוהי משימה מתוך אירוע יומן ${eventName}`
+        : `זוהי משימה מתוך האירוע ${eventName}`
+      : task.communityName
+        ? `זוהי משימה מתוך קהילת ${task.communityName}`
+        : 'זוהי משימה מתוך קהילה';
+
+    const actions: {
+      text: string;
+      style?: 'cancel';
+      onPress?: () => void;
+    }[] = [{ text: 'חזרה', style: 'cancel' }];
+
+    if (task.communityId) {
+      actions.push({
+        text: 'פתיחת קהילה',
+        onPress: () =>
+          router.push({
+            pathname: '/(authenticated)/community/[id]',
+            params: { id: task.communityId },
+          } as never),
+      });
     }
+
+    const eventId = task.eventId ?? task.sourceEventId;
+    if (eventId) {
+      actions.push({
+        text: 'פתיחת אירוע',
+        onPress: () =>
+          router.push({
+            pathname: '/(authenticated)/event/[id]',
+            params: { id: eventId },
+          } as never),
+      });
+    }
+
+    Alert.alert('פרטי משימה', message, actions);
   };
 
-  const _handleDeleteTask = async (taskId: string) => {
-    try {
-      await removeTaskMutation({ id: taskId as Id<'tasks'> });
-    } catch (e) {
-      console.error('handleDeleteTask error:', e);
+  const handleTaskPress = (task: DisplayTask): void => {
+    const isEditable =
+      task.kind === 'task' &&
+      !task.communityId &&
+      !task.sourceEventId &&
+      task.category !== 'קהילות' &&
+      task.category !== 'אירועי יומן';
+
+    if (isEditable) {
+      router.push(`/(authenticated)/task/${task.id}` as never);
+      return;
     }
+
+    openSourceInfo(task);
   };
-
-  // ===== לוגיקת סינון משולבת (פילטר + חיפוש) =====
-  const filteredTasks = allConvexTasks.filter((task) => {
-    // TODO: לסנן גם לפי category אמיתי מ-Convex
-    const matchesFilter =
-      activeFilter === 'הכל' || task.category === activeFilter;
-    const matchesSearch = task.title
-      .toLowerCase()
-      .includes(searchQuery.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
-  const assignedEventTasks: AssignedEventTask[] = useMemo(
-    () =>
-      (assignedEventTaskRows ?? []).map((task) => ({
-        id: task._id,
-        title: task.title,
-        completed: task.completed,
-        eventTitle: task.eventTitle,
-        eventStartTime: task.eventStartTime,
-        eventAllDay: task.eventAllDay,
-        communityName: task.communityName,
-      })),
-    [assignedEventTaskRows]
-  );
-  const filteredAssignedEventTasks = assignedEventTasks.filter((task) => {
-    const matchesFilter = activeFilter === 'הכל' || activeFilter === 'אירועים';
-    const normalizedSearch = searchQuery.toLowerCase();
-    const matchesSearch =
-      task.title.toLowerCase().includes(normalizedSearch) ||
-      task.eventTitle.toLowerCase().includes(normalizedSearch) ||
-      task.communityName.toLowerCase().includes(normalizedSearch);
-    return matchesFilter && matchesSearch;
-  });
-
-  // עכשיו מחלקים ל"לביצוע" ו"בוצעו" מתוך הרשימה שכבר סוננה
-  const pendingTasks = filteredTasks.filter((task) => !task.completed);
-  const completedTasks = filteredTasks.filter((task) => task.completed);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -264,7 +925,7 @@ export default function TasksScreen() {
           style={styles.filtersContainer}
           contentContainerStyle={styles.filtersContent}
         >
-          {filters.map((filter) => (
+          {TASK_TABS.map((filter) => (
             <Pressable
               key={filter}
               style={[
@@ -272,6 +933,10 @@ export default function TasksScreen() {
                 activeFilter === filter && styles.filterChipActive,
               ]}
               onPress={() => setActiveFilter(filter)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityState={{ selected: activeFilter === filter }}
+              accessibilityLabel={`סינון ${filter}`}
             >
               <Text
                 style={[
@@ -288,60 +953,101 @@ export default function TasksScreen() {
         {/* Tasks List */}
         <ScrollView
           style={styles.tasksScrollView}
+          contentContainerStyle={styles.tasksContent}
           showsVerticalScrollIndicator={false}
         >
-          {/* Pending Tasks Section */}
-          {pendingTasks.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>לביצוע</Text>
-              {pendingTasks.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  isExpanded={expandedTasks.has(task.id)}
-                  onToggleExpansion={() => toggleTaskExpansion(task.id)}
-                  onToggleSubtask={(subtaskId) =>
-                    toggleSubtask(task.id, subtaskId)
-                  }
-                  onToggleCompletion={() => toggleTaskCompletion(task.id)}
-                  onPress={() =>
-                    router.push(`/(authenticated)/task/${task.id}` as never)
-                  }
-                />
-              ))}
-            </View>
+          {hasVisibleContent ? (
+            <>
+              {hasMineTasks ? (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>לביצוע שלי</Text>
+                  {MINE_GROUPS.map((group) =>
+                    mineGroups[group.key].length > 0 ? (
+                      <TaskGroup
+                        key={group.key}
+                        title={group.title}
+                        tasks={mineGroups[group.key]}
+                        expandedTaskIds={expandedTaskIds}
+                        onToggleCompletion={toggleTaskCompletion}
+                        onToggleExpansion={toggleTaskExpansion}
+                        onToggleSubtask={toggleSubtask}
+                        onOpenImagePreview={setPreviewImageUri}
+                        onPressTask={handleTaskPress}
+                      />
+                    ) : null
+                  )}
+                </View>
+              ) : null}
+
+              {trackingTasks.length > 0 ? (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>במעקב</Text>
+                  <Text style={styles.sectionHelper}>משימות שהוקצו לאחרים</Text>
+                  {trackingTasks.map((task) => (
+                    <TaskCard
+                      key={task.uid}
+                      task={task}
+                      isExpanded={expandedTaskIds.has(task.uid)}
+                      onToggleCompletion={() => toggleTaskCompletion(task)}
+                      onToggleExpansion={() => toggleTaskExpansion(task.uid)}
+                      onToggleSubtask={(subtaskId) =>
+                        toggleSubtask(task, subtaskId)
+                      }
+                      onOpenImagePreview={setPreviewImageUri}
+                      onPress={() => handleTaskPress(task)}
+                    />
+                  ))}
+                </View>
+              ) : null}
+
+              {completedTasks.length > 0 ? (
+                <View style={styles.section}>
+                  <View style={styles.sectionHeaderRow}>
+                    {hasMoreCompletedTasks ? (
+                      <View style={styles.completedActions}>
+                        <Pressable
+                          onPress={() => setShowMoreCompleted((prev) => !prev)}
+                          style={styles.secondaryButton}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityLabel={
+                            showMoreCompleted ? 'הצג פחות' : 'הצג עוד'
+                          }
+                        >
+                          <Text style={styles.secondaryButtonText}>
+                            {showMoreCompleted ? 'הצג פחות' : 'הצג עוד'}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <View style={styles.completedActionsPlaceholder} />
+                    )}
+                    <Text style={styles.sectionTitleNoMargin}>
+                      בוצעו לאחרונה
+                    </Text>
+                  </View>
+                  {completedTasks.map((task) => (
+                    <TaskCard
+                      key={task.uid}
+                      task={task}
+                      isExpanded={expandedTaskIds.has(task.uid)}
+                      onToggleCompletion={() => toggleTaskCompletion(task)}
+                      onToggleExpansion={() => toggleTaskExpansion(task.uid)}
+                      onToggleSubtask={(subtaskId) =>
+                        toggleSubtask(task, subtaskId)
+                      }
+                      onOpenImagePreview={setPreviewImageUri}
+                      onPress={() => handleTaskPress(task)}
+                    />
+                  ))}
+                </View>
+              ) : null}
+            </>
+          ) : (
+            <EmptyState activeFilter={activeFilter} />
           )}
 
-          {filteredAssignedEventTasks.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>משימות מאירועים</Text>
-              {filteredAssignedEventTasks.map((task) => (
-                <EventTaskCard key={task.id} task={task} />
-              ))}
-            </View>
-          )}
-
-          {/* Completed Tasks Section */}
-          {completedTasks.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>בוצעו</Text>
-              {completedTasks.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  isExpanded={false}
-                  onToggleExpansion={() => {}}
-                  onToggleSubtask={() => {}}
-                  onToggleCompletion={() => toggleTaskCompletion(task.id)}
-                  onPress={() =>
-                    router.push(`/(authenticated)/task/${task.id}` as never)
-                  }
-                />
-              ))}
-            </View>
-          )}
-
-          <View style={{ height: 40 }} />
+          <View style={styles.bottomSpacer} />
         </ScrollView>
       </View>
       <NotificationsDrawer
@@ -349,206 +1055,466 @@ export default function TasksScreen() {
         onClose={() => setIsNotificationsOpen(false)}
         direction="rtl"
       />
+      <Modal
+        visible={previewImageUri !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewImageUri(null)}
+      >
+        <View style={styles.previewOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setPreviewImageUri(null)}
+            accessible={false}
+          />
+          {previewImageUri ? (
+            <View style={styles.previewCard}>
+              <Pressable
+                style={styles.previewCloseButton}
+                onPress={() => setPreviewImageUri(null)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="סגירה"
+              >
+                <MaterialIcons name="close" size={24} color="#ffffff" />
+              </Pressable>
+              <Image
+                source={{ uri: previewImageUri }}
+                style={styles.previewImage}
+                resizeMode="contain"
+                accessible={true}
+                accessibilityLabel="תצוגה מקדימה של תמונה"
+              />
+            </View>
+          ) : null}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-// ===== Task Card Component =====
+function TaskGroup({
+  title,
+  tasks,
+  expandedTaskIds,
+  onToggleCompletion,
+  onToggleExpansion,
+  onToggleSubtask,
+  onOpenImagePreview,
+  onPressTask,
+}: {
+  title: string;
+  tasks: DisplayTask[];
+  expandedTaskIds: Set<string>;
+  onToggleCompletion: (task: DisplayTask) => void;
+  onToggleExpansion: (taskId: string) => void;
+  onToggleSubtask: (task: DisplayTask, subtaskId: string) => void;
+  onOpenImagePreview: (uri: string) => void;
+  onPressTask: (task: DisplayTask) => void;
+}) {
+  return (
+    <View style={styles.group}>
+      <Text style={styles.groupTitle}>{title}</Text>
+      {tasks.map((task) => (
+        <TaskCard
+          key={task.uid}
+          task={task}
+          isExpanded={expandedTaskIds.has(task.uid)}
+          onToggleCompletion={() => onToggleCompletion(task)}
+          onToggleExpansion={() => onToggleExpansion(task.uid)}
+          onToggleSubtask={(subtaskId) => onToggleSubtask(task, subtaskId)}
+          onOpenImagePreview={onOpenImagePreview}
+          onPress={() => onPressTask(task)}
+        />
+      ))}
+    </View>
+  );
+}
+
 function TaskCard({
   task,
   isExpanded,
+  onToggleCompletion,
   onToggleExpansion,
   onToggleSubtask,
-  onToggleCompletion,
+  onOpenImagePreview,
   onPress,
 }: {
-  task: Task;
+  task: DisplayTask;
   isExpanded: boolean;
+  onToggleCompletion: () => void;
   onToggleExpansion: () => void;
   onToggleSubtask: (subtaskId: string) => void;
-  onToggleCompletion: () => void;
+  onOpenImagePreview: (uri: string) => void;
   onPress: () => void;
 }) {
-  const hasSubtasks = task.subtasks && task.subtasks.length > 0;
-  const completedSubtasks =
-    task.subtasks?.filter((st) => st.completed).length || 0;
-  const totalSubtasks = task.subtasks?.length || 0;
+  const hasSubtasks = task.subtasks.length > 0;
+  const completedSubtasks = task.subtasks.filter(
+    (subtask) => subtask.completed
+  ).length;
+  const totalSubtasks = task.subtasks.length;
+  const isOverdue = task.placement === 'mine' && task.mineGroup === 'overdue';
+  const tags = buildVisibleTags(task, isOverdue);
+  const progressText =
+    task.category === 'קניות'
+      ? `${completedSubtasks} מתוך ${totalSubtasks} פריטים סומנו`
+      : `${completedSubtasks} מתוך ${totalSubtasks} שלבים הושלמו`;
 
   return (
     <Pressable
       onPress={onPress}
-      style={[
-        styles.taskCard,
-        task.isUrgent && styles.taskCardUrgent,
-        task.completed && styles.taskCardCompleted,
-      ]}
+      style={[styles.taskCard, task.completed && styles.taskCardCompleted]}
       accessible={true}
       accessibilityRole="button"
       accessibilityLabel={`משימה: ${task.title}`}
     >
-      <View style={styles.taskCardHeader}>
-        {/* Checkbox */}
+      <View style={styles.taskCardRow}>
         <Pressable
           style={styles.checkbox}
-          onPress={onToggleCompletion}
+          onPress={(event) => {
+            event.stopPropagation();
+            onToggleCompletion();
+          }}
+          hitSlop={10}
           accessible={true}
           accessibilityRole="checkbox"
           accessibilityState={{ checked: task.completed }}
+          accessibilityLabel={`סימון השלמה עבור ${task.title}`}
         >
           {task.completed ? (
-            <MaterialIcons name="check-circle" size={24} color={PRIMARY_BLUE} />
+            <MaterialIcons name="check-circle" size={30} color={PRIMARY_BLUE} />
           ) : (
             <View
               style={[
                 styles.checkboxEmpty,
-                task.isUrgent && styles.checkboxUrgent,
+                isOverdue && styles.checkboxOverdue,
               ]}
             />
           )}
         </Pressable>
-
-        {/* Task Content */}
         <View style={styles.taskContent}>
           <Text
             style={[
               styles.taskTitle,
-              task.isUrgent && styles.taskTitleUrgent,
               task.completed && styles.taskTitleCompleted,
             ]}
+            numberOfLines={2}
           >
             {task.title}
           </Text>
-
-          {/* Tags */}
-          <View style={styles.tagsRow}>
-            {task.isOverdue && (
-              <View style={[styles.tag, styles.tagOverdue]}>
-                <Text style={styles.tagTextOverdue}>איחור</Text>
-              </View>
-            )}
-            <View style={[styles.tag, styles.categoryTag]}>
-              <Text style={styles.tagText}>{task.category}</Text>
+          <View style={styles.metaRow}>
+            <View style={styles.metaSide}>
+              <TaskIndicators task={task} hasSubtasks={hasSubtasks} />
+              <AssigneeAvatars
+                assignees={task.assigneeDisplays}
+                showEveryone={task.responsibilityLabel === 'כולם'}
+              />
             </View>
+            <Text style={styles.taskMeta} numberOfLines={1}>
+              {task.secondaryText}
+            </Text>
           </View>
 
-          {/* Subtasks Progress */}
-          {hasSubtasks && !task.completed && (
+          {tags.length > 0 ? (
+            <View style={styles.tagsRow}>
+              {tags.map((tag) => (
+                <View key={tag.label} style={[styles.tag, tag.style]}>
+                  <Text style={[styles.tagText, tag.textStyle]}>
+                    {tag.label}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {hasSubtasks && !task.completed ? (
             <View style={styles.subtasksProgress}>
-              <Text style={styles.subtasksProgressText}>
-                {completedSubtasks} מתוך {totalSubtasks} הושלמו
-              </Text>
+              <View style={styles.subtasksProgressHeader}>
+                <Pressable
+                  style={styles.expandButton}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    onToggleExpansion();
+                  }}
+                  hitSlop={8}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={isExpanded ? 'כווץ פריטים' : 'הצג פריטים'}
+                >
+                  <MaterialIcons
+                    name={
+                      isExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'
+                    }
+                    size={22}
+                    color={TEXT_MUTED}
+                  />
+                </Pressable>
+                <Text style={styles.subtasksProgressText}>{progressText}</Text>
+              </View>
               <View style={styles.progressBar}>
                 <View
                   style={[
                     styles.progressBarFill,
-                    {
-                      width: `${(completedSubtasks / totalSubtasks) * 100}%`,
-                    },
+                    { width: `${(completedSubtasks / totalSubtasks) * 100}%` },
                   ]}
                 />
               </View>
+              {isExpanded ? (
+                <View style={styles.subtasksList}>
+                  {task.subtasks.map((subtask) => (
+                    <Pressable
+                      key={subtask.id}
+                      style={styles.subtaskItem}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        onToggleSubtask(subtask.id);
+                      }}
+                      accessible={true}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: subtask.completed }}
+                      accessibilityLabel={subtask.title}
+                    >
+                      <View
+                        style={[
+                          styles.subtaskCheckbox,
+                          subtask.completed && styles.subtaskCheckboxChecked,
+                        ]}
+                      >
+                        {subtask.completed ? (
+                          <MaterialIcons
+                            name="check"
+                            size={13}
+                            color="#ffffff"
+                          />
+                        ) : null}
+                      </View>
+                      <Text
+                        style={[
+                          styles.subtaskText,
+                          subtask.completed && styles.subtaskTextCompleted,
+                        ]}
+                        numberOfLines={2}
+                      >
+                        {subtask.title}
+                      </Text>
+                      {getSubtaskAttachment(subtask) ? (
+                        <SubtaskAttachmentButton
+                          attachment={getSubtaskAttachment(subtask)}
+                          onOpenImagePreview={onOpenImagePreview}
+                        />
+                      ) : null}
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
             </View>
-          )}
+          ) : null}
         </View>
-
-        {/* Expand Button */}
-        {hasSubtasks && !task.completed && (
-          <Pressable
-            style={styles.expandButton}
-            onPress={onToggleExpansion}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel={isExpanded ? 'כווץ' : 'הרחב'}
-          >
-            <MaterialIcons
-              name={isExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
-              size={24}
-              color="#637588"
-            />
-          </Pressable>
-        )}
       </View>
-
-      {/* Subtasks List (Expanded) */}
-      {isExpanded && hasSubtasks && task.subtasks && (
-        <View style={styles.subtasksList}>
-          {task.subtasks.map((subtask) => (
-            <Pressable
-              key={subtask.id}
-              style={styles.subtaskItem}
-              onPress={() => onToggleSubtask(subtask.id)}
-              accessible={true}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: subtask.completed }}
-            >
-              <View
-                style={[
-                  styles.subtaskCheckbox,
-                  subtask.completed && styles.subtaskCheckboxChecked,
-                ]}
-              >
-                {subtask.completed && (
-                  <MaterialIcons name="check" size={14} color="#ffffff" />
-                )}
-              </View>
-              <Text
-                style={[
-                  styles.subtaskText,
-                  subtask.completed && styles.subtaskTextCompleted,
-                ]}
-              >
-                {subtask.title}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
     </Pressable>
   );
 }
 
-function EventTaskCard({ task }: { task: AssignedEventTask }) {
+function TaskIndicators({
+  task,
+  hasSubtasks,
+}: {
+  task: DisplayTask;
+  hasSubtasks: boolean;
+}) {
+  if (!(task.hasReminders || task.hasAttachments || hasSubtasks)) return null;
+
   return (
-    <View
-      style={[styles.taskCard, task.completed && styles.taskCardCompleted]}
-      accessible={true}
-      accessibilityLabel={`משימת אירוע: ${task.title}`}
-    >
-      <View style={styles.taskCardHeader}>
-        <View style={styles.eventTaskIcon}>
-          <MaterialIcons
-            name="event-available"
-            size={20}
-            color={PRIMARY_BLUE}
-          />
-        </View>
-        <View style={styles.taskContent}>
-          <Text
-            style={[
-              styles.taskTitle,
-              task.completed && styles.taskTitleCompleted,
-            ]}
-          >
-            {task.title}
-          </Text>
-          <Text style={styles.eventTaskMeta} numberOfLines={1}>
-            {task.eventTitle}
-          </Text>
-          <Text style={styles.eventTaskMeta} numberOfLines={1}>
-            {formatEventTaskDate(task.eventStartTime, task.eventAllDay)}
-          </Text>
-          <View style={styles.tagsRow}>
-            <View style={[styles.tag, styles.eventTaskTag]}>
-              <Text style={styles.eventTaskTagText}>משימת אירוע</Text>
-            </View>
-            <View style={styles.tag}>
-              <Text style={styles.tagText}>{task.communityName}</Text>
-            </View>
-          </View>
-        </View>
-      </View>
+    <View style={styles.indicatorsRow}>
+      {task.hasReminders ? (
+        <MaterialIcons name="notifications-none" size={15} color="#94a3b8" />
+      ) : null}
+      {task.hasAttachments ? (
+        <MaterialIcons name="attach-file" size={15} color="#94a3b8" />
+      ) : null}
+      {hasSubtasks ? (
+        <MaterialIcons name="checklist-rtl" size={15} color="#94a3b8" />
+      ) : null}
     </View>
   );
+}
+
+function AssigneeAvatars({
+  assignees,
+  showEveryone,
+}: {
+  assignees: AssigneeDisplay[];
+  showEveryone: boolean;
+}) {
+  if (showEveryone) {
+    return (
+      <View style={styles.everyoneBadge}>
+        <Text style={styles.everyoneBadgeText}>כולם</Text>
+      </View>
+    );
+  }
+  if (assignees.length === 0) return null;
+  const visible = assignees.slice(0, 3);
+  const extraCount = assignees.length - visible.length;
+
+  return (
+    <View style={styles.assigneeAvatars}>
+      {visible.map((assignee, index) => (
+        <View
+          key={assignee.key}
+          style={[
+            styles.assigneeAvatar,
+            {
+              backgroundColor: assignee.color,
+              marginRight: index === 0 ? 0 : -6,
+              zIndex: visible.length - index,
+            },
+          ]}
+        >
+          <Text style={styles.assigneeAvatarText}>{assignee.initials}</Text>
+        </View>
+      ))}
+      {extraCount > 0 ? (
+        <View style={[styles.assigneeAvatar, styles.assigneeAvatarExtra]}>
+          <Text style={styles.assigneeAvatarExtraText}>+{extraCount}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function SubtaskAttachmentButton({
+  attachment,
+  onOpenImagePreview,
+}: {
+  attachment: SubtaskAttachmentPreviewData | undefined;
+  onOpenImagePreview: (uri: string) => void;
+}) {
+  const storageId = attachment?.storageId as Id<'_storage'> | undefined;
+  const storageUrl = useQuery(
+    api.events.getAttachmentUrl,
+    storageId ? { storageId } : 'skip'
+  );
+  const uri = attachment?.localUri ?? storageUrl ?? undefined;
+  const isImage = (attachment?.mimeType ?? '').startsWith('image/');
+
+  const openAttachment = async (): Promise<void> => {
+    if (!uri) {
+      Alert.alert('קובץ מצורף', 'לא ניתן לפתוח את הקובץ כרגע');
+      return;
+    }
+    if (isImage) {
+      onOpenImagePreview(uri);
+      return;
+    }
+    try {
+      await Linking.openURL(uri);
+    } catch {
+      Alert.alert('קובץ מצורף', 'לא ניתן לפתוח את הקובץ כרגע');
+    }
+  };
+
+  if (isImage && uri) {
+    return (
+      <Pressable
+        style={styles.subtaskThumbnailButton}
+        onPress={(event) => {
+          event.stopPropagation();
+          openAttachment();
+        }}
+        accessible={true}
+        accessibilityRole="button"
+        accessibilityLabel="פתיחת תמונה"
+      >
+        <Image source={{ uri }} style={styles.subtaskThumbnail} />
+      </Pressable>
+    );
+  }
+
+  return (
+    <Pressable
+      style={styles.subtaskFileButton}
+      onPress={(event) => {
+        event.stopPropagation();
+        openAttachment();
+      }}
+      accessible={true}
+      accessibilityRole="button"
+      accessibilityLabel={
+        attachment?.displayName ?? attachment?.originalName ?? 'פתיחת קובץ'
+      }
+    >
+      <MaterialIcons name="attach-file" size={16} color={PRIMARY_BLUE} />
+    </Pressable>
+  );
+}
+
+function EmptyState({ activeFilter }: { activeFilter: TaskTab }) {
+  const state = EMPTY_STATES[activeFilter];
+  return (
+    <View style={styles.emptyState}>
+      <MaterialIcons name="task-alt" size={34} color="#cbd5e1" />
+      <Text style={styles.emptyTitle}>{state.title}</Text>
+      {state.helper ? (
+        <Text style={styles.emptyHelper}>{state.helper}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function buildVisibleTags(
+  task: DisplayTask,
+  isOverdue: boolean
+): {
+  label: string;
+  style?: object;
+  textStyle?: object;
+}[] {
+  const tags: {
+    label: string;
+    style?: object;
+    textStyle?: object;
+  }[] = [];
+
+  if (isOverdue) {
+    tags.push({
+      label: 'המועד עבר',
+      style: styles.tagOverdue,
+      textStyle: styles.tagTextOverdue,
+    });
+  }
+
+  if (task.communityName && tags.length < 3) {
+    tags.push({
+      label: task.communityName,
+      style: styles.sourceTag,
+      textStyle: styles.sourceTagText,
+    });
+  }
+
+  if (task.eventTitle && tags.length < 3) {
+    tags.push({
+      label: task.eventTitle,
+      style: styles.sourceTag,
+      textStyle: styles.sourceTagText,
+    });
+  }
+
+  if (!(task.communityName || task.eventTitle) && tags.length < 3) {
+    tags.push({
+      label: task.category,
+      style: styles.categoryTag,
+      textStyle: styles.categoryTagText,
+    });
+  }
+
+  if (task.responsibilityLabel && tags.length < 3) {
+    tags.push({
+      label: task.responsibilityLabel,
+    });
+  }
+
+  return tags.slice(0, 3);
 }
 
 const styles = StyleSheet.create({
@@ -559,7 +1525,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f6f7f8',
-    direction: 'rtl',
   },
 
   /* Header */
@@ -573,23 +1538,6 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#111418',
-  },
-  addButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: PRIMARY_BLUE,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: PRIMARY_BLUE,
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 4,
-  },
 
   /* Search */
   searchContainer: {
@@ -598,7 +1546,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
   },
   searchBar: {
-    flexDirection: 'row-reverse',
+    direction: 'rtl',
+    flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#f6f7f8',
     borderRadius: 12,
@@ -611,37 +1560,47 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
-    color: '#111418',
+    color: TEXT_DARK,
     textAlign: 'right',
+    writingDirection: 'rtl',
   },
 
   /* Filters */
   filtersContainer: {
     backgroundColor: '#ffffff',
-    height: 55, // 👈 זה ימנע מהם להימתח על חצי מסך!
-    flexGrow: 0, // 👈 זה מבטיח שהקונטיינר לא יגדל מעבר ל-55 פיקסלים
+    height: 55,
+    flexGrow: 0,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    direction: 'rtl',
   },
   filtersContent: {
     paddingHorizontal: 16,
     alignItems: 'center',
     gap: 10,
-    flexDirection: 'row-reverse', // RTL
+    direction: 'rtl',
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    minWidth: '100%',
   },
   filterChip: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#f5f7fa',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   filterChipActive: {
     backgroundColor: PRIMARY_BLUE,
+    borderColor: PRIMARY_BLUE,
   },
   filterChipText: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#637588',
+    fontWeight: '700',
+    color: TEXT_MUTED,
+    textAlign: 'right',
+    writingDirection: 'rtl',
   },
   filterChipTextActive: {
     color: '#ffffff',
@@ -651,142 +1610,292 @@ const styles = StyleSheet.create({
   tasksScrollView: {
     flex: 1,
   },
+  tasksContent: {
+    paddingTop: 8,
+    alignItems: 'stretch',
+  },
   section: {
     marginTop: 16,
     paddingHorizontal: 16,
+    alignItems: 'stretch',
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#111418',
-    marginBottom: 12,
+    fontWeight: '800',
+    color: TEXT_DARK,
+    marginBottom: 10,
+    alignSelf: 'stretch',
     textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  sectionTitleNoMargin: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '800',
+    color: TEXT_DARK,
+    alignSelf: 'stretch',
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  sectionHelper: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    alignSelf: 'stretch',
+    textAlign: 'right',
+    marginTop: -4,
+    marginBottom: 10,
+    writingDirection: 'rtl',
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  completedActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  completedActionsPlaceholder: {
+    width: 1,
+  },
+  secondaryButton: {
+    minHeight: 34,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eef6fb',
+  },
+  secondaryButtonText: {
+    color: PRIMARY_BLUE,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  group: {
+    marginTop: 4,
+  },
+  groupTitle: {
+    color: TEXT_MUTED,
+    fontSize: 14,
+    fontWeight: '800',
+    alignSelf: 'stretch',
+    textAlign: 'right',
+    marginBottom: 8,
+    writingDirection: 'rtl',
   },
 
   /* Task Card */
   taskCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 10,
     shadowColor: '#000',
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.04,
     shadowRadius: 8,
-    elevation: 2,
+    elevation: 1,
     borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  taskCardUrgent: {
-    borderColor: '#ef4444',
-    borderWidth: 2,
+    borderColor: CARD_BORDER,
   },
   taskCardCompleted: {
-    opacity: 0.6,
+    opacity: 0.68,
     backgroundColor: '#f9fafb',
   },
-  taskCardHeader: {
-    flexDirection: 'row-reverse',
+  taskCardRow: {
+    flexDirection: 'row',
     alignItems: 'flex-start',
   },
 
   /* Checkbox */
   checkbox: {
-    marginLeft: 12,
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    marginRight: 10,
+    paddingTop: 1,
   },
   checkboxEmpty: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     borderWidth: 2,
-    borderColor: '#d1d5db',
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
   },
-  checkboxUrgent: {
-    borderColor: '#ef4444',
-  },
-  eventTaskIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#E8F5FD',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 12,
+  checkboxOverdue: {
+    borderColor: '#d89b65',
+    backgroundColor: '#fff8f1',
   },
 
   /* Task Content */
   taskContent: {
     flex: 1,
+    alignItems: 'stretch',
   },
   taskTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#111418',
-    marginBottom: 8,
+    fontWeight: '800',
+    color: TEXT_DARK,
+    marginBottom: 5,
     textAlign: 'right',
-  },
-  taskTitleUrgent: {
-    color: '#ef4444',
+    writingDirection: 'rtl',
+    lineHeight: 22,
   },
   taskTitleCompleted: {
     textDecorationLine: 'line-through',
-    color: '#9ca3af',
+    color: '#94a3b8',
   },
-  eventTaskMeta: {
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  metaSide: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  taskMeta: {
+    flex: 1,
     fontSize: 13,
-    color: '#637588',
+    color: TEXT_MUTED,
     textAlign: 'right',
-    marginBottom: 4,
+    writingDirection: 'rtl',
+    lineHeight: 18,
+  },
+  indicatorsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  assigneeAvatars: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 24,
+  },
+  assigneeAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+  },
+  assigneeAvatarText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  assigneeAvatarExtra: {
+    backgroundColor: '#e2e8f0',
+    marginRight: -6,
+  },
+  assigneeAvatarExtraText: {
+    color: TEXT_MUTED,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  everyoneBadge: {
+    minWidth: 34,
+    height: 24,
+    borderRadius: 12,
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: PRIMARY_BLUE_TINT,
+  },
+  everyoneBadgeText: {
+    color: PRIMARY_BLUE,
+    fontSize: 10,
+    fontWeight: '900',
+    writingDirection: 'rtl',
   },
 
   /* Tags */
   tagsRow: {
     flexDirection: 'row-reverse',
-    gap: 8,
-    marginBottom: 8,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    alignSelf: 'stretch',
+    gap: 6,
+    marginTop: 9,
   },
   tag: {
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: '#f0f0f0',
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
   },
   categoryTag: {
-    backgroundColor: '#e8f5fd',
+    backgroundColor: PRIMARY_BLUE_TINT,
   },
   tagOverdue: {
-    backgroundColor: '#fee2e2',
+    backgroundColor: '#fff2e5',
   },
   eventTaskTag: {
-    backgroundColor: '#E8F5FD',
+    backgroundColor: '#eef6fb',
+  },
+  sourceTag: {
+    backgroundColor: '#eef6fb',
+  },
+  trackingTag: {
+    backgroundColor: '#f6f1ff',
   },
   tagText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#637588',
+    fontWeight: '700',
+    color: TEXT_MUTED,
+    textAlign: 'right',
   },
-  eventTaskTagText: {
-    fontSize: 12,
-    fontWeight: '600',
+  categoryTagText: {
     color: PRIMARY_BLUE,
   },
+  eventTaskTagText: {
+    color: PRIMARY_BLUE,
+  },
+  sourceTagText: {
+    color: PRIMARY_BLUE,
+  },
+  trackingTagText: {
+    color: '#7c3aed',
+  },
   tagTextOverdue: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ef4444',
+    color: '#b36a2e',
   },
 
   /* Subtasks Progress */
   subtasksProgress: {
-    marginTop: 4,
+    marginTop: 10,
+  },
+  subtasksProgressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
   },
   subtasksProgressText: {
+    flex: 1,
     fontSize: 13,
-    color: '#637588',
-    marginBottom: 6,
+    color: TEXT_MUTED,
     textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  expandButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
   },
   progressBar: {
-    height: 6,
+    height: 5,
     backgroundColor: '#e5e7eb',
     borderRadius: 3,
     overflow: 'hidden',
@@ -795,47 +1904,127 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: PRIMARY_BLUE,
     borderRadius: 3,
+    alignSelf: 'flex-end',
   },
-
-  /* Expand Button */
-  expandButton: {
-    marginLeft: 8,
-  },
-
-  /* Subtasks List */
   subtasksList: {
-    marginTop: 12,
-    paddingTop: 12,
+    marginTop: 10,
+    paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-    gap: 10,
+    borderTopColor: '#eef2f7',
+    gap: 8,
   },
   subtaskItem: {
-    flexDirection: 'row-reverse',
+    minHeight: 34,
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 4,
+    gap: 8,
+    paddingVertical: 2,
   },
   subtaskCheckbox: {
     width: 20,
     height: 20,
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    justifyContent: 'center',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
     alignItems: 'center',
-    marginLeft: 10,
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
   },
   subtaskCheckboxChecked: {
     backgroundColor: PRIMARY_BLUE,
     borderColor: PRIMARY_BLUE,
   },
   subtaskText: {
-    fontSize: 14,
-    color: '#111418',
+    flex: 1,
+    color: TEXT_DARK,
+    fontSize: 13,
+    lineHeight: 18,
     textAlign: 'right',
+    writingDirection: 'rtl',
   },
   subtaskTextCompleted: {
+    color: '#94a3b8',
     textDecorationLine: 'line-through',
-    color: '#9ca3af',
+  },
+  subtaskThumbnailButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  subtaskThumbnail: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#e5e7eb',
+  },
+  subtaskFileButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: PRIMARY_BLUE_TINT,
+  },
+
+  /* Empty */
+  emptyState: {
+    marginHorizontal: 16,
+    marginTop: 28,
+    borderRadius: 18,
+    padding: 20,
+    alignItems: 'flex-end',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+  },
+  emptyTitle: {
+    marginTop: 10,
+    color: TEXT_DARK,
+    fontSize: 16,
+    fontWeight: '800',
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  emptyHelper: {
+    marginTop: 6,
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  bottomSpacer: {
+    height: 40,
+  },
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.86)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  previewCard: {
+    width: '100%',
+    height: '78%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewCloseButton: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    zIndex: 2,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
   },
 });

@@ -324,6 +324,91 @@ function customReminderTimestamp(
   return baseTimestamp - unitToMinutes(amount, unit) * 60 * 1000;
 }
 
+function defaultReminderBaseTimestamp(schedule: {
+  dueDate?: number;
+  dueAt?: number;
+}): number | undefined {
+  if (schedule.dueAt !== undefined) return schedule.dueAt;
+  if (schedule.dueDate !== undefined) {
+    return schedule.dueDate + 9 * 60 * 60 * 1000;
+  }
+  return undefined;
+}
+
+function resolveReminderTimestamp(
+  reminder: TaskReminder,
+  schedule: {
+    dueDate?: number;
+    dueAt?: number;
+    hasTime: boolean;
+  }
+): number | undefined {
+  if (reminder.type === 'morning') {
+    return schedule.dueDate !== undefined
+      ? schedule.dueDate + 9 * 60 * 60 * 1000
+      : undefined;
+  }
+  if (reminder.type === 'evening') {
+    return schedule.dueDate !== undefined
+      ? schedule.dueDate + 18 * 60 * 60 * 1000
+      : undefined;
+  }
+  if (reminder.type === 'at_time') {
+    return schedule.hasTime ? schedule.dueAt : undefined;
+  }
+  if (reminder.type === 'hour_before') {
+    return schedule.hasTime && schedule.dueAt !== undefined
+      ? schedule.dueAt - 60 * 60 * 1000
+      : undefined;
+  }
+
+  const baseTimestamp = defaultReminderBaseTimestamp(schedule);
+  if (
+    baseTimestamp !== undefined &&
+    reminder.customAmount !== undefined &&
+    reminder.customUnit !== undefined
+  ) {
+    return customReminderTimestamp(
+      baseTimestamp,
+      reminder.customAmount,
+      reminder.customUnit
+    );
+  }
+  return reminder.customReminderAt;
+}
+
+function normalizeTaskReminders({
+  reminders,
+  dueDate,
+  dueAt,
+  hasTime,
+  now,
+}: {
+  reminders: TaskReminder[];
+  dueDate?: number;
+  dueAt?: number;
+  hasTime: boolean;
+  now: number;
+}): TaskReminder[] {
+  if (dueDate === undefined) return [];
+
+  return reminders.flatMap((reminder) => {
+    const reminderAt = resolveReminderTimestamp(reminder, {
+      dueDate,
+      dueAt,
+      hasTime,
+    });
+    if (reminderAt === undefined || reminderAt < now) return [];
+    if (reminder.type !== 'custom') return [reminder];
+    return [
+      {
+        ...reminder,
+        customReminderAt: reminderAt,
+      },
+    ];
+  });
+}
+
 function reminderFromOldFields(task: EditableTask): TaskReminder[] {
   if (!task.reminderType || task.reminderType === 'none') return [];
   if (task.reminderType === 'custom') {
@@ -762,7 +847,7 @@ export default function TaskEditorScreen({
         : '09:00';
     updateDraft({
       hasTime,
-      selectedTime: hasTime ? selectedTime : draft.selectedTime,
+      selectedTime: hasTime ? selectedTime : undefined,
       reminders: [],
     });
   };
@@ -865,12 +950,13 @@ export default function TaskEditorScreen({
       setTimeError('אי אפשר לבחור שעה שכבר עברה');
       return;
     }
-    const normalizedReminders = hasDueDate ? draft.reminders : [];
-    const reminderError = validateCustomReminder(normalizedReminders);
-    if (reminderError) {
-      updateDraft({ reminderError });
-      return;
-    }
+    const normalizedReminders = normalizeTaskReminders({
+      reminders: draft.reminders,
+      dueDate: schedule.dueDate,
+      dueAt: schedule.dueAt,
+      hasTime: schedule.hasTime,
+      now: Date.now(),
+    });
 
     const recurrenceType = hasDueDate ? draft.recurrenceType : 'none';
     const normalizedSubtasks = normalizeSubtasks(draft.subtasks);
@@ -945,6 +1031,7 @@ export default function TaskEditorScreen({
         });
       }
 
+      const firstReminder = normalizedReminders[0];
       const clearFields: ClearableTaskField[] = [
         ...schedule.clearFields,
         ...(subtasksForConvex.length === 0
@@ -956,6 +1043,9 @@ export default function TaskEditorScreen({
               'reminderType',
               'customReminderAt',
             ] satisfies ClearableTaskField[])
+          : []),
+        ...(firstReminder && firstReminder.type !== 'custom'
+          ? (['customReminderAt'] satisfies ClearableTaskField[])
           : []),
         ...(recurrenceType !== 'specific_days'
           ? (['selectedWeekdays'] satisfies ClearableTaskField[])
@@ -974,7 +1064,6 @@ export default function TaskEditorScreen({
           : []),
       ];
 
-      const firstReminder = normalizedReminders[0];
       const payload = {
         title: draft.title.trim(),
         description: draft.notes.trim() || undefined,
@@ -1717,9 +1806,13 @@ export default function TaskEditorScreen({
       >
         <View style={styles.discardOverlay}>
           <View style={styles.discardModal}>
-            <Text style={styles.discardTitle}>יציאה ללא שמירה</Text>
+            <Text style={styles.discardTitle}>
+              {isCreate ? 'יציאה ללא שמירה' : 'יש שינויים שלא נשמרו'}
+            </Text>
             <Text style={styles.discardMessage}>
-              האם ברצונך למחוק את הנתונים שהכנסת?
+              {isCreate
+                ? 'האם ברצונך למחוק את הנתונים שהכנסת?'
+                : 'השינויים שביצעת לא יישמרו אם תצאי עכשיו.'}
             </Text>
             <View style={styles.discardActions}>
               <Pressable
@@ -1732,16 +1825,28 @@ export default function TaskEditorScreen({
                 <Text style={styles.discardKeepText}>המשך עריכה</Text>
               </Pressable>
               <Pressable
-                style={styles.discardDeleteButton}
+                style={
+                  isCreate
+                    ? styles.discardDeleteButton
+                    : styles.discardCancelChangesButton
+                }
                 onPress={() => {
                   setDiscardOpen(false);
                   navigateToDestination();
                 }}
                 accessible={true}
                 accessibilityRole="button"
-                accessibilityLabel="מחק וצא"
+                accessibilityLabel={isCreate ? 'מחק וצא' : 'בטל שינויים'}
               >
-                <Text style={styles.discardDeleteText}>מחק וצא</Text>
+                <Text
+                  style={
+                    isCreate
+                      ? styles.discardDeleteText
+                      : styles.discardCancelChangesText
+                  }
+                >
+                  {isCreate ? 'מחק וצא' : 'בטל שינויים'}
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -2156,8 +2261,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  discardCancelChangesButton: {
+    flex: 1,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   discardDeleteText: {
     color: '#dc2626',
+    fontWeight: '800',
+  },
+  discardCancelChangesText: {
+    color: '#475569',
     fontWeight: '800',
   },
   centerState: {
