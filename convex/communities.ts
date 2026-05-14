@@ -297,12 +297,26 @@ export const listMyCommunities = query({
 });
 
 // ─────────────────────────────────────────────────────────────
-// שליפת קהילה לפי ID (ללא בדיקת חברות — לשימוש ב-calendar filter)
+// שליפת קהילה לפי ID עבור משתמשים שהם חברים פעילים בלבד
 // ─────────────────────────────────────────────────────────────
 export const getById = query({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
-    return await ctx.db.get(communityId);
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const community = await ctx.db.get(communityId);
+    if (!community || community.archived) return null;
+
+    const membership = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', communityId).eq('userId', userId)
+      )
+      .unique();
+    if (!isActiveCommunityMember(membership)) return null;
+
+    return community;
   },
 });
 

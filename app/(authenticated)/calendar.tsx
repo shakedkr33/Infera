@@ -202,150 +202,6 @@ type TimelineEventRow = MockTimelineEvent & {
   communityName?: string;
 };
 
-const MOCK_MONTHLY_EVENTS: Record<number, CalendarEvent[]> = {
-  2: [
-    {
-      id: 'm1',
-      title: 'פגישת הורים',
-      time: '16:00',
-      category: 'משפחה',
-      categoryColor: '#ff922b',
-      assigneeColors: ['#ff922b', '#36a9e2'],
-    },
-  ],
-  5: [
-    {
-      id: 'm2',
-      title: 'יום הולדת נועה',
-      time: '17:00',
-      category: 'משפחה',
-      categoryColor: '#ff922b',
-      assigneeColors: ['#ff922b', '#7950f2', '#51cf66'],
-    },
-  ],
-  8: [
-    {
-      id: 'm3',
-      title: 'תור לרופא',
-      time: '10:00',
-      category: 'בריאות',
-      categoryColor: '#36a9e2',
-      assigneeColors: ['#36a9e2'],
-    },
-  ],
-  10: [
-    {
-      id: 'm4',
-      title: 'אימון כושר',
-      time: '18:00',
-      category: 'כושר',
-      categoryColor: '#7950f2',
-      assigneeColors: ['#7950f2'],
-    },
-    {
-      id: 'm5',
-      title: 'ארוחת ערב משפחתית',
-      time: '20:00',
-      category: 'משפחה',
-      categoryColor: '#ff922b',
-      assigneeColors: ['#ff922b', '#51cf66'],
-    },
-  ],
-  12: [
-    {
-      id: 'm6',
-      title: 'קניות לשבת',
-      time: '16:30',
-      category: 'קניות',
-      categoryColor: '#51cf66',
-      assigneeColors: ['#51cf66'],
-    },
-  ],
-  15: [
-    {
-      id: 'm7',
-      title: 'יום הולדת סבתא רחל',
-      time: '12:00',
-      category: 'משפחה',
-      categoryColor: '#ff922b',
-      assigneeColors: ['#ff922b', '#7950f2', '#36a9e2', '#51cf66'],
-    },
-  ],
-  16: [
-    {
-      id: 'm8',
-      title: 'ארוחת צהריים משפחתית',
-      time: '13:00',
-      category: 'משפחה',
-      categoryColor: '#ff922b',
-      assigneeColors: ['#ff922b'],
-    },
-    {
-      id: 'm9',
-      title: 'תור לרופא שיניים',
-      time: '10:00',
-      category: 'בריאות',
-      categoryColor: '#36a9e2',
-      assigneeColors: ['#36a9e2'],
-    },
-  ],
-  18: [
-    {
-      id: 'm10',
-      title: 'חוג ציור',
-      time: '15:00',
-      category: 'חוגים',
-      categoryColor: '#e64980',
-      assigneeColors: ['#e64980'],
-    },
-  ],
-  20: [
-    {
-      id: 'm11',
-      title: 'טיול משפחתי',
-      time: '08:00',
-      category: 'משפחה',
-      categoryColor: '#ff922b',
-      assigneeColors: ['#ff922b', '#7950f2', '#51cf66', '#36a9e2'],
-    },
-  ],
-  22: [
-    {
-      id: 'm12',
-      title: 'פגישת צוות שבועית',
-      time: '09:00',
-      category: 'עבודה',
-      categoryColor: '#6b7280',
-      assigneeColors: ['#6b7280'],
-    },
-  ],
-  25: [
-    {
-      id: 'm13',
-      title: 'חוג פסנתר',
-      time: '16:00',
-      category: 'חוגים',
-      categoryColor: '#7950f2',
-      assigneeColors: ['#7950f2'],
-    },
-  ],
-  28: [
-    {
-      id: 'm14',
-      title: 'ערב הורים בבית ספר',
-      time: '19:00',
-      category: 'משפחה',
-      categoryColor: '#ff922b',
-      assigneeColors: ['#ff922b', '#36a9e2'],
-    },
-  ],
-};
-
-const MOCK_BIRTHDAYS: Record<number, BirthdayInfo> = {
-  5: { name: 'נועה', age: 8 },
-  15: { name: 'סבתא רחל' },
-};
-
 // ===== Event Helpers =====
 function calculateDuration(event: CalendarEvent): number {
   const durations: Record<string, number> = {
@@ -395,7 +251,7 @@ function generateCalendarGrid(
   const daysInMonth = getDaysInMonth(year, month);
   const firstDayOffset = getFirstDayOfMonth(year, month);
   const daysInPrevMonth = getDaysInMonth(year, month - 1);
-  const eventsSource = monthlyEventsOverride ?? MOCK_MONTHLY_EVENTS;
+  const eventsSource = monthlyEventsOverride ?? {};
 
   const allDays: CalendarDay[] = [];
 
@@ -414,7 +270,6 @@ function generateCalendarGrid(
       isCurrentMonth: true,
       isToday: d === todayDay && month === todayMonth && year === todayYear,
       events: eventsSource[d] ?? [],
-      birthday: MOCK_BIRTHDAYS[d],
     });
   }
 
@@ -1294,8 +1149,7 @@ export default function CalendarScreen(): React.JSX.Element {
                 style={[styles.calendarPanel, animatedCalendarStyle]}
               >
                 <MonthlyGrid
-                  year={displayYear}
-                  month={displayMonth}
+                  grid={grid}
                   selectedDay={selectedDay}
                   isExpanded={isExpanded}
                   onSelectDay={setSelectedDay}
@@ -1348,22 +1202,18 @@ export default function CalendarScreen(): React.JSX.Element {
 
 // ===== Monthly Grid =====
 interface MonthlyGridProps {
-  year: number;
-  month: number;
+  grid: CalendarDay[][];
   selectedDay: number | null;
   isExpanded: boolean;
   onSelectDay: (day: number | null) => void;
 }
 
 function MonthlyGrid({
-  year,
-  month,
+  grid,
   selectedDay,
   isExpanded,
   onSelectDay,
 }: MonthlyGridProps): React.JSX.Element {
-  const grid = useMemo(() => generateCalendarGrid(year, month), [year, month]);
-
   return (
     <View style={mStyles.gridContainer}>
       {/* Day Name Headers */}
@@ -1431,11 +1281,7 @@ function DayCell({
   onPress,
 }: DayCellProps): React.JSX.Element {
   const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
-
-  const uniqueColors = useMemo(() => {
-    const all = dayData.events.flatMap((e) => e.assigneeColors);
-    return [...new Set(all)].slice(0, 4);
-  }, [dayData.events]);
+  const hasEventsForDay = dayData.isCurrentMonth && dayData.events.length > 0;
 
   const handleBirthdayPress = useCallback((): void => {
     if (dayData.birthday == null) return;
@@ -1495,16 +1341,12 @@ function DayCell({
             </Pressable>
           )}
 
-          {/* Event Dots */}
-          {uniqueColors.length > 0 && (
-            <View style={mStyles.dotsRow}>
-              {uniqueColors.map((color) => (
-                <View
-                  key={color}
-                  style={[mStyles.dot, { backgroundColor: color }]}
-                />
-              ))}
-            </View>
+          {hasEventsForDay && (
+            <View
+              accessibilityElementsHidden={true}
+              importantForAccessibility="no"
+              style={mStyles.eventIndicatorBar}
+            />
           )}
         </>
       )}
@@ -2374,6 +2216,7 @@ const mStyles = StyleSheet.create({
     height: COMPACT_CELL_HEIGHT,
     backgroundColor: '#ffffff',
     borderRadius: 12,
+    position: 'relative',
     alignItems: 'center',
     paddingTop: 6,
     paddingBottom: 4,
@@ -2446,17 +2289,14 @@ const mStyles = StyleSheet.create({
     lineHeight: 14,
   },
 
-  /* Dots */
-  dotsRow: {
-    flexDirection: 'row',
-    gap: 3,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
+  eventIndicatorBar: {
+    position: 'absolute',
+    right: 12,
+    bottom: 6,
+    left: 12,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: `${PRIMARY_BLUE}45`,
   },
 
   /* Expanded Cell Content */

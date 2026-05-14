@@ -13,6 +13,7 @@ import {
   shouldIncludeInPersonalHomeCalendar,
 } from './communityCalendarState';
 import { isActiveCommunityMember } from './communityMemberUtils';
+import { resolveKind } from './members';
 
 // ─── Attachment arg validator ──────────────────────────────────────────────────
 // uploadedBy and uploadedAt are NOT accepted from the client — the handler
@@ -181,6 +182,63 @@ async function getCommunityMembership(
       q.eq('communityId', communityId).eq('userId', userId)
     )
     .unique();
+}
+
+async function userCanAccessSpace(
+  ctx: MutationCtx | QueryCtx,
+  spaceId: Id<'spaces'>,
+  userId: Id<'users'>
+): Promise<boolean> {
+  const space = await ctx.db.get(spaceId);
+  if (space?.ownerId === userId) return true;
+
+  const rows = await ctx.db
+    .query('members')
+    .withIndex('by_user', (q) => q.eq('userId', userId))
+    .collect();
+  return rows.some(
+    (row) => row.spaceId === spaceId && resolveKind(row) === 'access'
+  );
+}
+
+async function getViewerFamilyEntityIds(
+  ctx: QueryCtx,
+  spaceId: Id<'spaces'>,
+  userId: Id<'users'>
+): Promise<Set<string>> {
+  const rows = await ctx.db
+    .query('members')
+    .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
+    .collect();
+  return new Set(
+    rows
+      .filter(
+        (row) =>
+          resolveKind(row) === 'entity' &&
+          (row.userId === userId || row.matchedUserId === userId)
+      )
+      .map((row) => row._id as string)
+  );
+}
+
+function isPersonalOrFamilyEventVisibleToUser(
+  event: {
+    createdBy: Id<'users'>;
+    sharedWithUserIds?: Array<Id<'users'>>;
+    allFamily?: boolean;
+    sharedWithFamilyMemberIds?: string[];
+  },
+  userId: Id<'users'>,
+  viewerFamilyEntityIds: Set<string>
+): boolean {
+  if (event.createdBy === userId) return true;
+  if (event.sharedWithUserIds?.some((id) => id === userId)) return true;
+  if (event.allFamily === true) return true;
+  return (
+    event.sharedWithFamilyMemberIds?.some((id) =>
+      viewerFamilyEntityIds.has(id)
+    ) ?? false
+  );
 }
 
 /** Creator, community owner, or admin always see community events on home/calendar aggregates. */
@@ -462,7 +520,15 @@ export const listByDateRange = query({
     if (!userId) {
       return [];
     }
-    // TODO: לחבר לאימות – לוודא שהמשתמש הנוכחי שייך ל-spaceId
+    if (!(await userCanAccessSpace(ctx, spaceId, userId))) {
+      return [];
+    }
+
+    const viewerFamilyEntityIds = await getViewerFamilyEntityIds(
+      ctx,
+      spaceId,
+      userId
+    );
     const rows = await ctx.db
       .query('events')
       .withIndex('by_space_and_time', (q) =>
@@ -513,6 +579,13 @@ export const listByDateRange = query({
       let isSavedToMyCalendar = false;
 
       if (ev.communityId) {
+        const membership = await getCommunityMembership(
+          ctx,
+          ev.communityId,
+          userId
+        );
+        if (!isActiveCommunityMember(membership)) continue;
+
         communityName = communityNameById.get(ev.communityId as string);
         isSavedToMyCalendar = computeIsSavedToMyCalendar({
           requiresRsvp: ev.requiresRsvp,
@@ -524,6 +597,10 @@ export const listByDateRange = query({
         // must still respect personal-calendar saved state — only include if
         // actively saved. This mirrors listCommunityEventsForDate filtering.
         if (!isSavedToMyCalendar) continue;
+      } else if (
+        !isPersonalOrFamilyEventVisibleToUser(ev, userId, viewerFamilyEntityIds)
+      ) {
+        continue;
       }
 
       result.push({ ...ev, communityName, isSavedToMyCalendar });
@@ -953,13 +1030,27 @@ export const deleteEvent = mutation({
 export const remove = mutation({
   args: { id: v.id('events') },
   handler: async (ctx, { id }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('לא מחובר למערכת');
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
 
-    // TODO: לוודא שהמשתמש הנוכחי הוא יוצר האירוע
     // TODO: למחוק גם eventRsvps קשורים לפני מחיקת האירוע
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('אירוע לא נמצא');
+    if (existing.communityId) {
+      const membership = await getCommunityMembership(
+        ctx,
+        existing.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) throw new Error('אין הרשאה');
+      const canManage =
+        existing.createdBy === userId ||
+        membership.role === 'owner' ||
+        membership.role === 'admin';
+      if (!canManage) throw new Error('אין הרשאה');
+    } else if (existing.createdBy !== userId) {
+      throw new Error('אין הרשאה');
+    }
 
     await ctx.db.delete(id);
   },

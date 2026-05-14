@@ -2,7 +2,10 @@
 //        snapshot used only for sourceStatus='deleted'; live data from source otherwise
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
+import type { Doc, Id } from './_generated/dataModel';
+import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
+import { resolveKind } from './members';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -13,15 +16,16 @@ import { mutation, query } from './_generated/server';
  * - source event missing but status not yet patched → fall back to snapshot
  */
 async function resolveLinkedEventData(
-  ctx: { db: { get: (id: string) => Promise<unknown> } },
-  linked: {
-    sourceEventId: string;
-    sourceStatus: string;
-    snapshotTitle: string;
-    snapshotStartTime: number;
-    snapshotEndTime: number;
-    snapshotLocation?: string;
-  }
+  ctx: MutationCtx | QueryCtx,
+  linked: Pick<
+    Doc<'linkedEvents'>,
+    | 'sourceEventId'
+    | 'sourceStatus'
+    | 'snapshotTitle'
+    | 'snapshotStartTime'
+    | 'snapshotEndTime'
+    | 'snapshotLocation'
+  >
 ) {
   if (linked.sourceStatus === 'deleted') {
     return {
@@ -34,8 +38,7 @@ async function resolveLinkedEventData(
     };
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: Convex db.get returns any
-  const source = await (ctx.db as any).get(linked.sourceEventId);
+  const source = await ctx.db.get(linked.sourceEventId);
   if (!source) {
     // Source deleted but sourceStatus not yet patched — use snapshot
     return {
@@ -60,6 +63,23 @@ async function resolveLinkedEventData(
   };
 }
 
+async function userCanAccessSpace(
+  ctx: MutationCtx | QueryCtx,
+  spaceId: Id<'spaces'>,
+  userId: Id<'users'>
+): Promise<boolean> {
+  const space = await ctx.db.get(spaceId);
+  if (space?.ownerId === userId) return true;
+
+  const rows = await ctx.db
+    .query('members')
+    .withIndex('by_user', (q) => q.eq('userId', userId))
+    .collect();
+  return rows.some(
+    (row) => row.spaceId === spaceId && resolveKind(row) === 'access'
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // שמירת אירוע משותף ביומן הנמען
 // ─────────────────────────────────────────────────────────────
@@ -71,6 +91,9 @@ export const saveLinkedEvent = mutation({
   handler: async (ctx, { shareToken, spaceId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('יש להתחבר כדי לשמור אירוע');
+    if (!(await userCanAccessSpace(ctx, spaceId, userId))) {
+      throw new Error('אין הרשאה לשמור אירוע במרחב זה');
+    }
 
     // Validate the share link
     const link = await ctx.db
@@ -147,7 +170,7 @@ export const copyLinkedEvent = mutation({
     if (linked.savedByUserId !== userId) throw new Error('אין הרשאה');
 
     // Resolve display data (live or snapshot)
-    const resolved = await resolveLinkedEventData(ctx as never, linked);
+    const resolved = await resolveLinkedEventData(ctx, linked);
 
     const now = Date.now();
     // Create a standalone personal event — only the 4 public synced fields are copied
@@ -183,16 +206,18 @@ export const getLinkedEventsForSpace = query({
   handler: async (ctx, { spaceId, from, to }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+    if (!(await userCanAccessSpace(ctx, spaceId, userId))) return [];
 
     const linkedRows = await ctx.db
       .query('linkedEvents')
-      .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
+      .withIndex('by_recipient', (q) => q.eq('savedByUserId', userId))
       .collect();
 
     const results = [];
 
     for (const linked of linkedRows) {
-      const resolved = await resolveLinkedEventData(ctx as never, linked);
+      if (linked.spaceId !== spaceId) continue;
+      const resolved = await resolveLinkedEventData(ctx, linked);
 
       // Filter by requested date range
       if (resolved.startTime > to || resolved.endTime < from) continue;
@@ -229,7 +254,7 @@ export const getLinkedEventDetail = query({
     if (!linked) return null;
     if (linked.savedByUserId !== userId) return null;
 
-    const resolved = await resolveLinkedEventData(ctx as never, linked);
+    const resolved = await resolveLinkedEventData(ctx, linked);
 
     // Owner name for labeling in the detail screen
     const owner = await ctx.db.get(linked.ownerUserId);

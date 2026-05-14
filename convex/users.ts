@@ -172,12 +172,9 @@ export const getMySpace = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
-    // 1. נסה members table — מוצא membership ומחזיר spaceId
-    const membership = await ctx.db
-      .query('members')
-      .withIndex('by_user', (q) => q.eq('userId', userId))
-      .first();
-    if (membership?.spaceId) return membership.spaceId;
+    // 1. נסה members table — רק שורת access, לא entity של בן משפחה
+    const membershipSpaceId = await resolveMySpaceId(ctx, userId);
+    if (membershipSpaceId) return membershipSpaceId;
 
     // 2. fallback: user.defaultSpaceId (נאכלס ב-onboarding)
     const user = await ctx.db.get(userId);
