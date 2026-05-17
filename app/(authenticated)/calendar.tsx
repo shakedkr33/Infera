@@ -52,8 +52,14 @@ const COMPACT_CELL_HEIGHT = 54;
 const MONTH_SWIPE_DISTANCE = 56;
 const MONTH_SWIPE_VELOCITY = 420;
 
+/** Calendar panel snap thresholds */
+const OPEN_DRAG_DISTANCE = 28;
+const CLOSE_DRAG_DISTANCE = 28;
+const SNAP_VELOCITY = 260;
+
 // Dynamic panel height building blocks
-const PANEL_FIXED_HEIGHT = 56; // compact grid chrome + subtle drag handle
+const PANEL_FIXED_HEIGHT = 56; // compact grid chrome (day-name header row + padding)
+const CALENDAR_HANDLE_HEIGHT = 44; // tap-to-toggle arrow handle
 const COMPACT_ROW_HEIGHT = COMPACT_CELL_HEIGHT + 4; // cell + weekRow marginBottom
 const EXPANDED_DAY_HEADER_HEIGHT = 24;
 const EXPANDED_ROW_ITEM_HEIGHT = 20;
@@ -1229,7 +1235,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
   // === Dynamic panel heights ===
   const compactPanelHeight =
-    PANEL_FIXED_HEIGHT + grid.length * COMPACT_ROW_HEIGHT;
+    PANEL_FIXED_HEIGHT + grid.length * COMPACT_ROW_HEIGHT + CALENDAR_HANDLE_HEIGHT;
   const expandedPanelHeight =
     monthlyViewportHeight > 0
       ? Math.max(compactPanelHeight, monthlyViewportHeight)
@@ -1333,11 +1339,25 @@ export default function CalendarScreen(): React.JSX.Element {
     );
   }, [sheetDayData, displayYear, displayMonth]);
 
-  // === Pan gesture for entire calendar panel ===
+  // === Tap-to-toggle for the arrow handle ===
+  const toggleCalendarSnap = useCallback((): void => {
+    const nextState: SnapState = snapState === 'expanded' ? 'compact' : 'expanded';
+    const targetHeight =
+      nextState === 'expanded' ? expandedHeightSV.value : compactHeightSV.value;
+
+    calendarHeight.value = withSpring(targetHeight, {
+      damping: 22,
+      stiffness: 120,
+    });
+
+    setSnapState(nextState);
+  }, [calendarHeight, compactHeightSV, expandedHeightSV, snapState]);
+
+  // === Pan gesture for the bottom arrow handle only ===
   // drag DOWN (positive translationY) = expand, drag UP = collapse
   const panGesture = Gesture.Pan()
-    .activeOffsetY([-10, 10])
-    .failOffsetX([-26, 26])
+    .activeOffsetY([-4, 4])
+    .failOffsetX([-48, 48])
     .onBegin(() => {
       'worklet';
       savedHeight.value = calendarHeight.value;
@@ -1355,26 +1375,33 @@ export default function CalendarScreen(): React.JSX.Element {
       const currentHeight = calendarHeight.value;
       const compact = compactHeightSV.value;
       const expanded = expandedHeightSV.value;
+      const midpoint = compact + (expanded - compact) * 0.35;
 
       let targetHeight = compact;
 
-      if (event.velocityY > 500) {
+      const startedCompact = savedHeight.value <= compact + 4;
+      const startedExpanded = savedHeight.value >= expanded - 4;
+
+      if (
+        startedCompact &&
+        (event.translationY > OPEN_DRAG_DISTANCE || event.velocityY > SNAP_VELOCITY)
+      ) {
         targetHeight = expanded;
-      } else if (event.velocityY < -500) {
+      } else if (
+        startedExpanded &&
+        (event.translationY < -CLOSE_DRAG_DISTANCE || event.velocityY < -SNAP_VELOCITY)
+      ) {
         targetHeight = compact;
       } else {
-        const dCompact = Math.abs(currentHeight - compact);
-        const dExpanded = Math.abs(currentHeight - expanded);
-        targetHeight = dExpanded < dCompact ? expanded : compact;
+        targetHeight = currentHeight >= midpoint ? expanded : compact;
       }
 
       calendarHeight.value = withSpring(targetHeight, {
-        damping: 20,
-        stiffness: 90,
+        damping: 22,
+        stiffness: 120,
       });
 
-      const newState: SnapState =
-        targetHeight === compact ? 'compact' : 'expanded';
+      const newState: SnapState = targetHeight === compact ? 'compact' : 'expanded';
       runOnJS(setSnapState)(newState);
     });
 
@@ -2031,9 +2058,19 @@ export default function CalendarScreen(): React.JSX.Element {
               )}
 
               <GestureDetector gesture={panGesture}>
-                <View style={styles.dragHandleContainer}>
-                  <View style={styles.dragHandleBar} />
-                </View>
+                <Pressable
+                  onPress={toggleCalendarSnap}
+                  style={styles.dragHandleContainer}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={isExpanded ? 'סגור את היומן' : 'פתח את היומן'}
+                >
+                  <MaterialIcons
+                    name={isExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                    size={30}
+                    color="#647b87"
+                  />
+                </Pressable>
               </GestureDetector>
             </ReAnimated.View>
 
@@ -3339,16 +3376,12 @@ const styles = StyleSheet.create({
   },
   expandedCalendarGridHost: {},
   dragHandleContainer: {
+    height: CALENDAR_HANDLE_HEIGHT,
+    minHeight: CALENDAR_HANDLE_HEIGHT,
     alignItems: 'center',
-    paddingTop: 5,
-    paddingBottom: 6,
+    justifyContent: 'center',
     backgroundColor: BG_COLOR,
-  },
-  dragHandleBar: {
-    width: 28,
-    height: 3,
-    backgroundColor: '#d6dbe1',
-    borderRadius: 999,
+    zIndex: 2,
   },
   dailyEventsScroll: {
     flex: 1,
