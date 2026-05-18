@@ -229,11 +229,22 @@ export default function NewEventScreen(): React.JSX.Element {
     communityId,
     selectedDate: selectedDateParam,
     date: dateParam,
+    returnTo,
+    sourceView,
+    sourceDate,
+    sourceMonth,
+    sourceCollapsed,
   } = useLocalSearchParams<{
     communityId?: string;
     selectedDate?: string;
     date?: string;
+    returnTo?: string;
+    sourceView?: string;
+    sourceDate?: string;
+    sourceMonth?: string;
+    sourceCollapsed?: string;
   }>();
+  const router = useRouter();
   // FIXED: added generateUploadUrl + upload loop before createEvent for file attachments
   const createEvent = useMutation(api.events.create);
   const generateUploadUrl = useMutation(api.events.generateUploadUrl);
@@ -259,6 +270,37 @@ export default function NewEventScreen(): React.JSX.Element {
     }
     return undefined;
   }, [selectedDateParam, dateParam]);
+
+  // Navigate back to the exact Calendar context the user came from.
+  // Only used when returnTo is set (i.e., navigated here from Calendar).
+  const navigateToReturnTarget = useCallback((): void => {
+    if (returnTo === 'calendar') {
+      if (sourceView === 'timeline') {
+        router.replace({
+          pathname: '/(authenticated)/calendar',
+          params: {
+            view: 'timeline',
+            ...(sourceDate ? { date: sourceDate } : {}),
+          },
+        } as never);
+        return;
+      }
+      if (sourceView === 'month') {
+        router.replace({
+          pathname: '/(authenticated)/calendar',
+          params: {
+            view: 'month',
+            ...(sourceDate ? { date: sourceDate } : {}),
+            ...(sourceMonth ? { month: sourceMonth } : {}),
+            collapsed: sourceCollapsed ?? 'true',
+          },
+        } as never);
+        return;
+      }
+    }
+    // Safe fallback — always return to Calendar, never to Home.
+    router.replace('/(authenticated)/calendar' as never);
+  }, [returnTo, sourceView, sourceDate, sourceMonth, sourceCollapsed, router]);
 
   const handlePersonalSave = useCallback(
     async (data: EventData): Promise<string> => {
@@ -402,6 +444,7 @@ export default function NewEventScreen(): React.JSX.Element {
       mode="create"
       onSave={handlePersonalSave}
       selectedDate={selectedDate}
+      onDismiss={returnTo ? navigateToReturnTarget : undefined}
     />
   );
 }

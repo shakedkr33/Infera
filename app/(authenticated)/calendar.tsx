@@ -274,25 +274,6 @@ function getCategoryIcon(category: string): string {
   return icons[category] ?? 'event';
 }
 
-function openNewEventForCalendarDay(
-  router: ReturnType<typeof useRouter>,
-  cellDate: Date
-): void {
-  const ts = new Date(
-    cellDate.getFullYear(),
-    cellDate.getMonth(),
-    cellDate.getDate(),
-    0,
-    0,
-    0,
-    0
-  ).getTime();
-  router.replace({
-    pathname: '/(authenticated)/event/new',
-    params: { selectedDate: String(ts) },
-  } as never);
-}
-
 function openEventEditFromCalendar(
   router: ReturnType<typeof useRouter>,
   event: CalendarEvent
@@ -959,8 +940,19 @@ function CalendarDayEventsSheet({
 export default function CalendarScreen(): React.JSX.Element {
   const router = useRouter();
   const { height: screenHeight, width: screenWidth } = useWindowDimensions();
-  const rawCommunityId = useLocalSearchParams<{ communityId?: string }>()
-    .communityId;
+  const {
+    communityId: rawCommunityId,
+    view: returnView,
+    date: returnDate,
+    month: returnMonth,
+    collapsed: returnCollapsed,
+  } = useLocalSearchParams<{
+    communityId?: string;
+    view?: string;
+    date?: string;
+    month?: string;
+    collapsed?: string;
+  }>();
   // Guard against the string "undefined" being passed as a route param
   const communityId =
     rawCommunityId === 'undefined' ? undefined : rawCommunityId;
@@ -1463,6 +1455,42 @@ export default function CalendarScreen(): React.JSX.Element {
     loadViewMode();
   }, [loadViewMode]);
 
+  // Restore calendar context when returning from Create Event with explicit params.
+  // Fires whenever the return params change (i.e., after router.replace back here).
+  useEffect(() => {
+    if (!returnView) return;
+
+    if (returnView === 'timeline') {
+      setViewMode('timeline');
+      slideAnim.setValue(1);
+    } else if (returnView === 'month') {
+      setViewMode('monthly');
+      slideAnim.setValue(0);
+
+      const shouldBeCollapsed = returnCollapsed !== 'false';
+      setSnapState(shouldBeCollapsed ? 'compact' : 'expanded');
+
+      if (returnMonth) {
+        const parts = returnMonth.split('-');
+        const y = Number(parts[0]);
+        const m = Number(parts[1]);
+        if (!Number.isNaN(y) && !Number.isNaN(m) && m >= 1 && m <= 12) {
+          setMonthlyVisibleDate(new Date(y, m - 1, 1));
+        }
+      }
+
+      if (returnDate) {
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(returnDate);
+        if (match) {
+          const d = Number(match[3]);
+          if (d >= 1 && d <= 31) setSelectedDay(d);
+        }
+      }
+    }
+    // slideAnim is a stable Animated.Value instance (from useState) — it never
+    // changes, so including it in deps does not add unwanted re-runs.
+  }, [returnView, returnDate, returnMonth, returnCollapsed, slideAnim]);
+
   const saveViewMode = async (mode: 'timeline' | 'monthly'): Promise<void> => {
     try {
       await AsyncStorage.setItem('@calendar_view_mode', mode);
@@ -1615,9 +1643,30 @@ export default function CalendarScreen(): React.JSX.Element {
   const handleExpandedCreateForDay = useCallback(
     (cellDate: Date) => {
       setEventEditMenu(null);
-      openNewEventForCalendarDay(router, cellDate);
+      const ts = new Date(
+        cellDate.getFullYear(),
+        cellDate.getMonth(),
+        cellDate.getDate(),
+        0,
+        0,
+        0,
+        0
+      ).getTime();
+      const dateStr = `${cellDate.getFullYear()}-${String(cellDate.getMonth() + 1).padStart(2, '0')}-${String(cellDate.getDate()).padStart(2, '0')}`;
+      const monthStr = `${displayYear}-${String(displayMonth + 1).padStart(2, '0')}`;
+      router.push({
+        pathname: '/(authenticated)/event/new',
+        params: {
+          selectedDate: String(ts),
+          returnTo: 'calendar',
+          sourceView: 'month',
+          sourceDate: dateStr,
+          sourceMonth: monthStr,
+          sourceCollapsed: snapState === 'compact' ? 'true' : 'false',
+        },
+      } as Parameters<typeof router.push>[0]);
     },
-    [router]
+    [router, snapState, displayYear, displayMonth]
   );
 
   // ── Auto-switch to timeline view when community filter is active
@@ -2050,7 +2099,12 @@ export default function CalendarScreen(): React.JSX.Element {
               onAddPress={(dateStr) => {
                 router.push({
                   pathname: '/(authenticated)/event/new',
-                  params: { date: dateStr },
+                  params: {
+                    date: dateStr,
+                    returnTo: 'calendar',
+                    sourceView: 'timeline',
+                    sourceDate: dateStr,
+                  },
                 } as Parameters<typeof router.push>[0]);
               }}
             />
@@ -2727,7 +2781,21 @@ function DayEventsList({
             </Text>
             <Pressable
               style={dStyles.addBtn}
-              onPress={() => router.push('/(authenticated)/event/new' as never)}
+              onPress={() => {
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayData.day).padStart(2, '0')}`;
+                const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+                router.push({
+                  pathname: '/(authenticated)/event/new',
+                  params: {
+                    date: dateStr,
+                    returnTo: 'calendar',
+                    sourceView: 'month',
+                    sourceDate: dateStr,
+                    sourceMonth: monthStr,
+                    sourceCollapsed: 'true',
+                  },
+                } as Parameters<typeof router.push>[0]);
+              }}
               accessible={true}
               accessibilityLabel="הוסף אירוע חדש"
             >
@@ -2738,7 +2806,21 @@ function DayEventsList({
           <>
             <Pressable
               style={dStyles.addBtn}
-              onPress={() => router.push('/(authenticated)/event/new' as never)}
+              onPress={() => {
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayData.day).padStart(2, '0')}`;
+                const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+                router.push({
+                  pathname: '/(authenticated)/event/new',
+                  params: {
+                    date: dateStr,
+                    returnTo: 'calendar',
+                    sourceView: 'month',
+                    sourceDate: dateStr,
+                    sourceMonth: monthStr,
+                    sourceCollapsed: 'true',
+                  },
+                } as Parameters<typeof router.push>[0]);
+              }}
               accessible={true}
               accessibilityLabel="הוסף אירוע חדש"
             >

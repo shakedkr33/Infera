@@ -3,10 +3,11 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { router } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -220,6 +221,9 @@ export default function EventScreen({
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
+  // Ref keeps a live pointer to handleBack so the BackHandler subscription
+  // (registered once on mount) always calls the latest version of the function.
+  const handleBackRef = useRef<() => void>(() => undefined);
 
   // FIXED: success sheet shown after personal event save
   const [savedEvent, setSavedEvent] = useState<EventData | null>(null);
@@ -372,6 +376,21 @@ export default function EventScreen({
       goBack();
     }
   };
+
+  // Keep ref current every render so the BackHandler (registered once) always
+  // invokes the latest handleBack closure with fresh state.
+  handleBackRef.current = handleBack;
+
+  // Intercept Android hardware back and route through the same handleBack logic
+  // (shows unsaved-changes dialog if needed, then navigates to return target).
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleBackRef.current();
+      return true;
+    });
+    return () => sub.remove();
+  }, []);
 
   const confirmDiscard = (): void => {
     setDiscardOpen(false);
