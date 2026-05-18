@@ -264,14 +264,21 @@ function getCategoryIcon(category: string): string {
 
 function openNewEventForCalendarDay(
   router: ReturnType<typeof useRouter>,
-  year: number,
-  month: number,
-  day: number
+  cellDate: Date
 ): void {
-  const ts = new Date(year, month, day, 0, 0, 0, 0).getTime();
-  router.replace(
-    `/(authenticated)/event/new?selectedDate=${encodeURIComponent(String(ts))}` as never
-  );
+  const ts = new Date(
+    cellDate.getFullYear(),
+    cellDate.getMonth(),
+    cellDate.getDate(),
+    0,
+    0,
+    0,
+    0
+  ).getTime();
+  router.replace({
+    pathname: '/(authenticated)/event/new',
+    params: { selectedDate: String(ts) },
+  } as never);
 }
 
 function openEventEditFromCalendar(
@@ -1235,7 +1242,9 @@ export default function CalendarScreen(): React.JSX.Element {
 
   // === Dynamic panel heights ===
   const compactPanelHeight =
-    PANEL_FIXED_HEIGHT + grid.length * COMPACT_ROW_HEIGHT + CALENDAR_HANDLE_HEIGHT;
+    PANEL_FIXED_HEIGHT +
+    grid.length * COMPACT_ROW_HEIGHT +
+    CALENDAR_HANDLE_HEIGHT;
   const expandedPanelHeight =
     monthlyViewportHeight > 0
       ? Math.max(compactPanelHeight, monthlyViewportHeight)
@@ -1341,7 +1350,8 @@ export default function CalendarScreen(): React.JSX.Element {
 
   // === Tap-to-toggle for the arrow handle ===
   const toggleCalendarSnap = useCallback((): void => {
-    const nextState: SnapState = snapState === 'expanded' ? 'compact' : 'expanded';
+    const nextState: SnapState =
+      snapState === 'expanded' ? 'compact' : 'expanded';
     const targetHeight =
       nextState === 'expanded' ? expandedHeightSV.value : compactHeightSV.value;
 
@@ -1384,12 +1394,14 @@ export default function CalendarScreen(): React.JSX.Element {
 
       if (
         startedCompact &&
-        (event.translationY > OPEN_DRAG_DISTANCE || event.velocityY > SNAP_VELOCITY)
+        (event.translationY > OPEN_DRAG_DISTANCE ||
+          event.velocityY > SNAP_VELOCITY)
       ) {
         targetHeight = expanded;
       } else if (
         startedExpanded &&
-        (event.translationY < -CLOSE_DRAG_DISTANCE || event.velocityY < -SNAP_VELOCITY)
+        (event.translationY < -CLOSE_DRAG_DISTANCE ||
+          event.velocityY < -SNAP_VELOCITY)
       ) {
         targetHeight = compact;
       } else {
@@ -1401,7 +1413,8 @@ export default function CalendarScreen(): React.JSX.Element {
         stiffness: 120,
       });
 
-      const newState: SnapState = targetHeight === compact ? 'compact' : 'expanded';
+      const newState: SnapState =
+        targetHeight === compact ? 'compact' : 'expanded';
       runOnJS(setSnapState)(newState);
     });
 
@@ -1580,9 +1593,9 @@ export default function CalendarScreen(): React.JSX.Element {
   }, [closeDayEventsSheet, eventEditMenu, router]);
 
   const handleExpandedCreateForDay = useCallback(
-    (year: number, month: number, day: number) => {
+    (cellDate: Date) => {
       setEventEditMenu(null);
-      openNewEventForCalendarDay(router, year, month, day);
+      openNewEventForCalendarDay(router, cellDate);
     },
     [router]
   );
@@ -2063,10 +2076,14 @@ export default function CalendarScreen(): React.JSX.Element {
                   style={styles.dragHandleContainer}
                   accessible={true}
                   accessibilityRole="button"
-                  accessibilityLabel={isExpanded ? 'סגור את היומן' : 'פתח את היומן'}
+                  accessibilityLabel={
+                    isExpanded ? 'סגור את היומן' : 'פתח את היומן'
+                  }
                 >
                   <MaterialIcons
-                    name={isExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                    name={
+                      isExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'
+                    }
                     size={30}
                     color="#647b87"
                   />
@@ -2148,7 +2165,7 @@ interface MonthlyGridProps {
   onSelectDay: (day: number | null) => void;
   onOpenDaySheet: (day: number) => void;
   onNavigateToEvent: (event: CalendarEvent) => void;
-  onCreateEventForDay: (year: number, month: number, day: number) => void;
+  onCreateEventForDay: (cellDate: Date) => void;
 }
 
 function hebrewPrefix(
@@ -2295,7 +2312,7 @@ interface DayCellProps {
   onSelectDay: (day: number | null) => void;
   onOpenDaySheet: (day: number) => void;
   onNavigateToEvent: (event: CalendarEvent) => void;
-  onCreateEventForDay: (year: number, month: number, day: number) => void;
+  onCreateEventForDay: (cellDate: Date) => void;
 }
 
 function DayCell({
@@ -2315,6 +2332,10 @@ function DayCell({
   const hasEventsForDay = dayData.isCurrentMonth && dayData.events.length > 0;
   const isSingleEventDay = dayData.events.length === 1;
   const hasMultipleEvents = dayData.events.length > 1;
+  const cellDate = useMemo(
+    () => new Date(displayYear, displayMonth, dayData.day, 0, 0, 0, 0),
+    [displayYear, displayMonth, dayData.day]
+  );
 
   const handleBirthdayPress = useCallback((): void => {
     if (dayData.birthday == null) return;
@@ -2328,7 +2349,7 @@ function DayCell({
 
   const longPressCreate = (): void => {
     if (!dayData.isCurrentMonth) return;
-    onCreateEventForDay(displayYear, displayMonth, dayData.day);
+    onCreateEventForDay(cellDate);
   };
 
   const expandedAccessibilityLabel = (): string =>
@@ -2354,10 +2375,12 @@ function DayCell({
           mStyles.dayCell,
           !dayData.isCurrentMonth && mStyles.dayCellOtherMonth,
         ]}
-        accessibilityHint="לחץ לצפייה באירועי היום"
+        accessibilityHint="לחץ לצפייה באירועי היום, לחיצה ארוכה ליצירת אירוע"
         accessibilityLabel={`יום ${dayData.day}${dayData.birthday ? `, יום הולדת ${dayData.birthday.name}` : ''}${dayData.events.length > 0 ? `, ${dayData.events.length} אירועים` : ''}`}
         accessibilityRole="button"
         accessible={true}
+        delayLongPress={480}
+        onLongPress={longPressCreate}
         onPress={onCompactPress}
       >
         <View
@@ -2385,7 +2408,9 @@ function DayCell({
             accessibilityLabel={`יום הולדת ${dayData.birthday.name}`}
             accessibilityRole="button"
             accessible={true}
+            delayLongPress={480}
             hitSlop={6}
+            onLongPress={longPressCreate}
             onPress={handleBirthdayPress}
           >
             <Text style={mStyles.birthdayEmoji}>🎂</Text>
@@ -2405,7 +2430,22 @@ function DayCell({
 
   // ── Expanded month ──
   return (
-    <View
+    <Pressable
+      accessibilityHint="לחיצה ארוכה ליצירת אירוע"
+      accessibilityLabel={`יום ${dayData.day}, ${expandedAccessibilityLabel()}`}
+      accessibilityRole="button"
+      accessible={true}
+      delayLongPress={420}
+      disabled={!dayData.isCurrentMonth}
+      onLongPress={longPressCreate}
+      onPress={() => {
+        if (!dayData.isCurrentMonth) return;
+        if (hasMultipleEvents) {
+          openMultiEventDay();
+          return;
+        }
+        selectThisDay();
+      }}
       style={[
         mStyles.dayCell,
         mStyles.dayCellExpanded,
@@ -2461,6 +2501,8 @@ function DayCell({
               accessibilityLabel={`יום הולדת ${dayData.birthday.name}`}
               accessibilityRole="button"
               accessible={true}
+              delayLongPress={420}
+              onLongPress={longPressCreate}
               onPress={handleBirthdayPress}
               style={mStyles.expandedBirthdayRow}
             >
@@ -2488,6 +2530,8 @@ function DayCell({
                 accessibilityLabel={accessLabel}
                 accessibilityRole="button"
                 accessible={true}
+                delayLongPress={420}
+                onLongPress={longPressCreate}
                 onPress={() => {
                   if (hasMultipleEvents) {
                     openSheetForThisDay();
@@ -2554,7 +2598,7 @@ function DayCell({
           />
         </View>
       )}
-    </View>
+    </Pressable>
   );
 }
 

@@ -379,6 +379,7 @@ export default function NewEventScreen(): React.JSX.Element {
 
   return (
     <EventScreen
+      key={selectedDate != null ? String(selectedDate) : 'default'}
       mode="create"
       onSave={handlePersonalSave}
       selectedDate={selectedDate}
