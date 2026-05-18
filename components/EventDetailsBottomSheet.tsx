@@ -28,6 +28,7 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
+import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -37,6 +38,7 @@ import {
   isOpenCommunityInformationalLabelVisible,
 } from '@/lib/openCommunityCalendarUi';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
+import { parseGeoUri } from '@/lib/utils/geoUri';
 
 /**
  * Inside a Modal, RTL alignment must be handled manually per environment.
@@ -150,6 +152,8 @@ export interface EventItem {
   endTime?: string;
   title: string;
   location?: string;
+  /** geo:lat,lng URI — present when the event was saved with autocomplete coordinates */
+  locationUrl?: string;
   type: 'event' | 'task';
   iconColor: string;
   completed: boolean;
@@ -185,9 +189,6 @@ type Attachment = {
   mimeType: string;
   sizeBytes: number;
 };
-
-const googleMapsIcon = require('@/assets/images/navigation/google-maps.png');
-const wazeIcon = require('@/assets/images/navigation/waze.png');
 
 export function EventDetailsBottomSheet({
   event,
@@ -341,10 +342,7 @@ export function EventDetailsBottomSheet({
       eventId: eventIdToRemove,
       confirmRemoveWithActiveTask: true,
     }).catch(() => Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן'));
-  }, [
-    calendarRemoveConfirmationEventId,
-    removeCommunityEventFromMyCalendar,
-  ]);
+  }, [calendarRemoveConfirmationEventId, removeCommunityEventFromMyCalendar]);
 
   const handleCancelCalendarRemoval = useCallback(
     (): void => setCalendarRemoveConfirmationEventId(null),
@@ -463,6 +461,7 @@ export function EventDetailsBottomSheet({
           ),
           groupName: event?.groupName,
           location: eventDoc.location,
+          locationUrl: (eventDoc as { locationUrl?: string }).locationUrl,
           description: eventDoc.description,
           isRecurring: eventDoc.isRecurring,
           recurringPattern: eventDoc.recurringPattern,
@@ -492,6 +491,7 @@ export function EventDetailsBottomSheet({
                 : event.time,
             groupName: event.groupName,
             location: event.location,
+            locationUrl: event.locationUrl,
             description: event.description,
             isRecurring: event.isRecurring,
             recurringPattern: event.recurringPattern,
@@ -640,20 +640,6 @@ export function EventDetailsBottomSheet({
           ),
       },
     ]);
-  };
-
-  const openNavigationUrl = (app: 'google' | 'waze'): void => {
-    const location = displayEvent?.location?.trim();
-    if (!location) return;
-    const encoded = encodeURIComponent(location);
-    const url =
-      app === 'google'
-        ? `https://www.google.com/maps/search/?api=1&query=${encoded}`
-        : `https://waze.com/ul?q=${encoded}&navigate=yes`;
-    setNavPickerOpen(false);
-    Linking.openURL(url).catch(() =>
-      Alert.alert('שגיאה', 'לא ניתן לפתוח ניווט כרגע')
-    );
   };
 
   if (!visible || (!displayEvent && !convexEventId)) return null;
@@ -940,7 +926,11 @@ export function EventDetailsBottomSheet({
                         onPress={handleNavigate}
                         style={styles.navigateBtn}
                       >
-                        <MaterialIcons color="#fff" name="near-me" size={14} />
+                        <MaterialIcons
+                          color="#8d6e63"
+                          name="near-me"
+                          size={14}
+                        />
                         <Text style={styles.navigateBtnText}>נווט</Text>
                       </Pressable>
                       <View style={styles.locationTextBlock}>
@@ -1437,57 +1427,13 @@ export function EventDetailsBottomSheet({
         )}
       </Animated.View>
 
-      <Modal
-        animationType="fade"
-        onRequestClose={() => setNavPickerOpen(false)}
-        transparent
+      <NavigationPickerModal
+        location={displayEvent?.location ?? null}
+        latitude={parseGeoUri(displayEvent?.locationUrl)?.lat}
+        longitude={parseGeoUri(displayEvent?.locationUrl)?.lng}
+        onClose={() => setNavPickerOpen(false)}
         visible={navPickerOpen}
-      >
-        <Pressable
-          onPress={() => setNavPickerOpen(false)}
-          style={styles.navPickerBackdrop}
-        />
-        <View style={styles.navPickerSheet}>
-          <Text style={styles.navPickerTitle}>פתיחה בניווט</Text>
-          <Pressable
-            accessibilityLabel="פתח ב-Google Maps"
-            accessibilityRole="button"
-            accessible={true}
-            onPress={() => openNavigationUrl('google')}
-            style={styles.navOption}
-          >
-            <Image
-              resizeMode="contain"
-              source={googleMapsIcon}
-              style={styles.navAppIcon}
-            />
-            <Text style={styles.navOptionText}>Google Maps</Text>
-          </Pressable>
-          <Pressable
-            accessibilityLabel="פתח ב-Waze"
-            accessibilityRole="button"
-            accessible={true}
-            onPress={() => openNavigationUrl('waze')}
-            style={styles.navOption}
-          >
-            <Image
-              resizeMode="contain"
-              source={wazeIcon}
-              style={styles.navAppIcon}
-            />
-            <Text style={styles.navOptionText}>Waze</Text>
-          </Pressable>
-          <Pressable
-            accessibilityLabel="ביטול"
-            accessibilityRole="button"
-            accessible={true}
-            onPress={() => setNavPickerOpen(false)}
-            style={styles.navCancel}
-          >
-            <Text style={styles.navCancelText}>ביטול</Text>
-          </Pressable>
-        </View>
-      </Modal>
+      />
 
       <Modal
         animationType="fade"
@@ -1962,18 +1908,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   navigateBtn: {
-    backgroundColor: '#36a9e2',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    backgroundColor: 'rgba(141,110,99,0.1)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    minHeight: 36,
+    minHeight: 34,
   },
   navigateBtnText: {
-    color: '#fff',
+    color: '#8d6e63',
     fontWeight: '700',
     fontSize: 13,
     textAlign: 'right',
@@ -2736,58 +2682,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'center',
     writingDirection: HEB_WRITING_DIRECTION,
-  },
-  navPickerBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.28)',
-  },
-  navPickerSheet: {
-    position: 'absolute',
-    left: 18,
-    right: 18,
-    bottom: 26,
-    backgroundColor: '#fff',
-    borderRadius: 22,
-    padding: 14,
-    gap: 8,
-  },
-  navPickerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#111827',
-    textAlign: HEB_TEXT_ALIGN,
-    marginBottom: 2,
-  },
-  navOption: {
-    minHeight: 48,
-    borderRadius: 14,
-    backgroundColor: '#f8fafc',
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 12,
-  },
-  navAppIcon: {
-    width: 28,
-    height: 28,
-  },
-  navOptionText: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#334155',
-    textAlign: HEB_TEXT_ALIGN,
-  },
-  navCancel: {
-    minHeight: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 14,
-  },
-  navCancelText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#64748b',
   },
   previewBackdrop: {
     flex: 1,

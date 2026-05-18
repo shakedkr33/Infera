@@ -53,8 +53,7 @@ import { makeReminder } from '@/lib/types/event';
 const PRIMARY = '#36a9e2';
 
 const IMPORTANT_ITEMS_SECTION_TITLE = 'חשוב לזכור';
-const IMPORTANT_ITEMS_PLACEHOLDER =
-  'למשל: חולצה לבנה, פרי חתוך, בקבוק מים...';
+const IMPORTANT_ITEMS_PLACEHOLDER = 'למשל: חולצה לבנה, פרי חתוך, בקבוק מים...';
 const IMPORTANT_ITEMS_ADD_LABEL = 'הוסף';
 
 function createImportantItemId(): string {
@@ -518,6 +517,7 @@ export default function EventScreen({
                   updateEvent({
                     location: update.location || undefined,
                     onlineUrl: update.onlineUrl || undefined,
+                    locationUrl: update.locationUrl,
                   })
                 }
               />
@@ -666,9 +666,7 @@ export default function EventScreen({
                 visibilityOffHelperText={taskVisibilityOffHelperText}
                 onAddParticipants={() => {}}
                 assignmentTitle={
-                  isCommunityEvent
-                    ? 'הקצאת משימה לחבר קהילה'
-                    : 'הקצאת משימה'
+                  isCommunityEvent ? 'הקצאת משימה לחבר קהילה' : 'הקצאת משימה'
                 }
                 assignmentEmptyText={
                   isCommunityEvent

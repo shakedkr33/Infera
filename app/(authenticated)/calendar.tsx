@@ -2,12 +2,18 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Minus, Plus } from 'lucide-react-native';
 import {
-  Alert,
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import {
   Animated,
   type GestureResponderEvent,
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -29,12 +35,14 @@ import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
+import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { APP_IS_RTL, rtl } from '@/lib/rtl';
+import { parseGeoUri } from '@/lib/utils/geoUri';
 
 /**
  * Android: root View uses `direction: 'rtl'` (`app/_layout.tsx`). Yoga lays out `flexDirection: 'row'`
@@ -109,6 +117,8 @@ interface CalendarEvent {
   categoryColor: string;
   communityId?: string;
   location?: string;
+  /** geo:lat,lng URI — present when the event was saved with autocomplete coordinates */
+  locationUrl?: string;
   icon?: string;
   cancelled?: boolean;
   assigneeColors?: string[];
@@ -225,6 +235,8 @@ type MockTimelineEvent = (typeof MOCK_TIMELINE_DATA)[number]['events'][number];
 type TimelineEventRow = MockTimelineEvent & {
   sourceType?: 'event' | 'linked';
   communityName?: string;
+  endTime?: string;
+  locationUrl?: string;
 };
 
 interface TimelineDayGroup {
@@ -1019,11 +1031,19 @@ export default function CalendarScreen(): React.JSX.Element {
     setSelectedEvent(null);
   };
 
-  const handleNavigateToLocation = (location: string): void => {
-    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`;
-    Linking.openURL(url).catch(() =>
-      Alert.alert('שגיאה', 'לא ניתן לפתוח ניווט כרגע')
-    );
+  const [navPickerLocation, setNavPickerLocation] = useState<string | null>(
+    null
+  );
+  const [navPickerLocationUrl, setNavPickerLocationUrl] = useState<
+    string | null
+  >(null);
+
+  const handleNavigateToLocation = (
+    location: string,
+    locationUrl?: string
+  ): void => {
+    setNavPickerLocation(location);
+    setNavPickerLocationUrl(locationUrl ?? null);
   };
 
   const today = useMemo(() => new Date(), []);
@@ -1675,13 +1695,18 @@ export default function CalendarScreen(): React.JSX.Element {
         }
 
         const isSavedCommunityInSpace = Boolean(event.communityId);
+        const endD1 = event.endTime ? new Date(event.endTime) : null;
         grouped[key].events.push({
           id: event._id,
           category: isSavedCommunityInSpace ? 'קהילה' : 'אישי',
           categoryColor: isSavedCommunityInSpace ? '#36a9e2' : PRIMARY_BLUE,
           title: event.title,
           time: timeStr,
+          endTime: endD1
+            ? `${String(endD1.getHours()).padStart(2, '0')}:${String(endD1.getMinutes()).padStart(2, '0')}`
+            : undefined,
           location: event.location ?? '',
+          locationUrl: (event as { locationUrl?: string }).locationUrl,
           icon: 'event',
           cancelled: event.status === 'cancelled',
           sourceType: 'event',
@@ -1720,13 +1745,18 @@ export default function CalendarScreen(): React.JSX.Element {
           continue;
         }
 
+        const endD2 = event.endTime ? new Date(event.endTime) : null;
         grouped[key].events.push({
           id: event._id,
           category: 'קהילה',
           categoryColor: '#36a9e2',
           title: event.title,
           time: timeStr,
+          endTime: endD2
+            ? `${String(endD2.getHours()).padStart(2, '0')}:${String(endD2.getMinutes()).padStart(2, '0')}`
+            : undefined,
           location: event.location ?? '',
+          locationUrl: (event as { locationUrl?: string }).locationUrl,
           icon: 'event',
           cancelled: false,
           sourceType: 'event',
@@ -1785,6 +1815,7 @@ export default function CalendarScreen(): React.JSX.Element {
       if (grouped[key].events.some((e) => e.id === event._id)) {
         continue;
       }
+      const endD3 = event.endTime ? new Date(event.endTime) : null;
       grouped[key].events.push({
         id: event._id,
         category: 'קהילה',
@@ -1794,6 +1825,9 @@ export default function CalendarScreen(): React.JSX.Element {
           hour: '2-digit',
           minute: '2-digit',
         }),
+        endTime: endD3
+          ? `${String(endD3.getHours()).padStart(2, '0')}:${String(endD3.getMinutes()).padStart(2, '0')}`
+          : undefined,
         location: event.location ?? '',
         icon: 'event',
         cancelled: event.status === 'cancelled',
@@ -2012,6 +2046,13 @@ export default function CalendarScreen(): React.JSX.Element {
                 });
               }}
               onEventPress={handleOpenEventDetails}
+              onNavigate={handleNavigateToLocation}
+              onAddPress={(dateStr) => {
+                router.push({
+                  pathname: '/(authenticated)/event/new',
+                  params: { date: dateStr },
+                } as Parameters<typeof router.push>[0]);
+              }}
             />
           </ScrollView>
         ) : (
@@ -2125,6 +2166,16 @@ export default function CalendarScreen(): React.JSX.Element {
           }}
           onClose={closeEventSheet}
           onNavigate={handleNavigateToLocation}
+        />
+        <NavigationPickerModal
+          location={navPickerLocation}
+          latitude={parseGeoUri(navPickerLocationUrl)?.lat}
+          longitude={parseGeoUri(navPickerLocationUrl)?.lng}
+          onClose={() => {
+            setNavPickerLocation(null);
+            setNavPickerLocationUrl(null);
+          }}
+          visible={navPickerLocation !== null}
         />
         <CalendarDayEventsSheet
           birthday={sheetDayData?.birthday}
@@ -2875,16 +2926,63 @@ function DayEventsList({
   );
 }
 
+// ===== Timeline Helpers =====
+
+/** Returns all calendar days strictly between two Date values (local time). */
+function buildMissingDays(
+  fromDate: Date,
+  toDate: Date
+): Array<{ dateStr: string; dayLabel: string; dayNumber: string }> {
+  const result: Array<{
+    dateStr: string;
+    dayLabel: string;
+    dayNumber: string;
+  }> = [];
+  const cursor = new Date(
+    fromDate.getFullYear(),
+    fromDate.getMonth(),
+    fromDate.getDate() + 1
+  );
+  const endMs = new Date(
+    toDate.getFullYear(),
+    toDate.getMonth(),
+    toDate.getDate()
+  ).getTime();
+
+  while (cursor.getTime() < endMs) {
+    const y = cursor.getFullYear();
+    const m = cursor.getMonth();
+    const d = cursor.getDate();
+    result.push({
+      dateStr: `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+      dayLabel: cursor.toLocaleDateString('he-IL', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+      }),
+      dayNumber: String(d),
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return result;
+}
+
 // ===== Timeline View =====
 function TimelineView({
   data,
   onTodayLayout,
   onEventPress,
+  onNavigate,
+  onAddPress,
 }: {
   data: TimelineDayGroup[];
   onTodayLayout?: (y: number) => void;
   onEventPress: (event: CalendarEvent) => void;
+  onNavigate: (location: string, locationUrl?: string) => void;
+  onAddPress: (dateStr: string) => void;
 }): React.JSX.Element {
+  const [openGaps, setOpenGaps] = useState<Record<string, boolean>>({});
+
   if (data.length === 0) {
     return (
       <View
@@ -2907,146 +3005,277 @@ function TimelineView({
 
   return (
     <View style={styles.timelineContainer}>
-      {data.map((dayGroup) => (
-        <View
-          key={`${dayGroup.sortKey}-${dayGroup.dayNumber}`}
-          onLayout={(event) => {
-            if (!dayGroup.isToday || onTodayLayout == null) return;
-            onTodayLayout(event.nativeEvent.layout.y);
-          }}
-          style={styles.dayGroup}
-        >
-          {/* Day Header */}
-          <View style={styles.dayHeader}>
+      {data.map((dayGroup, idx) => {
+        const sk = new Date(dayGroup.sortKey);
+        const dateStr = `${sk.getFullYear()}-${String(sk.getMonth() + 1).padStart(2, '0')}-${String(sk.getDate()).padStart(2, '0')}`;
+
+        const nextGroup = data[idx + 1];
+        const missingDays =
+          nextGroup != null
+            ? buildMissingDays(sk, new Date(nextGroup.sortKey))
+            : [];
+        const isGapOpen =
+          missingDays.length > 0 ? (openGaps[dateStr] ?? false) : false;
+
+        return (
+          <Fragment key={`group-${dayGroup.sortKey}`}>
+            {/* Day group */}
             <View
-              style={[
-                styles.dayNumberCircle,
-                dayGroup.isToday && styles.dayNumberCircleToday,
-              ]}
+              onLayout={(event) => {
+                if (!dayGroup.isToday || onTodayLayout == null) return;
+                onTodayLayout(event.nativeEvent.layout.y);
+              }}
+              style={styles.dayGroup}
             >
-              <Text
-                style={[
-                  styles.dayNumberText,
-                  dayGroup.isToday && styles.dayNumberTextToday,
-                ]}
-              >
-                {dayGroup.dayNumber}
-              </Text>
-            </View>
-            <Text
-              style={[
-                styles.dayLabel,
-                dayGroup.isToday && styles.dayLabelToday,
-              ]}
-            >
-              {dayGroup.dayLabel}
-            </Text>
-            <View style={styles.dayDivider} />
-          </View>
-
-          {/* Vertical Timeline Line */}
-          <View style={styles.timelineLineWrapper}>
-            <View style={styles.timelineVerticalLine} />
-
-            {/* Events */}
-            <View style={styles.eventsWrapper}>
-              {dayGroup.events.map((event: TimelineEventRow) => (
-                <View key={event.id} style={styles.eventRow}>
-                  {/* Color Dot */}
-                  <View
+              {/* Day Header */}
+              <View style={styles.dayHeader}>
+                <View
+                  style={[
+                    styles.dayNumberCircle,
+                    dayGroup.isToday && styles.dayNumberCircleToday,
+                  ]}
+                >
+                  <Text
                     style={[
-                      styles.eventDot,
-                      { borderColor: event.categoryColor },
-                      event.cancelled && styles.eventDotCancelled,
+                      styles.dayNumberText,
+                      dayGroup.isToday && styles.dayNumberTextToday,
                     ]}
-                  />
-
-                  {/* Event Card */}
-                  <Pressable
-                    style={[
-                      styles.eventCard,
-                      event.cancelled && styles.eventCardCancelled,
-                    ]}
-                    onPress={() => onEventPress(event)}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${event.title}, ${event.time}`}
                   >
-                    <View style={styles.eventCardHeader}>
-                      {/* Category Tag */}
+                    {dayGroup.dayNumber}
+                  </Text>
+                </View>
+                <Text
+                  style={[
+                    styles.dayLabel,
+                    dayGroup.isToday && styles.dayLabelToday,
+                  ]}
+                >
+                  {dayGroup.dayLabel}
+                </Text>
+                <View style={styles.dayDivider} />
+                <Pressable
+                  onPress={() => onAddPress(dateStr)}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={`הוסף אירוע בתאריך ${dayGroup.dayLabel}`}
+                  style={({ pressed }) => [
+                    styles.addEventPill,
+                    pressed && styles.addEventPillPressed,
+                  ]}
+                >
+                  <Text style={styles.addEventPillText}>הוסף</Text>
+                </Pressable>
+              </View>
+
+              {/* Vertical Timeline Line */}
+              <View style={styles.timelineLineWrapper}>
+                <View style={styles.timelineVerticalLine} />
+
+                {/* Events */}
+                <View style={styles.eventsWrapper}>
+                  {dayGroup.events.map((event: TimelineEventRow) => (
+                    <View key={event.id} style={styles.eventRow}>
+                      {/* Color Dot */}
                       <View
                         style={[
-                          styles.categoryTag,
-                          {
-                            backgroundColor: `${event.categoryColor}20`,
-                          },
+                          styles.eventDot,
+                          { borderColor: event.categoryColor },
+                          event.cancelled && styles.eventDotCancelled,
                         ]}
-                      >
-                        <Text
-                          style={[
-                            styles.categoryTagText,
-                            {
-                              color: event.cancelled
-                                ? '#9ca3af'
-                                : event.categoryColor,
-                            },
-                          ]}
-                        >
-                          {event.category}
-                        </Text>
-                      </View>
+                      />
 
-                      {/* Time Chip */}
-                      <View style={styles.timeChip}>
-                        <Text
+                      {/* Time column + Card (RTL: time on visual right) */}
+                      <View style={styles.eventRowInner}>
+                        {/* Time column — outside the card */}
+                        <View style={styles.eventTimeColumn}>
+                          {event.time ? (
+                            <>
+                              <Text style={styles.eventTimeText}>
+                                {event.endTime ? `${event.time}-` : event.time}
+                              </Text>
+                              {event.endTime ? (
+                                <Text style={styles.eventEndTimeText}>
+                                  {event.endTime}
+                                </Text>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </View>
+
+                        {/* Event Card */}
+                        <Pressable
                           style={[
-                            styles.timeChipText,
-                            event.cancelled && styles.timeChipTextCancelled,
+                            styles.eventCard,
+                            event.cancelled && styles.eventCardCancelled,
                           ]}
+                          onPress={() => onEventPress(event)}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
                         >
-                          {event.time}
-                        </Text>
+                          {/* Color accent bar */}
+                          <View
+                            style={[
+                              styles.eventAccentBar,
+                              {
+                                backgroundColor: event.cancelled
+                                  ? '#9ca3af'
+                                  : event.categoryColor,
+                              },
+                            ]}
+                          />
+
+                          {/* Card inner content */}
+                          <View style={styles.eventCardContent}>
+                            {/* Header: category tag + community name tag */}
+                            <View style={styles.eventCardHeader}>
+                              <View
+                                style={[
+                                  styles.categoryTag,
+                                  {
+                                    backgroundColor: `${event.categoryColor}20`,
+                                  },
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.categoryTagText,
+                                    {
+                                      color: event.cancelled
+                                        ? '#9ca3af'
+                                        : event.categoryColor,
+                                    },
+                                  ]}
+                                >
+                                  {event.category}
+                                </Text>
+                              </View>
+                              {event.communityName ? (
+                                <CommunityEventNameTag
+                                  name={event.communityName}
+                                />
+                              ) : null}
+                            </View>
+
+                            {/* Event Title */}
+                            <Text
+                              style={[
+                                styles.eventTitle,
+                                event.cancelled && styles.eventTitleCancelled,
+                              ]}
+                            >
+                              {event.title}
+                            </Text>
+
+                            {/* Location + nav button */}
+                            {event.location ? (
+                              <>
+                                <View style={styles.locationRow}>
+                                  <MaterialIcons
+                                    name="location-on"
+                                    size={13}
+                                    color="#94a3b8"
+                                  />
+                                  <Text
+                                    style={styles.locationText}
+                                    numberOfLines={1}
+                                  >
+                                    {event.location}
+                                  </Text>
+                                </View>
+                                <Pressable
+                                  style={styles.eventNavBtn}
+                                  onPress={(e) => {
+                                    e.stopPropagation?.();
+                                    onNavigate(
+                                      event.location as string,
+                                      event.locationUrl
+                                    );
+                                  }}
+                                  accessible={true}
+                                  accessibilityRole="button"
+                                  accessibilityLabel="נווט"
+                                >
+                                  <MaterialIcons
+                                    name="near-me"
+                                    size={13}
+                                    color="#8d6e63"
+                                  />
+                                  <Text style={styles.eventNavBtnText}>
+                                    נווט
+                                  </Text>
+                                </Pressable>
+                              </>
+                            ) : null}
+                          </View>
+                        </Pressable>
                       </View>
                     </View>
+                  ))}
+                </View>
+              </View>
+            </View>
 
-                    {event.communityName ? (
-                      <View
-                        style={{ marginTop: 4, marginBottom: 6, width: '100%' }}
-                      >
-                        <CommunityEventNameTag name={event.communityName} />
-                      </View>
-                    ) : null}
+            {/* Gap toggle: shown between two groups when days are missing */}
+            {missingDays.length > 0 && (
+              <View style={styles.gapRow}>
+                <Pressable
+                  onPress={() =>
+                    setOpenGaps((prev) => ({
+                      ...prev,
+                      [dateStr]: !(prev[dateStr] ?? false),
+                    }))
+                  }
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    isGapOpen
+                      ? 'הסתר ימים ללא אירועים'
+                      : `הצג ${missingDays.length === 1 ? 'יום' : 'ימים'} ללא אירועים`
+                  }
+                  hitSlop={{ top: 13, bottom: 13, left: 13, right: 13 }}
+                  style={({ pressed }) => [
+                    styles.gapToggleButton,
+                    pressed && styles.gapToggleButtonPressed,
+                  ]}
+                >
+                  {isGapOpen ? (
+                    <Minus size={18} color={PRIMARY_BLUE} strokeWidth={2} />
+                  ) : (
+                    <Plus size={18} color={PRIMARY_BLUE} strokeWidth={2} />
+                  )}
+                </Pressable>
+              </View>
+            )}
 
-                    {/* Event Title */}
-                    <Text
-                      style={[
-                        styles.eventTitle,
-                        event.cancelled && styles.eventTitleCancelled,
+            {/* Empty day rows rendered when gap is open */}
+            {isGapOpen &&
+              missingDays.map((day) => (
+                <View key={day.dateStr} style={styles.dayGroup}>
+                  <View style={styles.dayHeader}>
+                    <View style={styles.dayNumberCircle}>
+                      <Text style={styles.dayNumberText}>{day.dayNumber}</Text>
+                    </View>
+                    <Text style={styles.dayLabel}>{day.dayLabel}</Text>
+                    <View style={styles.dayDivider} />
+                    <Pressable
+                      onPress={() => onAddPress(day.dateStr)}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel={`הוסף אירוע בתאריך ${day.dayLabel}`}
+                      style={({ pressed }) => [
+                        styles.addEventPill,
+                        pressed && styles.addEventPillPressed,
                       ]}
                     >
-                      {event.title}
-                    </Text>
-
-                    {/* Location */}
-                    {event.location !== '' && (
-                      <View style={styles.locationRow}>
-                        <MaterialIcons
-                          name={event.icon as 'location-on'}
-                          size={16}
-                          color="#647b87"
-                        />
-                        <Text style={styles.locationText}>
-                          {event.location}
-                        </Text>
-                      </View>
-                    )}
-                  </Pressable>
+                      <Text style={styles.addEventPillText}>הוסף</Text>
+                    </Pressable>
+                  </View>
                 </View>
               ))}
-            </View>
-          </View>
-        </View>
-      ))}
+          </Fragment>
+        );
+      })}
 
       {/* End indicator */}
       <View style={styles.endIndicator}>
@@ -3291,6 +3520,37 @@ const styles = StyleSheet.create({
     backgroundColor: '#e5e7eb',
     borderRadius: 1,
   },
+  addEventPill: {
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#e8f5fd',
+  },
+  addEventPillPressed: {
+    opacity: 0.7,
+  },
+  addEventPillText: {
+    fontSize: 13,
+    color: PRIMARY_BLUE,
+    fontWeight: '600',
+  },
+  gapRow: {
+    alignItems: 'flex-start',
+    paddingLeft: 6,
+    marginTop: -16,
+    marginBottom: 8,
+  },
+  gapToggleButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  gapToggleButtonPressed: {
+    backgroundColor: '#e8f5fd',
+  },
 
   /* Timeline Line */
   timelineLineWrapper: {
@@ -3313,6 +3573,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
   },
+  eventRowInner: {
+    flex: 1,
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  eventTimeColumn: {
+    width: 44,
+    alignItems: 'center',
+    paddingTop: 14,
+    flexShrink: 0,
+  },
+  eventTimeText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#94a3b8',
+    textAlign: 'center',
+    writingDirection: 'ltr',
+  },
+  eventEndTimeText: {
+    fontSize: 11,
+    color: '#cbd5e1',
+    textAlign: 'center',
+    marginTop: 1,
+  },
   eventDot: {
     position: 'absolute',
     right: -31,
@@ -3333,51 +3618,49 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
     borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
   eventCardCancelled: {
     opacity: 0.6,
   },
+  eventAccentBar: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    borderRadius: 2,
+  },
+  eventCardContent: {
+    padding: 12,
+    paddingRight: 16,
+  },
   eventCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 8,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+    marginBottom: 6,
   },
   categoryTag: {
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    paddingVertical: 3,
+    borderRadius: 999,
   },
   categoryTagText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  timeChip: {
-    backgroundColor: '#f9fafb',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  timeChipText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111517',
-  },
-  timeChipTextCancelled: {
-    color: '#647b87',
+    fontSize: 11,
+    fontWeight: '600',
   },
   eventTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '700',
     color: '#111517',
-    marginBottom: 8,
+    marginBottom: 4,
     textAlign: 'right',
   },
   eventTitleCancelled: {
@@ -3386,13 +3669,32 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
   },
   locationRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  locationText: {
+    fontSize: 13,
+    color: '#94a3b8',
+    textAlign: 'right',
+    flex: 1,
+  },
+  eventNavBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    backgroundColor: 'rgba(141,110,99,0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    marginTop: 6,
+    alignSelf: 'flex-start',
   },
-  locationText: {
-    fontSize: 14,
-    color: '#647b87',
+  eventNavBtnText: {
+    color: '#8d6e63',
+    fontWeight: '700',
+    fontSize: 12,
   },
 
   /* End Indicator */

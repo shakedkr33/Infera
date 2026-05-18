@@ -114,6 +114,8 @@ export interface EventData {
   location?: string; // physical address → events.location
   onlineUrl?: string; // meeting link → events.onlineUrl
   locationCoords?: { lat: number; lng: number };
+  /** geo:lat,lng URI — set when user picks from autocomplete, stored in events.locationUrl */
+  locationUrl?: string;
   notes?: string;
   remindersEnabled: boolean;
   reminders: Reminder[];

@@ -4,7 +4,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   Linking,
@@ -20,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -27,6 +27,7 @@ import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
 import { isOpenCommunityCalendarActionVisible } from '@/lib/openCommunityCalendarUi';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
+import { parseGeoUri } from '@/lib/utils/geoUri';
 
 const HEB_TEXT_ALIGN = 'left';
 const HEB_ROW = 'row';
@@ -279,6 +280,9 @@ export default function EventDetailScreen() {
   );
   const [manualAssigneeName, setManualAssigneeName] = useState('');
 
+  const [navPickerLocation, setNavPickerLocation] = useState<string | null>(
+    null
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 8, y: 80 });
   const menuBtnRef = useRef<View>(null);
@@ -430,54 +434,14 @@ export default function EventDetailScreen() {
     }, 300);
   }, [event, eventId, createShareLinkMutation]);
 
-  const openNavigationUrl = useCallback(
-    (app: 'apple' | 'google' | 'waze'): void => {
-      const location = event?.location?.trim();
-      if (!location) return;
-
-      const encodedLocation = encodeURIComponent(location);
-      const url =
-        app === 'apple'
-          ? `maps://?q=${encodedLocation}`
-          : app === 'google'
-            ? Platform.OS === 'ios'
-              ? `comgooglemaps://?q=${encodedLocation}`
-              : `https://www.google.com/maps/search/?api=1&query=${encodedLocation}`
-            : `waze://?q=${encodedLocation}&navigate=yes`;
-
-      Linking.openURL(url).catch(() => {
-        Alert.alert('שגיאה', 'לא הצלחנו לפתוח ניווט. נסי שוב בעוד רגע.');
-      });
-    },
-    [event?.location]
-  );
-
   const handleOpenNavigationChooser = useCallback(() => {
     const location = event?.location?.trim();
     if (!location) return;
+    setNavPickerLocation(location);
+  }, [event?.location]);
 
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ['Apple Maps', 'Google Maps', 'Waze', 'ביטול'],
-          cancelButtonIndex: 3,
-          userInterfaceStyle: 'light',
-        },
-        (buttonIndex) => {
-          if (buttonIndex === 0) openNavigationUrl('apple');
-          if (buttonIndex === 1) openNavigationUrl('google');
-          if (buttonIndex === 2) openNavigationUrl('waze');
-        }
-      );
-      return;
-    }
-
-    Alert.alert('בחרי אפליקציית ניווט', undefined, [
-      { text: 'Google Maps', onPress: () => openNavigationUrl('google') },
-      { text: 'Waze', onPress: () => openNavigationUrl('waze') },
-      { text: 'ביטול', style: 'cancel' },
-    ]);
-  }, [event?.location, openNavigationUrl]);
+  const navPickerLocationUrl =
+    (event as { locationUrl?: string } | null | undefined)?.locationUrl ?? null;
 
   const overflowItems = useMemo<OverflowItem[]>(() => {
     const items: OverflowItem[] = [
@@ -793,7 +757,7 @@ export default function EventDetailScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="נווט למיקום האירוע"
               >
-                <Ionicons name="navigate-outline" size={14} color="#0369a1" />
+                <Ionicons name="navigate-outline" size={14} color="#8d6e63" />
                 <Text style={styles.navigateInlineBtnText}>נווט</Text>
               </TouchableOpacity>
             </View>
@@ -1485,6 +1449,13 @@ export default function EventDetailScreen() {
         }}
         visible={blockedRsvpTaskCount !== null}
       />
+      <NavigationPickerModal
+        location={navPickerLocation}
+        latitude={parseGeoUri(navPickerLocationUrl)?.lat}
+        longitude={parseGeoUri(navPickerLocationUrl)?.lng}
+        onClose={() => setNavPickerLocation(null)}
+        visible={navPickerLocation !== null}
+      />
     </SafeAreaView>
   );
 }
@@ -1574,22 +1545,21 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   navigateInlineBtn: {
-    minHeight: 44,
-    minWidth: 68,
+    minHeight: 34,
+    minWidth: 60,
     flexDirection: HEB_ROW,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    borderRadius: 999,
-    backgroundColor: '#E6F4FB',
-    borderWidth: 1,
-    borderColor: '#BAE6FD',
+    borderRadius: 10,
+    backgroundColor: 'rgba(141,110,99,0.1)',
     paddingHorizontal: 10,
+    paddingVertical: 7,
   },
   navigateInlineBtnText: {
-    color: '#0369a1',
+    color: '#8d6e63',
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '700',
     textAlign: 'center',
     writingDirection: HEB_WRITING_DIRECTION,
   },

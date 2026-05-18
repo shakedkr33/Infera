@@ -1,5 +1,4 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -8,7 +7,6 @@ import {
   Dimensions,
   Linking,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -22,6 +20,7 @@ import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
+import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
@@ -30,6 +29,7 @@ import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvi
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { getTextAlign } from '@/lib/rtl';
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
+import { parseGeoUri } from '@/lib/utils/geoUri';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -66,6 +66,8 @@ type Item = {
   endTime?: string;
   title: string;
   location: string;
+  /** geo:lat,lng URI — present when the event was saved with autocomplete coordinates */
+  locationUrl?: string;
   type: 'event' | 'task';
   icon: string;
   iconBg: string;
@@ -233,10 +235,11 @@ export default function HomeScreen() {
   const lastDragCloseTime = useRef<number>(0);
 
   // ── Navigation app picker ──────────────────────────────────────────────────
-  const [navPickerVisible, setNavPickerVisible] = useState(false);
-  const [navLocation, setNavLocation] = useState<string | null>(null);
-  const [lastNavApp, setLastNavApp] = useState<
-    'waze' | 'google' | 'apple' | null
+  const [navPickerLocation, setNavPickerLocation] = useState<string | null>(
+    null
+  );
+  const [navPickerLocationUrl, setNavPickerLocationUrl] = useState<
+    string | null
   >(null);
 
   // ── RSVP (replaces pendingResponses + expandedPendingId) ──────────────────
@@ -423,6 +426,7 @@ export default function HomeScreen() {
             : undefined,
         title: ev.title,
         location: ev.location ?? '',
+        locationUrl: (ev as { locationUrl?: string }).locationUrl,
         type: 'event' as const,
         icon: 'event',
         iconBg: '#E8F5FD',
@@ -498,6 +502,7 @@ export default function HomeScreen() {
               : undefined,
           title: ev.title,
           location: ev.location ?? '',
+          locationUrl: (ev as { locationUrl?: string }).locationUrl,
           type: 'event' as const,
           icon: 'event',
           iconBg: '#e8f5fd',
@@ -766,13 +771,6 @@ export default function HomeScreen() {
     }
   };
 
-  // Load last-used navigation app from storage
-  useEffect(() => {
-    AsyncStorage.getItem('lastNavApp').then((val) => {
-      if (val) setLastNavApp(val as 'waze' | 'google' | 'apple');
-    });
-  }, []);
-
   // Scroll date carousel to today on mount
   // With row-reverse, day 1 is rightmost. Today's position from the left =
   // (totalDays - 1 - todayIndex) * PILL_WIDTH
@@ -795,36 +793,12 @@ export default function HomeScreen() {
     return () => clearTimeout(timer);
   }, []);
 
-  // ── Navigation picker handlers ─────────────────────────────────────────────
-
-  const handleOpenNavPicker = (location: string) => {
-    setNavLocation(location);
-    setNavPickerVisible(true);
-  };
-
-  const handleNavSelect = async (app: 'waze' | 'google' | 'apple') => {
-    if (!navLocation) return;
-    const encoded = encodeURIComponent(navLocation);
-    const urls = {
-      waze: `https://waze.com/ul?q=${encoded}`,
-      google: `https://www.google.com/maps/search/?api=1&query=${encoded}`,
-      apple: `http://maps.apple.com/?q=${encoded}`,
-    };
-    const url = urls[app];
-    try {
-      const canOpen = await Linking.canOpenURL(url);
-      if (canOpen) {
-        await Linking.openURL(url);
-        setLastNavApp(app);
-        AsyncStorage.setItem('lastNavApp', app);
-      } else {
-        Alert.alert('שגיאה', 'לא ניתן לפתוח את אפליקציית הניווט במכשיר זה.');
-      }
-    } catch {
-      Alert.alert('שגיאה', 'אירעה שגיאה בפתיחת הניווט.');
-    }
-    setNavPickerVisible(false);
-    setNavLocation(null);
+  const handleOpenNavPicker = (
+    location: string,
+    locationUrl?: string
+  ): void => {
+    setNavPickerLocation(location);
+    setNavPickerLocationUrl(locationUrl ?? null);
   };
 
   const AVATAR_COLORS = ['#FFD1DC', '#E0F2F1', '#FFF9C4', '#E8EAF6', '#FCE4EC'];
@@ -1248,7 +1222,10 @@ export default function HomeScreen() {
                         style={stylesRtl.navBtn}
                         onPress={(e) => {
                           e.stopPropagation?.();
-                          handleOpenNavPicker(nextEvent.location);
+                          handleOpenNavPicker(
+                            nextEvent.location,
+                            nextEvent.locationUrl
+                          );
                         }}
                         accessible={true}
                         accessibilityRole="button"
@@ -1620,7 +1597,10 @@ export default function HomeScreen() {
                               <Pressable
                                 onPress={(e) => {
                                   e.stopPropagation?.();
-                                  handleOpenNavPicker(item.location);
+                                  handleOpenNavPicker(
+                                    item.location,
+                                    item.locationUrl
+                                  );
                                 }}
                                 style={{
                                   alignSelf: 'flex-start',
@@ -1993,14 +1973,19 @@ export default function HomeScreen() {
                                               )
                                           );
                                         } else {
-                                          handleOpenNavPicker(item.location);
+                                          handleOpenNavPicker(
+                                            item.location,
+                                            item.locationUrl
+                                          );
                                         }
                                       }}
                                       style={{
                                         alignSelf: 'flex-start',
                                         marginTop: 6,
-                                        backgroundColor: 'rgba(54,169,226,0.1)',
-                                        borderRadius: 12,
+                                        backgroundColor: item.remoteUrl
+                                          ? 'rgba(54,169,226,0.1)'
+                                          : 'rgba(141,110,99,0.1)',
+                                        borderRadius: 10,
                                         paddingHorizontal: 10,
                                         paddingVertical: 4,
                                         flexDirection: 'row',
@@ -2020,11 +2005,15 @@ export default function HomeScreen() {
                                             : 'near-me'
                                         }
                                         size={13}
-                                        color="#36a9e2"
+                                        color={
+                                          item.remoteUrl ? '#36a9e2' : '#8d6e63'
+                                        }
                                       />
                                       <Text
                                         style={{
-                                          color: '#36a9e2',
+                                          color: item.remoteUrl
+                                            ? '#36a9e2'
+                                            : '#8d6e63',
                                           fontSize: 12,
                                           fontWeight: '700',
                                         }}
@@ -2310,182 +2299,16 @@ export default function HomeScreen() {
         onNavigate={handleOpenNavPicker}
       />
 
-      {/* ── Navigation App Picker Modal ──────────────────────────────────────── */}
-      <Modal
-        visible={navPickerVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setNavPickerVisible(false)}
-      >
-        {/* Backdrop — tap to dismiss */}
-        <Pressable
-          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }}
-          onPress={() => setNavPickerVisible(false)}
-        />
-
-        <View
-          style={{
-            backgroundColor: '#fff',
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingHorizontal: 24,
-            paddingTop: 12,
-            paddingBottom: 36,
-          }}
-        >
-          {/* Handle */}
-          <View
-            style={{
-              width: 40,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: '#e5e7eb',
-              alignSelf: 'center',
-              marginBottom: 20,
-            }}
-          />
-
-          <Text
-            style={{
-              fontSize: 16,
-              fontWeight: '700',
-              color: '#111517',
-              textAlign: 'right',
-              marginBottom: 16,
-            }}
-          >
-            פתח עם...
-          </Text>
-
-          {/* Last-used app — shown first with a label */}
-          {lastNavApp
-            ? (() => {
-                const labels: Record<'waze' | 'google' | 'apple', string> = {
-                  waze: 'Waze',
-                  google: 'Google Maps',
-                  apple: 'Apple Maps',
-                };
-                return (
-                  <View style={{ marginBottom: 8 }}>
-                    <Text
-                      style={{
-                        fontSize: 11,
-                        color: '#94a3b8',
-                        textAlign: 'right',
-                        marginBottom: 6,
-                      }}
-                    >
-                      השתמשת לאחרונה
-                    </Text>
-                    <Pressable
-                      onPress={() => handleNavSelect(lastNavApp)}
-                      style={{
-                        flexDirection: 'row-reverse',
-                        alignItems: 'center',
-                        gap: 12,
-                        backgroundColor: 'rgba(54,169,226,0.08)',
-                        borderRadius: 16,
-                        paddingHorizontal: 16,
-                        paddingVertical: 14,
-                        borderWidth: 1,
-                        borderColor: 'rgba(54,169,226,0.2)',
-                        marginBottom: 12,
-                      }}
-                      accessible={true}
-                      accessibilityRole="button"
-                      accessibilityLabel={`פתח עם ${labels[lastNavApp]}`}
-                    >
-                      <Text
-                        style={{
-                          fontSize: 17,
-                          fontWeight: '700',
-                          color: '#36a9e2',
-                          flex: 1,
-                          textAlign: 'right',
-                        }}
-                      >
-                        {labels[lastNavApp]}
-                      </Text>
-                      <MaterialIcons name="near-me" size={22} color="#36a9e2" />
-                    </Pressable>
-                    <View
-                      style={{
-                        height: 1,
-                        backgroundColor: '#f1f5f9',
-                        marginBottom: 12,
-                      }}
-                    />
-                  </View>
-                );
-              })()
-            : null}
-
-          {/* All options */}
-          {(
-            [
-              { key: 'waze', label: 'Waze', icon: 'near-me', show: true },
-              { key: 'google', label: 'Google Maps', icon: 'map', show: true },
-              {
-                key: 'apple',
-                label: 'Apple Maps',
-                icon: 'location-on',
-                show: Platform.OS === 'ios',
-              },
-            ] as const
-          )
-            .filter((o) => o.show)
-            .map((opt) => (
-              <Pressable
-                key={opt.key}
-                onPress={() => handleNavSelect(opt.key)}
-                style={{
-                  flexDirection: 'row-reverse',
-                  alignItems: 'center',
-                  gap: 12,
-                  paddingHorizontal: 16,
-                  paddingVertical: 14,
-                  borderRadius: 16,
-                  marginBottom: 8,
-                  backgroundColor: '#f8fafc',
-                }}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel={`פתח עם ${opt.label}`}
-              >
-                <MaterialIcons name={opt.icon} size={22} color="#64748b" />
-                <Text
-                  style={{
-                    fontSize: 16,
-                    fontWeight: '600',
-                    color: '#111517',
-                    flex: 1,
-                    textAlign: 'right',
-                  }}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            ))}
-
-          {/* Cancel */}
-          <Pressable
-            onPress={() => setNavPickerVisible(false)}
-            style={{
-              alignSelf: 'center',
-              marginTop: 8,
-              paddingVertical: 8,
-              paddingHorizontal: 24,
-            }}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="ביטול"
-          >
-            <Text style={{ color: '#94a3b8', fontSize: 15, fontWeight: '600' }}>
-              ביטול
-            </Text>
-          </Pressable>
-        </View>
-      </Modal>
+      <NavigationPickerModal
+        location={navPickerLocation}
+        latitude={parseGeoUri(navPickerLocationUrl)?.lat}
+        longitude={parseGeoUri(navPickerLocationUrl)?.lng}
+        onClose={() => {
+          setNavPickerLocation(null);
+          setNavPickerLocationUrl(null);
+        }}
+        visible={navPickerLocation !== null}
+      />
     </SafeAreaView>
   );
 }

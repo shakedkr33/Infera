@@ -1,7 +1,9 @@
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { GooglePlaceDetail } from 'react-native-google-places-autocomplete';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import { buildGeoUri } from '@/lib/utils/geoUri';
 
 const PRIMARY = '#36a9e2';
 const TINT = '#e8f5fd';
@@ -15,6 +17,8 @@ type LocMode = 'address' | 'link';
 export interface LocationUpdate {
   location: string; // physical address → EventData.location
   onlineUrl: string; // meeting URL     → EventData.onlineUrl
+  /** geo:lat,lng URI — populated only when user picks a result from autocomplete */
+  locationUrl?: string;
 }
 
 interface LocationCardProps {
@@ -122,9 +126,16 @@ export function LocationCard({
             ref={placesRef}
             placeholder="חפשי כתובת..."
             query={{ key: PLACES_KEY, language: 'he' }}
-            onPress={(data) => {
-              // MVP: store only the human-readable address string
-              onChange({ location: data.description, onlineUrl: '' });
+            onPress={(data, details: GooglePlaceDetail | null) => {
+              const geo = details?.geometry?.location;
+              const locationUrl = geo
+                ? buildGeoUri(geo.lat, geo.lng)
+                : undefined;
+              onChange({
+                location: data.description,
+                onlineUrl: '',
+                locationUrl,
+              });
             }}
             onFail={() => {
               // Graceful degradation: user keeps whatever they typed
@@ -132,12 +143,16 @@ export function LocationCard({
             textInputProps={{
               value: location ?? '',
               onChangeText: (text: string) =>
-                onChange({ location: text, onlineUrl: '' }),
+                onChange({
+                  location: text,
+                  onlineUrl: '',
+                  locationUrl: undefined,
+                }),
               textAlign: 'right' as const,
               placeholderTextColor: '#94a3b8',
               accessibilityLabel: 'חיפוש כתובת',
             }}
-            fetchDetails={false}
+            fetchDetails={true}
             enablePoweredByContainer={false}
             keepResultsAfterBlur={false}
             listViewDisplayed="auto"

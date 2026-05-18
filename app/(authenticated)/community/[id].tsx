@@ -16,7 +16,6 @@ import {
   Animated,
   FlatList,
   type GestureResponderEvent,
-  Linking,
   Modal,
   Pressable,
   ScrollView,
@@ -2520,11 +2519,8 @@ export default function CommunityDetailScreen() {
     setSelectedEventId(null);
   }, []);
 
-  const handleNavigateToLocation = useCallback((location: string) => {
-    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`;
-    Linking.openURL(url).catch(() =>
-      Alert.alert('שגיאה', 'לא ניתן לפתוח ניווט כרגע')
-    );
+  const handleNavigateToLocation = useCallback((_location: string) => {
+    // Navigation is handled internally by EventDetailsBottomSheet via NavigationPickerModal
   }, []);
 
   const handleToggleTask = useCallback(

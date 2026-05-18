@@ -178,6 +178,7 @@ function convexEventToEventData(
         : 'none',
     location: isLink ? undefined : (event.location ?? undefined),
     onlineUrl: isLink ? (event.onlineUrl ?? undefined) : undefined,
+    locationUrl: isLink ? undefined : (event.locationUrl ?? undefined),
     notes: event.description ?? undefined,
     remindersEnabled,
     reminders,
@@ -311,6 +312,7 @@ export default function EditEventScreen(): React.JSX.Element {
           ? undefined
           : data.location?.trim() || undefined,
         onlineUrl: data.onlineUrl?.trim() || undefined,
+        locationUrl: data.onlineUrl ? undefined : data.locationUrl || undefined,
         tasksVisibleToParticipants: data.tasksVisibleToParticipants,
         requiresRsvp: rsvpRequired,
         participants:
@@ -378,8 +380,7 @@ export default function EditEventScreen(): React.JSX.Element {
           });
         }
 
-        const assignedPid =
-          task.assignedParticipantIds?.[0] ?? task.assigneeId;
+        const assignedPid = task.assignedParticipantIds?.[0] ?? task.assigneeId;
         const originalUserId = orig.assignedToUserId as string | undefined;
         const originalManualName = orig.assignedToManual?.trim();
         if (isCommunityEvent) {
@@ -489,7 +490,9 @@ export default function EditEventScreen(): React.JSX.Element {
       customHeaderTitle={headerTitle}
       context={isCommunityEvent ? 'community' : 'personal'}
       showParticipants={!isCommunityEvent}
-      taskParticipants={isCommunityEvent ? communityTaskParticipants : undefined}
+      taskParticipants={
+        isCommunityEvent ? communityTaskParticipants : undefined
+      }
       showRsvpSection={isCommunityEvent}
       rsvpRequired={rsvpRequired}
       onRsvpRequiredChange={setRsvpRequired}

@@ -80,6 +80,7 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
         allDay: data.isAllDay || undefined,
         location: data.location?.trim() || undefined,
         onlineUrl: data.onlineUrl?.trim() || undefined,
+        locationUrl: data.locationUrl || undefined,
         spaceId: (spaceId as Id<'spaces'> | null) ?? undefined,
         communityId: communityId as Id<'communities'>,
         tasksVisibleToParticipants: data.tasksVisibleToParticipants,
@@ -224,11 +225,15 @@ async function uploadDraftAttachments(
 // ─── Route Entry ──────────────────────────────────────────────────────────────
 
 export default function NewEventScreen(): React.JSX.Element {
-  const { communityId, selectedDate: selectedDateParam } =
-    useLocalSearchParams<{
-      communityId?: string;
-      selectedDate?: string;
-    }>();
+  const {
+    communityId,
+    selectedDate: selectedDateParam,
+    date: dateParam,
+  } = useLocalSearchParams<{
+    communityId?: string;
+    selectedDate?: string;
+    date?: string;
+  }>();
   // FIXED: added generateUploadUrl + upload loop before createEvent for file attachments
   const createEvent = useMutation(api.events.create);
   const generateUploadUrl = useMutation(api.events.generateUploadUrl);
@@ -238,9 +243,22 @@ export default function NewEventScreen(): React.JSX.Element {
   const toggleEventTaskCompleted = useMutation(api.eventTasks.toggleCompleted);
   const spaceId = useQuery(api.users.getMySpace);
 
-  const selectedDate = selectedDateParam
-    ? Number(selectedDateParam)
-    : undefined;
+  // Resolve initial date: prefer legacy numeric selectedDate, then YYYY-MM-DD date param.
+  // Build local midnight timestamp to avoid UTC-offset day shift.
+  const selectedDate = useMemo((): number | undefined => {
+    if (selectedDateParam) return Number(selectedDateParam);
+    if (dateParam) {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateParam);
+      if (match) {
+        const y = Number(match[1]);
+        const m = Number(match[2]) - 1;
+        const d = Number(match[3]);
+        const dt = new Date(y, m, d);
+        if (!Number.isNaN(dt.getTime())) return dt.getTime();
+      }
+    }
+    return undefined;
+  }, [selectedDateParam, dateParam]);
 
   const handlePersonalSave = useCallback(
     async (data: EventData): Promise<string> => {
@@ -305,6 +323,7 @@ export default function NewEventScreen(): React.JSX.Element {
         spaceId: resolvedSpaceId,
         location: data.location?.trim() || undefined,
         onlineUrl: data.onlineUrl?.trim() || undefined,
+        locationUrl: data.locationUrl || undefined,
         tasksVisibleToParticipants: data.tasksVisibleToParticipants,
         participants:
           data.participants.length > 0
