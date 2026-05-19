@@ -133,6 +133,7 @@ export default function TasksScreen() {
 
   // ── Convex: mutations ────────────────────────────────────────────────────
   const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
+  const toggleEventTaskMutation = useMutation(api.eventTasks.toggleCompleted);
   const removeTaskMutation = useMutation(api.tasks.remove);
 
   const filters = ['הכל', 'אישי', 'אירועים'];
@@ -301,7 +302,17 @@ export default function TasksScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>משימות מאירועים</Text>
               {filteredAssignedEventTasks.map((task) => (
-                <EventTaskCard key={task.id} task={task} />
+                <EventTaskCard
+                  key={task.id}
+                  task={task}
+                  onToggle={async () => {
+                    try {
+                      await toggleEventTaskMutation({ id: task.id as Id<'eventTasks'> });
+                    } catch {
+                      // silently ignore
+                    }
+                  }}
+                />
               ))}
             </View>
           )}
@@ -492,7 +503,13 @@ function TaskCard({
   );
 }
 
-function EventTaskCard({ task }: { task: AssignedEventTask }) {
+function EventTaskCard({
+  task,
+  onToggle,
+}: {
+  task: AssignedEventTask;
+  onToggle: () => void;
+}) {
   return (
     <View
       style={[styles.taskCard, task.completed && styles.taskCardCompleted]}
@@ -500,13 +517,20 @@ function EventTaskCard({ task }: { task: AssignedEventTask }) {
       accessibilityLabel={`משימת אירוע: ${task.title}`}
     >
       <View style={styles.taskCardHeader}>
-        <View style={styles.eventTaskIcon}>
-          <MaterialIcons
-            name="event-available"
-            size={20}
-            color={PRIMARY_BLUE}
-          />
-        </View>
+        <Pressable
+          style={styles.checkbox}
+          onPress={onToggle}
+          accessible={true}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: task.completed }}
+          accessibilityLabel={task.completed ? 'בוטל סימון' : 'סמן כהושלם'}
+        >
+          {task.completed ? (
+            <MaterialIcons name="check-circle" size={24} color={PRIMARY_BLUE} />
+          ) : (
+            <View style={styles.checkboxEmpty} />
+          )}
+        </Pressable>
         <View style={styles.taskContent}>
           <Text
             style={[

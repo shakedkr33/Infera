@@ -34,6 +34,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import type { AssignedEventTask } from '@/components/InlineEventTasksSection';
+import { InlineEventTasksSection } from '@/components/InlineEventTasksSection';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { useNotifications } from '@/contexts/NotificationsContext';
@@ -237,6 +239,7 @@ type TimelineEventRow = MockTimelineEvent & {
   communityName?: string;
   endTime?: string;
   locationUrl?: string;
+  myAssignedTasks?: AssignedEventTask[];
 };
 
 interface TimelineDayGroup {
@@ -1128,6 +1131,22 @@ export default function CalendarScreen(): React.JSX.Element {
       !isFiltered ? { from: timelineRange.from, to: timelineRange.to } : 'skip'
     ) ?? [];
 
+  // My assigned event tasks for the timeline date range — grouped per event
+  const timelineAssignedEventTasks =
+    useQuery(api.eventTasks.listMyAssignedEventTasksForDate, {
+      from: timelineRange.from,
+      to: timelineRange.to,
+    }) ?? [];
+
+  const timelineTasksByEventId = useMemo(() => {
+    const map: Record<string, AssignedEventTask[]> = {};
+    for (const t of timelineAssignedEventTasks) {
+      if (!map[t.eventId]) map[t.eventId] = [];
+      map[t.eventId].push({ id: t._id, title: t.title, completed: t.completed });
+    }
+    return map;
+  }, [timelineAssignedEventTasks]);
+
   // FIXED: linked (shared) events for the displayed month — shown as dots alongside personal events
   const linkedEvents =
     useQuery(
@@ -1745,6 +1764,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
         const isSavedCommunityInSpace = Boolean(event.communityId);
         const endD1 = event.endTime ? new Date(event.endTime) : null;
+        const myTasks1 = timelineTasksByEventId[event._id];
         grouped[key].events.push({
           id: event._id,
           category: isSavedCommunityInSpace ? 'קהילה' : 'אישי',
@@ -1760,6 +1780,7 @@ export default function CalendarScreen(): React.JSX.Element {
           cancelled: event.status === 'cancelled',
           sourceType: 'event',
           communityName: event.communityName,
+          myAssignedTasks: myTasks1 && myTasks1.length > 0 ? myTasks1 : undefined,
         });
       }
 
@@ -1794,6 +1815,7 @@ export default function CalendarScreen(): React.JSX.Element {
           continue;
         }
 
+        const myTasks2 = timelineTasksByEventId[event._id];
         const endD2 = event.endTime ? new Date(event.endTime) : null;
         grouped[key].events.push({
           id: event._id,
@@ -1810,6 +1832,7 @@ export default function CalendarScreen(): React.JSX.Element {
           cancelled: false,
           sourceType: 'event',
           communityName: event.communityName,
+          myAssignedTasks: myTasks2 && myTasks2.length > 0 ? myTasks2 : undefined,
         });
       }
 
@@ -1864,6 +1887,7 @@ export default function CalendarScreen(): React.JSX.Element {
       if (grouped[key].events.some((e) => e.id === event._id)) {
         continue;
       }
+      const myTasks3 = timelineTasksByEventId[event._id];
       const endD3 = event.endTime ? new Date(event.endTime) : null;
       grouped[key].events.push({
         id: event._id,
@@ -1882,6 +1906,7 @@ export default function CalendarScreen(): React.JSX.Element {
         cancelled: event.status === 'cancelled',
         sourceType: 'event',
         communityName: communityData?.name,
+        myAssignedTasks: myTasks3 && myTasks3.length > 0 ? myTasks3 : undefined,
       });
     }
 
@@ -1904,6 +1929,7 @@ export default function CalendarScreen(): React.JSX.Element {
     timelinePersonalEvents,
     timelineCommunityEvents,
     communityData?.name,
+    timelineTasksByEventId,
   ]);
 
   useEffect(() => {
@@ -3185,112 +3211,125 @@ function TimelineView({
                         </View>
 
                         {/* Event Card */}
-                        <Pressable
-                          style={[
-                            styles.eventCard,
-                            event.cancelled && styles.eventCardCancelled,
-                          ]}
-                          onPress={() => onEventPress(event)}
-                          accessible={true}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
-                        >
-                          {/* Color accent bar */}
-                          <View
+                        <View style={styles.timelineEventCardColumn}>
+                          <Pressable
                             style={[
-                              styles.eventAccentBar,
-                              {
-                                backgroundColor: event.cancelled
-                                  ? '#9ca3af'
-                                  : event.categoryColor,
-                              },
+                              styles.eventCard,
+                              event.cancelled && styles.eventCardCancelled,
+                              event.myAssignedTasks &&
+                                event.myAssignedTasks.length > 0 &&
+                                styles.eventCardWithTasks,
                             ]}
-                          />
+                            onPress={() => onEventPress(event)}
+                            accessible={true}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
+                          >
+                            {/* Color accent bar */}
+                            <View
+                              style={[
+                                styles.eventAccentBar,
+                                {
+                                  backgroundColor: event.cancelled
+                                    ? '#9ca3af'
+                                    : event.categoryColor,
+                                },
+                              ]}
+                            />
 
-                          {/* Card inner content */}
-                          <View style={styles.eventCardContent}>
-                            {/* Header: category tag + community name tag */}
-                            <View style={styles.eventCardHeader}>
-                              <View
-                                style={[
-                                  styles.categoryTag,
-                                  {
-                                    backgroundColor: `${event.categoryColor}20`,
-                                  },
-                                ]}
-                              >
-                                <Text
+                            {/* Card inner content */}
+                            <View style={styles.eventCardContent}>
+                              {/* Header: category tag + community name tag */}
+                              <View style={styles.eventCardHeader}>
+                                <View
                                   style={[
-                                    styles.categoryTagText,
+                                    styles.categoryTag,
                                     {
-                                      color: event.cancelled
-                                        ? '#9ca3af'
-                                        : event.categoryColor,
+                                      backgroundColor: `${event.categoryColor}20`,
                                     },
                                   ]}
                                 >
-                                  {event.category}
-                                </Text>
-                              </View>
-                              {event.communityName ? (
-                                <CommunityEventNameTag
-                                  name={event.communityName}
-                                />
-                              ) : null}
-                            </View>
-
-                            {/* Event Title */}
-                            <Text
-                              style={[
-                                styles.eventTitle,
-                                event.cancelled && styles.eventTitleCancelled,
-                              ]}
-                            >
-                              {event.title}
-                            </Text>
-
-                            {/* Location + nav button */}
-                            {event.location ? (
-                              <>
-                                <View style={styles.locationRow}>
-                                  <MaterialIcons
-                                    name="location-on"
-                                    size={13}
-                                    color="#94a3b8"
-                                  />
                                   <Text
-                                    style={styles.locationText}
-                                    numberOfLines={1}
+                                    style={[
+                                      styles.categoryTagText,
+                                      {
+                                        color: event.cancelled
+                                          ? '#9ca3af'
+                                          : event.categoryColor,
+                                      },
+                                    ]}
                                   >
-                                    {event.location}
+                                    {event.category}
                                   </Text>
                                 </View>
-                                <Pressable
-                                  style={styles.eventNavBtn}
-                                  onPress={(e) => {
-                                    e.stopPropagation?.();
-                                    onNavigate(
-                                      event.location as string,
-                                      event.locationUrl
-                                    );
-                                  }}
-                                  accessible={true}
-                                  accessibilityRole="button"
-                                  accessibilityLabel="נווט"
-                                >
-                                  <MaterialIcons
-                                    name="near-me"
-                                    size={13}
-                                    color="#8d6e63"
+                                {event.communityName ? (
+                                  <CommunityEventNameTag
+                                    name={event.communityName}
                                   />
-                                  <Text style={styles.eventNavBtnText}>
-                                    נווט
-                                  </Text>
-                                </Pressable>
-                              </>
-                            ) : null}
-                          </View>
-                        </Pressable>
+                                ) : null}
+                              </View>
+
+                              {/* Event Title */}
+                              <Text
+                                style={[
+                                  styles.eventTitle,
+                                  event.cancelled && styles.eventTitleCancelled,
+                                ]}
+                              >
+                                {event.title}
+                              </Text>
+
+                              {/* Location + nav button */}
+                              {event.location ? (
+                                <>
+                                  <View style={styles.locationRow}>
+                                    <MaterialIcons
+                                      name="location-on"
+                                      size={13}
+                                      color="#94a3b8"
+                                    />
+                                    <Text
+                                      style={styles.locationText}
+                                      numberOfLines={1}
+                                    >
+                                      {event.location}
+                                    </Text>
+                                  </View>
+                                  <Pressable
+                                    style={styles.eventNavBtn}
+                                    onPress={(e) => {
+                                      e.stopPropagation?.();
+                                      onNavigate(
+                                        event.location as string,
+                                        event.locationUrl
+                                      );
+                                    }}
+                                    accessible={true}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="נווט"
+                                  >
+                                    <MaterialIcons
+                                      name="near-me"
+                                      size={13}
+                                      color="#8d6e63"
+                                    />
+                                    <Text style={styles.eventNavBtnText}>
+                                      נווט
+                                    </Text>
+                                  </Pressable>
+                                </>
+                              ) : null}
+                            </View>
+                          </Pressable>
+                          {event.myAssignedTasks &&
+                            event.myAssignedTasks.length > 0 ? (
+                            <View style={styles.calendarTaskExpansionContainer}>
+                              <InlineEventTasksSection
+                                tasks={event.myAssignedTasks}
+                              />
+                            </View>
+                          ) : null}
+                        </View>
                       </View>
                     </View>
                   ))}
@@ -3696,11 +3735,33 @@ const styles = StyleSheet.create({
   },
 
   /* Event Card */
-  eventCard: {
+  timelineEventCardColumn: {
     flex: 1,
+    minWidth: 0,
+    alignSelf: 'stretch',
+  },
+  eventCard: {
+    width: '100%',
     backgroundColor: '#ffffff',
     borderRadius: 16,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  eventCardWithTasks: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  calendarTaskExpansionContainer: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
     shadowColor: '#000',
     shadowOpacity: 0.04,
     shadowRadius: 6,

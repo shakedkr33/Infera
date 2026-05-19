@@ -19,6 +19,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import type { AssignedEventTask } from '@/components/InlineEventTasksSection';
+import { InlineEventTasksSection } from '@/components/InlineEventTasksSection';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
@@ -88,6 +90,8 @@ type Item = {
   linkedEventId?: string;
   /** Mirrors Convex calendar flags for community rows opened from home timeline */
   isSavedToMyCalendar?: boolean;
+  /** Tasks assigned to the current user for this event (eventTasks only) */
+  myAssignedTasks?: AssignedEventTask[];
 };
 
 type UndatedTask = {
@@ -248,6 +252,7 @@ export default function HomeScreen() {
   // ── Undated tasks "show all" modal ─────────────────────────────────────────
   const [showAllUndated, setShowAllUndated] = useState(false);
 
+
   const openEventSheet = (item: Item) => {
     if (Date.now() - lastDragCloseTime.current < 600) return;
 
@@ -394,14 +399,22 @@ export default function HomeScreen() {
     [convexTasks, selectedDate]
   );
 
+  // ── Assigned eventTasks grouped by eventId — shared across all event item builders ──
+  const tasksByEvent: Record<string, AssignedEventTask[]> = useMemo(() => {
+    const map: Record<string, AssignedEventTask[]> = {};
+    for (const t of assignedEventTasks) {
+      const key = String(t.eventId);
+      if (!map[key]) map[key] = [];
+      map[key].push({ id: t._id, title: t.title, completed: t.completed });
+    }
+    return map;
+  }, [assignedEventTasks]);
+
   // ── Community event items mapped to Item shape ────────────────────────────
   const communityEventItems: Item[] = useMemo(() => {
-    const taskCountByEvent: Record<string, number> = {};
-    for (const t of assignedEventTasks) {
-      taskCountByEvent[t.eventId] = (taskCountByEvent[t.eventId] ?? 0) + 1;
-    }
     return communityEvents.map((ev) => {
-      const count = taskCountByEvent[ev._id] ?? 0;
+      const myTasks = tasksByEvent[String(ev._id)] ?? [];
+      const count = myTasks.length;
       const personalTaskSummary =
         count === 0
           ? undefined
@@ -440,9 +453,10 @@ export default function HomeScreen() {
         isRecurring: undefined,
         recurringPattern: undefined,
         isSavedToMyCalendar: ev.isSavedToMyCalendar,
+        myAssignedTasks: myTasks.length > 0 ? myTasks : undefined,
       };
     });
-  }, [communityEvents, assignedEventTasks]);
+  }, [communityEvents, tasksByEvent]);
 
   // ── Assigned event task items mapped to Item shape ────────────────────────
   const assignedTaskItems: Item[] = useMemo(
@@ -485,6 +499,7 @@ export default function HomeScreen() {
           'isSavedToMyCalendar' in ev
             ? (ev as { isSavedToMyCalendar?: boolean }).isSavedToMyCalendar
             : undefined;
+        const myTasks = tasksByEvent[String(ev._id)] ?? [];
         return {
           id: ev._id,
           time: ev.allDay
@@ -516,9 +531,10 @@ export default function HomeScreen() {
           groupName: communityIdStr ? communityName : undefined,
           communityId: communityIdStr,
           isSavedToMyCalendar,
+          myAssignedTasks: myTasks.length > 0 ? myTasks : undefined,
         };
       }),
-    [personalEventsForHome]
+    [personalEventsForHome, tasksByEvent]
   );
 
   // FIXED: linked (shared) events mapped to Item shape
@@ -626,13 +642,14 @@ export default function HomeScreen() {
     const timedLinkedEvents = linkedEventItems.filter((i) => !i.allDay);
     const seen = new Set<string>();
     const deduped: Item[] = [];
+    // timedAssignedTasks intentionally excluded: event tasks are now shown
+    // inline inside their parent event card via InlineEventTasksSection.
     for (const item of [
       ...todayTasks,
       ...items,
       ...timedPersonalEvents,
       ...timedLinkedEvents,
       ...timedCommunityEvents,
-      ...timedAssignedTasks,
     ]) {
       if (!seen.has(item.id)) {
         seen.add(item.id);
@@ -655,7 +672,6 @@ export default function HomeScreen() {
     personalEventItems,
     linkedEventItems,
     communityEventItems,
-    assignedTaskItems,
   ]);
 
   // ── Convex: undated tasks ──────────────────────────────────────────────────
@@ -1145,7 +1161,15 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel={`פרטי אירוע: ${nextEvent.title}`}
             >
-              <View style={[stylesRtl.cardShadow, stylesRtl.eventCard]}>
+              <View
+                style={[
+                  stylesRtl.cardShadow,
+                  stylesRtl.eventCard,
+                  nextEvent.myAssignedTasks &&
+                    nextEvent.myAssignedTasks.length > 0 &&
+                    stylesRtl.nextEventCardWithTasks,
+                ]}
+              >
                 <View style={stylesRtl.eventAccentBar} />
                 <View style={{ padding: 24, paddingRight: 32 }}>
                   {/* Top row: "האירוע הבא" pill (right) + relative start time (left) */}
@@ -1244,6 +1268,12 @@ export default function HomeScreen() {
                 </View>
               </View>
             </Pressable>
+            {nextEvent.myAssignedTasks &&
+              nextEvent.myAssignedTasks.length > 0 ? (
+              <View style={stylesRtl.nextEventTaskExpansionContainer}>
+                <InlineEventTasksSection tasks={nextEvent.myAssignedTasks} />
+              </View>
+            ) : null}
           </View>
         )}
 
@@ -1636,6 +1666,14 @@ export default function HomeScreen() {
                           </View>
                         </View>
                       </Pressable>
+                      {item.myAssignedTasks &&
+                        item.myAssignedTasks.length > 0 ? (
+                        <View style={stylesRtl.taskExpansionContainer}>
+                          <InlineEventTasksSection
+                            tasks={item.myAssignedTasks}
+                          />
+                        </View>
+                      ) : null}
                     </Swipeable>
                   ))}
               </View>
@@ -1690,7 +1728,14 @@ export default function HomeScreen() {
                         {/* Card */}
                         <View style={{ flex: 1, marginBottom: 12 }}>
                           <Pressable onPress={() => handleCardPress(item)}>
-                            <View style={stylesRtl.timelineCard}>
+                            <View
+                              style={[
+                                stylesRtl.timelineCard,
+                                item.myAssignedTasks &&
+                                  item.myAssignedTasks.length > 0 &&
+                                  stylesRtl.timelineCardWithTasks,
+                              ]}
+                            >
                               <View
                                 style={[
                                   stylesRtl.timelineAccent,
@@ -2026,6 +2071,14 @@ export default function HomeScreen() {
                               </View>
                             </View>
                           </Pressable>
+                          {item.myAssignedTasks &&
+                            item.myAssignedTasks.length > 0 ? (
+                            <View style={stylesRtl.taskExpansionContainer}>
+                              <InlineEventTasksSection
+                                tasks={item.myAssignedTasks}
+                              />
+                            </View>
+                          ) : null}
                         </View>
                       </View>
                     </Swipeable>
@@ -2600,6 +2653,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f8fafc',
   },
+  nextEventCardWithTasks: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderBottomWidth: 0,
+  },
+  nextEventTaskExpansionContainer: {
+    backgroundColor: '#fff',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: '#f8fafc',
+    paddingHorizontal: 24,
+    paddingBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+  },
   eventAccentBar: {
     position: 'absolute',
     right: 0,
@@ -2755,6 +2828,23 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 1,
     overflow: 'hidden',
+  },
+  timelineCardWithTasks: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  taskExpansionContainer: {
+    backgroundColor: '#fff',
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    paddingHorizontal: 12,
+    paddingTop: 0,
+    paddingBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 1,
   },
   timelineAccent: {
     position: 'absolute',
