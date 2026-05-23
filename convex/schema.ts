@@ -166,12 +166,17 @@ export default defineSchema({
     sourceImportantItemId: v.optional(v.string()),
     // Legacy / extended fields present in existing documents
     allowParticipantEditing: v.optional(v.boolean()),
+    assignedToMemberId: v.optional(v.id('members')),
     assignedToUserIds: v.optional(v.array(v.id('users'))),
+    assignedToMemberIds: v.optional(v.array(v.id('members'))),
     hasTime: v.optional(v.boolean()),
+    dueAt: v.optional(v.number()),
     recurrenceType: v.optional(v.string()),
     reminderType: v.optional(v.string()),
+    reminders: v.optional(v.array(v.any())),
     selectedWeekdays: v.optional(v.array(v.float64())),
     subtasks: v.optional(v.array(v.any())),
+    attachments: v.optional(v.array(v.any())),
     updatedAt: v.optional(v.float64()),
   })
     .index('by_space_completed', ['spaceId', 'completed'])

@@ -377,6 +377,33 @@ export const update = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
+// סימון/ביטול השלמת תת-משימה
+// ─────────────────────────────────────────────────────────────
+export const toggleSubtaskCompleted = mutation({
+  args: { id: v.id('tasks'), subtaskId: v.string() },
+  handler: async (ctx, { id, subtaskId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const existing = await ctx.db.get(id);
+    if (!existing) throw new Error('משימה לא נמצאה');
+
+    const subtasks = existing.subtasks ?? [];
+    const nextSubtasks = subtasks.map(
+      (subtask: { id: string; completed: boolean }) =>
+        subtask.id === subtaskId
+          ? { ...subtask, completed: !subtask.completed }
+          : subtask
+    );
+
+    await ctx.db.patch(id, {
+      subtasks: nextSubtasks,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // מחיקת משימה
 // ─────────────────────────────────────────────────────────────
 export const remove = mutation({

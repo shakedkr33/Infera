@@ -16,7 +16,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
-import type { TaskDraft } from '@/lib/types/task';
+import type { TaskCategory, TaskDraft } from '@/lib/types/task';
+import { TASK_CATEGORIES } from '@/lib/types/task';
 import { AssigneesChips } from './AssigneesChips';
 import { ReminderChips } from './ReminderChips';
 import { RepeatSection } from './RepeatSection';
@@ -34,6 +35,7 @@ const EMPTY_DRAFT: TaskDraft = {
   allowSubtaskEditing: true,
   notes: '',
   isRoutine: false,
+  category: 'personal',
 };
 
 interface TaskEditorProps {
@@ -135,6 +137,7 @@ export default function TaskEditorScreen({
           description: draft.notes || undefined,
           dueDate: resolveDueDate(),
           spaceId: spaceId as Id<'spaces'>,
+          category: draft.category,
           // TODO: להוסיף assignedTo מ-AssigneesChips כשיחובר ל-Convex
         });
         router.back();
@@ -358,7 +361,37 @@ export default function TaskEditorScreen({
           </View>
         )}
 
-        {/* 5. Assignees */}
+        {/* 5. Category */}
+        <View style={s.section}>
+          <Text style={s.label}>קטגוריה</Text>
+          <View style={s.categoryRow}>
+            {TASK_CATEGORIES.map((cat) => (
+              <Pressable
+                key={cat.key}
+                style={[
+                  s.categoryBtn,
+                  draft.category === cat.key && s.categoryBtnActive,
+                ]}
+                onPress={() => update({ category: cat.key as TaskCategory })}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityState={{ selected: draft.category === cat.key }}
+                accessibilityLabel={cat.label}
+              >
+                <Text
+                  style={[
+                    s.categoryBtnText,
+                    draft.category === cat.key && s.categoryBtnTextActive,
+                  ]}
+                >
+                  {cat.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+
+        {/* 6. Assignees */}
         {assigneesForUI.length > 0 && (
           <View style={s.section}>
             <Text style={s.label}>אחראי</Text>
@@ -370,7 +403,7 @@ export default function TaskEditorScreen({
           </View>
         )}
 
-        {/* 6. Subtasks */}
+        {/* 7. Subtasks */}
         <View style={s.section}>
           <SubtasksSection
             subtasks={draft.subtasks}
@@ -380,7 +413,7 @@ export default function TaskEditorScreen({
           />
         </View>
 
-        {/* 7. Notes */}
+        {/* 8. Notes */}
         <View style={s.section}>
           <Text style={s.label}>הערות</Text>
           <TextInput
@@ -398,7 +431,7 @@ export default function TaskEditorScreen({
           />
         </View>
 
-        {/* 8. AI Tags Banner */}
+        {/* 9. AI Tags Banner */}
         <View style={s.aiBanner}>
           <View style={s.aiIconBox}>
             <MaterialIcons name="auto-awesome" size={22} color={PRIMARY} />
@@ -504,6 +537,35 @@ const s = StyleSheet.create({
     marginTop: 4,
   },
   dateRow: { flexDirection: 'row', gap: 8 },
+  categoryRow: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  categoryBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    minWidth: 72,
+    alignItems: 'center',
+  },
+  categoryBtnActive: {
+    borderWidth: 2,
+    borderColor: PRIMARY,
+    backgroundColor: `${PRIMARY}10`,
+  },
+  categoryBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  categoryBtnTextActive: {
+    color: PRIMARY,
+    fontWeight: '700',
+  },
   dateBtn: {
     flex: 1,
     height: 64,
