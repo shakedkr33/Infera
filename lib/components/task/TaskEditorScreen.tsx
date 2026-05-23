@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -23,18 +23,6 @@ import { RepeatSection } from './RepeatSection';
 import { SubtasksSection } from './SubtasksSection';
 
 const PRIMARY = '#308ce8';
-
-const MOCK_ASSIGNEES = [
-  { id: 'me', name: 'אני', initial: 'א', color: PRIMARY },
-  { id: '1', name: 'יוסי', initial: 'י', color: '#3b82f6' },
-  { id: '2', name: 'מיכל', initial: 'מ', color: '#ec4899' },
-];
-
-const MOCK_EVENTS = [
-  { id: 'none', label: 'ללא אירוע' },
-  { id: '1', label: 'ארוחת ערב משפחתית' },
-  { id: '2', label: 'טיול יום הולדת' },
-];
 
 const EMPTY_DRAFT: TaskDraft = {
   title: '',
@@ -61,14 +49,23 @@ export default function TaskEditorScreen({
 
   const [draft, setDraft] = useState<TaskDraft>(EMPTY_DRAFT);
   const [titleError, setTitleError] = useState(false);
-  const [linkedEvent, setLinkedEvent] = useState('none');
-  const [eventPickerOpen, setEventPickerOpen] = useState(false);
 
   // ── Convex: spaceId ─────────────────────────────────────────────────────
-  // getMySpace מחזיר את ה-spaceId ישירות (Id<'spaces'> | null | undefined)
-  // undefined = עדיין טוען | null = אין מרחב פעיל | string = ה-ID
   const mySpace = useQuery(api.users.getMySpace);
-  const spaceId = mySpace ?? undefined; // ממיר null ל-undefined עבור mutatio
+  const spaceId = mySpace ?? undefined;
+
+  // ── Convex: family contacts for assignee picker ──────────────────────────
+  const familyContacts = useQuery(api.members.listMyFamilyContacts);
+
+  const assigneesForUI = useMemo(() => {
+    const members = familyContacts?.members ?? [];
+    return members.map((m) => ({
+      id: m._id as string,
+      name: m.displayName ?? '?',
+      initial: (m.displayName ?? '?')[0] ?? '?',
+      color: m.color ?? PRIMARY,
+    }));
+  }, [familyContacts?.members]);
 
   // ── Convex: edit mode – load existing task ───────────────────────────────
   const existingTask = useQuery(
@@ -361,64 +358,19 @@ export default function TaskEditorScreen({
           </View>
         )}
 
-        {/* 5. Linked Event */}
-        <View style={s.section}>
-          <Text style={s.label}>שיוך לאירוע</Text>
-          <Pressable
-            style={s.selectContainer}
-            onPress={() => setEventPickerOpen(!eventPickerOpen)}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel={`שיוך לאירוע: ${MOCK_EVENTS.find((e) => e.id === linkedEvent)?.label ?? 'ללא אירוע'}`}
-          >
-            <MaterialIcons name="expand-more" size={22} color="#9ca3af" />
-            <Text style={s.selectText}>
-              {MOCK_EVENTS.find((e) => e.id === linkedEvent)?.label ??
-                'ללא אירוע'}
-            </Text>
-          </Pressable>
-          {eventPickerOpen && (
-            <View style={s.pickerDropdown}>
-              {MOCK_EVENTS.map((ev) => (
-                <Pressable
-                  key={ev.id}
-                  style={[
-                    s.pickerOption,
-                    linkedEvent === ev.id && s.pickerOptionActive,
-                  ]}
-                  onPress={() => {
-                    setLinkedEvent(ev.id);
-                    setEventPickerOpen(false);
-                  }}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel={ev.label}
-                >
-                  <Text
-                    style={[
-                      s.pickerOptionText,
-                      linkedEvent === ev.id && s.pickerOptionTextActive,
-                    ]}
-                  >
-                    {ev.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
-        </View>
+        {/* 5. Assignees */}
+        {assigneesForUI.length > 0 && (
+          <View style={s.section}>
+            <Text style={s.label}>אחראי</Text>
+            <AssigneesChips
+              assignees={assigneesForUI}
+              selected={draft.assignees}
+              onChange={(ids) => update({ assignees: ids })}
+            />
+          </View>
+        )}
 
-        {/* 6. Assignees */}
-        <View style={s.section}>
-          <Text style={s.label}>אחראי</Text>
-          <AssigneesChips
-            assignees={MOCK_ASSIGNEES}
-            selected={draft.assignees}
-            onChange={(ids) => update({ assignees: ids })}
-          />
-        </View>
-
-        {/* 7. Subtasks */}
+        {/* 6. Subtasks */}
         <View style={s.section}>
           <SubtasksSection
             subtasks={draft.subtasks}
@@ -428,7 +380,7 @@ export default function TaskEditorScreen({
           />
         </View>
 
-        {/* 8. Notes */}
+        {/* 7. Notes */}
         <View style={s.section}>
           <Text style={s.label}>הערות</Text>
           <TextInput
@@ -446,7 +398,7 @@ export default function TaskEditorScreen({
           />
         </View>
 
-        {/* 9. AI Tags Banner */}
+        {/* 8. AI Tags Banner */}
         <View style={s.aiBanner}>
           <View style={s.aiIconBox}>
             <MaterialIcons name="auto-awesome" size={22} color={PRIMARY} />
@@ -585,40 +537,6 @@ const s = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: PRIMARY,
-  },
-  selectContainer: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 16,
-    height: 54,
-    paddingHorizontal: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  selectText: { fontSize: 15, color: '#374151' },
-  pickerDropdown: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    marginTop: 8,
-    overflow: 'hidden',
-  },
-  pickerOption: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-  },
-  pickerOptionActive: {
-    backgroundColor: `${PRIMARY}0d`,
-  },
-  pickerOptionText: {
-    fontSize: 14,
-    color: '#374151',
-    textAlign: 'right',
-  },
-  pickerOptionTextActive: {
-    color: PRIMARY,
-    fontWeight: '700',
   },
   notesInput: {
     backgroundColor: '#f9fafb',
