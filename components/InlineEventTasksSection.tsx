@@ -13,9 +13,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
-import { TaskCheckbox } from '@/components/TaskCheckbox';
 
 export interface AssignedEventTask {
   id: string;
@@ -40,9 +40,7 @@ export function InlineEventTasksSection({
 
   const allDone = tasks.every((t) => t.completed);
   const label =
-    tasks.length === 1
-      ? 'משימה אחת שלי'
-      : `${tasks.length} משימות שלי`;
+    tasks.length === 1 ? 'משימה אחת שלי' : `${tasks.length} משימות שלי`;
 
   const handleToggle = async (id: string) => {
     try {
@@ -94,9 +92,7 @@ export function InlineEventTasksSection({
               </Text>
             </View>
           ))}
-          {allDone && (
-            <Text style={s.allDoneInList}>כל המשימות בוצעו ✓</Text>
-          )}
+          {allDone && <Text style={s.allDoneInList}>כל המשימות בוצעו ✓</Text>}
         </View>
       )}
     </View>

@@ -74,7 +74,11 @@ export function RelatedTasksSection({
 
   // ── Task actions ──────────────────────────────────────────────────────────
   const toggleTask = (taskId: string): void => {
-    onChange(tasks.map((t) => (t.id === taskId ? { ...t, completed: !t.completed } : t)));
+    onChange(
+      tasks.map((t) =>
+        t.id === taskId ? { ...t, completed: !t.completed } : t
+      )
+    );
   };
 
   const deleteTask = (taskId: string): void => {
@@ -151,7 +155,9 @@ export function RelatedTasksSection({
           <View
             style={[
               s.progressFill,
-              { width: `${tasks.length > 0 ? (completedCount / tasks.length) * 100 : 0}%` },
+              {
+                width: `${tasks.length > 0 ? (completedCount / tasks.length) * 100 : 0}%`,
+              },
             ]}
           />
         </View>
@@ -256,7 +262,11 @@ export function RelatedTasksSection({
         animationType="slide"
         onRequestClose={closeAssignSheet}
       >
-        <Pressable style={s.sheetOverlay} onPress={closeAssignSheet} accessible={false}>
+        <Pressable
+          style={s.sheetOverlay}
+          onPress={closeAssignSheet}
+          accessible={false}
+        >
           <Pressable style={s.sheet} onPress={() => undefined}>
             {/* Handle */}
             <View style={s.sheetHandle} />
@@ -268,9 +278,7 @@ export function RelatedTasksSection({
               /* ── No-participants state ── */
               <View style={s.noParticipantsBox}>
                 <MaterialIcons name="group-off" size={32} color="#cbd5e1" />
-                <Text style={s.noParticipantsText}>
-                  {assignmentEmptyText}
-                </Text>
+                <Text style={s.noParticipantsText}>{assignmentEmptyText}</Text>
                 {showAddParticipantsEmptyAction ? (
                   <Pressable
                     style={s.addParticipantsBtn}
@@ -289,7 +297,9 @@ export function RelatedTasksSection({
             ) : (
               /* ── Participant list ── */
               <>
-                <Text style={s.sheetSectionLabel}>{assignmentSectionLabel}</Text>
+                <Text style={s.sheetSectionLabel}>
+                  {assignmentSectionLabel}
+                </Text>
                 <ScrollView
                   style={s.participantList}
                   keyboardShouldPersistTaps="handled"
@@ -300,7 +310,10 @@ export function RelatedTasksSection({
                     return (
                       <Pressable
                         key={p.id}
-                        style={[s.participantRow, selected && s.participantRowSelected]}
+                        style={[
+                          s.participantRow,
+                          selected && s.participantRowSelected,
+                        ]}
                         onPress={() => toggleParticipantDraft(p.id)}
                         accessible={true}
                         accessibilityRole="checkbox"
@@ -308,9 +321,18 @@ export function RelatedTasksSection({
                         accessibilityLabel={p.name}
                       >
                         {/* Selection indicator */}
-                        <View style={[s.participantCheck, selected && s.participantCheckSelected]}>
+                        <View
+                          style={[
+                            s.participantCheck,
+                            selected && s.participantCheckSelected,
+                          ]}
+                        >
                           {selected && (
-                            <MaterialIcons name="check" size={14} color="#fff" />
+                            <MaterialIcons
+                              name="check"
+                              size={14}
+                              color="#fff"
+                            />
                           )}
                         </View>
 
@@ -318,14 +340,22 @@ export function RelatedTasksSection({
                         <View style={s.participantInfo}>
                           <Text style={s.participantName}>{p.name}</Text>
                           {(p.phone ?? p.email) != null && (
-                            <Text style={s.participantSecondary} numberOfLines={1}>
+                            <Text
+                              style={s.participantSecondary}
+                              numberOfLines={1}
+                            >
                               {p.phone ?? p.email}
                             </Text>
                           )}
                         </View>
 
                         {/* Avatar */}
-                        <View style={[s.participantAvatar, { backgroundColor: p.color }]}>
+                        <View
+                          style={[
+                            s.participantAvatar,
+                            { backgroundColor: p.color },
+                          ]}
+                        >
                           <Text style={s.participantAvatarText}>
                             {(p.name.trim() || '?')[0]?.toUpperCase() ?? '?'}
                           </Text>

@@ -307,7 +307,9 @@ export default function TasksScreen() {
                   task={task}
                   onToggle={async () => {
                     try {
-                      await toggleEventTaskMutation({ id: task.id as Id<'eventTasks'> });
+                      await toggleEventTaskMutation({
+                        id: task.id as Id<'eventTasks'>,
+                      });
                     } catch {
                       // silently ignore
                     }

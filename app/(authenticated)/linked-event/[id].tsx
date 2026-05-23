@@ -176,9 +176,7 @@ export default function LinkedEventDetailScreen(): React.JSX.Element {
           {/* Date */}
           <View style={s.detailRow}>
             <Ionicons name="calendar-outline" size={18} color={PRIMARY} />
-            <Text style={s.detailText}>
-              {formatFullDate(detail.startTime)}
-            </Text>
+            <Text style={s.detailText}>{formatFullDate(detail.startTime)}</Text>
           </View>
 
           {/* Time */}

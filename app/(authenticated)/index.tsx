@@ -21,6 +21,8 @@ import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import type { AssignedEventTask } from '@/components/InlineEventTasksSection';
 import { InlineEventTasksSection } from '@/components/InlineEventTasksSection';
+import type { ImportantItem } from '@/components/InlineImportantItemsSection';
+import { InlineImportantItemsSection } from '@/components/InlineImportantItemsSection';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
@@ -92,6 +94,8 @@ type Item = {
   isSavedToMyCalendar?: boolean;
   /** Tasks assigned to the current user for this event (eventTasks only) */
   myAssignedTasks?: AssignedEventTask[];
+  /** "חשוב לזכור" items for community events */
+  importantItems?: ImportantItem[];
 };
 
 type UndatedTask = {
@@ -252,7 +256,6 @@ export default function HomeScreen() {
   // ── Undated tasks "show all" modal ─────────────────────────────────────────
   const [showAllUndated, setShowAllUndated] = useState(false);
 
-
   const openEventSheet = (item: Item) => {
     if (Date.now() - lastDragCloseTime.current < 600) return;
 
@@ -365,6 +368,9 @@ export default function HomeScreen() {
     useQuery(api.eventTasks.listMyAssignedEventTasksForDate, { from, to }) ??
     [];
 
+  const myImportantItemChecks =
+    useQuery(api.tasks.getMyImportantItemChecks) ?? {};
+
   // ── Convex: dated tasks ────────────────────────────────────────────────────
   const convexTasks = useQuery(
     api.tasks.listBySpace,
@@ -376,7 +382,11 @@ export default function HomeScreen() {
       (convexTasks ?? [])
         .filter(
           (t) =>
-            t.dueDate != null && isSameDay(new Date(t.dueDate), selectedDate)
+            t.dueDate != null &&
+            isSameDay(new Date(t.dueDate), selectedDate) &&
+            // "חשוב לזכור" personal copies are shown nested under the event,
+            // not as separate standalone task cards on Home.
+            t.sourceType !== 'community_event_important_item'
         )
         .map((t) => ({
           id: t._id,
@@ -409,6 +419,17 @@ export default function HomeScreen() {
     }
     return map;
   }, [assignedEventTasks]);
+
+  // ── importantItems indexed by eventId — feeds both communityEventItems and
+  //    personalEventItems so the section survives deduplication either way ──
+  const communityImportantItemsById = useMemo(() => {
+    const map: Record<string, ImportantItem[]> = {};
+    for (const ev of communityEvents) {
+      const items = (ev as { importantItems?: ImportantItem[] }).importantItems;
+      if (items && items.length > 0) map[String(ev._id)] = items;
+    }
+    return map;
+  }, [communityEvents]);
 
   // ── Community event items mapped to Item shape ────────────────────────────
   const communityEventItems: Item[] = useMemo(() => {
@@ -454,9 +475,10 @@ export default function HomeScreen() {
         recurringPattern: undefined,
         isSavedToMyCalendar: ev.isSavedToMyCalendar,
         myAssignedTasks: myTasks.length > 0 ? myTasks : undefined,
+        importantItems: communityImportantItemsById[String(ev._id)],
       };
     });
-  }, [communityEvents, tasksByEvent]);
+  }, [communityEvents, tasksByEvent, communityImportantItemsById]);
 
   // ── Assigned event task items mapped to Item shape ────────────────────────
   const assignedTaskItems: Item[] = useMemo(
@@ -532,9 +554,12 @@ export default function HomeScreen() {
           communityId: communityIdStr,
           isSavedToMyCalendar,
           myAssignedTasks: myTasks.length > 0 ? myTasks : undefined,
+          // Carry importantItems from community data so they survive deduplication
+          // regardless of which version of the event wins the seen-id check.
+          importantItems: communityImportantItemsById[String(ev._id)],
         };
       }),
-    [personalEventsForHome, tasksByEvent]
+    [personalEventsForHome, tasksByEvent, communityImportantItemsById]
   );
 
   // FIXED: linked (shared) events mapped to Item shape
@@ -689,11 +714,13 @@ export default function HomeScreen() {
   */
   const undatedTasks: UndatedTask[] = useMemo(
     () =>
-      (convexUndatedTasks ?? []).map((t) => ({
-        id: t._id,
-        title: t.title,
-        completed: t.completed,
-      })),
+      (convexUndatedTasks ?? [])
+        .filter((t) => t.sourceType !== 'community_event_important_item')
+        .map((t) => ({
+          id: t._id,
+          title: t.title,
+          completed: t.completed,
+        })),
     [convexUndatedTasks]
   );
 
@@ -1269,9 +1296,18 @@ export default function HomeScreen() {
               </View>
             </Pressable>
             {nextEvent.myAssignedTasks &&
-              nextEvent.myAssignedTasks.length > 0 ? (
+            nextEvent.myAssignedTasks.length > 0 ? (
               <View style={stylesRtl.nextEventTaskExpansionContainer}>
                 <InlineEventTasksSection tasks={nextEvent.myAssignedTasks} />
+              </View>
+            ) : null}
+            {nextEvent.importantItems && nextEvent.importantItems.length > 0 ? (
+              <View style={stylesRtl.nextEventTaskExpansionContainer}>
+                <InlineImportantItemsSection
+                  eventId={String(nextEvent.id)}
+                  items={nextEvent.importantItems}
+                  checks={myImportantItemChecks[String(nextEvent.id)] ?? {}}
+                />
               </View>
             ) : null}
           </View>
@@ -1667,10 +1703,21 @@ export default function HomeScreen() {
                         </View>
                       </Pressable>
                       {item.myAssignedTasks &&
-                        item.myAssignedTasks.length > 0 ? (
+                      item.myAssignedTasks.length > 0 ? (
                         <View style={stylesRtl.taskExpansionContainer}>
                           <InlineEventTasksSection
                             tasks={item.myAssignedTasks}
+                          />
+                        </View>
+                      ) : null}
+                      {item.importantItems && item.importantItems.length > 0 ? (
+                        <View style={stylesRtl.taskExpansionContainer}>
+                          <InlineImportantItemsSection
+                            eventId={String(item.id)}
+                            items={item.importantItems}
+                            checks={
+                              myImportantItemChecks[String(item.id)] ?? {}
+                            }
                           />
                         </View>
                       ) : null}
@@ -2072,10 +2119,22 @@ export default function HomeScreen() {
                             </View>
                           </Pressable>
                           {item.myAssignedTasks &&
-                            item.myAssignedTasks.length > 0 ? (
+                          item.myAssignedTasks.length > 0 ? (
                             <View style={stylesRtl.taskExpansionContainer}>
                               <InlineEventTasksSection
                                 tasks={item.myAssignedTasks}
+                              />
+                            </View>
+                          ) : null}
+                          {item.importantItems &&
+                          item.importantItems.length > 0 ? (
+                            <View style={stylesRtl.taskExpansionContainer}>
+                              <InlineImportantItemsSection
+                                eventId={String(item.id)}
+                                items={item.importantItems}
+                                checks={
+                                  myImportantItemChecks[String(item.id)] ?? {}
+                                }
                               />
                             </View>
                           ) : null}

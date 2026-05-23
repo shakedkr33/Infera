@@ -165,7 +165,7 @@ export default function SettingsScreen() {
             onPress={() => router.push('/(authenticated)/family-profile')}
             accessible={true}
             accessibilityRole="button"
-            accessibilityLabel={"ניהול פרופיל"}
+            accessibilityLabel={'ניהול פרופיל'}
             className={`${tw.flexRow} items-center gap-3 p-4 rounded-xl bg-zinc-900 border border-zinc-800`}
           >
             <ChevronLeft size={20} color="#71717a" />
@@ -173,7 +173,7 @@ export default function SettingsScreen() {
               <Text
                 className={`text-white text-base font-semibold ${tw.textStart}`}
               >
-                {"ניהול פרופיל"}
+                {'ניהול פרופיל'}
               </Text>
               {profileMemberCount > 0 && (
                 <Text

@@ -30,6 +30,7 @@ import {
 import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
+import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import {
@@ -287,6 +288,9 @@ export function EventDetailsBottomSheet({
   const addImportantItemsToMyTasks = useMutation(
     api.tasks.addEventImportantItemsToMyTasks
   );
+  const toggleImportantItemCheckMutation = useMutation(
+    api.tasks.toggleImportantItemCheck
+  );
   const upsertRsvpMutation = useMutation(api.eventRsvps.upsertRsvp);
   const setRsvpNoAndUnclaimMyEventTasks = useMutation(
     api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
@@ -308,6 +312,7 @@ export function EventDetailsBottomSheet({
     api.tasks.hasUserCopiedAllImportantItemsFromEvent,
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
+  const myImportantItemChecks = useQuery(api.tasks.getMyImportantItemChecks);
 
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
@@ -616,6 +621,20 @@ export function EventDetailsBottomSheet({
       .finally(() => setIsCopyingImportantItems(false));
   };
 
+  const handleToggleImportantItem = (
+    itemId: string,
+    itemTitle: string
+  ): void => {
+    if (!convexEventId) return;
+    toggleImportantItemCheckMutation({
+      eventId: convexEventId,
+      itemId,
+      itemTitle,
+    }).catch(() => {
+      // silently ignore — Convex surfaces in dev
+    });
+  };
+
   const handleClaimEventTask = (taskId: Id<'eventTasks'>): void => {
     Alert.alert('להשתבץ למשימה הזו?', '', [
       { text: 'ביטול', style: 'cancel' },
@@ -665,6 +684,10 @@ export function EventDetailsBottomSheet({
   const importantItems =
     eventImportantItems ?? displayEvent?.importantItems ?? [];
   const hasImportantItems = importantItems.length > 0;
+  const myChecksForEvent: Record<string, boolean> =
+    convexEventId && myImportantItemChecks
+      ? (myImportantItemChecks[convexEventId] ?? {})
+      : {};
   const importantItemsCopyLoading = importantItemsCopyState === undefined;
   const allImportantItemsCopied =
     importantItemsCopiedLocally ||
@@ -1183,14 +1206,27 @@ export function EventDetailsBottomSheet({
                     </Text>
                   </View>
                   <View style={styles.importantItemsList}>
-                    {importantItems.map((item) => (
-                      <View key={item.id} style={styles.importantItemRow}>
-                        <Text style={styles.importantItemBullet}>•</Text>
-                        <Text style={styles.importantItemText}>
-                          {item.title}
-                        </Text>
-                      </View>
-                    ))}
+                    {importantItems.map((item) => {
+                      const checked = myChecksForEvent[item.id] ?? false;
+                      return (
+                        <View key={item.id} style={styles.importantItemRow}>
+                          <TaskCheckbox
+                            checked={checked}
+                            onToggle={() =>
+                              handleToggleImportantItem(item.id, item.title)
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.importantItemText,
+                              checked && styles.importantItemTextDone,
+                            ]}
+                          >
+                            {item.title}
+                          </Text>
+                        </View>
+                      );
+                    })}
                   </View>
                   <Pressable
                     accessibilityLabel={importantItemsCopyLabel}
@@ -2561,6 +2597,10 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: '600',
     writingDirection: HEB_WRITING_DIRECTION,
+  },
+  importantItemTextDone: {
+    textDecorationLine: 'line-through',
+    color: '#94a3b8',
   },
   importantItemsCopyBtn: {
     alignSelf: 'stretch',

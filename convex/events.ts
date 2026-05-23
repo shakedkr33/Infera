@@ -1034,6 +1034,7 @@ export const listCommunityEventsForDate = query({
             communityId,
             communityName: community.name,
             location: ev.location,
+            importantItems: ev.importantItems ?? [],
             isSavedToMyCalendar: computeIsSavedToMyCalendar({
               requiresRsvp: ev.requiresRsvp,
               rsvpStatus: rsvpByEventId.get(ev._id),

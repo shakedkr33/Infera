@@ -98,8 +98,7 @@ export function OnboardingProvider({
         lastName: prev.lastName || serverLastName,
         personalColor: prev.personalColor || profile.profileColor,
         spaceType:
-          prev.spaceType ||
-          (profile.spaceType as OnboardingData['spaceType']),
+          prev.spaceType || (profile.spaceType as OnboardingData['spaceType']),
         familyData: restoredFamilyData,
         onboardingCompleted: true,
       };
@@ -107,7 +106,9 @@ export function OnboardingProvider({
   };
 
   return (
-    <OnboardingContext.Provider value={{ data, updateData, resetData, hydrateFromServer }}>
+    <OnboardingContext.Provider
+      value={{ data, updateData, resetData, hydrateFromServer }}
+    >
       {children}
     </OnboardingContext.Provider>
   );

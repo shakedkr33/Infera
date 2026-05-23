@@ -36,6 +36,8 @@ import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import type { AssignedEventTask } from '@/components/InlineEventTasksSection';
 import { InlineEventTasksSection } from '@/components/InlineEventTasksSection';
+import type { ImportantItem } from '@/components/InlineImportantItemsSection';
+import { InlineImportantItemsSection } from '@/components/InlineImportantItemsSection';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { useNotifications } from '@/contexts/NotificationsContext';
@@ -240,6 +242,7 @@ type TimelineEventRow = MockTimelineEvent & {
   endTime?: string;
   locationUrl?: string;
   myAssignedTasks?: AssignedEventTask[];
+  importantItems?: ImportantItem[];
 };
 
 interface TimelineDayGroup {
@@ -1142,10 +1145,17 @@ export default function CalendarScreen(): React.JSX.Element {
     const map: Record<string, AssignedEventTask[]> = {};
     for (const t of timelineAssignedEventTasks) {
       if (!map[t.eventId]) map[t.eventId] = [];
-      map[t.eventId].push({ id: t._id, title: t.title, completed: t.completed });
+      map[t.eventId].push({
+        id: t._id,
+        title: t.title,
+        completed: t.completed,
+      });
     }
     return map;
   }, [timelineAssignedEventTasks]);
+
+  const myImportantItemChecks =
+    useQuery(api.tasks.getMyImportantItemChecks) ?? {};
 
   // FIXED: linked (shared) events for the displayed month — shown as dots alongside personal events
   const linkedEvents =
@@ -1765,6 +1775,9 @@ export default function CalendarScreen(): React.JSX.Element {
         const isSavedCommunityInSpace = Boolean(event.communityId);
         const endD1 = event.endTime ? new Date(event.endTime) : null;
         const myTasks1 = timelineTasksByEventId[event._id];
+        const rawImportantItems1 = (
+          event as { importantItems?: ImportantItem[] }
+        ).importantItems;
         grouped[key].events.push({
           id: event._id,
           category: isSavedCommunityInSpace ? 'קהילה' : 'אישי',
@@ -1780,7 +1793,11 @@ export default function CalendarScreen(): React.JSX.Element {
           cancelled: event.status === 'cancelled',
           sourceType: 'event',
           communityName: event.communityName,
-          myAssignedTasks: myTasks1 && myTasks1.length > 0 ? myTasks1 : undefined,
+          myAssignedTasks:
+            myTasks1 && myTasks1.length > 0 ? myTasks1 : undefined,
+          importantItems: rawImportantItems1?.length
+            ? rawImportantItems1
+            : undefined,
         });
       }
 
@@ -1817,6 +1834,9 @@ export default function CalendarScreen(): React.JSX.Element {
 
         const myTasks2 = timelineTasksByEventId[event._id];
         const endD2 = event.endTime ? new Date(event.endTime) : null;
+        const rawImportantItems2 = (
+          event as { importantItems?: ImportantItem[] }
+        ).importantItems;
         grouped[key].events.push({
           id: event._id,
           category: 'קהילה',
@@ -1832,7 +1852,11 @@ export default function CalendarScreen(): React.JSX.Element {
           cancelled: false,
           sourceType: 'event',
           communityName: event.communityName,
-          myAssignedTasks: myTasks2 && myTasks2.length > 0 ? myTasks2 : undefined,
+          myAssignedTasks:
+            myTasks2 && myTasks2.length > 0 ? myTasks2 : undefined,
+          importantItems: rawImportantItems2?.length
+            ? rawImportantItems2
+            : undefined,
         });
       }
 
@@ -1889,6 +1913,8 @@ export default function CalendarScreen(): React.JSX.Element {
       }
       const myTasks3 = timelineTasksByEventId[event._id];
       const endD3 = event.endTime ? new Date(event.endTime) : null;
+      const rawImportantItems3 = (event as { importantItems?: ImportantItem[] })
+        .importantItems;
       grouped[key].events.push({
         id: event._id,
         category: 'קהילה',
@@ -1907,6 +1933,9 @@ export default function CalendarScreen(): React.JSX.Element {
         sourceType: 'event',
         communityName: communityData?.name,
         myAssignedTasks: myTasks3 && myTasks3.length > 0 ? myTasks3 : undefined,
+        importantItems: rawImportantItems3?.length
+          ? rawImportantItems3
+          : undefined,
       });
     }
 
@@ -3090,6 +3119,8 @@ function TimelineView({
   onAddPress: (dateStr: string) => void;
 }): React.JSX.Element {
   const [openGaps, setOpenGaps] = useState<Record<string, boolean>>({});
+  const myImportantItemChecks =
+    useQuery(api.tasks.getMyImportantItemChecks) ?? {};
 
   if (data.length === 0) {
     return (
@@ -3322,10 +3353,22 @@ function TimelineView({
                             </View>
                           </Pressable>
                           {event.myAssignedTasks &&
-                            event.myAssignedTasks.length > 0 ? (
+                          event.myAssignedTasks.length > 0 ? (
                             <View style={styles.calendarTaskExpansionContainer}>
                               <InlineEventTasksSection
                                 tasks={event.myAssignedTasks}
+                              />
+                            </View>
+                          ) : null}
+                          {event.importantItems &&
+                          event.importantItems.length > 0 ? (
+                            <View style={styles.calendarTaskExpansionContainer}>
+                              <InlineImportantItemsSection
+                                eventId={String(event.id)}
+                                items={event.importantItems}
+                                checks={
+                                  myImportantItemChecks[String(event.id)] ?? {}
+                                }
                               />
                             </View>
                           ) : null}

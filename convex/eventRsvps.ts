@@ -142,7 +142,10 @@ export const setRsvpNoAndUnclaimMyEventTasks = mutation({
       });
     }
 
-    return { unclaimedTasks: myAssignedTasks.length, rsvpStatus: 'no' as const };
+    return {
+      unclaimedTasks: myAssignedTasks.length,
+      rsvpStatus: 'no' as const,
+    };
   },
 });
 

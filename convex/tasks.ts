@@ -418,14 +418,26 @@ export const addEventImportantItemsToMyTasks = mutation({
       return { created: 0, alreadyExisted: 0 };
     }
 
-    const membership = await ctx.db
+    const membershipRow = await ctx.db
       .query('members')
       .withIndex('by_user', (q) => q.eq('userId', userId))
       .first();
-    const user = membership?.spaceId ? null : await ctx.db.get(userId);
-    const spaceId = membership?.spaceId ?? user?.defaultSpaceId;
+    const user = membershipRow?.spaceId ? null : await ctx.db.get(userId);
+    const spaceId = membershipRow?.spaceId ?? user?.defaultSpaceId;
 
     const dueDate = getImportantItemDueDate(event.startTime);
+
+    // Build task description with event/community metadata
+    let communityName: string | undefined;
+    if (event.communityId) {
+      const community = await ctx.db.get(event.communityId);
+      communityName = community?.name;
+    }
+    const descriptionParts: string[] = [];
+    if (communityName) descriptionParts.push(`קהילה: ${communityName}`);
+    descriptionParts.push(`אירוע: ${event.title}`);
+    const description =
+      descriptionParts.length > 0 ? descriptionParts.join(' · ') : undefined;
 
     const existingTasks = await ctx.db
       .query('tasks')
@@ -450,10 +462,12 @@ export const addEventImportantItemsToMyTasks = mutation({
 
       await ctx.db.insert('tasks', {
         title: item.title,
+        description,
         completed: false,
         spaceId,
         assignedTo: userId,
         communityId: event.communityId,
+        category: 'אירועים',
         dueDate,
         isAiGenerated: false,
         createdBy: userId,
@@ -467,6 +481,116 @@ export const addEventImportantItemsToMyTasks = mutation({
     }
 
     return { created, alreadyExisted };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Toggle personal checkbox for a single "חשוב לזכור" item.
+// Creates a personal task (completed=true) on first check.
+// Subsequent calls toggle the task's completed state.
+// This enables two-way sync: the same task record drives both
+// the event-detail checkbox and the "המשימות שלי" list.
+// ─────────────────────────────────────────────────────────────
+export const toggleImportantItemCheck = mutation({
+  args: {
+    eventId: v.id('events'),
+    itemId: v.string(),
+    itemTitle: v.string(),
+  },
+  handler: async (ctx, { eventId, itemId, itemTitle }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const existingTask = await ctx.db
+      .query('tasks')
+      .withIndex('by_assigned_source_event', (q) =>
+        q.eq('assignedTo', userId).eq('sourceEventId', eventId)
+      )
+      .filter((q) => q.eq(q.field('sourceImportantItemId'), itemId))
+      .first();
+
+    if (existingTask) {
+      const nowCompleted = !existingTask.completed;
+      await ctx.db.patch(existingTask._id, {
+        completed: nowCompleted,
+        completedAt: nowCompleted ? Date.now() : undefined,
+      });
+    } else {
+      const event = await ctx.db.get(eventId);
+      if (!event) throw new Error('האירוע לא נמצא');
+
+      const membershipRow = await ctx.db
+        .query('members')
+        .withIndex('by_user', (q) => q.eq('userId', userId))
+        .first();
+      const user = membershipRow?.spaceId ? null : await ctx.db.get(userId);
+      const spaceId = membershipRow?.spaceId ?? user?.defaultSpaceId;
+
+      let communityName: string | undefined;
+      if (event.communityId) {
+        const community = await ctx.db.get(event.communityId);
+        communityName = community?.name;
+      }
+      const descriptionParts: string[] = [];
+      if (communityName) descriptionParts.push(`קהילה: ${communityName}`);
+      descriptionParts.push(`אירוע: ${event.title}`);
+      const description =
+        descriptionParts.length > 0 ? descriptionParts.join(' · ') : undefined;
+
+      await ctx.db.insert('tasks', {
+        title: itemTitle,
+        description,
+        completed: true,
+        completedAt: Date.now(),
+        spaceId,
+        assignedTo: userId,
+        communityId: event.communityId,
+        category: 'אירועים',
+        dueDate: getImportantItemDueDate(event.startTime),
+        isAiGenerated: false,
+        createdBy: userId,
+        createdAt: Date.now(),
+        sourceType: 'community_event_important_item',
+        sourceEventId: eventId,
+        sourceImportantItemId: itemId,
+      });
+    }
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Returns a nested map: eventId → { itemId: completed }
+// for all "חשוב לזכור" personal tasks the current user has.
+// Used to drive personal checkboxes in event detail, home, and
+// timeline — a single reactive query shared across all screens.
+//
+// TODO: For full two-way sync between personal tasks list and
+// the event-detail checkboxes, the tasks.tsx screen should also
+// call toggleImportantItemCheck when completing a task whose
+// sourceType === 'community_event_important_item'.
+// ─────────────────────────────────────────────────────────────
+export const getMyImportantItemChecks = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return {} as Record<string, Record<string, boolean>>;
+
+    const tasks = await ctx.db
+      .query('tasks')
+      .withIndex('by_assigned', (q) => q.eq('assignedTo', userId))
+      .filter((q) =>
+        q.eq(q.field('sourceType'), 'community_event_important_item')
+      )
+      .collect();
+
+    const result: Record<string, Record<string, boolean>> = {};
+    for (const task of tasks) {
+      if (!task.sourceEventId || !task.sourceImportantItemId) continue;
+      const eventKey = String(task.sourceEventId);
+      if (!result[eventKey]) result[eventKey] = {};
+      result[eventKey][task.sourceImportantItemId] = task.completed;
+    }
+    return result;
   },
 });
 

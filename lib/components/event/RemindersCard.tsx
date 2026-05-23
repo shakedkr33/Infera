@@ -19,16 +19,16 @@ const TINT = '#e8f5fd';
 // ─── Preset definitions ───────────────────────────────────────────────────────
 
 const PRESETS: { preset: ReminderPreset; label: string }[] = [
-  { preset: 'at_event',    label: 'בעת האירוע' },
+  { preset: 'at_event', label: 'בעת האירוע' },
   { preset: 'hour_before', label: 'שעה לפני האירוע' },
-  { preset: 'day_before',  label: '24 שעות לפני האירוע' },
-  { preset: 'custom',      label: 'מותאם אישית' },
+  { preset: 'day_before', label: '24 שעות לפני האירוע' },
+  { preset: 'custom', label: 'מותאם אישית' },
 ];
 
 const UNIT_LABELS: Record<ReminderUnit, string> = {
   minutes: 'דקות',
-  hours:   'שעות',
-  days:    'ימים',
+  hours: 'שעות',
+  days: 'ימים',
 };
 
 const UNITS: ReminderUnit[] = ['minutes', 'hours', 'days'];
@@ -106,7 +106,12 @@ export function RemindersCard({
     const offsetMinutes = unitToMinutes(draftValue, draftUnit);
     const next = reminders.map((r) =>
       r.preset === 'custom'
-        ? { ...r, offsetMinutes, customValue: draftValue, customUnit: draftUnit }
+        ? {
+            ...r,
+            offsetMinutes,
+            customValue: draftValue,
+            customUnit: draftUnit,
+          }
         : r
     );
     onChange(enabled, next);
@@ -140,7 +145,11 @@ export function RemindersCard({
           </Text>
         </View>
         <View style={[s.iconCircle, { backgroundColor: TINT }]}>
-          <MaterialIcons name="notifications-active" size={20} color={PRIMARY} />
+          <MaterialIcons
+            name="notifications-active"
+            size={20}
+            color={PRIMARY}
+          />
         </View>
       </View>
 
@@ -174,7 +183,9 @@ export function RemindersCard({
                   accessibilityLabel={opt.label}
                 >
                   <View style={[s.checkbox, active && s.checkboxActive]}>
-                    {active && <MaterialIcons name="check" size={13} color="#fff" />}
+                    {active && (
+                      <MaterialIcons name="check" size={13} color="#fff" />
+                    )}
                   </View>
                   <Text style={[s.optionText, active && s.optionTextActive]}>
                     {opt.label}
@@ -235,7 +246,12 @@ export function RemindersCard({
                     accessibilityState={{ selected: draftUnit === unit }}
                     accessibilityLabel={UNIT_LABELS[unit]}
                   >
-                    <Text style={[s.unitChipText, draftUnit === unit && s.unitChipTextActive]}>
+                    <Text
+                      style={[
+                        s.unitChipText,
+                        draftUnit === unit && s.unitChipTextActive,
+                      ]}
+                    >
                       {UNIT_LABELS[unit]}
                     </Text>
                   </Pressable>

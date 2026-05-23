@@ -21,10 +21,7 @@ import {
 import { colors, shadows } from '../../constants/theme';
 // SHARED: phone selection logic for contact import
 // FIXED: removed label filtering — branching now based on total phone count
-import {
-  getPhoneLabel,
-  normalizePhone,
-} from '../../lib/utils/contactPhone';
+import { getPhoneLabel, normalizePhone } from '../../lib/utils/contactPhone';
 
 const PRIMARY = colors.primary; // '#36a9e2'
 const TINT = '#e8f5fd';
@@ -56,13 +53,16 @@ export function AddPersonBottomSheet({
   const slideAnim = useRef(new Animated.Value(300)).current;
 
   // ── View state ─────────────────────────────────────────────────────────────
-  const [view, setView] = useState<'main' | 'contacts' | 'phone-picker' | 'no-mobile'>('main');
+  const [view, setView] = useState<
+    'main' | 'contacts' | 'phone-picker' | 'no-mobile'
+  >('main');
   const [contacts, setContacts] = useState<Contacts.Contact[]>([]);
   const [search, setSearch] = useState('');
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // Phone disambiguation state (family flow)
-  const [disambigContact, setDisambigContact] = useState<Contacts.Contact | null>(null);
+  const [disambigContact, setDisambigContact] =
+    useState<Contacts.Contact | null>(null);
   const [selectedPhone, setSelectedPhone] = useState<string>('');
 
   // ── Animation + state reset ────────────────────────────────────────────────
@@ -195,16 +195,15 @@ export function AddPersonBottomSheet({
 
   // Stable key: prefer contacts API id, fall back to first phone number
   const contactKey = (c: Contacts.Contact) =>
-    (c as { id?: string }).id ?? (c.phoneNumbers?.[0]?.number ?? '');
+    (c as { id?: string }).id ?? c.phoneNumbers?.[0]?.number ?? '';
 
   const filteredContacts = contacts.filter((c) => {
     const q = search.toLowerCase();
     if (!q) return true;
-    const allNumbers = (c.phoneNumbers ?? []).map((p) => p.number ?? '').join(' ');
-    return (
-      (c.name ?? '').toLowerCase().includes(q) ||
-      allNumbers.includes(q)
-    );
+    const allNumbers = (c.phoneNumbers ?? [])
+      .map((p) => p.number ?? '')
+      .join(' ');
+    return (c.name ?? '').toLowerCase().includes(q) || allNumbers.includes(q);
   });
 
   return (
@@ -227,14 +226,17 @@ export function AddPersonBottomSheet({
             accessible={false}
           />
 
-            <Animated.View
-              style={[
-                s.sheet,
-                (view === 'contacts' || view === 'phone-picker' || view === 'no-mobile') && s.sheetContacts,
-                { transform: [{ translateY: slideAnim }] },
-                shadows.strong,
-              ]}
-            >
+          <Animated.View
+            style={[
+              s.sheet,
+              (view === 'contacts' ||
+                view === 'phone-picker' ||
+                view === 'no-mobile') &&
+                s.sheetContacts,
+              { transform: [{ translateY: slideAnim }] },
+              shadows.strong,
+            ]}
+          >
             {/* Drag indicator */}
             <View style={s.handle} />
 
@@ -253,10 +255,7 @@ export function AddPersonBottomSheet({
                   style={[s.optionRow, shadows.subtle]}
                 >
                   <View
-                    style={[
-                      s.optionIcon,
-                      { backgroundColor: `${PRIMARY}18` },
-                    ]}
+                    style={[s.optionIcon, { backgroundColor: `${PRIMARY}18` }]}
                   >
                     <MaterialIcons
                       name="contact-page"
@@ -285,10 +284,7 @@ export function AddPersonBottomSheet({
                   style={[s.optionRow, shadows.subtle]}
                 >
                   <View
-                    style={[
-                      s.optionIcon,
-                      { backgroundColor: `${PRIMARY}18` },
-                    ]}
+                    style={[s.optionIcon, { backgroundColor: `${PRIMARY}18` }]}
                   >
                     <MaterialIcons
                       name="person-add"
@@ -321,7 +317,11 @@ export function AddPersonBottomSheet({
                     accessibilityRole="button"
                     accessibilityLabel="חזרה"
                   >
-                    <Ionicons name="chevron-forward" size={22} color="#334155" />
+                    <Ionicons
+                      name="chevron-forward"
+                      size={22}
+                      color="#334155"
+                    />
                   </Pressable>
                   <Text style={s.contactsTitle}>בחירת מספר טלפון</Text>
                   <View style={{ width: 42 }} />
@@ -338,10 +338,7 @@ export function AddPersonBottomSheet({
                   return (
                     <Pressable
                       key={`phone-${phone.number ?? ''}-${idx}`}
-                      style={[
-                        s.contactRow,
-                        isSelected && s.contactRowSelected,
-                      ]}
+                      style={[s.contactRow, isSelected && s.contactRowSelected]}
                       onPress={() => setSelectedPhone(phone.number ?? '')}
                       accessible={true}
                       accessibilityRole="radio"
@@ -363,11 +360,7 @@ export function AddPersonBottomSheet({
                         ]}
                       >
                         {isSelected && (
-                          <Ionicons
-                            name="checkmark"
-                            size={14}
-                            color="#fff"
-                          />
+                          <Ionicons name="checkmark" size={14} color="#fff" />
                         )}
                       </View>
                     </Pressable>
@@ -404,7 +397,11 @@ export function AddPersonBottomSheet({
                     accessibilityRole="button"
                     accessibilityLabel="חזרה"
                   >
-                    <Ionicons name="chevron-forward" size={22} color="#334155" />
+                    <Ionicons
+                      name="chevron-forward"
+                      size={22}
+                      color="#334155"
+                    />
                   </Pressable>
                   <Text style={s.contactsTitle}>מספר טלפון</Text>
                   <View style={{ width: 42 }} />
@@ -412,12 +409,17 @@ export function AddPersonBottomSheet({
 
                 {/* Icon + message */}
                 <View style={s.noMobileBox}>
-                  <MaterialIcons name="phone-disabled" size={36} color="#cbd5e1" />
+                  <MaterialIcons
+                    name="phone-disabled"
+                    size={36}
+                    color="#cbd5e1"
+                  />
                   <Text style={s.noMobileText}>
                     לא נמצא מספר טלפון לאיש קשר זה
                   </Text>
                   <Text style={s.noMobileSubText}>
-                    {disambigContact.name?.trim() || 'איש הקשר'} אינו כולל מספר טלפון בפנקס הטלפונים.
+                    {disambigContact.name?.trim() || 'איש הקשר'} אינו כולל מספר
+                    טלפון בפנקס הטלפונים.
                   </Text>
                 </View>
 
@@ -472,7 +474,11 @@ export function AddPersonBottomSheet({
                     accessibilityRole="button"
                     accessibilityLabel="חזרה"
                   >
-                    <Ionicons name="chevron-forward" size={22} color="#334155" />
+                    <Ionicons
+                      name="chevron-forward"
+                      size={22}
+                      color="#334155"
+                    />
                   </Pressable>
                   <Text style={s.contactsTitle}>בחירה מאנשי קשר</Text>
                   {selectedKey ? (
@@ -516,9 +522,7 @@ export function AddPersonBottomSheet({
                           isSelected && s.contactRowSelected,
                         ]}
                         onPress={() =>
-                          setSelectedKey((prev) =>
-                            prev === key ? null : key
-                          )
+                          setSelectedKey((prev) => (prev === key ? null : key))
                         }
                         accessible={true}
                         accessibilityRole="radio"
@@ -544,11 +548,7 @@ export function AddPersonBottomSheet({
                           ]}
                         >
                           {isSelected && (
-                            <Ionicons
-                              name="checkmark"
-                              size={14}
-                              color="#fff"
-                            />
+                            <Ionicons name="checkmark" size={14} color="#fff" />
                           )}
                         </View>
                       </Pressable>

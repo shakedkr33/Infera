@@ -164,6 +164,15 @@ export default defineSchema({
     sourceType: v.optional(v.literal('community_event_important_item')),
     sourceEventId: v.optional(v.id('events')),
     sourceImportantItemId: v.optional(v.string()),
+    // Legacy / extended fields present in existing documents
+    allowParticipantEditing: v.optional(v.boolean()),
+    assignedToUserIds: v.optional(v.array(v.id('users'))),
+    hasTime: v.optional(v.boolean()),
+    recurrenceType: v.optional(v.string()),
+    reminderType: v.optional(v.string()),
+    selectedWeekdays: v.optional(v.array(v.float64())),
+    subtasks: v.optional(v.array(v.any())),
+    updatedAt: v.optional(v.float64()),
   })
     .index('by_space_completed', ['spaceId', 'completed'])
     .index('by_assigned', ['assignedTo'])

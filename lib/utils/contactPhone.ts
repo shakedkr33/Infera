@@ -10,10 +10,7 @@ import type * as Contacts from 'expo-contacts';
  * Handles compound labels like "work mobile", "work-mobile", "work_mobile".
  */
 export function isMobileCapable(label?: string | null): boolean {
-  const normalized = (label ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/[_-]+/g, ' ');
+  const normalized = (label ?? '').toLowerCase().trim().replace(/[_-]+/g, ' ');
 
   // FIXED: phone-selection sheet now correctly opens when contact has 2+ mobile numbers
   // 'iphone' now has an includes() check alongside its exact-match check,

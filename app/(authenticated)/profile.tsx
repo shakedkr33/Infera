@@ -32,13 +32,8 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 export default function ProfileScreen() {
   const router = useRouter();
   const { signOut } = useAuthActions();
-  const {
-    isPremium,
-    isConfigured,
-    isExpoGo,
-    presentPaywall,
-    customerData,
-  } = useRevenueCat();
+  const { isPremium, isConfigured, isExpoGo, presentPaywall, customerData } =
+    useRevenueCat();
   const deleteMyAccount = useMutation(api.users.deleteMyAccount);
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   // Debug panel is hidden in normal UI; revealed only by long-pressing the version footer
@@ -170,10 +165,17 @@ export default function ProfileScreen() {
                 onPress={() => presentPaywall()}
                 accessible={true}
                 accessibilityRole="button"
-                accessibilityLabel={isPremium ? 'מנוי פרימיום פעיל' : 'שדרוג ל-InYomi Pro'}
+                accessibilityLabel={
+                  isPremium ? 'מנוי פרימיום פעיל' : 'שדרוג ל-InYomi Pro'
+                }
                 hitSlop={8}
               >
-                <Text style={[styles.profileSubtitle, isPremium && styles.premiumLabel]}>
+                <Text
+                  style={[
+                    styles.profileSubtitle,
+                    isPremium && styles.premiumLabel,
+                  ]}
+                >
                   {isPremium ? 'מנוי פרימיום פעיל 👑' : 'מנוי חינמי'}
                 </Text>
               </TouchableOpacity>
@@ -240,9 +242,13 @@ export default function ProfileScreen() {
                 name="chevron-left"
                 size={20}
                 color="#eab308"
-                style={{ transform: [{ rotate: isDebugOpen ? '-90deg' : '0deg' }] }}
+                style={{
+                  transform: [{ rotate: isDebugOpen ? '-90deg' : '0deg' }],
+                }}
               />
-              <Text style={styles.debugHeaderText}>קונסולת דיבאג (מצב פיתוח)</Text>
+              <Text style={styles.debugHeaderText}>
+                קונסולת דיבאג (מצב פיתוח)
+              </Text>
               <MaterialIcons name="bug-report" size={20} color="#eab308" />
             </TouchableOpacity>
 
@@ -251,21 +257,50 @@ export default function ProfileScreen() {
                 <Text style={styles.debugSectionLabel}>מצב אפליקציה</Text>
                 <View style={styles.debugRows}>
                   <DebugRow label="סביבה" value={APP_ENV} />
-                  <DebugRow label="מערכת תשלומים" value={PAYMENT_SYSTEM_ENABLED ? 'פעיל' : 'כבוי'} />
-                  <DebugRow label="תשלומים מדומים" value={MOCK_PAYMENTS ? 'פעיל' : 'כבוי'} />
-                  <DebugRow label="RevenueCat מוגדר" value={isConfigured ? 'כן' : 'לא'} />
+                  <DebugRow
+                    label="מערכת תשלומים"
+                    value={PAYMENT_SYSTEM_ENABLED ? 'פעיל' : 'כבוי'}
+                  />
+                  <DebugRow
+                    label="תשלומים מדומים"
+                    value={MOCK_PAYMENTS ? 'פעיל' : 'כבוי'}
+                  />
+                  <DebugRow
+                    label="RevenueCat מוגדר"
+                    value={isConfigured ? 'כן' : 'לא'}
+                  />
                   <DebugRow label="Expo Go" value={isExpoGo ? 'כן' : 'לא'} />
-                  <DebugRow label="סטטוס פרימיום" value={isPremium ? 'פרימיום' : 'חינמי'} />
+                  <DebugRow
+                    label="סטטוס פרימיום"
+                    value={isPremium ? 'פרימיום' : 'חינמי'}
+                  />
                   <DebugRow label="Entitlement" value="InYomi Pro" />
                   {customerData && (
-                    <DebugRow label="App User ID" value={customerData.appUserID.substring(0, 20)} />
+                    <DebugRow
+                      label="App User ID"
+                      value={customerData.appUserID.substring(0, 20)}
+                    />
                   )}
                 </View>
-                <Text style={[styles.debugSectionLabel, { marginTop: 16 }]}>בדיקות UI</Text>
+                <Text style={[styles.debugSectionLabel, { marginTop: 16 }]}>
+                  בדיקות UI
+                </Text>
                 <View style={styles.debugRows}>
-                  <DebugButton iconName="credit-card" label="פתח מסך תשלום (Preview)" onPress={openPaywallPreview} />
-                  <DebugButton iconName="login" label="פתח מסך התחברות (Preview)" onPress={openSignInPreview} />
-                  <DebugButton iconName="person-add" label="פתח מסך הרשמה (Preview)" onPress={openSignUpPreview} />
+                  <DebugButton
+                    iconName="credit-card"
+                    label="פתח מסך תשלום (Preview)"
+                    onPress={openPaywallPreview}
+                  />
+                  <DebugButton
+                    iconName="login"
+                    label="פתח מסך התחברות (Preview)"
+                    onPress={openSignInPreview}
+                  />
+                  <DebugButton
+                    iconName="person-add"
+                    label="פתח מסך הרשמה (Preview)"
+                    onPress={openSignUpPreview}
+                  />
                 </View>
               </View>
             )}
