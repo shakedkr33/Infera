@@ -6,8 +6,9 @@ const PRIMARY = '#308ce8';
 
 const OPTIONS: { key: ReminderOption; label: string }[] = [
   { key: 'none', label: 'ללא' },
-  { key: 'in_hour', label: 'בעוד שעה' },
-  { key: 'in_two_hours', label: 'בעוד שעתיים' },
+  { key: 'morning', label: 'בבוקר' },
+  { key: 'evening', label: 'בערב' },
+  { key: 'at_time', label: 'בזמן' },
   { key: 'hour_before', label: 'שעה לפני' },
   { key: 'custom', label: 'מותאם אישית' },
 ];

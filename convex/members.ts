@@ -183,43 +183,13 @@ export const listMyFamilyContacts = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
-    console.log('[DEBUG] listMyFamilyContacts userId:', userId);
     if (!userId) return { selfEntityId: null, members: [] };
 
     // FIXED: use shared resolveMySpaceId so this function and updateMyProfile
     // always resolve the same spaceId for the same user.
     const spaceId = await resolveMySpaceId(ctx, userId);
-    console.log('[DEBUG] listMyFamilyContacts spaceId:', spaceId);
 
     if (!spaceId) return { selfEntityId: null, members: [] };
-
-    const allRowsInSpace = await ctx.db
-      .query('members')
-      .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
-      .collect();
-    console.log(
-      '[DEBUG] ALL rows in space (no filter):',
-      JSON.stringify(
-        allRowsInSpace.map((r) => ({
-          _id: r._id,
-          kind: r.kind,
-          role: r.role,
-          displayName: r.displayName,
-          userId: r.userId,
-        }))
-      )
-    );
-    console.log(
-      '[DEBUG YANIV] ALL rows in Yaniv space:',
-      JSON.stringify(
-        allRowsInSpace.map((r) => ({
-          _id: r._id,
-          kind: r.kind,
-          role: r.role,
-          displayName: r.displayName,
-        }))
-      )
-    );
 
     // Primary path: use by_kind index for rows that have kind stamped
     const indexedEntities = await ctx.db
@@ -229,36 +199,12 @@ export const listMyFamilyContacts = query({
       )
       .collect();
 
-    console.log('[DEBUG YANIV] by_kind entity rows:', indexedEntities.length);
-    console.log(
-      '[DEBUG YANIV] entity rows detail:',
-      JSON.stringify(
-        indexedEntities.map((r) => ({
-          _id: r._id,
-          displayName: r.displayName,
-          kind: r.kind,
-          spaceId: r.spaceId,
-        }))
-      )
-    );
-
     // Fallback path: rows without kind field — resolve inline for backward-compat
     // (will be empty after backfillKind runs once)
     const allRows = await ctx.db
       .query('members')
       .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
       .collect();
-    console.log(
-      '[DEBUG] all rows in space:',
-      JSON.stringify(
-        allRows.map((r) => ({
-          _id: r._id,
-          kind: r.kind,
-          role: r.role,
-          displayName: r.displayName,
-        }))
-      )
-    );
 
     const unstampedEntities = allRows.filter(
       (r) => r.kind === undefined && resolveKind(r) === 'entity'
@@ -270,8 +216,6 @@ export const listMyFamilyContacts = query({
       ...indexedEntities,
       ...unstampedEntities.filter((r) => !seen.has(r._id)),
     ];
-
-    console.log('[DEBUG] entity rows found:', entities.length);
 
     // FIXED: listMyFamilyContacts now returns selfEntityId to enable client-side self-exclusion.
     const selfEntityRow = entities.find(
@@ -329,6 +273,14 @@ export const listMyFamilyContacts = query({
 
     return {
       selfEntityId: selfEntityRow?._id ?? null,
+      selfEntity: selfEntityRow
+        ? {
+            _id: selfEntityRow._id,
+            displayName: selfEntityRow.displayName,
+            color: selfEntityRow.color,
+            matchedUserId: selfEntityRow.matchedUserId,
+          }
+        : null,
       members: [
         ...(adminEntry ? [adminEntry] : []),
         // FIXED: e164ToLocal applied to all entity rows, not just admin entry

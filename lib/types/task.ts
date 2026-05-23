@@ -1,30 +1,38 @@
-// ─── Legacy types (used by existing TaskEditorScreen) ─────────────────────────
+import type { EventAttachmentDraft } from '@/lib/types/event';
 
-export type DateOption = 'today' | 'other' | 'none';
-
-export type ReminderOption =
+export type TaskDateOption =
   | 'none'
-  | 'in_hour'
-  | 'in_two_hours'
+  | 'today'
+  | 'tomorrow'
+  | 'other'
+  | 'in_one_hour'
+  | 'in_two_hours';
+
+export type TaskReminderType =
+  | 'none'
+  | 'morning'
+  | 'evening'
+  | 'at_time'
   | 'hour_before'
   | 'custom';
 
-export type RepeatOption = 'daily' | 'weekly' | 'specific_days';
+export type PersistedTaskReminderType = Exclude<TaskReminderType, 'none'>;
 
-export interface SubTask {
+export type TaskReminderUnit = 'minutes' | 'hours' | 'days';
+
+export interface TaskReminder {
   id: string;
-  title: string;
-  completed: boolean;
+  type: PersistedTaskReminderType;
+  customAmount?: number;
+  customUnit?: TaskReminderUnit;
+  customReminderAt?: number;
+  label?: string;
 }
 
-export interface TaskAssignee {
-  id: string;
-  name: string;
-  initial: string;
-  color: string;
-}
+export type TaskRecurrenceType = 'none' | 'daily' | 'weekly' | 'specific_days';
 
-// ─── New category types ────────────────────────────────────────────────────────
+export type ReminderOption = TaskReminderType;
+export type RepeatOption = Exclude<TaskRecurrenceType, 'none'>;
 
 export type TaskCategory = 'personal' | 'shopping' | 'family' | 'work';
 
@@ -37,6 +45,14 @@ export const TASK_CATEGORIES: {
   { key: 'family', label: 'משפחה' },
   { key: 'work', label: 'עבודה' },
 ] as const;
+
+export const TASK_FILTERS = [
+  'הכל',
+  ...TASK_CATEGORIES.map((category) => category.label),
+  'אירועים',
+] as const;
+
+export type TaskFilter = (typeof TASK_FILTERS)[number];
 
 export const TASK_CATEGORY_LABELS: Record<TaskCategory, string> = {
   personal: 'אישי',
@@ -55,21 +71,53 @@ export function getTaskCategoryLabel(category?: string): string {
     : TASK_CATEGORY_LABELS.personal;
 }
 
-// ─── TaskDraft (used by TaskEditorScreen) ─────────────────────────────────────
+export type SubTaskAttachmentType = 'image' | 'file';
+
+/** Subtask file (same draft/persist pattern as EventAttachmentDraft + id/type). */
+export interface SubTaskAttachment {
+  id: string;
+  type: SubTaskAttachmentType;
+  storageId?: string;
+  originalName: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt?: number;
+  localUri?: string;
+}
+
+export interface SubTask {
+  id: string;
+  title: string;
+  completed: boolean;
+  attachment?: SubTaskAttachment;
+}
+
+export interface TaskAssignee {
+  id: string;
+  name: string;
+  initial: string;
+  color: string;
+}
 
 export interface TaskDraft {
   title: string;
-  dateOption: DateOption;
+  dateOption: TaskDateOption;
   selectedDate?: number;
   selectedTime?: string;
-  reminder: ReminderOption;
-  customReminder?: string;
-  repeat?: RepeatOption;
-  linkedEventId?: string;
-  assignees: string[];
-  subtasks: SubTask[];
-  allowSubtaskEditing: boolean;
-  notes: string;
-  isRoutine: boolean;
+  hasTime: boolean;
+  reminders: TaskReminder[];
+  recurrenceType: TaskRecurrenceType;
+  selectedWeekdays: number[];
   category: TaskCategory;
+  assignedTo?: string;
+  assignedToMemberId?: string;
+  assignedToUserIds: string[];
+  assignedToMemberIds: string[];
+  reminderError?: string;
+  linkedEventId?: string;
+  subtasks: SubTask[];
+  allowParticipantEditing: boolean;
+  notes: string;
+  attachments: EventAttachmentDraft[];
 }
