@@ -23,9 +23,12 @@ type Task = {
   id: string;
   title: string;
   category: string;
+  completed: boolean;
+  dueDate?: number;
+  createdAt?: number;
+  completedAt?: number;
+  updatedAt?: number;
   isUrgent?: boolean;
-  isOverdue?: boolean;
-  completed?: boolean;
   subtasks?: {
     id: string;
     title: string;
@@ -43,6 +46,23 @@ type AssignedEventTask = {
   communityName: string;
 };
 
+type ImportantItemTask = {
+  id: string;
+  title: string;
+  completed: boolean;
+  eventTitle: string;
+  eventStartTime: number;
+  eventAllDay: boolean;
+  communityName: string;
+};
+
+type AnyTask =
+  | ({ kind: 'personal'; effectiveDate?: number } & Task)
+  | ({ kind: 'event'; effectiveDate: number } & AssignedEventTask)
+  | ({ kind: 'important'; effectiveDate: number } & ImportantItemTask);
+
+type Bucket = 'overdue' | 'today' | 'upcoming' | 'undated' | 'completed';
+
 function formatEventTaskDate(timestamp: number, allDay: boolean): string {
   const date = new Date(timestamp);
   const dateText = date.toLocaleDateString('he-IL', {
@@ -55,6 +75,58 @@ function formatEventTaskDate(timestamp: number, allDay: boolean): string {
     minute: '2-digit',
   });
   return `${dateText} · ${timeText}`;
+}
+
+const BUCKET_LABELS: Record<Bucket, string> = {
+  overdue: 'עבר המועד',
+  today: 'היום',
+  upcoming: 'בהמשך',
+  undated: 'ללא תאריך',
+  completed: 'בוצעו',
+};
+
+const BUCKET_ORDER: Bucket[] = [
+  'overdue',
+  'today',
+  'upcoming',
+  'undated',
+  'completed',
+];
+
+function getTaskBucket(
+  effectiveDate: number | undefined,
+  completed: boolean
+): Bucket {
+  if (completed) return 'completed';
+  if (effectiveDate === undefined) return 'undated';
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date(now);
+  todayEnd.setHours(23, 59, 59, 999);
+  if (effectiveDate < todayStart.getTime()) return 'overdue';
+  if (effectiveDate <= todayEnd.getTime()) return 'today';
+  return 'upcoming';
+}
+
+function getTaskSortValue(task: AnyTask, bucket: Bucket): number {
+  switch (bucket) {
+    case 'overdue':
+      return task.effectiveDate ?? 0;
+    case 'today':
+    case 'upcoming':
+      return task.effectiveDate ?? Number.MAX_SAFE_INTEGER;
+    case 'undated':
+      if (task.kind === 'personal') {
+        return task.updatedAt ?? task.createdAt ?? 0;
+      }
+      return 0;
+    case 'completed':
+      if (task.kind === 'personal') {
+        return task.completedAt ?? task.updatedAt ?? task.createdAt ?? 0;
+      }
+      return task.effectiveDate ?? 0;
+  }
 }
 
 /* MOCK_TASKS – הוסר, נתונים מגיעים מ-Convex:
@@ -113,22 +185,27 @@ export default function TasksScreen() {
     api.eventTasks.listMyAssignedEventTasks,
     eventTaskRange
   );
+  const importantItemTaskRows = useQuery(
+    api.tasks.listMyImportantItemTasks,
+    {}
+  );
 
   // ממיר נתוני Convex לפורמט Task המקומי
   const allConvexTasks: Task[] = useMemo(() => {
-    const dated = (convexTasks ?? []).map((t) => ({
-      id: t._id,
-      title: t.title,
-      category: t.category ?? 'אישי', // TODO: להוסיף category לסכמה
-      completed: t.completed,
-    }));
-    const undated = (convexUndated ?? []).map((t) => ({
+    const mapTask = (t: NonNullable<typeof convexTasks>[number]): Task => ({
       id: t._id,
       title: t.title,
       category: t.category ?? 'אישי',
       completed: t.completed,
-    }));
-    return [...dated, ...undated];
+      dueDate: t.dueDate,
+      createdAt: t.createdAt,
+      completedAt: t.completedAt,
+      updatedAt: t.updatedAt,
+    });
+    return [
+      ...(convexTasks ?? []).map(mapTask),
+      ...(convexUndated ?? []).map(mapTask),
+    ];
   }, [convexTasks, convexUndated]);
 
   // ── Convex: mutations ────────────────────────────────────────────────────
@@ -174,16 +251,7 @@ export default function TasksScreen() {
     }
   };
 
-  // ===== לוגיקת סינון משולבת (פילטר + חיפוש) =====
-  const filteredTasks = allConvexTasks.filter((task) => {
-    // TODO: לסנן גם לפי category אמיתי מ-Convex
-    const matchesFilter =
-      activeFilter === 'הכל' || task.category === activeFilter;
-    const matchesSearch = task.title
-      .toLowerCase()
-      .includes(searchQuery.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
+  // ===== בניית רשימה מאוחדת + סינון =====
   const assignedEventTasks: AssignedEventTask[] = useMemo(
     () =>
       (assignedEventTaskRows ?? []).map((task) => ({
@@ -197,19 +265,102 @@ export default function TasksScreen() {
       })),
     [assignedEventTaskRows]
   );
-  const filteredAssignedEventTasks = assignedEventTasks.filter((task) => {
-    const matchesFilter = activeFilter === 'הכל' || activeFilter === 'אירועים';
-    const normalizedSearch = searchQuery.toLowerCase();
-    const matchesSearch =
-      task.title.toLowerCase().includes(normalizedSearch) ||
-      task.eventTitle.toLowerCase().includes(normalizedSearch) ||
-      task.communityName.toLowerCase().includes(normalizedSearch);
-    return matchesFilter && matchesSearch;
-  });
 
-  // עכשיו מחלקים ל"לביצוע" ו"בוצעו" מתוך הרשימה שכבר סוננה
-  const pendingTasks = filteredTasks.filter((task) => !task.completed);
-  const completedTasks = filteredTasks.filter((task) => task.completed);
+  const importantItemTasks: ImportantItemTask[] = useMemo(
+    () =>
+      (importantItemTaskRows ?? []).map((task) => ({
+        id: task._id,
+        title: task.title,
+        completed: task.completed,
+        eventTitle: task.eventTitle,
+        eventStartTime: task.eventStartTime,
+        eventAllDay: task.eventAllDay,
+        communityName: task.communityName,
+      })),
+    [importantItemTaskRows]
+  );
+
+  // Unified list: personal + event + important-item
+  const allTasks: AnyTask[] = useMemo(
+    () => [
+      ...allConvexTasks.map(
+        (t): AnyTask => ({
+          kind: 'personal',
+          ...t,
+          effectiveDate: t.dueDate,
+        })
+      ),
+      ...assignedEventTasks.map(
+        (t): AnyTask => ({
+          kind: 'event',
+          ...t,
+          effectiveDate: t.eventStartTime,
+        })
+      ),
+      ...importantItemTasks.map(
+        (t): AnyTask => ({
+          kind: 'important',
+          ...t,
+          effectiveDate: t.eventStartTime,
+        })
+      ),
+    ],
+    [allConvexTasks, assignedEventTasks, importantItemTasks]
+  );
+
+  // Filter by active filter chip + search query
+  const filteredAllTasks = useMemo(() => {
+    const search = searchQuery.toLowerCase();
+    return allTasks.filter((task) => {
+      // category / kind filter
+      let matchesFilter: boolean;
+      if (activeFilter === 'הכל') {
+        matchesFilter = true;
+      } else if (activeFilter === 'אירועים') {
+        matchesFilter = task.kind === 'event' || task.kind === 'important';
+      } else {
+        // "אישי" or any explicit category
+        matchesFilter =
+          task.kind === 'personal' && task.category === activeFilter;
+      }
+      if (!matchesFilter) return false;
+
+      // text search
+      if (!search) return true;
+      if (task.title.toLowerCase().includes(search)) return true;
+      if (task.kind === 'event' || task.kind === 'important') {
+        return (
+          task.eventTitle.toLowerCase().includes(search) ||
+          task.communityName.toLowerCase().includes(search)
+        );
+      }
+      return false;
+    });
+  }, [allTasks, activeFilter, searchQuery]);
+
+  // Group into 5 buckets and sort each
+  const buckets = useMemo((): Record<Bucket, AnyTask[]> => {
+    const groups: Record<Bucket, AnyTask[]> = {
+      overdue: [],
+      today: [],
+      upcoming: [],
+      undated: [],
+      completed: [],
+    };
+    for (const task of filteredAllTasks) {
+      groups[getTaskBucket(task.effectiveDate, task.completed)].push(task);
+    }
+    for (const bucket of BUCKET_ORDER) {
+      const isDesc =
+        bucket === 'overdue' || bucket === 'undated' || bucket === 'completed';
+      groups[bucket].sort((a, b) => {
+        const av = getTaskSortValue(a, bucket);
+        const bv = getTaskSortValue(b, bucket);
+        return isDesc ? bv - av : av - bv;
+      });
+    }
+    return groups;
+  }, [filteredAllTasks]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -276,68 +427,77 @@ export default function TasksScreen() {
           style={styles.tasksScrollView}
           showsVerticalScrollIndicator={false}
         >
-          {/* Pending Tasks Section */}
-          {pendingTasks.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>לביצוע</Text>
-              {pendingTasks.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  isExpanded={expandedTasks.has(task.id)}
-                  onToggleExpansion={() => toggleTaskExpansion(task.id)}
-                  onToggleSubtask={(subtaskId) =>
-                    toggleSubtask(task.id, subtaskId)
+          {BUCKET_ORDER.map((bucket) => {
+            const tasks = buckets[bucket];
+            if (tasks.length === 0) return null;
+            const isOverdueBucket = bucket === 'overdue';
+            return (
+              <View key={bucket} style={styles.section}>
+                <Text
+                  style={[
+                    styles.sectionTitle,
+                    isOverdueBucket && styles.sectionTitleOverdue,
+                  ]}
+                >
+                  {BUCKET_LABELS[bucket]}
+                </Text>
+                {tasks.map((task) => {
+                  if (task.kind === 'event') {
+                    return (
+                      <EventTaskCard
+                        key={task.id}
+                        task={task}
+                        isOverdue={isOverdueBucket}
+                        onToggle={async () => {
+                          try {
+                            await toggleEventTaskMutation({
+                              id: task.id as Id<'eventTasks'>,
+                            });
+                          } catch {
+                            // silently ignore
+                          }
+                        }}
+                      />
+                    );
                   }
-                  onToggleCompletion={() => toggleTaskCompletion(task.id)}
-                  onPress={() =>
-                    router.push(`/(authenticated)/task/${task.id}` as never)
+                  if (task.kind === 'important') {
+                    return (
+                      <ImportantItemTaskCard
+                        key={task.id}
+                        task={task}
+                        isOverdue={isOverdueBucket}
+                        onToggle={async () => {
+                          try {
+                            await toggleCompletedMutation({
+                              id: task.id as Id<'tasks'>,
+                            });
+                          } catch {
+                            // silently ignore
+                          }
+                        }}
+                      />
+                    );
                   }
-                />
-              ))}
-            </View>
-          )}
-
-          {filteredAssignedEventTasks.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>משימות מאירועים</Text>
-              {filteredAssignedEventTasks.map((task) => (
-                <EventTaskCard
-                  key={task.id}
-                  task={task}
-                  onToggle={async () => {
-                    try {
-                      await toggleEventTaskMutation({
-                        id: task.id as Id<'eventTasks'>,
-                      });
-                    } catch {
-                      // silently ignore
-                    }
-                  }}
-                />
-              ))}
-            </View>
-          )}
-
-          {/* Completed Tasks Section */}
-          {completedTasks.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>בוצעו</Text>
-              {completedTasks.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  isExpanded={false}
-                  onToggleExpansion={() => {}}
-                  onToggleSubtask={() => {}}
-                  onToggleCompletion={() => toggleTaskCompletion(task.id)}
-                  onPress={() =>
-                    router.push(`/(authenticated)/task/${task.id}` as never)
-                  }
-                />
-              ))}
-            </View>
-          )}
+                  return (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      isOverdue={isOverdueBucket}
+                      isExpanded={expandedTasks.has(task.id)}
+                      onToggleExpansion={() => toggleTaskExpansion(task.id)}
+                      onToggleSubtask={(subtaskId) =>
+                        toggleSubtask(task.id, subtaskId)
+                      }
+                      onToggleCompletion={() => toggleTaskCompletion(task.id)}
+                      onPress={() =>
+                        router.push(`/(authenticated)/task/${task.id}` as never)
+                      }
+                    />
+                  );
+                })}
+              </View>
+            );
+          })}
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -355,6 +515,7 @@ export default function TasksScreen() {
 function TaskCard({
   task,
   isExpanded,
+  isOverdue,
   onToggleExpansion,
   onToggleSubtask,
   onToggleCompletion,
@@ -362,6 +523,7 @@ function TaskCard({
 }: {
   task: Task;
   isExpanded: boolean;
+  isOverdue?: boolean;
   onToggleExpansion: () => void;
   onToggleSubtask: (subtaskId: string) => void;
   onToggleCompletion: () => void;
@@ -379,6 +541,7 @@ function TaskCard({
         styles.taskCard,
         task.isUrgent && styles.taskCardUrgent,
         task.completed && styles.taskCardCompleted,
+        isOverdue && !task.completed && styles.taskCardOverdue,
       ]}
       accessible={true}
       accessibilityRole="button"
@@ -419,11 +582,6 @@ function TaskCard({
 
           {/* Tags */}
           <View style={styles.tagsRow}>
-            {task.isOverdue && (
-              <View style={[styles.tag, styles.tagOverdue]}>
-                <Text style={styles.tagTextOverdue}>איחור</Text>
-              </View>
-            )}
             <View style={styles.tag}>
               <Text style={styles.tagText}>{task.category}</Text>
             </View>
@@ -507,14 +665,20 @@ function TaskCard({
 
 function EventTaskCard({
   task,
+  isOverdue,
   onToggle,
 }: {
   task: AssignedEventTask;
+  isOverdue?: boolean;
   onToggle: () => void;
 }) {
   return (
     <View
-      style={[styles.taskCard, task.completed && styles.taskCardCompleted]}
+      style={[
+        styles.taskCard,
+        task.completed && styles.taskCardCompleted,
+        isOverdue && !task.completed && styles.taskCardOverdue,
+      ]}
       accessible={true}
       accessibilityLabel={`משימת אירוע: ${task.title}`}
     >
@@ -555,6 +719,71 @@ function EventTaskCard({
             <View style={styles.tag}>
               <Text style={styles.tagText}>{task.communityName}</Text>
             </View>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function ImportantItemTaskCard({
+  task,
+  isOverdue,
+  onToggle,
+}: {
+  task: ImportantItemTask;
+  isOverdue?: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <View
+      style={[
+        styles.taskCard,
+        task.completed && styles.taskCardCompleted,
+        isOverdue && !task.completed && styles.taskCardOverdue,
+      ]}
+      accessible={true}
+      accessibilityLabel={`חשוב לזכור: ${task.title}`}
+    >
+      <View style={styles.taskCardHeader}>
+        <Pressable
+          style={styles.checkbox}
+          onPress={onToggle}
+          accessible={true}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: task.completed }}
+          accessibilityLabel={task.completed ? 'בוטל סימון' : 'סמן כהושלם'}
+        >
+          {task.completed ? (
+            <MaterialIcons name="check-circle" size={24} color={PRIMARY_BLUE} />
+          ) : (
+            <View style={styles.checkboxEmpty} />
+          )}
+        </Pressable>
+        <View style={styles.taskContent}>
+          <Text
+            style={[
+              styles.taskTitle,
+              task.completed && styles.taskTitleCompleted,
+            ]}
+          >
+            {task.title}
+          </Text>
+          <Text style={styles.eventTaskMeta} numberOfLines={1}>
+            {task.eventTitle}
+          </Text>
+          <Text style={styles.eventTaskMeta} numberOfLines={1}>
+            {formatEventTaskDate(task.eventStartTime, task.eventAllDay)}
+          </Text>
+          <View style={styles.tagsRow}>
+            <View style={[styles.tag, styles.importantItemTag]}>
+              <Text style={styles.importantItemTagText}>חשוב לזכור</Text>
+            </View>
+            {task.communityName ? (
+              <View style={styles.tag}>
+                <Text style={styles.tagText}>{task.communityName}</Text>
+              </View>
+            ) : null}
           </View>
         </View>
       </View>
@@ -673,6 +902,9 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     textAlign: 'right',
   },
+  sectionTitleOverdue: {
+    color: '#D97706',
+  },
 
   /* Task Card */
   taskCard: {
@@ -694,6 +926,11 @@ const styles = StyleSheet.create({
   taskCardCompleted: {
     opacity: 0.6,
     backgroundColor: '#f9fafb',
+  },
+  taskCardOverdue: {
+    backgroundColor: '#FFFBF0',
+    borderRightWidth: 3,
+    borderRightColor: '#FDE68A',
   },
   taskCardHeader: {
     flexDirection: 'row-reverse',
@@ -776,6 +1013,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: PRIMARY_BLUE,
+  },
+  importantItemTag: {
+    backgroundColor: '#FEF3C7',
+  },
+  importantItemTagText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#D97706',
   },
   tagTextOverdue: {
     fontSize: 12,

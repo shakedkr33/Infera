@@ -65,6 +65,9 @@ function isPersonalTaskForUser(
   task: Doc<'tasks'>,
   userId: Doc<'users'>['_id']
 ): boolean {
+  // Important-item tasks are shown in the event tasks section, not the standalone list
+  if (task.sourceType === 'community_event_important_item') return false;
+
   if (task.assignedTo === userId) {
     return true;
   }
@@ -591,6 +594,63 @@ export const getMyImportantItemChecks = query({
       result[eventKey][task.sourceImportantItemId] = task.completed;
     }
     return result;
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Returns all personal "חשוב לזכור" tasks for the current user,
+// enriched with event title / date and community name, so the
+// Tasks screen can render them under "משימות מאירועים".
+// ─────────────────────────────────────────────────────────────
+export const listMyImportantItemTasks = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const tasks = await ctx.db
+      .query('tasks')
+      .withIndex('by_assigned', (q) => q.eq('assignedTo', userId))
+      .filter((q) =>
+        q.eq(q.field('sourceType'), 'community_event_important_item')
+      )
+      .collect();
+
+    const results = await Promise.all(
+      tasks.map(async (task) => {
+        if (!task.sourceEventId) return null;
+
+        const event = await ctx.db.get(task.sourceEventId);
+        if (!event) return null;
+
+        // Only surface items that still exist in the event
+        const currentItemIds = new Set(
+          (event.importantItems ?? []).map((i) => i.id)
+        );
+        const stillValid =
+          task.sourceImportantItemId !== undefined &&
+          currentItemIds.has(task.sourceImportantItemId);
+        if (!stillValid) return null;
+
+        let communityName = '';
+        if (event.communityId) {
+          const community = await ctx.db.get(event.communityId);
+          communityName = community?.name ?? '';
+        }
+
+        return {
+          _id: task._id,
+          title: task.title,
+          completed: task.completed,
+          eventTitle: event.title,
+          eventStartTime: event.startTime,
+          eventAllDay: event.allDay ?? false,
+          communityName,
+        };
+      })
+    );
+
+    return results.filter((r): r is NonNullable<typeof r> => r !== null);
   },
 });
 
