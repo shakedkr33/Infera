@@ -262,6 +262,7 @@ export default defineSchema({
   })
     .index('by_space_completed', ['spaceId', 'completed'])
     .index('by_assigned', ['assignedTo'])
+    .index('by_creator', ['createdBy'])
     .index('by_space', ['spaceId'])
     .index('by_community', ['communityId'])
     .index('by_assigned_source_event', ['assignedTo', 'sourceEventId'])

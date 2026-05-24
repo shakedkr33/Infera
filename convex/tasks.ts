@@ -710,6 +710,84 @@ export const listEventImportantItems = query({
 });
 
 // ─────────────────────────────────────────────────────────────
+// שליפת כל המשימות שהמשתמש מעורב בהן (ללא סינון לפי space)
+// מחזיר:
+//   1. משימות שנוצרו על ידי המשתמש (by_creator)
+//   2. משימות שהוקצו לו כ-assignedTo הראשי (by_assigned)
+//   3. משימות שנוצרו על ידי חברי ה-space שלו שבהן הוא
+//      מופיע ב-assignedToUserIds (assignee משני)
+// ─────────────────────────────────────────────────────────────
+export const listMyTasks = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const taskMap = new Map<string, Doc<'tasks'>>();
+
+    const addTask = (task: Doc<'tasks'>): void => {
+      const key = task._id as string;
+      if (!taskMap.has(key)) taskMap.set(key, task);
+    };
+
+    // ── 1. Tasks where current user is primary assignee ────────────────────
+    const assignedTasks = await ctx.db
+      .query('tasks')
+      .withIndex('by_assigned', (q) => q.eq('assignedTo', userId))
+      .filter((q) => q.eq(q.field('deletedAt'), undefined))
+      .collect();
+    for (const task of assignedTasks) addTask(task);
+
+    // ── 2. Tasks created by current user ───────────────────────────────────
+    const createdTasks = await ctx.db
+      .query('tasks')
+      .withIndex('by_creator', (q) => q.eq('createdBy', userId))
+      .filter((q) => q.eq(q.field('deletedAt'), undefined))
+      .collect();
+    for (const task of createdTasks) addTask(task);
+
+    // ── 3. Tasks created by space co-members where user is secondary assignee
+    // (handles the case where assignedToUserIds includes userId but
+    //  assignedTo points to a different primary assignee)
+    const memberRows = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+
+    const spaceIds = [...new Set(memberRows.map((m) => m.spaceId))];
+
+    for (const spaceId of spaceIds) {
+      const spaceMemberRows = await ctx.db
+        .query('members')
+        .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
+        .collect();
+
+      const coMemberUserIds = spaceMemberRows
+        .filter((m) => m.userId !== undefined && m.userId !== userId)
+        .map((m) => m.userId as Id<'users'>);
+
+      for (const coUserId of coMemberUserIds) {
+        const coTasks = await ctx.db
+          .query('tasks')
+          .withIndex('by_creator', (q) => q.eq('createdBy', coUserId))
+          .filter((q) => q.eq(q.field('deletedAt'), undefined))
+          .collect();
+
+        for (const task of coTasks) {
+          if (taskMap.has(task._id as string)) continue;
+          const userIds = (task.assignedToUserIds ?? []) as Id<'users'>[];
+          if (userIds.includes(userId)) {
+            addTask(task);
+          }
+        }
+      }
+    }
+
+    return [...taskMap.values()];
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // שליפת כל המשימות של space (עם תאריך)
 // ─────────────────────────────────────────────────────────────
 export const listBySpace = query({

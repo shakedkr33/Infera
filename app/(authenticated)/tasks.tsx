@@ -357,16 +357,18 @@ function resolveAssigneeDisplays(
   const userIds = [...task.assignedToUserIds];
   if (task.assignedTo) userIds.push(task.assignedTo);
   for (const userId of userIds) {
-    const name =
-      userId === currentUserId
-        ? 'אני'
-        : (maps.userNames.get(userId) ?? 'בן משפחה');
+    // Never show the current user's own avatar — on "My Tasks" the viewer
+    // is implied; only other participants should be visible.
+    if (userId === currentUserId) continue;
+    const name = maps.userNames.get(userId) ?? 'בן משפחה';
     addDisplay(`user:${userId}`, name, maps.userColors.get(userId));
   }
 
   const memberIds = [...task.assignedToMemberIds];
   if (task.assignedToMemberId) memberIds.push(task.assignedToMemberId);
   for (const memberId of memberIds) {
+    // Skip the self-entity row (current user's own family entity)
+    if (memberId === maps.selfEntityId) continue;
     const name = maps.memberNames.get(memberId) ?? 'בן משפחה';
     addDisplay(`member:${memberId}`, name, maps.memberColors.get(memberId));
   }
@@ -533,18 +535,12 @@ export default function TasksScreen() {
     }
   };
 
-  const spaceId = useQuery(api.users.getMySpace);
   const currentUser = useQuery(api.users.getCurrentUser);
   const familyContacts = useQuery(api.members.listMyFamilyContacts);
 
-  const convexTasks = useQuery(
-    api.tasks.listBySpace,
-    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
-  );
-  const convexUndated = useQuery(
-    api.tasks.listUndated,
-    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
-  );
+  // User-centric query — returns all tasks the current user is involved in,
+  // regardless of which space they live in (fixes shared task visibility).
+  const myTasks = useQuery(api.tasks.listMyTasks, {});
   const eventTaskRange = useMemo(() => {
     const fromDate = new Date();
     fromDate.setHours(0, 0, 0, 0);
@@ -613,7 +609,7 @@ export default function TasksScreen() {
     const now = Date.now();
 
     // ── Regular personal/family/work/shopping tasks ──────────────────────────
-    for (const row of [...(convexTasks ?? []), ...(convexUndated ?? [])]) {
+    for (const row of myTasks ?? []) {
       const assignedToUserIds = ((row.assignedToUserIds ?? []) as string[]).map(
         String
       );
@@ -789,8 +785,7 @@ export default function TasksScreen() {
     });
   }, [
     assignedEventTaskRows,
-    convexTasks,
-    convexUndated,
+    myTasks,
     currentUserId,
     importantItemTaskRows,
     memberMaps,
