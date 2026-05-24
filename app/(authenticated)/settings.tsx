@@ -239,6 +239,23 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* נמחקו לאחרונה */}
+        <View className="mx-4 mb-4">
+          <TouchableOpacity
+            onPress={() => router.push('/(authenticated)/recently-deleted')}
+            className={`${tw.flexRow} items-center gap-3 p-4 rounded-xl bg-zinc-900 border border-zinc-800`}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="נמחקו לאחרונה"
+          >
+            <ChevronLeft size={20} color="#71717a" />
+            <Text className={`flex-1 text-white text-base ${tw.textStart}`}>
+              נמחקו לאחרונה
+            </Text>
+            <Trash2 size={20} color="#a1a1aa" />
+          </TouchableOpacity>
+        </View>
+
         {/* כפתור התנתקות */}
         <View className="mx-4 mb-4">
           <TouchableOpacity

@@ -542,6 +542,8 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="community-reminder/new" options={{ href: null }} />
           {/* FIXED: linked-event detail screen — hidden from tab bar */}
           <Tabs.Screen name="linked-event/[id]" options={{ href: null }} />
+          {/* Recently Deleted — accessible from Profile/Settings only, not a tab */}
+          <Tabs.Screen name="recently-deleted" options={{ href: null }} />
         </Tabs>
 
         <ActionSheetModal

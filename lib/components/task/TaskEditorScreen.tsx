@@ -592,6 +592,7 @@ export default function TaskEditorScreen({
   const [customAmount, setCustomAmount] = useState(30);
   const [customUnit, setCustomUnit] = useState<TaskReminderUnit>('minutes');
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const numListRef = useRef<FlatList<number>>(null);
   const editSnapshotRef = useRef<string | null>(null);
@@ -606,6 +607,7 @@ export default function TaskEditorScreen({
   );
   const createTask = useMutation(api.tasks.create);
   const updateTask = useMutation(api.tasks.update);
+  const softDeleteTask = useMutation(api.tasks.softDeleteTask);
   const generateUploadUrl = useMutation(api.events.generateUploadUrl);
 
   const currentUserId = currentUser?._id as Id<'users'> | undefined;
@@ -786,6 +788,47 @@ export default function TaskEditorScreen({
       return;
     }
     navigateToDestination();
+  };
+
+  /**
+   * Soft-delete the task. Ownership is enforced on the backend as well.
+   * A shared task (multiple assignees) gets a stronger warning alert.
+   */
+  const handleDelete = (): void => {
+    if (!taskId || !existingTask) return;
+    const assignedUserIds =
+      (existingTask.assignedToUserIds as string[] | undefined) ?? [];
+    const assignedMemberIds =
+      (existingTask.assignedToMemberIds as string[] | undefined) ?? [];
+    const otherUsers = assignedUserIds.filter(
+      (id) => id !== String(currentUserId)
+    );
+    const shared = otherUsers.length > 0 || assignedMemberIds.length > 0;
+
+    const alertTitle = shared ? 'למחוק את המשימה המשותפת?' : 'למחוק את המשימה?';
+    const alertMessage = shared
+      ? 'המשימה תוסר גם אצל מי ששיתפת איתו. אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.'
+      : 'אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.';
+
+    Alert.alert(alertTitle, alertMessage, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'מחק',
+        style: 'destructive',
+        onPress: async () => {
+          setIsDeleting(true);
+          try {
+            await softDeleteTask({ id: taskId as Id<'tasks'> });
+            navigateToDestination();
+          } catch (error) {
+            console.error('softDeleteTask error:', error);
+            Alert.alert('שגיאה', 'לא הצלחנו למחוק את המשימה. נסה שוב.');
+          } finally {
+            setIsDeleting(false);
+          }
+        },
+      },
+    ]);
   };
 
   const selectDateOption = (option: TaskDateOption): void => {
@@ -1209,7 +1252,24 @@ export default function TaskEditorScreen({
     applyAssigneeSelection(new Set(visibleAssigneeIds));
   };
 
-  const isCtaDisabled = !draft.title.trim() || isSaving;
+  const isCtaDisabled = !draft.title.trim() || isSaving || isDeleting;
+
+  /**
+   * Whether the current user can soft-delete this task from the editor.
+   * Community reminders (communityId set, no sourceType) are not personally deletable.
+   * Only the creator (createdBy === currentUserId) can delete.
+   */
+  const canDeleteFromEditor =
+    !isCreate &&
+    !!existingTask &&
+    !!currentUserId &&
+    String((existingTask as { createdBy?: unknown }).createdBy) ===
+      String(currentUserId) &&
+    // Community reminders are community-owned, not personally deletable
+    !(
+      (existingTask as { communityId?: unknown }).communityId !== undefined &&
+      (existingTask as { sourceType?: unknown }).sourceType === undefined
+    );
 
   if (isCreate && (mySpace === undefined || currentUserId === undefined)) {
     return (
@@ -1601,6 +1661,34 @@ export default function TaskEditorScreen({
               {isSaving ? 'שומרת...' : isCreate ? 'צור משימה' : 'שמור שינויים'}
             </Text>
           </Pressable>
+
+          {canDeleteFromEditor ? (
+            <Pressable
+              style={[
+                styles.deleteButton,
+                isDeleting && styles.deleteButtonDisabled,
+              ]}
+              onPress={handleDelete}
+              disabled={isDeleting || isSaving}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="מחיקת משימה"
+            >
+              <MaterialIcons
+                name="delete-outline"
+                size={18}
+                color={isDeleting ? '#9ca3af' : '#ef4444'}
+              />
+              <Text
+                style={[
+                  styles.deleteButtonText,
+                  isDeleting && styles.deleteButtonTextDisabled,
+                ]}
+              >
+                {isDeleting ? 'מוחק...' : 'מחק משימה'}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
 
@@ -2110,6 +2198,17 @@ const styles = StyleSheet.create({
   ctaButtonDisabled: { backgroundColor: '#e2e8f0' },
   ctaText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   ctaTextDisabled: { color: '#94a3b8' },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 8,
+  },
+  deleteButtonDisabled: { opacity: 0.4 },
+  deleteButtonText: { color: '#ef4444', fontSize: 14, fontWeight: '600' },
+  deleteButtonTextDisabled: { color: '#9ca3af' },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.32)',

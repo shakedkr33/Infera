@@ -16,7 +16,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   APP_ENV,
-  IS_DEV_MODE,
   MOCK_PAYMENTS,
   PAYMENT_SYSTEM_ENABLED,
 } from '@/config/appConfig';
@@ -207,6 +206,12 @@ export default function ProfileScreen() {
             iconName="notifications-none"
             label="התראות"
             onPress={() => console.log('TODO: notifications settings')}
+          />
+          {/* Recently Deleted */}
+          <SettingsRow
+            iconName="delete-outline"
+            label="נמחקו לאחרונה"
+            onPress={() => router.push('/(authenticated)/recently-deleted')}
           />
           {/* Danger zone */}
           <SettingsRow

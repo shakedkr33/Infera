@@ -96,6 +96,15 @@ type Item = {
   myAssignedTasks?: AssignedEventTask[];
   /** "חשוב לזכור" items for community events */
   importantItems?: ImportantItem[];
+  /**
+   * Discriminates the source of a task-type item:
+   * 'personal_task' = from the tasks table, created by current user → can soft-delete
+   * 'event_task'    = from the eventTasks table, assigned by community → open event instead
+   * undefined       = event item (not a task)
+   */
+  taskSource?: 'personal_task' | 'event_task';
+  /** eventId for routing event_task items to the correct event detail screen */
+  taskEventId?: string;
 };
 
 type UndatedTask = {
@@ -223,6 +232,7 @@ export default function HomeScreen() {
 
   // ── Convex: tasks mutations ────────────────────────────────────────────────
   const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
+  const softDeleteTaskMutation = useMutation(api.tasks.softDeleteTask);
   const [showToast, setShowToast] = useState(true);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -232,7 +242,7 @@ export default function HomeScreen() {
   );
 
   // ── Insight card ───────────────────────────────────────────────────────────
-  const [dismissedInsightDate, setDismissedInsightDate] = useState<
+  const [_dismissedInsightDate, setDismissedInsightDate] = useState<
     string | null
   >(null);
 
@@ -404,6 +414,8 @@ export default function HomeScreen() {
           iconColor: '#228BE6',
           assigneeColor: '#E7F5FF',
           completed: t.completed,
+          // Personal task from tasks table — can be soft-deleted
+          taskSource: 'personal_task' as const,
           // TODO: להוסיף category, assignedTo, notes כשהסכמה תורחב
         })),
     [convexTasks, selectedDate]
@@ -502,6 +514,9 @@ export default function HomeScreen() {
         allDay: false,
         groupName: t.communityName,
         communityId: t.communityId as string,
+        // eventTask from eventTasks table — not deletable, opens event instead
+        taskSource: 'event_task' as const,
+        taskEventId: String(t.eventId),
       })),
     [assignedEventTasks]
   );
@@ -662,7 +677,7 @@ export default function HomeScreen() {
     // Assigned event tasks appear as separate actionable items in the timeline.
     // communityEventItems uses event._id; assignedTaskItems uses task._id — no collision.
     // Deduplicate by id as a conservative guard.
-    const timedAssignedTasks = assignedTaskItems.filter((i) => !i.allDay);
+    const _timedAssignedTasks = assignedTaskItems.filter((i) => !i.allDay);
     // FIXED: linked events merged into timeline (timed only; all-day handled separately)
     const timedLinkedEvents = linkedEventItems.filter((i) => !i.allDay);
     const seen = new Set<string>();
@@ -697,6 +712,7 @@ export default function HomeScreen() {
     personalEventItems,
     linkedEventItems,
     communityEventItems,
+    assignedTaskItems,
   ]);
 
   // ── Convex: undated tasks ──────────────────────────────────────────────────
@@ -752,7 +768,7 @@ export default function HomeScreen() {
   // const insightText = allItems.length > 3
   //   ? 'יש לך יום עמוס היום, שווה לשקול להזיז משימה אחת למחר.'
   //   : 'היום שלך נראה רגוע, אולי זה זמן טוב להשלים משהו קטן מהמשימות הפתוחות.';
-  const dismissInsight = () => setDismissedInsightDate(todayISO);
+  const _dismissInsight = () => setDismissedInsightDate(todayISO);
 
   // ── Task handlers ──────────────────────────────────────────────────────────
   const toggleTask = async (id: string) => {
@@ -774,23 +790,50 @@ export default function HomeScreen() {
     }
   };
 
-  const handleDeleteFromSources = (item: Item) => {
-    // TODO: wire to calendar / backend deletion
-    console.log('Delete from sources:', item.id);
+  const handleOpenItemEvent = (item: Item) => {
+    const eventId = item.taskEventId;
+    if (eventId) {
+      router.replace({
+        pathname: '/(authenticated)/event/[id]',
+        params: { id: eventId },
+      } as never);
+      return;
+    }
+    if (item.communityId) {
+      router.replace({
+        pathname: '/(authenticated)/community/[id]',
+        params: { id: item.communityId },
+      } as never);
+      return;
+    }
+    Alert.alert('שגיאה', 'לא הצלחנו לפתוח את האירוע כרגע');
   };
 
   const confirmDelete = (item: Item) => {
-    Alert.alert('מחיקה', 'האם אתה בטוח שברצונך למחוק?', [
-      { text: 'ביטול', style: 'cancel' },
-      {
-        text: 'מחק',
-        style: 'destructive',
-        onPress: () => {
-          handleDeleteFromSources(item);
-          setItems((prev) => prev.filter((i) => i.id !== item.id));
+    if (item.type !== 'task' || item.taskSource !== 'personal_task') {
+      // Community/event-assigned tasks: open the event instead of deleting
+      handleOpenItemEvent(item);
+      return;
+    }
+    Alert.alert(
+      'למחוק את המשימה?',
+      'אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.',
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'מחק',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await softDeleteTaskMutation({ id: item.id as Id<'tasks'> });
+            } catch (error) {
+              console.error('softDeleteTask error:', error);
+              Alert.alert('שגיאה', 'לא הצלחנו למחוק את המשימה. נסה שוב.');
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
 
   const handleCardPress = (item: Item) => {
@@ -829,7 +872,7 @@ export default function HomeScreen() {
     setTimeout(() => {
       dateScrollRef.current?.scrollTo({ x: offset, animated: false });
     }, 80);
-  }, []);
+  }, [daysInMonth, today]);
 
   useEffect(() => {
     const timer = setTimeout(() => setShowToast(false), 5000);
@@ -1556,21 +1599,43 @@ export default function HomeScreen() {
                   .map((item) => (
                     <Swipeable
                       key={item.id}
-                      renderRightActions={() => (
-                        <Pressable
-                          style={stylesRtl.deleteAction}
-                          onPress={() => confirmDelete(item)}
-                          accessible={true}
-                          accessibilityRole="button"
-                          accessibilityLabel="מחק פריט"
-                        >
-                          <MaterialIcons
-                            name="delete-outline"
-                            size={26}
-                            color="white"
-                          />
-                        </Pressable>
-                      )}
+                      renderRightActions={() =>
+                        item.type === 'task' &&
+                        item.taskSource === 'event_task' ? (
+                          <Pressable
+                            style={stylesRtl.openEventAction}
+                            onPress={() => handleOpenItemEvent(item)}
+                            accessible={true}
+                            accessibilityRole="button"
+                            accessibilityLabel="פתיחה באירוע"
+                          >
+                            <MaterialIcons
+                              name="open-in-new"
+                              size={22}
+                              color="white"
+                            />
+                            <Text style={stylesRtl.swipeActionLabel}>
+                              פתח אירוע
+                            </Text>
+                          </Pressable>
+                        ) : (
+                          <Pressable
+                            style={stylesRtl.deleteAction}
+                            onPress={() => confirmDelete(item)}
+                            accessible={true}
+                            accessibilityRole="button"
+                            accessibilityLabel={
+                              item.type === 'task' ? 'מחיקת משימה' : 'מחק פריט'
+                            }
+                          >
+                            <MaterialIcons
+                              name="delete-outline"
+                              size={26}
+                              color="white"
+                            />
+                          </Pressable>
+                        )
+                      }
                     >
                       <Pressable
                         onPress={() => handleCardPress(item)}
@@ -1732,21 +1797,43 @@ export default function HomeScreen() {
                   .map((item) => (
                     <Swipeable
                       key={item.id}
-                      renderRightActions={() => (
-                        <Pressable
-                          style={stylesRtl.deleteAction}
-                          onPress={() => confirmDelete(item)}
-                          accessible={true}
-                          accessibilityRole="button"
-                          accessibilityLabel="מחק פריט"
-                        >
-                          <MaterialIcons
-                            name="delete-outline"
-                            size={26}
-                            color="white"
-                          />
-                        </Pressable>
-                      )}
+                      renderRightActions={() =>
+                        item.type === 'task' &&
+                        item.taskSource === 'event_task' ? (
+                          <Pressable
+                            style={stylesRtl.openEventAction}
+                            onPress={() => handleOpenItemEvent(item)}
+                            accessible={true}
+                            accessibilityRole="button"
+                            accessibilityLabel="פתיחה באירוע"
+                          >
+                            <MaterialIcons
+                              name="open-in-new"
+                              size={22}
+                              color="white"
+                            />
+                            <Text style={stylesRtl.swipeActionLabel}>
+                              פתח אירוע
+                            </Text>
+                          </Pressable>
+                        ) : (
+                          <Pressable
+                            style={stylesRtl.deleteAction}
+                            onPress={() => confirmDelete(item)}
+                            accessible={true}
+                            accessibilityRole="button"
+                            accessibilityLabel={
+                              item.type === 'task' ? 'מחיקת משימה' : 'מחק פריט'
+                            }
+                          >
+                            <MaterialIcons
+                              name="delete-outline"
+                              size={26}
+                              color="white"
+                            />
+                          </Pressable>
+                        )
+                      }
                     >
                       <View
                         style={{
@@ -2921,6 +3008,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 8,
     marginBottom: 12,
+  },
+  openEventAction: {
+    backgroundColor: '#36a9e2',
+    borderRadius: 16,
+    width: 90,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+    marginBottom: 12,
+    gap: 4,
+  },
+  swipeActionLabel: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   // taskCheckbox moved to components/TaskCheckbox.tsx
   taskTitle: {

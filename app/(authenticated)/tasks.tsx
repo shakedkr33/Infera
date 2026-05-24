@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -14,7 +14,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import type { EventItem } from '@/components/EventDetailsBottomSheet';
+import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
@@ -462,6 +465,39 @@ function getSubtaskAttachment(
   return subtask.attachment ?? subtask.image;
 }
 
+/**
+ * A DisplayTask is "personally deletable" if:
+ * - It is from the tasks table (not an eventTask)
+ * - It was created by the current user
+ * - It is not a community reminder (communityId set without sourceType)
+ *
+ * Important items copied from events (sourceType === 'community_event_important_item')
+ * are personally deletable even if communityId is set.
+ */
+function isPersonallyDeletableDisplayTask(
+  task: DisplayTask,
+  currentUserId: string | undefined
+): boolean {
+  if (!currentUserId) return false;
+  if (task.kind === 'eventTask') return false;
+  if (task.createdBy !== currentUserId) return false;
+  // Community reminders (communityId set, no sourceType) are community-shared
+  if (task.communityId && !task.sourceType) return false;
+  return true;
+}
+
+/**
+ * A task is "shared" if it has other assignees beyond the creator.
+ * Owner can still delete, but gets a stronger warning alert.
+ */
+function isSharedTask(task: DisplayTask, currentUserId: string): boolean {
+  const otherUsers = task.assignedToUserIds.filter(
+    (id) => id !== currentUserId
+  );
+  const hasMemberAssignment = task.assignedToMemberIds.length > 0;
+  return otherUsers.length > 0 || hasMemberAssignment;
+}
+
 export default function TasksScreen() {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
@@ -472,6 +508,16 @@ export default function TasksScreen() {
   );
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+
+  // ── Event bottom sheet (for "פתח אירוע" action) ──────────────────────────
+  const [eventSheetVisible, setEventSheetVisible] = useState(false);
+  const [eventSheetEventId, setEventSheetEventId] = useState<string | null>(
+    null
+  );
+  const [eventSheetEvent, setEventSheetEvent] = useState<EventItem | null>(
+    null
+  );
+  const lastDragCloseTimeRef = useRef<number>(0);
   const {
     unseenCount,
     markAllSeen,
@@ -522,6 +568,7 @@ export default function TasksScreen() {
     api.eventTasks.toggleCompleted
   );
   const toggleSubtaskMutation = useMutation(api.tasks.toggleSubtaskCompleted);
+  const softDeleteTaskMutation = useMutation(api.tasks.softDeleteTask);
 
   const currentUserId = currentUser?._id as string | undefined;
 
@@ -907,6 +954,50 @@ export default function TasksScreen() {
     Alert.alert('פרטי משימה', message, actions);
   };
 
+  const handleSoftDelete = (task: DisplayTask): void => {
+    if (!currentUserId) return;
+    const shared = isSharedTask(task, currentUserId);
+    const title = shared ? 'למחוק את המשימה המשותפת?' : 'למחוק את המשימה?';
+    const message = shared
+      ? 'המשימה תוסר גם אצל מי ששיתפת איתו. אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.'
+      : 'אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.';
+    Alert.alert(title, message, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'מחק',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await softDeleteTaskMutation({ id: task.id as Id<'tasks'> });
+          } catch (error) {
+            console.error('softDeleteTask error:', error);
+            Alert.alert('שגיאה', 'לא הצלחנו למחוק את המשימה. נסה שוב.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleOpenTaskEvent = (task: DisplayTask): void => {
+    if (Date.now() - lastDragCloseTimeRef.current < 600) return;
+    // Prefer opening the event bottom sheet; fall back to community route for reminders
+    const eventId = task.eventId ?? task.sourceEventId;
+    if (eventId) {
+      setEventSheetEventId(eventId);
+      setEventSheetEvent(null);
+      setEventSheetVisible(true);
+      return;
+    }
+    if (task.communityId) {
+      router.replace({
+        pathname: '/(authenticated)/community/[id]',
+        params: { id: task.communityId },
+      } as never);
+      return;
+    }
+    Alert.alert('שגיאה', 'לא הצלחנו לפתוח את האירוע כרגע');
+  };
+
   const handleTaskPress = (task: DisplayTask): void => {
     const isEditable =
       task.kind === 'task' &&
@@ -1007,11 +1098,14 @@ export default function TasksScreen() {
                         isOverdue={group.key === 'overdue'}
                         tasks={mineGroups[group.key]}
                         expandedTaskIds={expandedTaskIds}
+                        currentUserId={currentUserId}
                         onToggleCompletion={toggleTaskCompletion}
                         onToggleExpansion={toggleTaskExpansion}
                         onToggleSubtask={toggleSubtask}
                         onOpenImagePreview={setPreviewImageUri}
                         onPressTask={handleTaskPress}
+                        onSoftDelete={handleSoftDelete}
+                        onOpenEvent={handleOpenTaskEvent}
                       />
                     ) : null
                   )}
@@ -1022,21 +1116,65 @@ export default function TasksScreen() {
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>במעקב</Text>
                   <Text style={styles.sectionHelper}>משימות שהוקצו לאחרים</Text>
-                  {trackingTasks.map((task) => (
-                    <TaskCard
-                      key={task.uid}
-                      task={task}
-                      isExpanded={expandedTaskIds.has(task.uid)}
-                      isOverdue={false}
-                      onToggleCompletion={() => toggleTaskCompletion(task)}
-                      onToggleExpansion={() => toggleTaskExpansion(task.uid)}
-                      onToggleSubtask={(subtaskId) =>
-                        toggleSubtask(task, subtaskId)
-                      }
-                      onOpenImagePreview={setPreviewImageUri}
-                      onPress={() => handleTaskPress(task)}
-                    />
-                  ))}
+                  {trackingTasks.map((task) => {
+                    const canDeleteTracking = isPersonallyDeletableDisplayTask(
+                      task,
+                      currentUserId
+                    );
+                    const renderTrackingSwipeAction = () =>
+                      canDeleteTracking ? (
+                        <Pressable
+                          style={styles.swipeDeleteAction}
+                          onPress={() => handleSoftDelete(task)}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityLabel="מחיקת משימה"
+                        >
+                          <MaterialIcons
+                            name="delete-outline"
+                            size={26}
+                            color="#ffffff"
+                          />
+                          <Text style={styles.swipeActionLabel}>מחק</Text>
+                        </Pressable>
+                      ) : (
+                        <Pressable
+                          style={styles.swipeOpenEventAction}
+                          onPress={() => handleOpenTaskEvent(task)}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityLabel="פתיחה באירוע"
+                        >
+                          <MaterialIcons
+                            name="open-in-new"
+                            size={22}
+                            color="#ffffff"
+                          />
+                          <Text style={styles.swipeActionLabel}>פתח אירוע</Text>
+                        </Pressable>
+                      );
+                    return (
+                      <Swipeable
+                        key={task.uid}
+                        renderRightActions={renderTrackingSwipeAction}
+                      >
+                        <TaskCard
+                          task={task}
+                          isExpanded={expandedTaskIds.has(task.uid)}
+                          isOverdue={false}
+                          onToggleCompletion={() => toggleTaskCompletion(task)}
+                          onToggleExpansion={() =>
+                            toggleTaskExpansion(task.uid)
+                          }
+                          onToggleSubtask={(subtaskId) =>
+                            toggleSubtask(task, subtaskId)
+                          }
+                          onOpenImagePreview={setPreviewImageUri}
+                          onPress={() => handleTaskPress(task)}
+                        />
+                      </Swipeable>
+                    );
+                  })}
                 </View>
               ) : null}
 
@@ -1094,6 +1232,20 @@ export default function TasksScreen() {
         onClose={() => setIsNotificationsOpen(false)}
         direction="rtl"
       />
+      <EventDetailsBottomSheet
+        event={eventSheetEvent}
+        eventId={eventSheetEventId}
+        visible={eventSheetVisible}
+        onDragClose={() => {
+          lastDragCloseTimeRef.current = Date.now();
+        }}
+        onClose={() => {
+          setEventSheetVisible(false);
+          setEventSheetEventId(null);
+          setEventSheetEvent(null);
+        }}
+        onNavigate={() => {}}
+      />
       <Modal
         visible={previewImageUri !== null}
         transparent
@@ -1137,40 +1289,75 @@ function TaskGroup({
   isOverdue,
   tasks,
   expandedTaskIds,
+  currentUserId,
   onToggleCompletion,
   onToggleExpansion,
   onToggleSubtask,
   onOpenImagePreview,
   onPressTask,
+  onSoftDelete,
+  onOpenEvent,
 }: {
   title: string;
   isOverdue: boolean;
   tasks: DisplayTask[];
   expandedTaskIds: Set<string>;
+  currentUserId: string | undefined;
   onToggleCompletion: (task: DisplayTask) => void;
   onToggleExpansion: (taskId: string) => void;
   onToggleSubtask: (task: DisplayTask, subtaskId: string) => void;
   onOpenImagePreview: (uri: string) => void;
   onPressTask: (task: DisplayTask) => void;
+  onSoftDelete: (task: DisplayTask) => void;
+  onOpenEvent: (task: DisplayTask) => void;
 }) {
   return (
     <View style={styles.group}>
       <Text style={[styles.groupTitle, isOverdue && styles.groupTitleOverdue]}>
         {title}
       </Text>
-      {tasks.map((task) => (
-        <TaskCard
-          key={task.uid}
-          task={task}
-          isExpanded={expandedTaskIds.has(task.uid)}
-          isOverdue={isOverdue}
-          onToggleCompletion={() => onToggleCompletion(task)}
-          onToggleExpansion={() => onToggleExpansion(task.uid)}
-          onToggleSubtask={(subtaskId) => onToggleSubtask(task, subtaskId)}
-          onOpenImagePreview={onOpenImagePreview}
-          onPress={() => onPressTask(task)}
-        />
-      ))}
+      {tasks.map((task) => {
+        const canDelete = isPersonallyDeletableDisplayTask(task, currentUserId);
+        const renderSwipeAction = () =>
+          canDelete ? (
+            <Pressable
+              style={styles.swipeDeleteAction}
+              onPress={() => onSoftDelete(task)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="מחיקת משימה"
+            >
+              <MaterialIcons name="delete-outline" size={26} color="#ffffff" />
+              <Text style={styles.swipeActionLabel}>מחק</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              style={styles.swipeOpenEventAction}
+              onPress={() => onOpenEvent(task)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="פתיחה באירוע"
+            >
+              <MaterialIcons name="open-in-new" size={22} color="#ffffff" />
+              <Text style={styles.swipeActionLabel}>פתח אירוע</Text>
+            </Pressable>
+          );
+
+        return (
+          <Swipeable key={task.uid} renderRightActions={renderSwipeAction}>
+            <TaskCard
+              task={task}
+              isExpanded={expandedTaskIds.has(task.uid)}
+              isOverdue={isOverdue}
+              onToggleCompletion={() => onToggleCompletion(task)}
+              onToggleExpansion={() => onToggleExpansion(task.uid)}
+              onToggleSubtask={(subtaskId) => onToggleSubtask(task, subtaskId)}
+              onOpenImagePreview={onOpenImagePreview}
+              onPress={() => onPressTask(task)}
+            />
+          </Swipeable>
+        );
+      })}
     </View>
   );
 }
@@ -2086,5 +2273,31 @@ const styles = StyleSheet.create({
   previewImage: {
     width: '100%',
     height: '100%',
+  },
+
+  /* Swipe actions */
+  swipeDeleteAction: {
+    backgroundColor: '#ef4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 80,
+    marginBottom: 12,
+    borderRadius: 14,
+    gap: 4,
+  },
+  swipeOpenEventAction: {
+    backgroundColor: '#36a9e2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 90,
+    marginBottom: 12,
+    borderRadius: 14,
+    gap: 4,
+  },
+  swipeActionLabel: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

@@ -491,6 +491,28 @@ function isPersonalTaskForUser(
   );
 }
 
+/**
+ * A task is "personally deletable" (soft-delete allowed) only if:
+ * - The current user created it (createdBy === userId), AND
+ * - It is NOT a community reminder (communityId set without sourceType).
+ *
+ * Important items copied from an event (sourceType === 'community_event_important_item')
+ * ARE deletable even when communityId is set — they are personal copies owned by the user.
+ *
+ * Community/event-assigned tasks from the eventTasks table are handled separately
+ * and are not represented by this function.
+ */
+function isPersonallyDeletableTask(
+  task: Doc<'tasks'>,
+  userId: Id<'users'>
+): boolean {
+  if (task.createdBy !== userId) return false;
+  // Community reminders (communityId set, no sourceType) are community-shared, not personal
+  if (task.communityId !== undefined && task.sourceType === undefined)
+    return false;
+  return true;
+}
+
 /** When no assignee was chosen in the UI, persist creator as assignee (no orphan tasks). */
 function normalizeAssigneesForWrite(
   fallbackUserId: Id<'users'>,
@@ -699,7 +721,12 @@ export const listBySpace = query({
     const rows = await ctx.db
       .query('tasks')
       .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
-      .filter((q) => q.neq(q.field('dueDate'), undefined))
+      .filter((q) =>
+        q.and(
+          q.neq(q.field('dueDate'), undefined),
+          q.eq(q.field('deletedAt'), undefined)
+        )
+      )
       .order('asc')
       .collect();
     const resolvedRows = await Promise.all(
@@ -727,7 +754,12 @@ export const listUndated = query({
     const rows = await ctx.db
       .query('tasks')
       .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
-      .filter((q) => q.eq(q.field('dueDate'), undefined))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field('dueDate'), undefined),
+          q.eq(q.field('deletedAt'), undefined)
+        )
+      )
       .collect();
     const resolvedRows = await Promise.all(
       rows
@@ -1380,7 +1412,10 @@ export const getMyImportantItemChecks = query({
       .query('tasks')
       .withIndex('by_assigned', (q) => q.eq('assignedTo', userId))
       .filter((q) =>
-        q.eq(q.field('sourceType'), 'community_event_important_item')
+        q.and(
+          q.eq(q.field('sourceType'), 'community_event_important_item'),
+          q.eq(q.field('deletedAt'), undefined)
+        )
       )
       .collect();
 
@@ -1410,7 +1445,10 @@ export const listMyImportantItemTasks = query({
       .query('tasks')
       .withIndex('by_assigned', (q) => q.eq('assignedTo', userId))
       .filter((q) =>
-        q.eq(q.field('sourceType'), 'community_event_important_item')
+        q.and(
+          q.eq(q.field('sourceType'), 'community_event_important_item'),
+          q.eq(q.field('deletedAt'), undefined)
+        )
       )
       .collect();
 
@@ -1449,5 +1487,85 @@ export const listMyImportantItemTasks = query({
     );
 
     return results.filter((r): r is NonNullable<typeof r> => r !== null);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// מחיקה רכה (soft delete) של משימה אישית
+// ─────────────────────────────────────────────────────────────
+export const softDeleteTask = mutation({
+  args: { id: v.id('tasks') },
+  handler: async (ctx, { id }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(id);
+    if (!task) throw new Error('משימה לא נמצאה');
+
+    if (!isPersonallyDeletableTask(task, userId)) {
+      throw new Error('לא ניתן למחוק משימה זו');
+    }
+
+    // Idempotent — already soft-deleted
+    if (task.deletedAt !== undefined) return;
+
+    const now = Date.now();
+    await ctx.db.patch(id, {
+      deletedAt: now,
+      // TODO: Future cleanup cron should hard-delete expired soft-deleted tasks after deleteExpiresAt and safely clean related subtasks, shopping data, attachments, previews, and Convex Storage files.
+      deleteExpiresAt: now + 30 * 24 * 60 * 60 * 1000,
+      deletedBy: userId,
+    });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// שחזור משימה שנמחקה רכה
+// ─────────────────────────────────────────────────────────────
+export const restoreTask = mutation({
+  args: { id: v.id('tasks') },
+  handler: async (ctx, { id }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(id);
+    if (!task) throw new Error('משימה לא נמצאה');
+
+    if (task.deletedBy !== userId) {
+      throw new Error('אין הרשאה לשחזר משימה זו');
+    }
+
+    await ctx.db.patch(id, {
+      deletedAt: undefined,
+      deleteExpiresAt: undefined,
+      deletedBy: undefined,
+    });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// רשימת פריטים שנמחקו לאחרונה (עבור מסך "נמחקו לאחרונה")
+// מחזיר רק משימות; ניתן להרחיב בעתיד לסוגי פריטים נוספים.
+// ─────────────────────────────────────────────────────────────
+export const listRecentlyDeleted = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const tasks = await ctx.db
+      .query('tasks')
+      .withIndex('by_deleted_by', (q) => q.eq('deletedBy', userId))
+      .filter((q) => q.neq(q.field('deletedAt'), undefined))
+      .order('desc')
+      .collect();
+
+    return tasks.map((task) => ({
+      id: task._id,
+      type: 'task' as const,
+      title: task.title,
+      deletedAt: task.deletedAt,
+      deleteExpiresAt: task.deleteExpiresAt,
+    }));
   },
 });

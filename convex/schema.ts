@@ -255,12 +255,17 @@ export default defineSchema({
     sourceType: v.optional(v.literal('community_event_important_item')),
     sourceEventId: v.optional(v.id('events')),
     sourceImportantItemId: v.optional(v.string()),
+    // ── Soft delete (MVP) ─────────────────────────────────────────────────────
+    deletedAt: v.optional(v.number()), // ms timestamp when soft-deleted
+    deleteExpiresAt: v.optional(v.number()), // ms timestamp after which hard-delete is safe
+    deletedBy: v.optional(v.id('users')), // user who performed the soft delete
   })
     .index('by_space_completed', ['spaceId', 'completed'])
     .index('by_assigned', ['assignedTo'])
     .index('by_space', ['spaceId'])
     .index('by_community', ['communityId'])
-    .index('by_assigned_source_event', ['assignedTo', 'sourceEventId']),
+    .index('by_assigned_source_event', ['assignedTo', 'sourceEventId'])
+    .index('by_deleted_by', ['deletedBy', 'deletedAt']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת ימי הולדת
