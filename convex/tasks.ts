@@ -1291,6 +1291,24 @@ export const addEventImportantItemsToMyTasks = mutation({
       return { created: 0, alreadyExisted: 0 };
     }
 
+    // Check if an active bundle task already exists for this user + event.
+    const existingBundle = await ctx.db
+      .query('tasks')
+      .withIndex('by_assigned_source_event', (q) =>
+        q.eq('assignedTo', userId).eq('sourceEventId', eventId)
+      )
+      .filter((q) =>
+        q.and(
+          q.eq(q.field('sourceType'), 'community_event_important_items_bundle'),
+          q.eq(q.field('deletedAt'), undefined)
+        )
+      )
+      .first();
+
+    if (existingBundle) {
+      return { created: 0, alreadyExisted: 1 };
+    }
+
     const membership = await ctx.db
       .query('members')
       .withIndex('by_user', (q) => q.eq('userId', userId))
@@ -1300,46 +1318,28 @@ export const addEventImportantItemsToMyTasks = mutation({
 
     const dueDate = getImportantItemDueDate(event.startTime);
 
-    const existingTasks = await ctx.db
-      .query('tasks')
-      .withIndex('by_assigned_source_event', (q) =>
-        q.eq('assignedTo', userId).eq('sourceEventId', eventId)
-      )
-      .collect();
-    const existingItemIds = new Set(
-      existingTasks
-        .map((task) => task.sourceImportantItemId)
-        .filter((id): id is string => typeof id === 'string')
-    );
+    const subtasks = importantItems.map((item) => ({
+      id: item.id,
+      title: item.title,
+      completed: false,
+    }));
 
-    let created = 0;
-    let alreadyExisted = 0;
+    await ctx.db.insert('tasks', {
+      title: `חשוב לזכור - ${event.title}`,
+      completed: false,
+      subtasks,
+      spaceId,
+      assignedTo: userId,
+      communityId: event.communityId,
+      dueDate,
+      isAiGenerated: false,
+      createdBy: userId,
+      createdAt: Date.now(),
+      sourceType: 'community_event_important_items_bundle',
+      sourceEventId: eventId,
+    });
 
-    for (const item of importantItems) {
-      if (existingItemIds.has(item.id)) {
-        alreadyExisted++;
-        continue;
-      }
-
-      await ctx.db.insert('tasks', {
-        title: item.title,
-        completed: false,
-        spaceId,
-        assignedTo: userId,
-        communityId: event.communityId,
-        dueDate,
-        isAiGenerated: false,
-        createdBy: userId,
-        createdAt: Date.now(),
-        sourceType: 'community_event_important_item',
-        sourceEventId: eventId,
-        sourceImportantItemId: item.id,
-      });
-      created++;
-      existingItemIds.add(item.id);
-    }
-
-    return { created, alreadyExisted };
+    return { created: 1, alreadyExisted: 0 };
   },
 });
 
@@ -1376,26 +1376,24 @@ export const hasUserCopiedAllImportantItemsFromEvent = query({
       return { totalItems: 0, copiedItems: 0, allCopied: false };
     }
 
-    const existingTasks = await ctx.db
+    // Source of truth: an active bundle task exists for this user + event.
+    const bundleTask = await ctx.db
       .query('tasks')
       .withIndex('by_assigned_source_event', (q) =>
         q.eq('assignedTo', userId).eq('sourceEventId', eventId)
       )
-      .collect();
-    const existingItemIds = new Set(
-      existingTasks
-        .map((task) => task.sourceImportantItemId)
-        .filter((id): id is string => typeof id === 'string')
-    );
+      .filter((q) =>
+        q.and(
+          q.eq(q.field('sourceType'), 'community_event_important_items_bundle'),
+          q.eq(q.field('deletedAt'), undefined)
+        )
+      )
+      .first();
 
-    const copiedItems = (event.importantItems ?? []).filter((item) =>
-      existingItemIds.has(item.id)
-    ).length;
-    return {
-      totalItems,
-      copiedItems,
-      allCopied: totalItems > 0 && copiedItems === totalItems,
-    };
+    if (bundleTask) {
+      return { totalItems, copiedItems: totalItems, allCopied: true };
+    }
+    return { totalItems, copiedItems: 0, allCopied: false };
   },
 });
 
@@ -1422,7 +1420,12 @@ export const toggleImportantItemCheck = mutation({
       .withIndex('by_assigned_source_event', (q) =>
         q.eq('assignedTo', userId).eq('sourceEventId', eventId)
       )
-      .filter((q) => q.eq(q.field('sourceImportantItemId'), itemId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field('sourceImportantItemId'), itemId),
+          q.eq(q.field('deletedAt'), undefined)
+        )
+      )
       .first();
 
     if (existingTask) {

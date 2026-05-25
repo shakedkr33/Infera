@@ -252,7 +252,12 @@ export default defineSchema({
     createdAt: v.number(),
     communityId: v.optional(v.id('communities')), // קהילה שאליה שייכת המשימה
     completedAt: v.optional(v.number()), // חותמת זמן השלמה (לצורך היסטוריה)
-    sourceType: v.optional(v.literal('community_event_important_item')),
+    sourceType: v.optional(
+      v.union(
+        v.literal('community_event_important_item'),
+        v.literal('community_event_important_items_bundle')
+      )
+    ),
     sourceEventId: v.optional(v.id('events')),
     sourceImportantItemId: v.optional(v.string()),
     // ── Soft delete (MVP) ─────────────────────────────────────────────────────
