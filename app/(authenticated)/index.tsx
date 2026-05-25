@@ -2118,34 +2118,35 @@ export default function HomeScreen() {
                   .map((item) => (
                     <Swipeable
                       key={item.id}
-                      renderRightActions={() =>
-                        item.type === 'task' &&
-                        item.taskSource === 'event_task' ? (
-                          <Pressable
-                            style={stylesRtl.openEventAction}
-                            onPress={() => handleOpenItemEvent(item)}
-                            accessible={true}
-                            accessibilityRole="button"
-                            accessibilityLabel="פתיחה באירוע"
-                          >
-                            <MaterialIcons
-                              name="open-in-new"
-                              size={22}
-                              color="white"
-                            />
-                            <Text style={stylesRtl.swipeActionLabel}>
-                              פתח אירוע
-                            </Text>
-                          </Pressable>
-                        ) : (
+                      renderRightActions={() => {
+                        if (item.type !== 'task') return null;
+                        if (item.taskSource === 'event_task') {
+                          return (
+                            <Pressable
+                              style={stylesRtl.openEventAction}
+                              onPress={() => handleOpenItemEvent(item)}
+                              accessible={true}
+                              accessibilityRole="button"
+                              accessibilityLabel="פתיחה באירוע"
+                            >
+                              <MaterialIcons
+                                name="open-in-new"
+                                size={22}
+                                color="white"
+                              />
+                              <Text style={stylesRtl.swipeActionLabel}>
+                                פתח אירוע
+                              </Text>
+                            </Pressable>
+                          );
+                        }
+                        return (
                           <Pressable
                             style={stylesRtl.deleteAction}
                             onPress={() => confirmDelete(item)}
                             accessible={true}
                             accessibilityRole="button"
-                            accessibilityLabel={
-                              item.type === 'task' ? 'מחיקת משימה' : 'מחק פריט'
-                            }
+                            accessibilityLabel="מחיקת משימה"
                           >
                             <MaterialIcons
                               name="delete-outline"
@@ -2153,8 +2154,8 @@ export default function HomeScreen() {
                               color="white"
                             />
                           </Pressable>
-                        )
-                      }
+                        );
+                      }}
                     >
                       <Pressable
                         onPress={() => handleCardPress(item)}
@@ -2344,34 +2345,35 @@ export default function HomeScreen() {
                   .map((item) => (
                     <Swipeable
                       key={item.id}
-                      renderRightActions={() =>
-                        item.type === 'task' &&
-                        item.taskSource === 'event_task' ? (
-                          <Pressable
-                            style={stylesRtl.openEventAction}
-                            onPress={() => handleOpenItemEvent(item)}
-                            accessible={true}
-                            accessibilityRole="button"
-                            accessibilityLabel="פתיחה באירוע"
-                          >
-                            <MaterialIcons
-                              name="open-in-new"
-                              size={22}
-                              color="white"
-                            />
-                            <Text style={stylesRtl.swipeActionLabel}>
-                              פתח אירוע
-                            </Text>
-                          </Pressable>
-                        ) : (
+                      renderRightActions={() => {
+                        if (item.type !== 'task') return null;
+                        if (item.taskSource === 'event_task') {
+                          return (
+                            <Pressable
+                              style={stylesRtl.openEventAction}
+                              onPress={() => handleOpenItemEvent(item)}
+                              accessible={true}
+                              accessibilityRole="button"
+                              accessibilityLabel="פתיחה באירוע"
+                            >
+                              <MaterialIcons
+                                name="open-in-new"
+                                size={22}
+                                color="white"
+                              />
+                              <Text style={stylesRtl.swipeActionLabel}>
+                                פתח אירוע
+                              </Text>
+                            </Pressable>
+                          );
+                        }
+                        return (
                           <Pressable
                             style={stylesRtl.deleteAction}
                             onPress={() => confirmDelete(item)}
                             accessible={true}
                             accessibilityRole="button"
-                            accessibilityLabel={
-                              item.type === 'task' ? 'מחיקת משימה' : 'מחק פריט'
-                            }
+                            accessibilityLabel="מחיקת משימה"
                           >
                             <MaterialIcons
                               name="delete-outline"
@@ -2379,8 +2381,8 @@ export default function HomeScreen() {
                               color="white"
                             />
                           </Pressable>
-                        )
-                      }
+                        );
+                      }}
                     >
                       <View
                         style={{
