@@ -77,6 +77,8 @@ type Item = {
   iconBg: string;
   iconColor: string;
   assigneeColor: string;
+  /** First-letter initials of the primary non-self assignee. Undefined = no real assignee to show. */
+  assigneeInitials?: string;
   completed: boolean;
   allDay?: boolean;
   pending?: boolean;
@@ -92,6 +94,8 @@ type Item = {
   linkedEventId?: string;
   /** Mirrors Convex calendar flags for community rows opened from home timeline */
   isSavedToMyCalendar?: boolean;
+  /** Subtask/checklist items — only populated for personal task items */
+  subtasks?: HomeSubtask[];
   /** Tasks assigned to the current user for this event (eventTasks only) */
   myAssignedTasks?: AssignedEventTask[];
   /** "חשוב לזכור" items for community events */
@@ -111,6 +115,22 @@ type UndatedTask = {
   id: string;
   title: string;
   completed: boolean;
+  /** Resolved initials for the primary assignee (if any and not self). */
+  assigneeInitials?: string;
+  /** Background color for the assignee circle. */
+  assigneeColor?: string;
+  /** Subtask/checklist items for expand-and-toggle support on Home. */
+  subtasks?: HomeSubtask[];
+};
+
+// Overdue tasks extend UndatedTask with raw date fields for the calm due-date display.
+type OverdueTask = UndatedTask & {
+  /** Raw ms timestamp of the due date (for formatting the calm date label). */
+  dueDate?: number;
+  /** Whether the task had a specific time set. */
+  hasTime?: boolean;
+  /** Raw ms timestamp of the actual due time (dueAt takes priority over dueDate for time). */
+  dueAt?: number;
 };
 
 // ─── Inline face mood (cream/boho tone — emoji cannot be recolored) ─────────
@@ -215,6 +235,219 @@ function FaceMood({ value }: { value: 0 | 1 | 2 }) {
   );
 }
 
+// ─── Subtask types ────────────────────────────────────────────────────────────
+
+type HomeSubtask = {
+  id: string;
+  title: string;
+  completed: boolean;
+};
+
+// ─── Home subtask expand/collapse section ─────────────────────────────────────
+
+type HomeSubtaskSectionProps = {
+  subtasks: HomeSubtask[];
+  isExpanded: boolean;
+  onToggleExpansion: () => void;
+  onToggleSubtask: (subtaskId: string) => void;
+};
+
+function HomeSubtaskSection({
+  subtasks,
+  isExpanded,
+  onToggleExpansion,
+  onToggleSubtask,
+}: HomeSubtaskSectionProps): React.JSX.Element | null {
+  if (subtasks.length === 0) return null;
+
+  const completedCount = subtasks.filter((s) => s.completed).length;
+  const progressText = `${completedCount} מתוך ${subtasks.length} פריטים סומנו`;
+
+  return (
+    <View style={{ marginTop: 6 }}>
+      {/* Progress + expand toggle */}
+      <Pressable
+        style={{
+          flexDirection: 'row-reverse',
+          alignItems: 'center',
+          gap: 4,
+          paddingVertical: 2,
+        }}
+        onPress={(e) => {
+          e.stopPropagation?.();
+          onToggleExpansion();
+        }}
+        accessible={true}
+        accessibilityRole="button"
+        accessibilityLabel={isExpanded ? 'כווץ רשימה' : 'הרחב רשימה'}
+      >
+        <MaterialIcons
+          name={isExpanded ? 'expand-less' : 'expand-more'}
+          size={16}
+          color="#94a3b8"
+        />
+        <Text
+          style={{
+            fontSize: 12,
+            color: '#64748b',
+            textAlign: 'right',
+            flex: 1,
+          }}
+        >
+          {progressText}
+        </Text>
+      </Pressable>
+
+      {/* Subtask rows — only when expanded */}
+      {isExpanded ? (
+        <View style={{ marginTop: 4, gap: 4 }}>
+          {subtasks.map((subtask) => (
+            <Pressable
+              key={subtask.id}
+              style={{
+                flexDirection: 'row-reverse',
+                alignItems: 'center',
+                gap: 8,
+                paddingVertical: 2,
+              }}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                onToggleSubtask(subtask.id);
+              }}
+              accessible={true}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: subtask.completed }}
+              accessibilityLabel={subtask.title}
+            >
+              <View
+                style={{
+                  width: 18,
+                  height: 18,
+                  borderRadius: 4,
+                  borderWidth: 1.5,
+                  borderColor: subtask.completed ? '#36a9e2' : '#cbd5e1',
+                  backgroundColor: subtask.completed
+                    ? '#36a9e2'
+                    : 'transparent',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {subtask.completed ? (
+                  <MaterialIcons name="check" size={12} color="#fff" />
+                ) : null}
+              </View>
+              <Text
+                style={{
+                  fontSize: 13,
+                  color: subtask.completed ? '#94a3b8' : '#334155',
+                  textDecorationLine: subtask.completed
+                    ? 'line-through'
+                    : 'none',
+                  flex: 1,
+                  textAlign: 'right',
+                }}
+                numberOfLines={2}
+              >
+                {subtask.title}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ─── Relative start-time formatting helper ────────────────────────────────────
+
+/**
+ * Returns a natural Hebrew relative-time string for the top activity card.
+ * Receives the number of minutes until the activity starts (must be > 0).
+ */
+function formatRelativeStartTime(mins: number): string {
+  if (mins < 1) return 'תכף מתחיל';
+  if (mins < 60) return `בעוד ${mins} דק׳`;
+  if (mins === 60) return 'בעוד שעה';
+  if (mins === 120) return 'בעוד שעתיים';
+  const hours = Math.floor(mins / 60);
+  const remainingMins = mins % 60;
+  const hoursWord = hours === 2 ? 'שעתיים' : `${hours} שעות`;
+  if (remainingMins === 0) return `בעוד ${hoursWord}`;
+  return `בעוד ${hoursWord} ו־${remainingMins} דק׳`;
+}
+
+// ─── Overdue date formatting helper ───────────────────────────────────────────
+
+/**
+ * Returns a calm Hebrew date string for an overdue task row.
+ * Uses dueAt for the time component (same source as timed task display).
+ * Never displays 00:00 for untimed tasks.
+ */
+function formatOverdueDate(
+  task: Pick<OverdueTask, 'dueDate' | 'hasTime' | 'dueAt'>
+): string {
+  if (!task.dueDate) return '';
+  const datePart = new Date(task.dueDate).toLocaleDateString('he-IL', {
+    day: 'numeric',
+    month: 'long',
+  });
+  if (task.hasTime) {
+    const timeTs = task.dueAt ?? task.dueDate;
+    const timePart = new Date(timeTs).toLocaleTimeString('he-IL', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return `${datePart}, ${timePart}`;
+  }
+  return datePart;
+}
+
+// ─── Assignee resolution helper ───────────────────────────────────────────────
+
+/**
+ * Returns the first non-self shared/assigned user indicator found on a task.
+ * Checks all four Convex task assignment fields in priority order:
+ *   assignedTo → assignedToUserIds → assignedToMemberId → assignedToMemberIds
+ * Returns undefined when there is no other-user indicator to display.
+ */
+function resolveNonSelfAssignee(
+  task: {
+    assignedTo?: unknown;
+    assignedToUserIds?: unknown;
+    assignedToMemberId?: unknown;
+    assignedToMemberIds?: unknown;
+  },
+  currentUserId: string | undefined,
+  byUserId: Map<string, { initials: string; color: string }>,
+  byMemberId: Map<string, { initials: string; color: string }>,
+  selfEntityId: string | undefined
+): { initials: string; color: string } | undefined {
+  // Check user-ID fields first (assignedTo is the primary assignee).
+  const userCandidates: string[] = [
+    ...(task.assignedTo ? [task.assignedTo as string] : []),
+    ...((task.assignedToUserIds as string[] | undefined) ?? []),
+  ];
+  for (const id of userCandidates) {
+    if (!id || id === currentUserId) continue;
+    const info = byUserId.get(id);
+    if (info) return info;
+  }
+
+  // Fall back to member-entity ID fields (family members without an account).
+  const memberCandidates: string[] = [
+    ...(task.assignedToMemberId ? [task.assignedToMemberId as string] : []),
+    ...((task.assignedToMemberIds as string[] | undefined) ?? []),
+  ];
+  for (const id of memberCandidates) {
+    if (!id || id === selfEntityId) continue;
+    const info = byMemberId.get(id);
+    if (info) return info;
+  }
+
+  return undefined;
+}
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
@@ -230,9 +463,39 @@ export default function HomeScreen() {
   const currentUser = useQuery(api.users.getCurrentUser);
   const userFirstName = currentUser?.fullName?.split(' ')[0] ?? null;
 
+  // ── Convex: family contacts (for assignee avatars on task rows) ────────────
+  const familyContacts = useQuery(api.members.listMyFamilyContacts);
+
+  // Build two lookup maps for compact assignee indicators:
+  //   byUserId   — keyed by matched Convex userId  (for assignedTo / assignedToUserIds)
+  //   byMemberId — keyed by member entity _id       (for assignedToMemberId / assignedToMemberIds)
+  // This mirrors the resolution order used by the Tasks screen's resolveAssigneeDisplays.
+  const memberMaps = useMemo(() => {
+    const byUserId = new Map<string, { initials: string; color: string }>();
+    const byMemberId = new Map<string, { initials: string; color: string }>();
+    const selfEntityId = familyContacts?.selfEntityId as string | undefined;
+
+    for (const member of familyContacts?.members ?? []) {
+      const name = (member.displayName ?? '').trim() || '?';
+      const words = name.split(' ').filter(Boolean);
+      const initials =
+        words.length >= 2 ? `${words[0][0]}${words[1][0]}` : name.slice(0, 2);
+      const info = {
+        initials: initials.toUpperCase(),
+        color: (member.color ?? '#36a9e2') as string,
+      };
+      if (member.matchedUserId) {
+        byUserId.set(member.matchedUserId as string, info);
+      }
+      byMemberId.set(member._id as string, info);
+    }
+    return { byUserId, byMemberId, selfEntityId };
+  }, [familyContacts?.members, familyContacts?.selfEntityId]);
+
   // ── Convex: tasks mutations ────────────────────────────────────────────────
   const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
   const softDeleteTaskMutation = useMutation(api.tasks.softDeleteTask);
+  const toggleSubtaskMutation = useMutation(api.tasks.toggleSubtaskCompleted);
   const [showToast, setShowToast] = useState(true);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -308,6 +571,7 @@ export default function HomeScreen() {
   const todayISO = new Date().toISOString().split('T')[0];
 
   const today = new Date();
+  const isSelectedToday = isSameDay(selectedDate, today);
   const year = today.getFullYear();
   const month = today.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -382,10 +646,9 @@ export default function HomeScreen() {
     useQuery(api.tasks.getMyImportantItemChecks) ?? {};
 
   // ── Convex: dated tasks ────────────────────────────────────────────────────
-  const convexTasks = useQuery(
-    api.tasks.listBySpace,
-    spaceId ? { spaceId: spaceId as Id<'spaces'> } : 'skip'
-  );
+  // listMyTasks mirrors Tasks-screen visibility: creator, assignedTo,
+  // and co-member secondary assignees — no spaceId restriction.
+  const convexTasks = useQuery(api.tasks.listMyTasks);
 
   const todayTasks: Item[] = useMemo(
     () =>
@@ -393,33 +656,139 @@ export default function HomeScreen() {
         .filter(
           (t) =>
             t.dueDate != null &&
+            // Only timed tasks go into the timeline. Untimed today tasks
+            // are rendered in the separate "היום" section below the timeline.
+            t.hasTime === true &&
             isSameDay(new Date(t.dueDate), selectedDate) &&
             // "חשוב לזכור" personal copies are shown nested under the event,
             // not as separate standalone task cards on Home.
             t.sourceType !== 'community_event_important_item'
         )
-        .map((t) => ({
-          id: t._id,
-          time: t.dueDate
-            ? new Date(t.dueDate).toLocaleTimeString('he-IL', {
+        .map((t) => {
+          // dueAt holds the exact time; dueDate is day-at-midnight.
+          // Use dueAt first so the displayed time matches what the Tasks screen shows.
+          const timeTs = t.dueAt ?? t.dueDate;
+          const timeStr = timeTs
+            ? new Date(timeTs).toLocaleTimeString('he-IL', {
                 hour: '2-digit',
                 minute: '2-digit',
               })
-            : '',
-          title: t.title,
-          location: '',
-          type: 'task' as const,
-          icon: 'check-box',
-          iconBg: '#E7F5FF',
-          iconColor: '#228BE6',
-          assigneeColor: '#E7F5FF',
-          completed: t.completed,
-          // Personal task from tasks table — can be soft-deleted
-          taskSource: 'personal_task' as const,
-          // TODO: להוסיף category, assignedTo, notes כשהסכמה תורחב
-        })),
-    [convexTasks, selectedDate]
+            : '';
+          const currentUserId = currentUser?._id as string | undefined;
+          const assigneeInfo = resolveNonSelfAssignee(
+            t,
+            currentUserId,
+            memberMaps.byUserId,
+            memberMaps.byMemberId,
+            memberMaps.selfEntityId
+          );
+          return {
+            id: t._id,
+            time: timeStr,
+            title: t.title,
+            location: '',
+            type: 'task' as const,
+            icon: 'check-box',
+            iconBg: '#E7F5FF',
+            iconColor: '#228BE6',
+            assigneeColor: assigneeInfo?.color ?? '#E7F5FF',
+            assigneeInitials: assigneeInfo?.initials,
+            completed: t.completed,
+            taskSource: 'personal_task' as const,
+            subtasks: (t.subtasks ?? []).map((s) => ({
+              id: s.id,
+              title: s.title,
+              completed: s.completed,
+            })),
+          };
+        }),
+    [convexTasks, selectedDate, memberMaps, currentUser?._id]
   );
+
+  // ── Overdue incomplete tasks — due before today, not yet completed ─────────
+  const overdueTasks: OverdueTask[] = useMemo(() => {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const startOfTodayMs = startOfToday.getTime();
+    return (convexTasks ?? [])
+      .filter(
+        (t) =>
+          t.dueDate != null &&
+          t.dueDate < startOfTodayMs &&
+          !t.completed &&
+          t.sourceType !== 'community_event_important_item'
+      )
+      .map((t) => {
+        const currentUserId = currentUser?._id as string | undefined;
+        const assigneeInfo = resolveNonSelfAssignee(
+          t,
+          currentUserId,
+          memberMaps.byUserId,
+          memberMaps.byMemberId,
+          memberMaps.selfEntityId
+        );
+        return {
+          id: t._id,
+          title: t.title,
+          completed: t.completed,
+          assigneeInitials: assigneeInfo?.initials,
+          assigneeColor: assigneeInfo?.color,
+          dueDate: t.dueDate ?? undefined,
+          hasTime: t.hasTime ?? false,
+          dueAt: t.dueAt ?? undefined,
+          subtasks: (t.subtasks ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+          })),
+        };
+      });
+  }, [convexTasks, memberMaps, currentUser?._id]);
+
+  // ── Untimed personal tasks for the selected day ───────────────────────────
+  // Tasks with hasTime===true go into the timeline via todayTasks.
+  // Tasks without a specific time (hasTime falsy) are rendered in a separate
+  // section. Boundaries are based on selectedDate so the section updates when
+  // the user picks a different day in the date carousel.
+  const selectedDayUntimedTasks: UndatedTask[] = useMemo(() => {
+    const dayStart = new Date(selectedDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const dayStartMs = dayStart.getTime();
+    const dayEndMs = dayEnd.getTime();
+    const currentUserId = currentUser?._id as string | undefined;
+    return (convexTasks ?? [])
+      .filter(
+        (t) =>
+          t.dueDate != null &&
+          !t.hasTime &&
+          t.dueDate >= dayStartMs &&
+          t.dueDate < dayEndMs &&
+          t.sourceType !== 'community_event_important_item'
+      )
+      .map((t) => {
+        const assigneeInfo = resolveNonSelfAssignee(
+          t,
+          currentUserId,
+          memberMaps.byUserId,
+          memberMaps.byMemberId,
+          memberMaps.selfEntityId
+        );
+        return {
+          id: t._id,
+          title: t.title,
+          completed: t.completed,
+          assigneeInitials: assigneeInfo?.initials,
+          assigneeColor: assigneeInfo?.color,
+          subtasks: (t.subtasks ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+          })),
+        };
+      });
+  }, [convexTasks, selectedDate, memberMaps, currentUser?._id]);
 
   // ── Assigned eventTasks grouped by eventId — shared across all event item builders ──
   const tasksByEvent: Record<string, AssignedEventTask[]> = useMemo(() => {
@@ -732,12 +1101,29 @@ export default function HomeScreen() {
     () =>
       (convexUndatedTasks ?? [])
         .filter((t) => t.sourceType !== 'community_event_important_item')
-        .map((t) => ({
-          id: t._id,
-          title: t.title,
-          completed: t.completed,
-        })),
-    [convexUndatedTasks]
+        .map((t) => {
+          const currentUserId = currentUser?._id as string | undefined;
+          const assigneeInfo = resolveNonSelfAssignee(
+            t,
+            currentUserId,
+            memberMaps.byUserId,
+            memberMaps.byMemberId,
+            memberMaps.selfEntityId
+          );
+          return {
+            id: t._id,
+            title: t.title,
+            completed: t.completed,
+            assigneeInitials: assigneeInfo?.initials,
+            assigneeColor: assigneeInfo?.color,
+            subtasks: (t.subtasks ?? []).map((s) => ({
+              id: s.id,
+              title: s.title,
+              completed: s.completed,
+            })),
+          };
+        }),
+    [convexUndatedTasks, memberMaps, currentUser?._id]
   );
 
   const toggleUndatedTask = async (id: string) => {
@@ -749,8 +1135,67 @@ export default function HomeScreen() {
     }
   };
 
+  const toggleOverdueTask = async (id: string) => {
+    try {
+      await toggleCompletedMutation({ id: id as Id<'tasks'> });
+    } catch (e) {
+      console.error('toggleOverdueTask error:', e);
+    }
+  };
+
+  const toggleTodayTask = async (id: string) => {
+    try {
+      await toggleCompletedMutation({ id: id as Id<'tasks'> });
+    } catch (e) {
+      console.error('toggleTodayTask error:', e);
+    }
+  };
+
+  // ── Subtask expand/collapse + toggle ──────────────────────────────────────
+  const [expandedHomeTaskIds, setExpandedHomeTaskIds] = useState<Set<string>>(
+    new Set()
+  );
+
+  const toggleHomeTaskExpansion = (taskId: string) => {
+    setExpandedHomeTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      return next;
+    });
+  };
+
+  const toggleHomeSubtask = async (
+    taskId: string,
+    subtaskId: string
+  ): Promise<void> => {
+    try {
+      await toggleSubtaskMutation({
+        id: taskId as Id<'tasks'>,
+        subtaskId,
+      });
+    } catch (e) {
+      console.error('toggleHomeSubtask error:', e);
+    }
+  };
+
+  // Navigate to the task edit/details screen.
+  const handleTaskPress = (id: string) => {
+    router.push({
+      pathname: '/(authenticated)/task/[id]',
+      params: { id },
+    } as never);
+  };
+
   // ── Empty states ───────────────────────────────────────────────────────────
-  const hasEventsOrTasks = allItems.length > 0 || undatedTasks.length > 0;
+  const hasEventsOrTasks =
+    allItems.length > 0 ||
+    undatedTasks.length > 0 ||
+    (isSelectedToday && overdueTasks.length > 0) ||
+    selectedDayUntimedTasks.length > 0;
   const hasBirthdays = contextBirthdays.length > 0;
   const hasDayData = allItems.filter((i) => !i.allDay).length > 0;
 
@@ -963,7 +1408,7 @@ export default function HomeScreen() {
   );
 
   // ── Day-state flags ────────────────────────────────────────────────────────
-  const isSelectedToday = isSameDay(selectedDate, today);
+  // isSelectedToday is hoisted above so it's available in hasEventsOrTasks.
   // Midnight of today — used to compare dates without time
   const todayMidnight = new Date(year, month, today.getDate()).getTime();
   const isSelectedPastDay =
@@ -981,11 +1426,16 @@ export default function HomeScreen() {
       if (Number.isNaN(h) || Number.isNaN(m)) return false;
       return h * 60 + m > nowMinutes;
     });
-  // End-of-day: today, had timed items, but none are future
+  // End-of-day: today, all timed items are in the past AND all are completed.
+  // Incomplete timed tasks must remain visible even after their scheduled time.
+  const hasIncompleteTodayTimedTasks = timedItemsForSelectedDay.some(
+    (i) => !i.completed
+  );
   const isEndOfDay =
     isSelectedToday &&
     timedItemsForSelectedDay.length > 0 &&
-    !hasFutureTimedItemsToday;
+    !hasFutureTimedItemsToday &&
+    !hasIncompleteTodayTimedTasks;
   // Summary mode: viewing a past day
   const isSummaryMode = isSelectedPastDay;
 
@@ -1242,14 +1692,14 @@ export default function HomeScreen() {
               >
                 <View style={stylesRtl.eventAccentBar} />
                 <View style={{ padding: 24, paddingRight: 32 }}>
-                  {/* Top row: "האירוע הבא" pill (right) + relative start time (left) */}
+                  {/* Top row: "הפעילות הבאה" pill (right) + relative start time (left) */}
                   <View style={stylesRtl.eventTopRow}>
                     <View style={stylesRtl.eventNextPill}>
                       <Text style={stylesRtl.eventNextPillText}>
-                        האירוע הבא
+                        הפעילות הבאה
                       </Text>
                     </View>
-                    {/* Relative time — only within 2 hours */}
+                    {/* Relative time — shown whenever start is in the future */}
                     {(() => {
                       if (!nextEvent.time) return null;
                       const [h, m] = nextEvent.time.split(':').map(Number);
@@ -1259,7 +1709,7 @@ export default function HomeScreen() {
                       const diffMins = Math.round(
                         (eventDate.getTime() - Date.now()) / 60000
                       );
-                      if (diffMins <= 0 || diffMins > 120) return null;
+                      if (diffMins <= 0) return null;
                       return (
                         <Text
                           style={{
@@ -1268,7 +1718,7 @@ export default function HomeScreen() {
                             fontWeight: '600',
                           }}
                         >
-                          {`מתחיל בעוד ${diffMins} דק׳`}
+                          {formatRelativeStartTime(diffMins)}
                         </Text>
                       );
                     })()}
@@ -1280,8 +1730,47 @@ export default function HomeScreen() {
                     </View>
                   ) : null}
 
-                  {/* Title */}
-                  <Text style={stylesRtl.eventTitle}>{nextEvent.title}</Text>
+                  {/* Title row — includes assignee chip for task items */}
+                  <View
+                    style={{
+                      flexDirection: 'row-reverse',
+                      alignItems: 'center',
+                      marginBottom: 8,
+                    }}
+                  >
+                    <Text
+                      style={[
+                        stylesRtl.eventTitle,
+                        { marginBottom: 0, flex: 1 },
+                      ]}
+                    >
+                      {nextEvent.title}
+                    </Text>
+                    {nextEvent.type === 'task' && nextEvent.assigneeInitials ? (
+                      <View
+                        style={[
+                          stylesRtl.assigneeCircle,
+                          {
+                            backgroundColor:
+                              nextEvent.assigneeColor ?? '#36a9e2',
+                            marginLeft: 8,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 9,
+                            color: '#fff',
+                            fontWeight: '700',
+                            textAlign: 'center',
+                            includeFontPadding: false,
+                          }}
+                        >
+                          {nextEvent.assigneeInitials}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
 
                   {/* Time range */}
                   <Text
@@ -1298,20 +1787,20 @@ export default function HomeScreen() {
                       : nextEvent.time}
                   </Text>
 
-                  {/* Address row: location text right, "נווט" button left */}
-                  <View style={stylesRtl.eventAddressRow}>
-                    <View style={stylesRtl.eventAddressGroup}>
-                      {/* Text first in row-reverse = rightmost; icon on its left */}
-                      <Text style={stylesRtl.eventAddress} numberOfLines={1}>
-                        {nextEvent.location}
-                      </Text>
-                      <MaterialIcons
-                        name="location-on"
-                        size={16}
-                        color="#94a3b8"
-                      />
-                    </View>
-                    {nextEvent.location ? (
+                  {/* Address row: only rendered when a location exists */}
+                  {nextEvent.location ? (
+                    <View style={stylesRtl.eventAddressRow}>
+                      <View style={stylesRtl.eventAddressGroup}>
+                        {/* Text first in row-reverse = rightmost; icon on its left */}
+                        <Text style={stylesRtl.eventAddress} numberOfLines={1}>
+                          {nextEvent.location}
+                        </Text>
+                        <MaterialIcons
+                          name="location-on"
+                          size={16}
+                          color="#94a3b8"
+                        />
+                      </View>
                       <Pressable
                         style={stylesRtl.navBtn}
                         onPress={(e) => {
@@ -1332,8 +1821,8 @@ export default function HomeScreen() {
                         />
                         <Text style={stylesRtl.navBtnText}>נווט</Text>
                       </Pressable>
-                    ) : null}
-                  </View>
+                    </View>
+                  ) : null}
                   {/* TODO: wire real traffic data here */}
                 </View>
               </View>
@@ -1350,6 +1839,22 @@ export default function HomeScreen() {
                   eventId={String(nextEvent.id)}
                   items={nextEvent.importantItems}
                   checks={myImportantItemChecks[String(nextEvent.id)] ?? {}}
+                />
+              </View>
+            ) : null}
+            {nextEvent.type === 'task' &&
+            (nextEvent.subtasks?.length ?? 0) > 0 &&
+            !nextEvent.completed ? (
+              <View style={stylesRtl.nextEventTaskExpansionContainer}>
+                <HomeSubtaskSection
+                  subtasks={nextEvent.subtasks ?? []}
+                  isExpanded={expandedHomeTaskIds.has(nextEvent.id)}
+                  onToggleExpansion={() =>
+                    toggleHomeTaskExpansion(nextEvent.id)
+                  }
+                  onToggleSubtask={(subtaskId) =>
+                    toggleHomeSubtask(nextEvent.id, subtaskId)
+                  }
                 />
               </View>
             ) : null}
@@ -1383,22 +1888,24 @@ export default function HomeScreen() {
         )}
 
         {/* ── Empty day state (data exists but not today) ──────────────────── */}
-        {hasEventsOrTasks && !hasDayData && (
-          <View style={stylesRtl.emptyDayContainer}>
-            <MaterialIcons name="calendar-today" size={28} color="#d1d5db" />
-            <Text style={stylesRtl.emptyDayTitle}>היום פנוי 🎉</Text>
-            <Text style={stylesRtl.emptyDaySubtitle}>
-              אין לך אירועים או משימות בתאריך הזה.
-            </Text>
-            <Pressable
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="הוספת אירוע"
-            >
-              <Text style={stylesRtl.emptyDayLink}>+ הוספת אירוע</Text>
-            </Pressable>
-          </View>
-        )}
+        {hasEventsOrTasks &&
+          !hasDayData &&
+          selectedDayUntimedTasks.length === 0 && (
+            <View style={stylesRtl.emptyDayContainer}>
+              <MaterialIcons name="calendar-today" size={28} color="#d1d5db" />
+              <Text style={stylesRtl.emptyDayTitle}>היום פנוי 🎉</Text>
+              <Text style={stylesRtl.emptyDaySubtitle}>
+                אין לך אירועים או משימות בתאריך הזה.
+              </Text>
+              <Pressable
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="הוספת אירוע"
+              >
+                <Text style={stylesRtl.emptyDayLink}>+ הוספת אירוע</Text>
+              </Pressable>
+            </View>
+          )}
 
         {/* ── Birthdays — hidden in summary/past-day mode ───────────────────── */}
         {!isSummaryMode && (
@@ -1699,12 +2206,24 @@ export default function HomeScreen() {
                               >
                                 {item.title}
                               </Text>
-                              <View
-                                style={[
-                                  stylesRtl.assigneeCircle,
-                                  { backgroundColor: item.assigneeColor },
-                                ]}
-                              />
+                              {item.assigneeInitials ? (
+                                <View
+                                  style={[
+                                    stylesRtl.assigneeCircle,
+                                    { backgroundColor: item.assigneeColor },
+                                  ]}
+                                >
+                                  <Text
+                                    style={{
+                                      fontSize: 9,
+                                      color: '#fff',
+                                      fontWeight: '700',
+                                    }}
+                                  >
+                                    {item.assigneeInitials}
+                                  </Text>
+                                </View>
+                              ) : null}
                             </View>
                             {item.location ? (
                               <Text style={stylesRtl.itemLocation}>
@@ -1782,6 +2301,22 @@ export default function HomeScreen() {
                             items={item.importantItems}
                             checks={
                               myImportantItemChecks[String(item.id)] ?? {}
+                            }
+                          />
+                        </View>
+                      ) : null}
+                      {item.type === 'task' &&
+                      (item.subtasks?.length ?? 0) > 0 &&
+                      !item.completed ? (
+                        <View style={stylesRtl.taskExpansionContainer}>
+                          <HomeSubtaskSection
+                            subtasks={item.subtasks ?? []}
+                            isExpanded={expandedHomeTaskIds.has(item.id)}
+                            onToggleExpansion={() =>
+                              toggleHomeTaskExpansion(item.id)
+                            }
+                            onToggleSubtask={(subtaskId) =>
+                              toggleHomeSubtask(item.id, subtaskId)
                             }
                           />
                         </View>
@@ -1915,22 +2450,35 @@ export default function HomeScreen() {
                                     >
                                       {item.title}
                                     </Text>
-                                    {/* Assignee circles row — expandable for multiple */}
-                                    <View
-                                      style={{
-                                        flexDirection: 'row-reverse',
-                                        gap: 4,
-                                      }}
-                                    >
+                                    {/* Assignee circle — only when there is a real named assignee */}
+                                    {item.assigneeInitials ? (
                                       <View
-                                        style={[
-                                          stylesRtl.assigneeCircle,
-                                          {
-                                            backgroundColor: item.assigneeColor,
-                                          },
-                                        ]}
-                                      />
-                                    </View>
+                                        style={{
+                                          flexDirection: 'row-reverse',
+                                          gap: 4,
+                                        }}
+                                      >
+                                        <View
+                                          style={[
+                                            stylesRtl.assigneeCircle,
+                                            {
+                                              backgroundColor:
+                                                item.assigneeColor,
+                                            },
+                                          ]}
+                                        >
+                                          <Text
+                                            style={{
+                                              fontSize: 9,
+                                              color: '#fff',
+                                              fontWeight: '700',
+                                            }}
+                                          >
+                                            {item.assigneeInitials}
+                                          </Text>
+                                        </View>
+                                      </View>
+                                    ) : null}
                                   </View>
 
                                   {/* RSVP inline chips */}
@@ -2225,6 +2773,22 @@ export default function HomeScreen() {
                               />
                             </View>
                           ) : null}
+                          {item.type === 'task' &&
+                          (item.subtasks?.length ?? 0) > 0 &&
+                          !item.completed ? (
+                            <View style={stylesRtl.taskExpansionContainer}>
+                              <HomeSubtaskSection
+                                subtasks={item.subtasks ?? []}
+                                isExpanded={expandedHomeTaskIds.has(item.id)}
+                                onToggleExpansion={() =>
+                                  toggleHomeTaskExpansion(item.id)
+                                }
+                                onToggleSubtask={(subtaskId) =>
+                                  toggleHomeSubtask(item.id, subtaskId)
+                                }
+                              />
+                            </View>
+                          ) : null}
                         </View>
                       </View>
                     </Swipeable>
@@ -2234,8 +2798,193 @@ export default function HomeScreen() {
           </>
         )}
 
-        {/* ── Undated tasks ──────────────────────────────────────────────────── */}
-        {undatedTasks.length > 0 && (
+        {/* ── Untimed personal tasks for selected day ──────────────────────── */}
+        {selectedDayUntimedTasks.length > 0 && (
+          <View style={{ marginBottom: 24 }}>
+            <View style={stylesRtl.sectionHeader}>
+              <Text style={stylesRtl.sectionTitle}>
+                {isSelectedToday ? 'היום' : 'משימות ליום הזה'}
+              </Text>
+            </View>
+            <View style={{ paddingHorizontal: 24, gap: 8 }}>
+              {selectedDayUntimedTasks.map((task) => (
+                <View
+                  key={task.id}
+                  style={[
+                    stylesRtl.undatedRow,
+                    { flexDirection: 'column', alignItems: 'stretch' },
+                  ]}
+                >
+                  {/* Main task row — tap to open edit */}
+                  <Pressable
+                    style={{
+                      flexDirection: 'row-reverse',
+                      alignItems: 'center',
+                      gap: 12,
+                    }}
+                    onPress={() => handleTaskPress(task.id)}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel={task.title}
+                  >
+                    <TaskCheckbox
+                      checked={task.completed}
+                      onToggle={() => toggleTodayTask(task.id)}
+                    />
+                    <Text
+                      style={[
+                        stylesRtl.undatedTitle,
+                        { flex: 1 },
+                        task.completed && stylesRtl.completedText,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {task.title}
+                    </Text>
+                    {task.assigneeInitials ? (
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
+                          backgroundColor: task.assigneeColor ?? '#36a9e2',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 9,
+                            color: '#fff',
+                            fontWeight: '700',
+                          }}
+                        >
+                          {task.assigneeInitials}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                  {/* Subtask section */}
+                  {(task.subtasks?.length ?? 0) > 0 && !task.completed ? (
+                    <HomeSubtaskSection
+                      subtasks={task.subtasks ?? []}
+                      isExpanded={expandedHomeTaskIds.has(task.id)}
+                      onToggleExpansion={() => toggleHomeTaskExpansion(task.id)}
+                      onToggleSubtask={(subtaskId) =>
+                        toggleHomeSubtask(task.id, subtaskId)
+                      }
+                    />
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* ── Overdue incomplete tasks — only shown on the real current day ── */}
+        {isSelectedToday && overdueTasks.length > 0 && (
+          <View style={{ marginBottom: 24 }}>
+            <View style={stylesRtl.sectionHeader}>
+              <Text style={stylesRtl.sectionTitle}>עדיין מחכה לך</Text>
+            </View>
+            <View style={{ paddingHorizontal: 24, gap: 8 }}>
+              {overdueTasks.map((task) => (
+                <View
+                  key={task.id}
+                  style={[
+                    stylesRtl.undatedRow,
+                    { flexDirection: 'column', alignItems: 'stretch' },
+                  ]}
+                >
+                  {/* Main task row — tap to open edit */}
+                  <Pressable
+                    style={{
+                      flexDirection: 'row-reverse',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                    onPress={() => handleTaskPress(task.id)}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel={task.title}
+                  >
+                    <View
+                      style={{
+                        flexDirection: 'row-reverse',
+                        alignItems: 'center',
+                        gap: 8,
+                        flex: 1,
+                      }}
+                    >
+                      <TaskCheckbox
+                        checked={task.completed}
+                        onToggle={() => toggleOverdueTask(task.id)}
+                      />
+                      <Text
+                        style={[
+                          stylesRtl.undatedTitle,
+                          { flex: 1 },
+                          task.completed && stylesRtl.completedText,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {task.title}
+                      </Text>
+                      {task.assigneeInitials ? (
+                        <View
+                          style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: 11,
+                            backgroundColor: task.assigneeColor ?? '#36a9e2',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <Text
+                            style={{
+                              fontSize: 9,
+                              color: '#fff',
+                              fontWeight: '700',
+                            }}
+                          >
+                            {task.assigneeInitials}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    {task.dueDate ? (
+                      <Text
+                        style={{
+                          fontSize: 11,
+                          color: '#94a3b8',
+                          marginRight: 8,
+                          textAlign: 'right',
+                        }}
+                      >
+                        {formatOverdueDate(task)}
+                      </Text>
+                    ) : null}
+                  </Pressable>
+                  {/* Subtask section */}
+                  {(task.subtasks?.length ?? 0) > 0 && !task.completed ? (
+                    <HomeSubtaskSection
+                      subtasks={task.subtasks ?? []}
+                      isExpanded={expandedHomeTaskIds.has(task.id)}
+                      onToggleExpansion={() => toggleHomeTaskExpansion(task.id)}
+                      onToggleSubtask={(subtaskId) =>
+                        toggleHomeSubtask(task.id, subtaskId)
+                      }
+                    />
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* ── Undated tasks — only on real current day ─────────────────────── */}
+        {isSelectedToday && undatedTasks.length > 0 && (
           <View style={{ marginBottom: 32 }}>
             <View style={stylesRtl.sectionHeader}>
               <Text style={stylesRtl.sectionTitle}>משימות ללא תאריך</Text>
@@ -2260,30 +3009,72 @@ export default function HomeScreen() {
             </View>
             <View style={{ paddingHorizontal: 24, gap: 8 }}>
               {undatedTasks.slice(0, 3).map((task) => (
-                <Pressable
+                <View
                   key={task.id}
-                  style={stylesRtl.undatedRow}
-                  onPress={() =>
-                    console.log('TODO: navigate to task edit', task.id)
-                  }
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel={task.title}
+                  style={[
+                    stylesRtl.undatedRow,
+                    { flexDirection: 'column', alignItems: 'stretch' },
+                  ]}
                 >
-                  <TaskCheckbox
-                    checked={task.completed}
-                    onToggle={() => toggleUndatedTask(task.id)}
-                  />
-                  <Text
-                    style={[
-                      stylesRtl.undatedTitle,
-                      task.completed && stylesRtl.completedText,
-                    ]}
-                    numberOfLines={1}
+                  <Pressable
+                    style={{
+                      flexDirection: 'row-reverse',
+                      alignItems: 'center',
+                      gap: 12,
+                    }}
+                    onPress={() => handleTaskPress(task.id)}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel={task.title}
                   >
-                    {task.title}
-                  </Text>
-                </Pressable>
+                    <TaskCheckbox
+                      checked={task.completed}
+                      onToggle={() => toggleUndatedTask(task.id)}
+                    />
+                    <Text
+                      style={[
+                        stylesRtl.undatedTitle,
+                        { flex: 1 },
+                        task.completed && stylesRtl.completedText,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {task.title}
+                    </Text>
+                    {task.assigneeInitials ? (
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
+                          backgroundColor: task.assigneeColor ?? '#36a9e2',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 9,
+                            color: '#fff',
+                            fontWeight: '700',
+                          }}
+                        >
+                          {task.assigneeInitials}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                  {(task.subtasks?.length ?? 0) > 0 && !task.completed ? (
+                    <HomeSubtaskSection
+                      subtasks={task.subtasks ?? []}
+                      isExpanded={expandedHomeTaskIds.has(task.id)}
+                      onToggleExpansion={() => toggleHomeTaskExpansion(task.id)}
+                      onToggleSubtask={(subtaskId) =>
+                        toggleHomeSubtask(task.id, subtaskId)
+                      }
+                    />
+                  ) : null}
+                </View>
               ))}
             </View>
 
@@ -2332,31 +3123,78 @@ export default function HomeScreen() {
                 <ScrollView showsVerticalScrollIndicator={false}>
                   <View style={{ gap: 8 }}>
                     {undatedTasks.map((task) => (
-                      <Pressable
+                      <View
                         key={task.id}
-                        style={stylesRtl.undatedRow}
-                        onPress={() => {
-                          setShowAllUndated(false);
-                          console.log('TODO: navigate to task edit', task.id);
-                        }}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel={task.title}
+                        style={[
+                          stylesRtl.undatedRow,
+                          { flexDirection: 'column', alignItems: 'stretch' },
+                        ]}
                       >
-                        <TaskCheckbox
-                          checked={task.completed}
-                          onToggle={() => toggleUndatedTask(task.id)}
-                        />
-                        <Text
-                          style={[
-                            stylesRtl.undatedTitle,
-                            task.completed && stylesRtl.completedText,
-                          ]}
-                          numberOfLines={2}
+                        <Pressable
+                          style={{
+                            flexDirection: 'row-reverse',
+                            alignItems: 'center',
+                            gap: 12,
+                          }}
+                          onPress={() => {
+                            setShowAllUndated(false);
+                            handleTaskPress(task.id);
+                          }}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityLabel={task.title}
                         >
-                          {task.title}
-                        </Text>
-                      </Pressable>
+                          <TaskCheckbox
+                            checked={task.completed}
+                            onToggle={() => toggleUndatedTask(task.id)}
+                          />
+                          <Text
+                            style={[
+                              stylesRtl.undatedTitle,
+                              { flex: 1 },
+                              task.completed && stylesRtl.completedText,
+                            ]}
+                            numberOfLines={2}
+                          >
+                            {task.title}
+                          </Text>
+                          {task.assigneeInitials ? (
+                            <View
+                              style={{
+                                width: 22,
+                                height: 22,
+                                borderRadius: 11,
+                                backgroundColor:
+                                  task.assigneeColor ?? '#36a9e2',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 9,
+                                  color: '#fff',
+                                  fontWeight: '700',
+                                }}
+                              >
+                                {task.assigneeInitials}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </Pressable>
+                        {(task.subtasks?.length ?? 0) > 0 && !task.completed ? (
+                          <HomeSubtaskSection
+                            subtasks={task.subtasks ?? []}
+                            isExpanded={expandedHomeTaskIds.has(task.id)}
+                            onToggleExpansion={() =>
+                              toggleHomeTaskExpansion(task.id)
+                            }
+                            onToggleSubtask={(subtaskId) =>
+                              toggleHomeSubtask(task.id, subtaskId)
+                            }
+                          />
+                        ) : null}
+                      </View>
                     ))}
                   </View>
                 </ScrollView>
@@ -3045,6 +3883,8 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     borderWidth: 1,
     borderColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   itemLocation: {
     color: '#94a3b8',
