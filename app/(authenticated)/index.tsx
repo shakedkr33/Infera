@@ -54,6 +54,18 @@ function isSameDay(a: Date, b: Date): boolean {
   );
 }
 
+// Tasks that are derived from community event important items (both the legacy
+// per-item copies and the Sprint 2 bundle task) are shown nested under the
+// event on Home and must not appear as standalone task cards there.
+function isEventDerivedImportantItemTask(task: {
+  sourceType?: string;
+}): boolean {
+  return (
+    task.sourceType === 'community_event_important_item' ||
+    task.sourceType === 'community_event_important_items_bundle'
+  );
+}
+
 // ─── Mood data ────────────────────────────────────────────────────────────────
 
 const MOODS = [
@@ -660,9 +672,9 @@ export default function HomeScreen() {
             // are rendered in the separate "היום" section below the timeline.
             t.hasTime === true &&
             isSameDay(new Date(t.dueDate), selectedDate) &&
-            // "חשוב לזכור" personal copies are shown nested under the event,
-            // not as separate standalone task cards on Home.
-            t.sourceType !== 'community_event_important_item'
+            // "חשוב לזכור" personal copies and bundles are shown nested under
+            // the event, not as separate standalone task cards on Home.
+            !isEventDerivedImportantItemTask(t)
         )
         .map((t) => {
           // dueAt holds the exact time; dueDate is day-at-midnight.
@@ -716,7 +728,7 @@ export default function HomeScreen() {
           t.dueDate != null &&
           t.dueDate < startOfTodayMs &&
           !t.completed &&
-          t.sourceType !== 'community_event_important_item'
+          !isEventDerivedImportantItemTask(t)
       )
       .map((t) => {
         const currentUserId = currentUser?._id as string | undefined;
@@ -765,7 +777,7 @@ export default function HomeScreen() {
           !t.hasTime &&
           t.dueDate >= dayStartMs &&
           t.dueDate < dayEndMs &&
-          t.sourceType !== 'community_event_important_item'
+          !isEventDerivedImportantItemTask(t)
       )
       .map((t) => {
         const assigneeInfo = resolveNonSelfAssignee(
@@ -1100,7 +1112,7 @@ export default function HomeScreen() {
   const undatedTasks: UndatedTask[] = useMemo(
     () =>
       (convexUndatedTasks ?? [])
-        .filter((t) => t.sourceType !== 'community_event_important_item')
+        .filter((t) => !isEventDerivedImportantItemTask(t))
         .map((t) => {
           const currentUserId = currentUser?._id as string | undefined;
           const assigneeInfo = resolveNonSelfAssignee(
