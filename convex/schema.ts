@@ -328,6 +328,8 @@ export default defineSchema({
     order: v.optional(v.number()),
     assignedToUserId: v.optional(v.id('users')),
     assignedToManual: v.optional(v.string()),
+    assignedByUserId: v.optional(v.id('users')),
+    assignedAt: v.optional(v.number()),
   })
     .index('by_event', ['eventId'])
     .index('by_event_order', ['eventId', 'order']),

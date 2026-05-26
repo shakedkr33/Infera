@@ -417,7 +417,7 @@ export default function EventScreen({
   const shouldShowRecurrence = !isCommunityEvent;
   const shouldShowReminders = true;
   const taskVisibilityOffHelperText = isCommunityEvent
-    ? 'רק את ומנהלות האירוע רואות את המשימות'
+    ? 'רק מנהלי האירוע רואים את המשימות'
     : 'רק את רואה את המשימות';
 
   const handleAddImportantItem = (): void => {

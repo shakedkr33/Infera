@@ -381,11 +381,16 @@ export default function EditEventScreen(): React.JSX.Element {
         }
 
         const assignedPid = task.assignedParticipantIds?.[0] ?? task.assigneeId;
-        const originalUserId = orig.assignedToUserId as string | undefined;
+        // task.assigneeId is the value captured at form-load time and never
+        // mutated by the form. Comparing against it (rather than the live
+        // orig.assignedToUserId) prevents a false-positive rewrite when the
+        // server's assignment changed (e.g. member declined) after this edit
+        // screen was opened but before the editor pressed Save.
+        const initialAssigneeId = task.assigneeId;
         const originalManualName = orig.assignedToManual?.trim();
         if (isCommunityEvent) {
           const assignmentChanged =
-            assignedPid !== originalUserId || Boolean(originalManualName);
+            assignedPid !== initialAssigneeId || Boolean(originalManualName);
           if (assignmentChanged) {
             await setTaskAssignee({
               id: task.id as Id<'eventTasks'>,
@@ -404,7 +409,7 @@ export default function EditEventScreen(): React.JSX.Element {
           .find((p) => p.id === assignedPid)
           ?.name?.trim();
         const assignmentChanged =
-          assignedName !== originalManualName || Boolean(originalUserId);
+          assignedName !== originalManualName || Boolean(orig.assignedToUserId);
         if (assignmentChanged) {
           await setTaskAssignee({
             id: task.id as Id<'eventTasks'>,

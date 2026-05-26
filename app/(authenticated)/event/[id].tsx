@@ -1069,8 +1069,8 @@ export default function EventDetailScreen() {
                   </Text>
                   <Text style={styles.taskVisibilityHelper}>
                     {participantsCanSeeTasks
-                      ? 'משתתפים יכולים לראות ולהשתבץ למשימות פנויות'
-                      : 'רק את ומנהלות האירוע רואות את המשימות'}
+                      ? 'המשתתפים יראו את המשימות ויוכלו להשתבץ'
+                      : 'רק מנהלי האירוע רואים את המשימות'}
                   </Text>
                 </View>
                 <TouchableOpacity

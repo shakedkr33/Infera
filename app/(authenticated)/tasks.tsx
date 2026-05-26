@@ -426,7 +426,14 @@ function isCreatedForSelfOnly(
   task: DisplayTask,
   currentUserId: string | undefined
 ): boolean {
-  return task.createdBy === currentUserId && !hasAnyAssignee(task);
+  if (task.createdBy !== currentUserId) return false;
+  if (hasAnyAssignee(task)) return false;
+  // Canonical community important-item tasks (no assignedTo) are community-shared
+  // rows created on behalf of the community, not personal tasks of the event creator.
+  // Personal copies (assignedTo === userId) are captured separately via importantItemTaskRows.
+  if (task.communityId && task.sourceType === 'community_event_important_item')
+    return false;
+  return true;
 }
 
 function recentCompletedTimestamp(task: DisplayTask): number | undefined {
@@ -502,6 +509,7 @@ function isSharedTask(task: DisplayTask, currentUserId: string): boolean {
 
 export default function TasksScreen() {
   const router = useRouter();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<TaskTab>('הכל');
   const [showMoreCompleted, setShowMoreCompleted] = useState(false);
@@ -510,6 +518,8 @@ export default function TasksScreen() {
   );
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+
+  const scrollViewRef = useRef<ScrollView>(null);
 
   // ── Event bottom sheet (for "פתח אירוע" action) ──────────────────────────
   const [eventSheetVisible, setEventSheetVisible] = useState(false);
@@ -565,6 +575,7 @@ export default function TasksScreen() {
   );
   const toggleSubtaskMutation = useMutation(api.tasks.toggleSubtaskCompleted);
   const softDeleteTaskMutation = useMutation(api.tasks.softDeleteTask);
+  const unclaimEventTaskMutation = useMutation(api.eventTasks.unclaimEventTask);
 
   const currentUserId = currentUser?._id as string | undefined;
 
@@ -973,6 +984,17 @@ export default function TasksScreen() {
     ]);
   };
 
+  const handleUnclaimEventTask = async (task: DisplayTask): Promise<void> => {
+    try {
+      await unclaimEventTaskMutation({ id: task.id as Id<'eventTasks'> });
+    } catch (error) {
+      Alert.alert(
+        'שגיאה',
+        error instanceof Error ? error.message : 'לא ניתן לבטל את ההקצאה כרגע'
+      );
+    }
+  };
+
   const handleOpenTaskEvent = (task: DisplayTask): void => {
     if (Date.now() - lastDragCloseTimeRef.current < 600) return;
     // Prefer opening the event bottom sheet; fall back to community route for reminders
@@ -1076,6 +1098,7 @@ export default function TasksScreen() {
 
         {/* Tasks List */}
         <ScrollView
+          ref={scrollViewRef}
           style={styles.tasksScrollView}
           contentContainerStyle={styles.tasksContent}
           showsVerticalScrollIndicator={false}
@@ -1101,6 +1124,7 @@ export default function TasksScreen() {
                         onPressTask={handleTaskPress}
                         onSoftDelete={handleSoftDelete}
                         onOpenEvent={handleOpenTaskEvent}
+                        onUnclaimEventTask={handleUnclaimEventTask}
                       />
                     ) : null
                   )}
@@ -1292,6 +1316,7 @@ function TaskGroup({
   onPressTask,
   onSoftDelete,
   onOpenEvent,
+  onUnclaimEventTask,
 }: {
   title: string;
   isOverdue: boolean;
@@ -1305,6 +1330,7 @@ function TaskGroup({
   onPressTask: (task: DisplayTask) => void;
   onSoftDelete: (task: DisplayTask) => void;
   onOpenEvent: (task: DisplayTask) => void;
+  onUnclaimEventTask: (task: DisplayTask) => void;
 }) {
   return (
     <View style={styles.group}>
@@ -1324,6 +1350,17 @@ function TaskGroup({
             >
               <MaterialIcons name="delete-outline" size={26} color="#ffffff" />
               <Text style={styles.swipeActionLabel}>מחק</Text>
+            </Pressable>
+          ) : task.kind === 'eventTask' ? (
+            <Pressable
+              style={styles.swipeUnclaimAction}
+              onPress={() => onUnclaimEventTask(task)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="ביטול הקצאה"
+            >
+              <MaterialIcons name="person-remove" size={22} color="#ffffff" />
+              <Text style={styles.swipeActionLabel}>בטל הקצאה</Text>
             </Pressable>
           ) : (
             <Pressable
@@ -2282,6 +2319,15 @@ const styles = StyleSheet.create({
   },
   swipeOpenEventAction: {
     backgroundColor: '#36a9e2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 90,
+    marginBottom: 12,
+    borderRadius: 14,
+    gap: 4,
+  },
+  swipeUnclaimAction: {
+    backgroundColor: '#f59e0b',
     justifyContent: 'center',
     alignItems: 'center',
     width: 90,

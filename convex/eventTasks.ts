@@ -328,6 +328,8 @@ export const setAssignee = mutation({
       await ctx.db.patch(id, {
         assignedToUserId: undefined,
         assignedToManual: undefined,
+        assignedByUserId: undefined,
+        assignedAt: undefined,
       });
       return;
     }
@@ -340,6 +342,8 @@ export const setAssignee = mutation({
         await ctx.db.patch(id, {
           assignedToUserId: undefined,
           assignedToManual: undefined,
+          assignedByUserId: undefined,
+          assignedAt: undefined,
         });
         return;
       }
@@ -351,17 +355,9 @@ export const setAssignee = mutation({
       await ctx.db.patch(id, {
         assignedToUserId: undefined,
         assignedToManual: manualName,
+        assignedByUserId: undefined,
+        assignedAt: undefined,
       });
-      if (event.communityId) {
-        await insertCommunityActivity(ctx, {
-          communityId: event.communityId,
-          actorUserId: userId,
-          type: 'task_assigned',
-          entityType: 'task',
-          entityId: id,
-          title: `${manualName} לקח/ה על עצמו/ה: ${task.title}`,
-        });
-      }
       return;
     }
 
@@ -371,9 +367,13 @@ export const setAssignee = mutation({
       if (!canManageAssignments && !isAssigned && assignee.userId !== userId)
         throw new Error('משימה לא מוקצית – ניתן להקצות רק את עצמך');
       if (task.assignedToUserId === assignee.userId && !hasManual) return;
+
+      const now = Date.now();
       await ctx.db.patch(id, {
         assignedToUserId: assignee.userId,
         assignedToManual: undefined,
+        assignedByUserId: userId,
+        assignedAt: now,
       });
       if (event.communityId) {
         await saveCommunityEventToPersonalCalendar(ctx, {
@@ -381,18 +381,32 @@ export const setAssignee = mutation({
           eventId: event._id,
           communityId: event.communityId,
         });
-        // TODO(server-push): notify assignee that a task was assigned and event was added to their calendar.
-      }
-      if (event.communityId) {
-        const memberName = await getUserDisplayName(ctx, assignee.userId);
-        await insertCommunityActivity(ctx, {
-          communityId: event.communityId,
-          actorUserId: userId,
-          type: 'task_assigned',
-          entityType: 'task',
-          entityId: id,
-          title: `${memberName} לקח/ה על עצמו/ה: ${task.title}`,
-        });
+        // For RSVP-required events (the default), auto-RSVP the assignee so the
+        // event card appears in their personal Home/Calendar view — mirroring
+        // the existing claimEventTask behaviour.
+        if (event.requiresRsvp !== false) {
+          const existingRsvp = await ctx.db
+            .query('eventRsvps')
+            .withIndex('by_event_user', (q) =>
+              q.eq('eventId', event._id).eq('userId', assignee.userId)
+            )
+            .unique();
+          if (existingRsvp?.status !== 'yes') {
+            if (existingRsvp) {
+              await ctx.db.patch(existingRsvp._id, {
+                status: 'yes',
+                updatedAt: Date.now(),
+              });
+            } else {
+              await ctx.db.insert('eventRsvps', {
+                eventId: event._id,
+                userId: assignee.userId,
+                status: 'yes',
+                updatedAt: Date.now(),
+              });
+            }
+          }
+        }
       }
     }
   },
@@ -482,9 +496,12 @@ export const claimEventTask = mutation({
       !!task.assignedToUserId || !!task.assignedToManual?.trim();
     if (isAssigned) throw new Error('המשימה כבר הוקצתה');
 
+    const claimNow = Date.now();
     await ctx.db.patch(id, {
       assignedToUserId: userId,
       assignedToManual: undefined,
+      assignedByUserId: userId,
+      assignedAt: claimNow,
     });
 
     const { wasAddedToCalendar } = await saveCommunityEventToPersonalCalendar(
@@ -565,10 +582,6 @@ export const unclaimEventTask = mutation({
       membership.role === 'owner' ||
       membership.role === 'admin';
 
-    if (!canManage && event.tasksVisibleToParticipants !== true) {
-      throw new Error('המשימות אינן גלויות למשתתפים');
-    }
-
     if (!task.assignedToUserId) throw new Error('המשימה אינה מוקצית למשתמש');
     if (!canManage && task.assignedToUserId !== userId) {
       throw new Error('ניתן להסיר רק הקצאה של עצמך');
@@ -577,12 +590,14 @@ export const unclaimEventTask = mutation({
     await ctx.db.patch(id, {
       assignedToUserId: undefined,
       assignedToManual: undefined,
+      assignedByUserId: undefined,
+      assignedAt: undefined,
     });
   },
 });
 
 // ─────────────────────────────────────────────────────────────
-// משימות מוקצות למשתמש הנוכחי בקהילות — לדף הבית
+// משימות מוקצות — לדף הבית (תאריך ספציפי)
 // ─────────────────────────────────────────────────────────────
 export const listMyAssignedEventTasksForDate = query({
   args: { from: v.number(), to: v.number() },
