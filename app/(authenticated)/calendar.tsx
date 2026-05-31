@@ -79,6 +79,9 @@ const EXPANDED_ROW_ITEM_HEIGHT_SINGLE = 42;
 const EXPANDED_GRID_BOTTOM_PADDING = 124;
 const EDIT_POPOVER_WIDTH = 112;
 const EDIT_POPOVER_HEIGHT = 52;
+/** Height when month grid collapses to a single week row (day selected, week-only mode) */
+const WEEK_ONLY_PANEL_HEIGHT =
+  PANEL_FIXED_HEIGHT + COMPACT_ROW_HEIGHT + CALENDAR_HANDLE_HEIGHT; // 56 + 58 + 44 = 158
 
 type SnapState = 'compact' | 'expanded';
 
@@ -243,6 +246,27 @@ type TimelineEventRow = MockTimelineEvent & {
   locationUrl?: string;
   myAssignedTasks?: AssignedEventTask[];
   importantItems?: ImportantItem[];
+  /** True for rows synthesised from the personal tasks table */
+  isPersonalTask?: boolean;
+  /** True when the task dueDate is in the past and not yet completed */
+  isOverdue?: boolean;
+  /** Subtask checklist items — only for personal task rows */
+  subtasks?: { id: string; title: string; completed: boolean }[];
+  /** Initials of the non-self assignee — only for personal task rows */
+  assigneeInitials?: string;
+  /** Background colour for the assignee avatar — only for personal task rows */
+  assigneeColor?: string;
+};
+
+/** Lightweight task item for monthly selected-day panels (DayEventsList / CalendarDayEventsSheet) */
+type CalendarDayTask = {
+  id: string;
+  title: string;
+  time: string;
+  isOverdue: boolean;
+  assigneeInitials?: string;
+  assigneeColor?: string;
+  subtasks?: { id: string; title: string; completed: boolean }[];
 };
 
 interface TimelineDayGroup {
@@ -251,6 +275,72 @@ interface TimelineDayGroup {
   isToday: boolean;
   events: TimelineEventRow[];
   sortKey: number;
+}
+
+// ===== Task filter (mirrors Home screen rule) =====
+function isEventDerivedImportantItemTask(task: {
+  sourceType?: string;
+}): boolean {
+  return (
+    task.sourceType === 'community_event_important_item' ||
+    task.sourceType === 'community_event_important_items_bundle'
+  );
+}
+
+/**
+ * Resolves the first non-self assignee on a task for avatar display.
+ * Mirrors the same function in the Home screen.
+ */
+function resolveNonSelfAssigneeCalendar(
+  task: {
+    assignedTo?: unknown;
+    assignedToUserIds?: unknown;
+    assignedToMemberId?: unknown;
+    assignedToMemberIds?: unknown;
+  },
+  currentUserId: string | undefined,
+  byUserId: Map<string, { initials: string; color: string }>,
+  byMemberId: Map<string, { initials: string; color: string }>,
+  selfEntityId: string | undefined
+): { initials: string; color: string } | undefined {
+  const userCandidates: string[] = [
+    ...(task.assignedTo ? [task.assignedTo as string] : []),
+    ...((task.assignedToUserIds as string[] | undefined) ?? []),
+  ];
+  for (const id of userCandidates) {
+    if (!id || id === currentUserId) continue;
+    const info = byUserId.get(id);
+    if (info) return info;
+  }
+  const memberCandidates: string[] = [
+    ...(task.assignedToMemberId ? [task.assignedToMemberId as string] : []),
+    ...((task.assignedToMemberIds as string[] | undefined) ?? []),
+  ];
+  for (const id of memberCandidates) {
+    if (!id || id === selfEntityId) continue;
+    const info = byMemberId.get(id);
+    if (info) return info;
+  }
+  return undefined;
+}
+
+/**
+ * Correct overdue check.
+ * - Timed tasks: overdue only after the specific dueAt moment.
+ * - Date-only tasks: overdue only when the due calendar day is strictly before today.
+ */
+function calcTaskOverdue(
+  dueDate: number,
+  dueAt: number | null | undefined,
+  hasTime: boolean | null | undefined,
+  nowMs: number
+): boolean {
+  if (hasTime && dueAt) return dueAt < nowMs;
+  const dueDay = new Date(dueDate);
+  dueDay.setHours(0, 0, 0, 0);
+  const todayStart = new Date(nowMs);
+  todayStart.setHours(0, 0, 0, 0);
+  return dueDay.getTime() < todayStart.getTime();
 }
 
 // ===== Event Helpers =====
@@ -602,6 +692,61 @@ const sheetStyles = StyleSheet.create({
     minWidth: 44,
     textAlign: 'right',
   },
+  sheetTaskRow: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+  },
+  sheetTaskTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111517',
+    textAlign: 'right',
+  },
+  sheetOverdueBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#fee2e2',
+  },
+  sheetOverdueBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#dc2626',
+  },
+  sheetTaskTitleRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  sheetTaskAssigneeAvatar: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetTaskAssigneeInitials: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  sheetTaskSubtasksRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 5,
+  },
+  sheetTaskSubtasksText: {
+    fontSize: 11,
+    color: '#64748b',
+  },
 });
 
 const editPopoverStyles = StyleSheet.create({
@@ -836,6 +981,7 @@ interface CalendarDayEventsSheetProps {
   dayLabel: string;
   birthday?: BirthdayInfo;
   events: CalendarEvent[];
+  tasks?: CalendarDayTask[];
   onEventNavigate: (event: CalendarEvent) => void;
   onEventLongPress: (
     event: CalendarEvent,
@@ -849,6 +995,7 @@ function CalendarDayEventsSheet({
   dayLabel,
   birthday,
   events,
+  tasks = [],
   onEventNavigate,
   onEventLongPress,
 }: CalendarDayEventsSheetProps): React.JSX.Element {
@@ -893,48 +1040,50 @@ function CalendarDayEventsSheet({
             contentContainerStyle={sheetStyles.sheetScrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {events.length === 0 ? (
+            {events.length === 0 && tasks.length === 0 ? (
               <Text style={sheetStyles.sheetEmpty}>אין אירועים ביום הזה</Text>
-            ) : (
-              events.map((ev) => {
-                const kind = ev.eventVisualKind ?? 'personal';
-                return (
-                  <Pressable
-                    key={ev.listKey ?? ev.id}
-                    style={[
-                      sheetStyles.sheetRow,
-                      kind === 'community' && sheetStyles.sheetRowCommunity,
-                      kind === 'shared' && sheetStyles.sheetRowShared,
-                    ]}
-                    onPress={() => onEventNavigate(ev)}
-                    onLongPress={(pressEvent) =>
-                      onEventLongPress(ev, pressEvent)
-                    }
-                    delayLongPress={340}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${ev.time !== '' ? `${ev.time} ` : ''}${ev.title}`}
-                  >
-                    <View style={sheetStyles.sheetEventLine}>
-                      {ev.time !== '' ? (
-                        <Text style={sheetStyles.sheetEventTime}>
-                          {ev.time}
-                        </Text>
-                      ) : null}
-                      <Text
-                        numberOfLines={1}
-                        style={[
-                          sheetStyles.sheetEventTitle,
-                          ev.cancelled && sheetStyles.sheetEventTitleCancelled,
-                        ]}
-                      >
-                        {ev.title}
-                      </Text>
-                    </View>
-                  </Pressable>
-                );
-              })
-            )}
+            ) : null}
+
+            {events.map((ev) => {
+              const kind = ev.eventVisualKind ?? 'personal';
+              return (
+                <Pressable
+                  key={ev.listKey ?? ev.id}
+                  style={[
+                    sheetStyles.sheetRow,
+                    kind === 'community' && sheetStyles.sheetRowCommunity,
+                    kind === 'shared' && sheetStyles.sheetRowShared,
+                  ]}
+                  onPress={() => onEventNavigate(ev)}
+                  onLongPress={(pressEvent) => onEventLongPress(ev, pressEvent)}
+                  delayLongPress={340}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${ev.time !== '' ? `${ev.time} ` : ''}${ev.title}`}
+                >
+                  <View style={sheetStyles.sheetEventLine}>
+                    {ev.time !== '' ? (
+                      <Text style={sheetStyles.sheetEventTime}>{ev.time}</Text>
+                    ) : null}
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        sheetStyles.sheetEventTitle,
+                        ev.cancelled && sheetStyles.sheetEventTitleCancelled,
+                      ]}
+                    >
+                      {ev.title}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+
+            {tasks.map((task) => (
+              <View key={task.id} style={{ marginBottom: 8 }}>
+                <CalendarTaskCard task={task} />
+              </View>
+            ))}
           </ScrollView>
         </View>
       </View>
@@ -1004,6 +1153,8 @@ export default function CalendarScreen(): React.JSX.Element {
 
   const handleOpenEventDetails = useCallback((event: CalendarEvent): void => {
     if (Date.now() - lastDragCloseTime.current < 600) return;
+    // Personal task rows are display-only in the calendar — not openable as events
+    if (event.id.startsWith('task:')) return;
 
     if (event.sourceType === 'linked') {
       setSelectedEvent({
@@ -1154,8 +1305,57 @@ export default function CalendarScreen(): React.JSX.Element {
     return map;
   }, [timelineAssignedEventTasks]);
 
-  const myImportantItemChecks =
-    useQuery(api.tasks.getMyImportantItemChecks) ?? {};
+  // Family contacts + current user — needed for assignee avatars on task cards
+  const familyContacts = useQuery(api.members.listMyFamilyContacts);
+  const currentUser = useQuery(api.users.getCurrentUser);
+
+  const memberMaps = useMemo(() => {
+    const byUserId = new Map<string, { initials: string; color: string }>();
+    const byMemberId = new Map<string, { initials: string; color: string }>();
+    const selfEntityId = familyContacts?.selfEntityId as string | undefined;
+    for (const member of familyContacts?.members ?? []) {
+      const name = (member.displayName ?? '').trim() || '?';
+      const words = name.split(' ').filter(Boolean);
+      const initials =
+        words.length >= 2 ? `${words[0][0]}${words[1][0]}` : name.slice(0, 2);
+      const info = {
+        initials: initials.toUpperCase(),
+        color: (member.color ?? '#36a9e2') as string,
+      };
+      if (member.matchedUserId)
+        byUserId.set(member.matchedUserId as string, info);
+      byMemberId.set(member._id as string, info);
+    }
+    return { byUserId, byMemberId, selfEntityId };
+  }, [familyContacts?.members, familyContacts?.selfEntityId]);
+
+  // Personal tasks for the calendar — fetched once, filtered client-side
+  const calendarTasksRaw = useQuery(api.tasks.listMyTasks) ?? [];
+
+  const calendarPersonalTasks = useMemo(
+    () =>
+      calendarTasksRaw.filter(
+        (t) =>
+          t.dueDate != null &&
+          !t.completed &&
+          !isEventDerivedImportantItemTask(t)
+      ),
+    [calendarTasksRaw]
+  );
+
+  /** Task count per day-of-month for the currently displayed month (monthly indicator) */
+  const calendarTasksByDay = useMemo(() => {
+    const map: Record<number, number> = {};
+    for (const t of calendarPersonalTasks) {
+      if (t.dueDate == null) continue;
+      const d = new Date(t.dueDate);
+      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth)
+        continue;
+      const day = d.getDate();
+      map[day] = (map[day] ?? 0) + 1;
+    }
+    return map;
+  }, [calendarPersonalTasks, displayYear, displayMonth]);
 
   // FIXED: linked (shared) events for the displayed month — shown as dots alongside personal events
   const linkedEvents =
@@ -1309,6 +1509,27 @@ export default function CalendarScreen(): React.JSX.Element {
   const [snapState, setSnapState] = useState<SnapState>('compact');
   const isExpanded = snapState === 'expanded';
 
+  // Week-only collapse: collapses the month grid to the selected week row.
+  const [isWeekCollapsed, setIsWeekCollapsed] = useState(false);
+  // Guard ref: prevents firing collapse/expand state changes on every scroll frame.
+  const weekCollapseGuard = useRef(false);
+
+  // Which grid row index contains selectedDay (for week-only rendering).
+  const selectedWeekIndex = useMemo(() => {
+    if (selectedDay == null) return -1;
+    return grid.findIndex((week) =>
+      week.some((d) => d.day === selectedDay && d.isCurrentMonth)
+    );
+  }, [grid, selectedDay]);
+
+  // Reset week-collapse and guard when the selected day is cleared.
+  useEffect(() => {
+    if (selectedDay == null) {
+      setIsWeekCollapsed(false);
+      weekCollapseGuard.current = false;
+    }
+  }, [selectedDay]);
+
   // Sync shared values when month or viewport changes.
   useEffect(() => {
     compactHeightSV.value = compactPanelHeight;
@@ -1389,8 +1610,115 @@ export default function CalendarScreen(): React.JSX.Element {
     );
   }, [sheetDayData, displayYear, displayMonth]);
 
+  /** Tasks for the compact below-grid day panel */
+  const visibleDayTasks = useMemo((): CalendarDayTask[] => {
+    if (visibleDay == null) return [];
+    const nowMs = Date.now();
+    const currentUserId = currentUser?._id as string | undefined;
+    return calendarPersonalTasks
+      .filter((t) => {
+        if (t.dueDate == null) return false;
+        const d = new Date(t.dueDate);
+        return (
+          d.getFullYear() === displayYear &&
+          d.getMonth() === displayMonth &&
+          d.getDate() === visibleDay
+        );
+      })
+      .map((t) => {
+        const assigneeInfo = resolveNonSelfAssigneeCalendar(
+          t,
+          currentUserId,
+          memberMaps.byUserId,
+          memberMaps.byMemberId,
+          memberMaps.selfEntityId
+        );
+        return {
+          id: `task:${t._id}`,
+          title: t.title,
+          time:
+            t.hasTime && t.dueAt
+              ? `${String(new Date(t.dueAt).getHours()).padStart(2, '0')}:${String(new Date(t.dueAt).getMinutes()).padStart(2, '0')}`
+              : '',
+          isOverdue: calcTaskOverdue(t.dueDate ?? 0, t.dueAt, t.hasTime, nowMs),
+          assigneeInitials: assigneeInfo?.initials,
+          assigneeColor: assigneeInfo?.color,
+          subtasks: (t.subtasks ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+          })),
+        };
+      });
+  }, [
+    calendarPersonalTasks,
+    visibleDay,
+    displayYear,
+    displayMonth,
+    currentUser,
+    memberMaps,
+  ]);
+
+  /** Tasks for the expanded day-sheet modal */
+  const sheetDayTasks = useMemo((): CalendarDayTask[] => {
+    if (daySheetDay == null) return [];
+    const nowMs = Date.now();
+    const currentUserId = currentUser?._id as string | undefined;
+    return calendarPersonalTasks
+      .filter((t) => {
+        if (t.dueDate == null) return false;
+        const d = new Date(t.dueDate);
+        return (
+          d.getFullYear() === displayYear &&
+          d.getMonth() === displayMonth &&
+          d.getDate() === daySheetDay
+        );
+      })
+      .map((t) => {
+        const assigneeInfo = resolveNonSelfAssigneeCalendar(
+          t,
+          currentUserId,
+          memberMaps.byUserId,
+          memberMaps.byMemberId,
+          memberMaps.selfEntityId
+        );
+        return {
+          id: `task:${t._id}`,
+          title: t.title,
+          time:
+            t.hasTime && t.dueAt
+              ? `${String(new Date(t.dueAt).getHours()).padStart(2, '0')}:${String(new Date(t.dueAt).getMinutes()).padStart(2, '0')}`
+              : '',
+          isOverdue: calcTaskOverdue(t.dueDate ?? 0, t.dueAt, t.hasTime, nowMs),
+          assigneeInitials: assigneeInfo?.initials,
+          assigneeColor: assigneeInfo?.color,
+          subtasks: (t.subtasks ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+          })),
+        };
+      });
+  }, [
+    calendarPersonalTasks,
+    daySheetDay,
+    displayYear,
+    displayMonth,
+    currentUser,
+    memberMaps,
+  ]);
+
+  // Resets week-collapse state + guard — called from pan gesture and snap toggle.
+  const resetWeekCollapse = useCallback((): void => {
+    setIsWeekCollapsed(false);
+    weekCollapseGuard.current = false;
+  }, []);
+
   // === Tap-to-toggle for the arrow handle ===
   const toggleCalendarSnap = useCallback((): void => {
+    // Always clear week-only mode when toggling the main snap
+    resetWeekCollapse();
+
     const nextState: SnapState =
       snapState === 'expanded' ? 'compact' : 'expanded';
     const targetHeight =
@@ -1402,7 +1730,32 @@ export default function CalendarScreen(): React.JSX.Element {
     });
 
     setSnapState(nextState);
-  }, [calendarHeight, compactHeightSV, expandedHeightSV, snapState]);
+  }, [
+    calendarHeight,
+    compactHeightSV,
+    expandedHeightSV,
+    resetWeekCollapse,
+    snapState,
+  ]);
+
+  // === Scroll-triggered week-collapse for the selected-day panel ===
+  // Collapse-only: scrolling down > 20px collapses the month grid to the
+  // selected week. Expansion back to full month is handled exclusively by the
+  // pan/handle gesture — never by scroll returning to the top.
+  const handleDayListScroll = useCallback(
+    (event: { nativeEvent: { contentOffset: { y: number } } }): void => {
+      const y = event.nativeEvent.contentOffset.y;
+      if (y > 20 && selectedDay != null && !weekCollapseGuard.current) {
+        weekCollapseGuard.current = true;
+        setIsWeekCollapsed(true);
+        calendarHeight.value = withSpring(WEEK_ONLY_PANEL_HEIGHT, {
+          damping: 22,
+          stiffness: 120,
+        });
+      }
+    },
+    [selectedDay, calendarHeight]
+  );
 
   // === Pan gesture for the bottom arrow handle only ===
   // drag DOWN (positive translationY) = expand, drag UP = collapse
@@ -1416,8 +1769,14 @@ export default function CalendarScreen(): React.JSX.Element {
     .onUpdate((event) => {
       'worklet';
       const newHeight = savedHeight.value + event.translationY;
+      // When starting from week-only (below compact), allow smooth dragging
+      // upward from that smaller height rather than clamping to compact.
+      const minH =
+        savedHeight.value < compactHeightSV.value
+          ? savedHeight.value
+          : compactHeightSV.value;
       calendarHeight.value = Math.max(
-        compactHeightSV.value,
+        minH,
         Math.min(expandedHeightSV.value, newHeight)
       );
     })
@@ -1426,27 +1785,43 @@ export default function CalendarScreen(): React.JSX.Element {
       const currentHeight = calendarHeight.value;
       const compact = compactHeightSV.value;
       const expanded = expandedHeightSV.value;
-      const midpoint = compact + (expanded - compact) * 0.35;
 
-      let targetHeight = compact;
+      let targetHeight: number;
 
-      const startedCompact = savedHeight.value <= compact + 4;
-      const startedExpanded = savedHeight.value >= expanded - 4;
+      // Detect if the drag started from week-only (height well below compact).
+      const startedWeekOnly = savedHeight.value < compact - 4;
 
-      if (
-        startedCompact &&
-        (event.translationY > OPEN_DRAG_DISTANCE ||
-          event.velocityY > SNAP_VELOCITY)
-      ) {
-        targetHeight = expanded;
-      } else if (
-        startedExpanded &&
-        (event.translationY < -CLOSE_DRAG_DISTANCE ||
-          event.velocityY < -SNAP_VELOCITY)
-      ) {
-        targetHeight = compact;
+      if (startedWeekOnly) {
+        // Any downward drag from week-only restores the full-month compact view.
+        // A big drag / fast flick goes straight to expanded.
+        if (
+          event.translationY > OPEN_DRAG_DISTANCE ||
+          event.velocityY > SNAP_VELOCITY
+        ) {
+          targetHeight = expanded;
+        } else {
+          targetHeight = compact;
+        }
       } else {
-        targetHeight = currentHeight >= midpoint ? expanded : compact;
+        const midpoint = compact + (expanded - compact) * 0.35;
+        const startedCompact = savedHeight.value <= compact + 4;
+        const startedExpanded = savedHeight.value >= expanded - 4;
+
+        if (
+          startedCompact &&
+          (event.translationY > OPEN_DRAG_DISTANCE ||
+            event.velocityY > SNAP_VELOCITY)
+        ) {
+          targetHeight = expanded;
+        } else if (
+          startedExpanded &&
+          (event.translationY < -CLOSE_DRAG_DISTANCE ||
+            event.velocityY < -SNAP_VELOCITY)
+        ) {
+          targetHeight = compact;
+        } else {
+          targetHeight = currentHeight >= midpoint ? expanded : compact;
+        }
       }
 
       calendarHeight.value = withSpring(targetHeight, {
@@ -1457,6 +1832,8 @@ export default function CalendarScreen(): React.JSX.Element {
       const newState: SnapState =
         targetHeight === compact ? 'compact' : 'expanded';
       runOnJS(setSnapState)(newState);
+      // Pan always restores full-month view, so clear week-only mode + guard.
+      runOnJS(resetWeekCollapse)();
     });
 
   const animatedCalendarStyle = useAnimatedStyle(() => ({
@@ -1860,6 +2237,84 @@ export default function CalendarScreen(): React.JSX.Element {
         });
       }
 
+      // Personal tasks — inserted on their original dueDate (date-truth preserved)
+      const nowMs = Date.now();
+      for (const t of calendarPersonalTasks) {
+        if (t.dueDate == null) continue;
+        if (t.dueDate < timelineRange.from || t.dueDate > timelineRange.to)
+          continue;
+
+        const d = new Date(t.dueDate);
+        const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+        const isToday =
+          d.getFullYear() === todayD.getFullYear() &&
+          d.getMonth() === todayD.getMonth() &&
+          d.getDate() === todayD.getDate();
+
+        if (!grouped[key]) {
+          grouped[key] = {
+            dayLabel: d.toLocaleDateString('he-IL', {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            }),
+            dayNumber: String(d.getDate()),
+            isToday,
+            events: [],
+            sortKey: d.getTime(),
+          };
+        }
+
+        const taskId = `task:${t._id}`;
+        if (grouped[key].events.some((e) => e.id === taskId)) continue;
+
+        const timeStr =
+          t.hasTime && t.dueAt
+            ? `${String(new Date(t.dueAt).getHours()).padStart(2, '0')}:${String(new Date(t.dueAt).getMinutes()).padStart(2, '0')}`
+            : '';
+
+        const currentUserId = currentUser?._id as string | undefined;
+        const assigneeInfo = resolveNonSelfAssigneeCalendar(
+          t,
+          currentUserId,
+          memberMaps.byUserId,
+          memberMaps.byMemberId,
+          memberMaps.selfEntityId
+        );
+
+        grouped[key].events.push({
+          id: taskId,
+          category: 'משימה',
+          categoryColor: PRIMARY_BLUE,
+          title: t.title,
+          time: timeStr,
+          location: '',
+          icon: 'check-box-outline-blank',
+          cancelled: false,
+          isPersonalTask: true,
+          isOverdue: calcTaskOverdue(t.dueDate, t.dueAt, t.hasTime, nowMs),
+          subtasks: (t.subtasks ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+          })),
+          assigneeInitials: assigneeInfo?.initials,
+          assigneeColor: assigneeInfo?.color,
+        });
+      }
+
+      // Sort each day group: timed items chronologically, untimed at the bottom
+      for (const group of Object.values(grouped)) {
+        group.events.sort((a, b) => {
+          if (!a.time && !b.time) return 0;
+          if (!a.time) return 1;
+          if (!b.time) return -1;
+          const [ah = 0, am = 0] = a.time.split(':').map(Number);
+          const [bh = 0, bm = 0] = b.time.split(':').map(Number);
+          return ah * 60 + am - (bh * 60 + bm);
+        });
+      }
+
       if (!grouped[todayKey]) {
         grouped[todayKey] = {
           dayLabel: todayLabel,
@@ -1959,6 +2414,10 @@ export default function CalendarScreen(): React.JSX.Element {
     timelineCommunityEvents,
     communityData?.name,
     timelineTasksByEventId,
+    calendarPersonalTasks,
+    timelineRange,
+    memberMaps,
+    currentUser,
   ]);
 
   useEffect(() => {
@@ -2193,6 +2652,7 @@ export default function CalendarScreen(): React.JSX.Element {
                         grid={grid}
                         selectedDay={selectedDay}
                         isExpanded={isExpanded}
+                        tasksByDay={calendarTasksByDay}
                         onCreateEventForDay={handleExpandedCreateForDay}
                         onNavigateToEvent={handleExpandedEventNavigate}
                         onOpenDaySheet={openDayEventsSheet}
@@ -2208,9 +2668,14 @@ export default function CalendarScreen(): React.JSX.Element {
                       displayMonth={displayMonth}
                       displayYear={displayYear}
                       expandedWeekBaseHeight={undefined}
-                      grid={grid}
+                      grid={
+                        isWeekCollapsed && selectedWeekIndex >= 0
+                          ? ([grid[selectedWeekIndex]] as typeof grid)
+                          : grid
+                      }
                       selectedDay={selectedDay}
                       isExpanded={isExpanded}
+                      tasksByDay={calendarTasksByDay}
                       onCreateEventForDay={handleExpandedCreateForDay}
                       onNavigateToEvent={handleExpandedEventNavigate}
                       onOpenDaySheet={openDayEventsSheet}
@@ -2245,17 +2710,31 @@ export default function CalendarScreen(): React.JSX.Element {
               <ScrollView
                 style={styles.dailyEventsScroll}
                 showsVerticalScrollIndicator={false}
+                scrollEventThrottle={16}
+                onScroll={handleDayListScroll}
               >
-                {visibleDay != null && visibleDayData != null && (
-                  <DayEventsList
-                    dayData={visibleDayData}
-                    year={displayYear}
-                    month={displayMonth}
-                    anim={listAnim}
-                    onEventPress={handleOpenEventDetails}
-                    onClose={() => setSelectedDay(null)}
-                  />
-                )}
+                {visibleDay != null &&
+                  (visibleDayData != null || visibleDayTasks.length > 0) && (
+                    <DayEventsList
+                      dayData={
+                        visibleDayData ?? {
+                          day: visibleDay,
+                          isCurrentMonth: true,
+                          isToday:
+                            today.getDate() === visibleDay &&
+                            today.getMonth() === displayMonth &&
+                            today.getFullYear() === displayYear,
+                          events: [],
+                        }
+                      }
+                      year={displayYear}
+                      month={displayMonth}
+                      anim={listAnim}
+                      tasks={visibleDayTasks}
+                      onEventPress={handleOpenEventDetails}
+                      onClose={() => setSelectedDay(null)}
+                    />
+                  )}
               </ScrollView>
             ) : null}
           </View>
@@ -2290,10 +2769,14 @@ export default function CalendarScreen(): React.JSX.Element {
           birthday={sheetDayData?.birthday}
           dayLabel={daySheetLabel}
           events={sheetDayData?.events ?? []}
+          tasks={sheetDayTasks}
           onClose={closeDayEventsSheet}
           onEventLongPress={handleExpandedEventLongPress}
           onEventNavigate={handleExpandedEventNavigate}
-          visible={daySheetDay !== null && sheetDayData != null}
+          visible={
+            daySheetDay !== null &&
+            (sheetDayData != null || sheetDayTasks.length > 0)
+          }
         />
         <MonthYearPickerModal
           onClose={() => setIsMonthPickerVisible(false)}
@@ -2322,6 +2805,8 @@ interface MonthlyGridProps {
   expandedWeekBaseHeight?: number;
   selectedDay: number | null;
   isExpanded: boolean;
+  /** Count of personal tasks per day-of-month for lightweight indicator */
+  tasksByDay: Record<number, number>;
   onSelectDay: (day: number | null) => void;
   onOpenDaySheet: (day: number) => void;
   onNavigateToEvent: (event: CalendarEvent) => void;
@@ -2377,6 +2862,7 @@ function MonthlyGrid({
   expandedWeekBaseHeight,
   selectedDay,
   isExpanded,
+  tasksByDay,
   onSelectDay,
   onOpenDaySheet,
   onNavigateToEvent,
@@ -2440,6 +2926,9 @@ function MonthlyGrid({
                 }
                 isExpanded={isExpanded}
                 weekHeight={weekHeight}
+                taskCount={
+                  dayData.isCurrentMonth ? (tasksByDay[dayData.day] ?? 0) : 0
+                }
                 onCompactPress={() => {
                   if (dayData.isCurrentMonth) {
                     onSelectDay(
@@ -2468,6 +2957,8 @@ interface DayCellProps {
   isSelected: boolean;
   isExpanded: boolean;
   weekHeight?: number;
+  /** Number of personal tasks due on this day (0 if none or out of month) */
+  taskCount: number;
   onCompactPress: () => void;
   onSelectDay: (day: number | null) => void;
   onOpenDaySheet: (day: number) => void;
@@ -2482,6 +2973,7 @@ function DayCell({
   isSelected,
   isExpanded,
   weekHeight,
+  taskCount,
   onCompactPress,
   onSelectDay,
   onOpenDaySheet,
@@ -2582,6 +3074,14 @@ function DayCell({
             accessibilityElementsHidden={true}
             importantForAccessibility="no"
             style={mStyles.eventIndicatorBar}
+          />
+        )}
+
+        {taskCount > 0 && (
+          <View
+            accessibilityElementsHidden={true}
+            importantForAccessibility="no"
+            style={mStyles.taskIndicatorDot}
           />
         )}
       </Pressable>
@@ -2740,6 +3240,18 @@ function DayCell({
             );
           })}
 
+          {taskCount > 0 && (
+            <View
+              accessibilityElementsHidden={true}
+              importantForAccessibility="no"
+              style={mStyles.expandedTaskRow}
+            >
+              <Text style={mStyles.expandedTaskText}>
+                {taskCount === 1 ? '✓ משימה' : `✓ ${taskCount} משימות`}
+              </Text>
+            </View>
+          )}
+
           <Pressable
             accessibilityHint="לחיצה ארוכה ליצירת אירוע חדש"
             accessibilityLabel="אזור יום"
@@ -2762,12 +3274,177 @@ function DayCell({
   );
 }
 
+// ===== Calendar Task Card =====
+// Single component used by both the monthly selected-day panel and the timeline.
+
+interface CalendarTaskCardProps {
+  task: CalendarDayTask;
+}
+
+function CalendarTaskCard({ task }: CalendarTaskCardProps): React.JSX.Element {
+  const router = useRouter();
+  const [subtasksExpanded, setSubtasksExpanded] = useState(false);
+  const subtasks = task.subtasks ?? [];
+  const completedCount = subtasks.filter((s) => s.completed).length;
+  // Strip the "task:" prefix that wraps the Convex _id in calendar rows.
+  const rawId = task.id.replace(/^task:/, '');
+
+  return (
+    <Pressable
+      style={styles.eventCard}
+      onPress={() =>
+        router.push({
+          pathname: '/(authenticated)/task/[id]',
+          params: { id: rawId },
+        } as never)
+      }
+      accessible={true}
+      accessibilityRole="button"
+      accessibilityLabel={`משימה: ${task.title}${task.time ? `, ${task.time}` : ''}${task.isOverdue ? ', באיחור' : ''}`}
+    >
+      {/* Blue accent bar */}
+      <View
+        style={[styles.eventAccentBar, { backgroundColor: PRIMARY_BLUE }]}
+      />
+
+      <View style={styles.eventCardContent}>
+        {/* Header: tag + time + overdue + assignee */}
+        <View style={styles.eventCardHeader}>
+          <View
+            style={[
+              styles.categoryTag,
+              { backgroundColor: `${PRIMARY_BLUE}18` },
+            ]}
+          >
+            <Text style={[styles.categoryTagText, { color: PRIMARY_BLUE }]}>
+              משימה
+            </Text>
+          </View>
+          {task.time !== '' ? (
+            <Text style={{ fontSize: 12, fontWeight: '600', color: '#64748b' }}>
+              {task.time}
+            </Text>
+          ) : null}
+          {task.isOverdue ? (
+            <View style={styles.overdueBadge}>
+              <Text style={styles.overdueBadgeText}>באיחור</Text>
+            </View>
+          ) : null}
+          {task.assigneeInitials ? (
+            <View
+              style={[
+                styles.taskAssigneeAvatar,
+                { backgroundColor: task.assigneeColor ?? PRIMARY_BLUE },
+              ]}
+            >
+              <Text style={styles.taskAssigneeInitials}>
+                {task.assigneeInitials}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Title */}
+        <Text style={styles.eventTitle}>{task.title}</Text>
+
+        {/* Subtask expand / collapse — same pattern as Home screen */}
+        {subtasks.length > 0 ? (
+          <View style={{ marginTop: 2 }}>
+            <Pressable
+              style={{
+                flexDirection: 'row-reverse',
+                alignItems: 'center',
+                gap: 4,
+                paddingVertical: 2,
+              }}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                setSubtasksExpanded((v) => !v);
+              }}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={
+                subtasksExpanded ? 'כווץ סעיפים' : 'הרחב סעיפים'
+              }
+            >
+              <MaterialIcons
+                name={subtasksExpanded ? 'expand-less' : 'expand-more'}
+                size={16}
+                color="#94a3b8"
+              />
+              <Text
+                style={{
+                  fontSize: 12,
+                  color: '#64748b',
+                  textAlign: 'right',
+                  flex: 1,
+                }}
+              >
+                {completedCount} מתוך {subtasks.length} סעיפים
+              </Text>
+            </Pressable>
+
+            {subtasksExpanded ? (
+              <View style={{ marginTop: 4, gap: 4 }}>
+                {subtasks.map((sub) => (
+                  <View
+                    key={sub.id}
+                    style={{
+                      flexDirection: 'row-reverse',
+                      alignItems: 'center',
+                      gap: 8,
+                      paddingVertical: 2,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: 4,
+                        borderWidth: 1.5,
+                        borderColor: sub.completed ? PRIMARY_BLUE : '#cbd5e1',
+                        backgroundColor: sub.completed
+                          ? PRIMARY_BLUE
+                          : 'transparent',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {sub.completed ? (
+                        <MaterialIcons name="check" size={12} color="#fff" />
+                      ) : null}
+                    </View>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        color: sub.completed ? '#94a3b8' : '#334155',
+                        textDecorationLine: sub.completed
+                          ? 'line-through'
+                          : 'none',
+                        flex: 1,
+                        textAlign: 'right',
+                      }}
+                    >
+                      {sub.title}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
 // ===== Day Events List =====
 interface DayEventsListProps {
   dayData: CalendarDay;
   year: number;
   month: number;
   anim: Animated.Value;
+  tasks?: CalendarDayTask[];
   onEventPress: (event: CalendarEvent) => void;
   onClose: () => void;
 }
@@ -2777,6 +3454,7 @@ function DayEventsList({
   year,
   month,
   anim,
+  tasks = [],
   onEventPress,
   onClose,
 }: DayEventsListProps): React.JSX.Element {
@@ -2793,7 +3471,8 @@ function DayEventsList({
     return `${weekday}, ${dayData.day} ב${monthName}`;
   }, [dayData.day, dayData.isToday, year, month]);
 
-  const hasContent = dayData.events.length > 0 || dayData.birthday != null;
+  const hasContent =
+    dayData.events.length > 0 || dayData.birthday != null || tasks.length > 0;
 
   return (
     <Animated.View
@@ -3052,6 +3731,13 @@ function DayEventsList({
         );
       })}
 
+      {/* Personal Task Cards — unified CalendarTaskCard */}
+      {tasks.map((task) => (
+        <View key={task.id} style={{ marginBottom: 8 }}>
+          <CalendarTaskCard task={task} />
+        </View>
+      ))}
+
       {/* Empty State */}
       {!hasContent && (
         <View style={dStyles.emptyState}>
@@ -3241,118 +3927,136 @@ function TimelineView({
                           ) : null}
                         </View>
 
-                        {/* Event Card */}
+                        {/* Event / Task Card */}
                         <View style={styles.timelineEventCardColumn}>
-                          <Pressable
-                            style={[
-                              styles.eventCard,
-                              event.cancelled && styles.eventCardCancelled,
-                              event.myAssignedTasks &&
-                                event.myAssignedTasks.length > 0 &&
-                                styles.eventCardWithTasks,
-                            ]}
-                            onPress={() => onEventPress(event)}
-                            accessible={true}
-                            accessibilityRole="button"
-                            accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
-                          >
-                            {/* Color accent bar */}
-                            <View
-                              style={[
-                                styles.eventAccentBar,
-                                {
-                                  backgroundColor: event.cancelled
-                                    ? '#9ca3af'
-                                    : event.categoryColor,
-                                },
-                              ]}
+                          {event.isPersonalTask ? (
+                            /* ── Personal task card — unified CalendarTaskCard ── */
+                            <CalendarTaskCard
+                              task={{
+                                id: event.id,
+                                title: event.title,
+                                time: event.time,
+                                isOverdue: event.isOverdue ?? false,
+                                assigneeInitials: event.assigneeInitials,
+                                assigneeColor: event.assigneeColor,
+                                subtasks: event.subtasks,
+                              }}
                             />
+                          ) : (
+                            /* ── Regular event card ── */
+                            <Pressable
+                              style={[
+                                styles.eventCard,
+                                event.cancelled && styles.eventCardCancelled,
+                                event.myAssignedTasks &&
+                                  event.myAssignedTasks.length > 0 &&
+                                  styles.eventCardWithTasks,
+                              ]}
+                              onPress={() => onEventPress(event)}
+                              accessible={true}
+                              accessibilityRole="button"
+                              accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
+                            >
+                              {/* Color accent bar */}
+                              <View
+                                style={[
+                                  styles.eventAccentBar,
+                                  {
+                                    backgroundColor: event.cancelled
+                                      ? '#9ca3af'
+                                      : event.categoryColor,
+                                  },
+                                ]}
+                              />
 
-                            {/* Card inner content */}
-                            <View style={styles.eventCardContent}>
-                              {/* Header: category tag + community name tag */}
-                              <View style={styles.eventCardHeader}>
-                                <View
-                                  style={[
-                                    styles.categoryTag,
-                                    {
-                                      backgroundColor: `${event.categoryColor}20`,
-                                    },
-                                  ]}
-                                >
-                                  <Text
+                              {/* Card inner content */}
+                              <View style={styles.eventCardContent}>
+                                {/* Header: category tag + community name tag */}
+                                <View style={styles.eventCardHeader}>
+                                  <View
                                     style={[
-                                      styles.categoryTagText,
+                                      styles.categoryTag,
                                       {
-                                        color: event.cancelled
-                                          ? '#9ca3af'
-                                          : event.categoryColor,
+                                        backgroundColor: `${event.categoryColor}20`,
                                       },
                                     ]}
                                   >
-                                    {event.category}
-                                  </Text>
-                                </View>
-                                {event.communityName ? (
-                                  <CommunityEventNameTag
-                                    name={event.communityName}
-                                  />
-                                ) : null}
-                              </View>
-
-                              {/* Event Title */}
-                              <Text
-                                style={[
-                                  styles.eventTitle,
-                                  event.cancelled && styles.eventTitleCancelled,
-                                ]}
-                              >
-                                {event.title}
-                              </Text>
-
-                              {/* Location + nav button */}
-                              {event.location ? (
-                                <>
-                                  <View style={styles.locationRow}>
-                                    <MaterialIcons
-                                      name="location-on"
-                                      size={13}
-                                      color="#94a3b8"
-                                    />
                                     <Text
-                                      style={styles.locationText}
-                                      numberOfLines={1}
+                                      style={[
+                                        styles.categoryTagText,
+                                        {
+                                          color: event.cancelled
+                                            ? '#9ca3af'
+                                            : event.categoryColor,
+                                        },
+                                      ]}
                                     >
-                                      {event.location}
+                                      {event.category}
                                     </Text>
                                   </View>
-                                  <Pressable
-                                    style={styles.eventNavBtn}
-                                    onPress={(e) => {
-                                      e.stopPropagation?.();
-                                      onNavigate(
-                                        event.location as string,
-                                        event.locationUrl
-                                      );
-                                    }}
-                                    accessible={true}
-                                    accessibilityRole="button"
-                                    accessibilityLabel="נווט"
-                                  >
-                                    <MaterialIcons
-                                      name="near-me"
-                                      size={13}
-                                      color="#8d6e63"
+                                  {event.communityName ? (
+                                    <CommunityEventNameTag
+                                      name={event.communityName}
                                     />
-                                    <Text style={styles.eventNavBtnText}>
-                                      נווט
-                                    </Text>
-                                  </Pressable>
-                                </>
-                              ) : null}
-                            </View>
-                          </Pressable>
-                          {event.myAssignedTasks &&
+                                  ) : null}
+                                </View>
+
+                                {/* Event Title */}
+                                <Text
+                                  style={[
+                                    styles.eventTitle,
+                                    event.cancelled &&
+                                      styles.eventTitleCancelled,
+                                  ]}
+                                >
+                                  {event.title}
+                                </Text>
+
+                                {/* Location + nav button */}
+                                {event.location ? (
+                                  <>
+                                    <View style={styles.locationRow}>
+                                      <MaterialIcons
+                                        name="location-on"
+                                        size={13}
+                                        color="#94a3b8"
+                                      />
+                                      <Text
+                                        style={styles.locationText}
+                                        numberOfLines={1}
+                                      >
+                                        {event.location}
+                                      </Text>
+                                    </View>
+                                    <Pressable
+                                      style={styles.eventNavBtn}
+                                      onPress={(e) => {
+                                        e.stopPropagation?.();
+                                        onNavigate(
+                                          event.location as string,
+                                          event.locationUrl
+                                        );
+                                      }}
+                                      accessible={true}
+                                      accessibilityRole="button"
+                                      accessibilityLabel="נווט"
+                                    >
+                                      <MaterialIcons
+                                        name="near-me"
+                                        size={13}
+                                        color="#8d6e63"
+                                      />
+                                      <Text style={styles.eventNavBtnText}>
+                                        נווט
+                                      </Text>
+                                    </Pressable>
+                                  </>
+                                ) : null}
+                              </View>
+                            </Pressable>
+                          )}
+                          {!event.isPersonalTask &&
+                          event.myAssignedTasks &&
                           event.myAssignedTasks.length > 0 ? (
                             <View style={styles.calendarTaskExpansionContainer}>
                               <InlineEventTasksSection
@@ -3360,7 +4064,8 @@ function TimelineView({
                               />
                             </View>
                           ) : null}
-                          {event.importantItems &&
+                          {!event.isPersonalTask &&
+                          event.importantItems &&
                           event.importantItems.length > 0 ? (
                             <View style={styles.calendarTaskExpansionContainer}>
                               <InlineImportantItemsSection
@@ -3842,6 +4547,39 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
+  overdueBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: '#fee2e2',
+  },
+  overdueBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#dc2626',
+  },
+  taskAssigneeAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskAssigneeInitials: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  taskSubtasksRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  taskSubtasksText: {
+    fontSize: 11,
+    color: '#b45309',
+  },
   eventTitle: {
     fontSize: 15,
     fontWeight: '700',
@@ -4154,6 +4892,32 @@ const mStyles = StyleSheet.create({
     flex: 1,
     minHeight: 8,
   },
+
+  /* Task indicators */
+  taskIndicatorDot: {
+    position: 'absolute',
+    right: 4,
+    bottom: 10,
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#f59e0b',
+  },
+  expandedTaskRow: {
+    borderRadius: 6,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    backgroundColor: '#fffbeb',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#fde68a',
+    alignItems: 'flex-end',
+  },
+  expandedTaskText: {
+    fontSize: 9,
+    color: '#b45309',
+    fontWeight: '600',
+    textAlign: 'right',
+  },
 });
 
 const pickerStyles = StyleSheet.create({
@@ -4405,6 +5169,72 @@ const dStyles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  /* Task Card (day panel) */
+  taskCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 12,
+    gap: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  taskIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0f7ff',
+  },
+  taskOverdueBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#fee2e2',
+    marginTop: 4,
+    alignSelf: 'flex-end',
+  },
+  taskOverdueText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#dc2626',
+  },
+  taskTitleRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+  },
+  taskAssigneeAvatarSmall: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskAssigneeInitialsSmall: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  taskSubtasksRowDay: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  taskSubtasksTextDay: {
+    fontSize: 11,
+    color: '#64748b',
   },
 
   /* Empty State */

@@ -783,7 +783,33 @@ export const listMyTasks = query({
       }
     }
 
-    return [...taskMap.values()];
+    const tasks = [...taskMap.values()];
+
+    // Batch-fetch community names for tasks that have communityId, so the
+    // Tasks screen can render the community chip without a separate query.
+    const uniqueCommunityIds = [
+      ...new Set(
+        tasks
+          .map((t) => t.communityId)
+          .filter((id): id is NonNullable<typeof id> => id != null)
+      ),
+    ];
+    const communityNameMap = new Map<string, string>();
+    await Promise.all(
+      uniqueCommunityIds.map(async (communityId) => {
+        const community = await ctx.db.get(communityId);
+        if (community?.name) {
+          communityNameMap.set(String(communityId), community.name);
+        }
+      })
+    );
+
+    return tasks.map((task) => ({
+      ...task,
+      communityName: task.communityId
+        ? communityNameMap.get(String(task.communityId))
+        : undefined,
+    }));
   },
 });
 

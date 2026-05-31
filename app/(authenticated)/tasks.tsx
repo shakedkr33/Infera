@@ -620,6 +620,8 @@ export default function TasksScreen() {
     const now = Date.now();
 
     // ── Regular personal/family/work/shopping tasks ──────────────────────────
+    // listMyTasks now enriches tasks with communityName (via batch community lookup),
+    // so bundle tasks automatically receive the community chip data here.
     for (const row of myTasks ?? []) {
       const assignedToUserIds = ((row.assignedToUserIds ?? []) as string[]).map(
         String
@@ -648,6 +650,7 @@ export default function TasksScreen() {
         assignedToUserIds,
         assignedToMemberIds,
         communityId: row.communityId ? String(row.communityId) : undefined,
+        communityName: row.communityName ?? undefined,
         sourceType: row.sourceType,
         sourceEventId: row.sourceEventId
           ? String(row.sourceEventId)

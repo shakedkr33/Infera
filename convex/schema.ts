@@ -330,6 +330,15 @@ export default defineSchema({
     assignedToManual: v.optional(v.string()),
     assignedByUserId: v.optional(v.id('users')),
     assignedAt: v.optional(v.number()),
+    // ── Backwards-compatibility only ──────────────────────────────────────
+    // These fields exist on documents created during the removed Sprint 4
+    // pending-assignment experiment. The product logic no longer reads or
+    // writes them; they are listed here solely so Convex schema validation
+    // does not reject existing rows.
+    assignmentStatus: v.optional(
+      v.union(v.literal('pending'), v.literal('accepted'))
+    ),
+    respondedAt: v.optional(v.number()),
   })
     .index('by_event', ['eventId'])
     .index('by_event_order', ['eventId', 'order']),
