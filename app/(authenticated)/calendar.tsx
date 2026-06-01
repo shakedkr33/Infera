@@ -40,6 +40,8 @@ import type { ImportantItem } from '@/components/InlineImportantItemsSection';
 import { InlineImportantItemsSection } from '@/components/InlineImportantItemsSection';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
+import type { ProfileCircle } from '@/components/ProfileCircles';
+import { ProfileCircles } from '@/components/ProfileCircles';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -138,6 +140,8 @@ interface CalendarEvent {
   sortTimeMs?: number;
   /** Expanded month chip styling */
   eventVisualKind?: 'community' | 'shared' | 'personal';
+  /** True when the current viewer created this event; false for Type B (shared-with-viewer) events */
+  isViewerCreator?: boolean;
 }
 
 interface BirthdayInfo {
@@ -256,6 +260,12 @@ type TimelineEventRow = MockTimelineEvent & {
   assigneeInitials?: string;
   /** Background colour for the assignee avatar — only for personal task rows */
   assigneeColor?: string;
+  /** Resolved family-member profiles to display as overlapping circles on the card */
+  profileCircles?: ProfileCircle[];
+  /** Count of external (non-family) participants, shown as "+N" after the circles */
+  profileCirclesExtraCount?: number;
+  /** Semantic context: 'sharedWith' for personal items, 'alsoAddedToCalendar' for community events */
+  profileCirclesContext?: 'sharedWith' | 'alsoAddedToCalendar';
 };
 
 /** Lightweight task item for monthly selected-day panels (DayEventsList / CalendarDayEventsSheet) */
@@ -1249,16 +1259,10 @@ export default function CalendarScreen(): React.JSX.Element {
   }, [today]);
 
   const personalEvents =
-    useQuery(
-      api.events.listByDateRange,
-      spaceId
-        ? {
-            spaceId: spaceId as Id<'spaces'>,
-            from: monthRange.from,
-            to: monthRange.to,
-          }
-        : 'skip'
-    ) ?? [];
+    useQuery(api.events.listByDateRange, {
+      from: monthRange.from,
+      to: monthRange.to,
+    }) ?? [];
 
   /** Community events (RSVP yes for members; creators/admins unchanged) — merged into unfiltered month + timeline */
   const aggregateCommunityEvents =
@@ -1268,16 +1272,10 @@ export default function CalendarScreen(): React.JSX.Element {
     ) ?? [];
 
   const timelinePersonalEvents =
-    useQuery(
-      api.events.listByDateRange,
-      spaceId
-        ? {
-            spaceId: spaceId as Id<'spaces'>,
-            from: timelineRange.from,
-            to: timelineRange.to,
-          }
-        : 'skip'
-    ) ?? [];
+    useQuery(api.events.listByDateRange, {
+      from: timelineRange.from,
+      to: timelineRange.to,
+    }) ?? [];
 
   const timelineCommunityEvents =
     useQuery(
@@ -1328,6 +1326,43 @@ export default function CalendarScreen(): React.JSX.Element {
     }
     return { byUserId, byMemberId, selfEntityId };
   }, [familyContacts?.members, familyContacts?.selfEntityId]);
+
+  // Full-profile lookup maps for ProfileCircles (need name, not just initials).
+  // Excludes the current user so they never appear in their own shared-with list.
+  const familyProfilesByUserId = useMemo(() => {
+    const map = new Map<string, ProfileCircle>();
+    const currentUserId = currentUser?._id as string | undefined;
+    for (const member of familyContacts?.members ?? []) {
+      const uid = (member as { matchedUserId?: string }).matchedUserId;
+      if (!uid || uid === currentUserId) continue;
+      map.set(uid, {
+        id: uid,
+        name: (member.displayName ?? '?') as string,
+        color: (member.color ?? '#36a9e2') as string,
+      });
+    }
+    return map;
+  }, [familyContacts?.members, currentUser?._id]);
+
+  const familyProfilesByMemberId = useMemo(() => {
+    const map = new Map<string, ProfileCircle>();
+    const selfEntityId = familyContacts?.selfEntityId as string | undefined;
+    for (const member of familyContacts?.members ?? []) {
+      const mid = member._id as string;
+      if (mid === selfEntityId) continue;
+      map.set(mid, {
+        id: mid,
+        name: (member.displayName ?? '?') as string,
+        color: (member.color ?? '#36a9e2') as string,
+      });
+    }
+    return map;
+  }, [familyContacts?.members, familyContacts?.selfEntityId]);
+
+  // All community events saved by family members — used for profile circles on
+  // timeline event cards without querying per-event (O(family_size) DB calls).
+  const familyAllSaved =
+    useQuery(api.profileCircles.getFamilyAllSavedCommunityEvents) ?? {};
 
   // Personal tasks for the calendar — fetched once, filtered client-side
   const calendarTasksRaw = useQuery(api.tasks.listMyTasks) ?? [];
@@ -1393,6 +1428,11 @@ export default function CalendarScreen(): React.JSX.Element {
       const day = d.getDate();
       if (!eventsByDay[day]) eventsByDay[day] = [];
       const isSavedCommunityInSpace = Boolean(ev.communityId);
+      const evCreatedBy = (ev as { createdBy?: string }).createdBy;
+      const calGridUserId = currentUser?._id as string | undefined;
+      const isViewerCreator = isSavedCommunityInSpace
+        ? undefined
+        : !!calGridUserId && evCreatedBy === calGridUserId;
       const personalRow = {
         id: ev._id,
         listKey: `${ev._id}-personal`,
@@ -1410,6 +1450,7 @@ export default function CalendarScreen(): React.JSX.Element {
         eventVisualKind: isSavedCommunityInSpace
           ? ('community' as const)
           : ('personal' as const),
+        isViewerCreator,
       };
       if (!eventsByDay[day].some((e) => e.id === personalRow.id)) {
         eventsByDay[day].push(personalRow);
@@ -1479,6 +1520,7 @@ export default function CalendarScreen(): React.JSX.Element {
     personalEvents,
     linkedEvents,
     aggregateCommunityEvents,
+    currentUser?._id,
   ]);
 
   // === Dynamic panel heights ===
@@ -2023,6 +2065,8 @@ export default function CalendarScreen(): React.JSX.Element {
       const key = event.listKey ?? event.id;
       longPressGuardRef.current = { key, until: Date.now() + 700 };
       if (event.sourceType === 'linked') return;
+      // Type B (shared-with-viewer) events: recipient cannot edit or delete
+      if (event.isViewerCreator === false) return;
 
       const x = Math.min(
         Math.max(12, pressEvent.nativeEvent.pageX - EDIT_POPOVER_WIDTH / 2),
@@ -2155,6 +2199,70 @@ export default function CalendarScreen(): React.JSX.Element {
         const rawImportantItems1 = (
           event as { importantItems?: ImportantItem[] }
         ).importantItems;
+
+        // Profile circles for personal events
+        let pc1: ProfileCircle[] = [];
+        let pc1Extra = 0;
+        let pc1Context: 'sharedWith' | 'alsoAddedToCalendar' = 'sharedWith';
+        if (isSavedCommunityInSpace) {
+          pc1 = familyAllSaved[event._id as string] ?? [];
+          pc1Context = 'alsoAddedToCalendar';
+        } else {
+          const evS = event as {
+            createdBy?: string;
+            allFamily?: boolean;
+            sharedWithUserIds?: string[];
+            sharedWithFamilyMemberIds?: string[];
+            participants?: string[];
+            sharedMemberProfiles?: Array<{
+              id: string;
+              displayName: string;
+              color: string;
+              isViewer: boolean;
+            }>;
+          };
+          const calCurrentUserId = currentUser?._id as string | undefined;
+          const isCreator =
+            !!calCurrentUserId && evS.createdBy === calCurrentUserId;
+          const totalParticipants = evS.participants?.length ?? 0;
+
+          if (isCreator) {
+            // Creator's view: show selected family recipients.
+            // Uses server-resolved sharedMemberProfiles so display is reliable
+            // even if the local map has a key mismatch.
+            if (evS.allFamily) {
+              pc1 = [...familyProfilesByUserId.values()];
+              pc1Extra = Math.max(0, totalParticipants - pc1.length);
+            } else {
+              const resolved = evS.sharedMemberProfiles ?? [];
+              for (const p of resolved) {
+                pc1.push({ id: p.id, name: p.displayName, color: p.color });
+              }
+              const familyCount = (evS.sharedWithFamilyMemberIds ?? []).length;
+              pc1Extra = Math.max(0, totalParticipants - familyCount);
+            }
+          } else {
+            // Recipient's view: show the creator's circle + all other recipients.
+            // Other-recipient circles come from server-resolved sharedMemberProfiles
+            // (cross-space safe). The isViewer flag skips the current viewer's circle.
+            const resolved = evS.sharedMemberProfiles ?? [];
+            const creatorId = evS.createdBy;
+            const circles: ProfileCircle[] = [];
+            if (creatorId) {
+              const creatorProfile =
+                familyProfilesByUserId.get(creatorId) ??
+                familyProfilesByMemberId.get(creatorId);
+              if (creatorProfile) circles.push(creatorProfile);
+            }
+            for (const p of resolved) {
+              if (p.isViewer) continue;
+              circles.push({ id: p.id, name: p.displayName, color: p.color });
+            }
+            pc1 = circles.slice(0, 3);
+            pc1Extra = Math.max(0, circles.length - 3);
+          }
+        }
+
         grouped[key].events.push({
           id: event._id,
           category: isSavedCommunityInSpace ? 'קהילה' : 'אישי',
@@ -2175,6 +2283,9 @@ export default function CalendarScreen(): React.JSX.Element {
           importantItems: rawImportantItems1?.length
             ? rawImportantItems1
             : undefined,
+          profileCircles: pc1.length > 0 ? pc1 : undefined,
+          profileCirclesExtraCount: pc1Extra > 0 ? pc1Extra : undefined,
+          profileCirclesContext: pc1Context,
         });
       }
 
@@ -2214,6 +2325,7 @@ export default function CalendarScreen(): React.JSX.Element {
         const rawImportantItems2 = (
           event as { importantItems?: ImportantItem[] }
         ).importantItems;
+        const pc2 = familyAllSaved[event._id as string] ?? [];
         grouped[key].events.push({
           id: event._id,
           category: 'קהילה',
@@ -2234,6 +2346,8 @@ export default function CalendarScreen(): React.JSX.Element {
           importantItems: rawImportantItems2?.length
             ? rawImportantItems2
             : undefined,
+          profileCircles: pc2.length > 0 ? pc2 : undefined,
+          profileCirclesContext: 'alsoAddedToCalendar',
         });
       }
 
@@ -2370,6 +2484,7 @@ export default function CalendarScreen(): React.JSX.Element {
       const endD3 = event.endTime ? new Date(event.endTime) : null;
       const rawImportantItems3 = (event as { importantItems?: ImportantItem[] })
         .importantItems;
+      const pc3 = familyAllSaved[event._id as string] ?? [];
       grouped[key].events.push({
         id: event._id,
         category: 'קהילה',
@@ -2391,6 +2506,8 @@ export default function CalendarScreen(): React.JSX.Element {
         importantItems: rawImportantItems3?.length
           ? rawImportantItems3
           : undefined,
+        profileCircles: pc3.length > 0 ? pc3 : undefined,
+        profileCirclesContext: 'alsoAddedToCalendar',
       });
     }
 
@@ -2418,6 +2535,9 @@ export default function CalendarScreen(): React.JSX.Element {
     timelineRange,
     memberMaps,
     currentUser,
+    familyProfilesByUserId,
+    familyProfilesByMemberId,
+    familyAllSaved,
   ]);
 
   useEffect(() => {
@@ -4052,6 +4172,23 @@ function TimelineView({
                                     </Pressable>
                                   </>
                                 ) : null}
+
+                                {/* Family profile circles */}
+                                {(event.profileCircles?.length ?? 0) > 0 ||
+                                (event.profileCirclesExtraCount ?? 0) > 0 ? (
+                                  <View style={styles.profileCirclesRow}>
+                                    <ProfileCircles
+                                      profiles={event.profileCircles ?? []}
+                                      extraCount={
+                                        event.profileCirclesExtraCount ?? 0
+                                      }
+                                      context={
+                                        event.profileCirclesContext ??
+                                        'sharedWith'
+                                      }
+                                    />
+                                  </View>
+                                ) : null}
                               </View>
                             </Pressable>
                           )}
@@ -4619,6 +4756,9 @@ const styles = StyleSheet.create({
     color: '#8d6e63',
     fontWeight: '700',
     fontSize: 12,
+  },
+  profileCirclesRow: {
+    marginTop: 6,
   },
 
   /* End Indicator */

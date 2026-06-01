@@ -13,6 +13,7 @@ import {
   shouldIncludeInPersonalHomeCalendar,
 } from './communityCalendarState';
 import { isActiveCommunityMember } from './communityMemberUtils';
+import { resolveMySpaceId } from './members';
 
 // ─── Attachment arg validator ──────────────────────────────────────────────────
 // uploadedBy and uploadedAt are NOT accepted from the client — the handler
@@ -292,8 +293,41 @@ export const getById = query({
       };
     }
 
-    if (event.createdBy !== userId) return null;
-    return { ...event, isSavedToMyCalendar: false };
+    // Creator always has access to their own event.
+    if (event.createdBy === userId) {
+      return { ...event, isSavedToMyCalendar: false };
+    }
+
+    // Space member — can view personal events in their shared family space.
+    if (event.spaceId) {
+      const memberRow = await ctx.db
+        .query('members')
+        .withIndex('by_user', (q) => q.eq('userId', userId))
+        .filter((q) => q.eq(q.field('spaceId'), event.spaceId))
+        .first();
+      if (memberRow) return { ...event, isSavedToMyCalendar: false };
+    }
+
+    // Cross-space: event lives in a different space than the viewer's resolved
+    // space (e.g. Yaniv's event stored under spaceY, but viewed by User A whose
+    // resolved space is spaceA). Allow access when explicitly shared.
+    const viewerMemberRows = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const viewerMemberIds = new Set(
+      viewerMemberRows.map((r) => r._id as string)
+    );
+    const sharedUserIds = ((event.sharedWithUserIds ?? []) as string[]);
+    const sharedMemberIds = event.sharedWithFamilyMemberIds ?? [];
+    const isExplicitlyShared =
+      sharedUserIds.includes(userId as string) ||
+      sharedMemberIds.some((mid) => viewerMemberIds.has(mid));
+    if (isExplicitlyShared) {
+      return { ...event, isSavedToMyCalendar: false };
+    }
+
+    return null;
   },
 });
 
@@ -450,31 +484,57 @@ export const listByCommunity = query({
 
 // ─────────────────────────────────────────────────────────────
 // שליפת אירועים לפי טווח תאריכים
+// spaceId is resolved server-side via resolveMySpaceId so the server
+// is always authoritative about which family space the caller belongs to.
+//
+// Two categories are merged:
+//   Category 1 — events in the viewer's resolved space (creator + saved community)
+//   Category 2 — personal events explicitly shared with the viewer from ANY space
+//                (handles cross-space sharing where creator's event lives in a
+//                 different spaceId than the viewer's resolved space)
 // ─────────────────────────────────────────────────────────────
 export const listByDateRange = query({
   args: {
-    spaceId: v.id('spaces'),
     from: v.number(), // Unix timestamp (ms) – תחילת טווח
     to: v.number(), // Unix timestamp (ms) – סוף טווח
   },
-  handler: async (ctx, { spaceId, from, to }) => {
+  handler: async (ctx, { from, to }) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      return [];
-    }
-    // TODO: לחבר לאימות – לוודא שהמשתמש הנוכחי שייך ל-spaceId
-    const rows = await ctx.db
-      .query('events')
-      .withIndex('by_space_and_time', (q) =>
-        q.eq('spaceId', spaceId).gte('startTime', from).lte('startTime', to)
-      )
-      .filter((q) => q.neq(q.field('status'), 'cancelled'))
-      .order('asc')
-      .collect();
+    if (!userId) return [];
 
-    if (rows.length === 0) {
-      return [];
-    }
+    const spaceId = await resolveMySpaceId(ctx, userId);
+
+    // Collect ALL member row _ids this viewer has across ALL spaces — both entity
+    // and access kinds. sharedWithFamilyMemberIds stores members._id values, so
+    // we compare against every row linked to this user regardless of space.
+    const myMemberRows = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    // For Category 1 visibility (same-space events), restrict to the viewer's resolved space.
+    const myMemberIdsInSpace = new Set(
+      spaceId
+        ? myMemberRows
+            .filter((r) => (r.spaceId as string) === (spaceId as string))
+            .map((r) => r._id as string)
+        : []
+    );
+    // For Category 2 visibility (cross-space events), use ALL member row IDs regardless of space.
+    const myMemberIdsAllSpaces = new Set(
+      myMemberRows.map((r) => r._id as string)
+    );
+
+    // ── Category 1: events in the viewer's resolved space ──────────────────────
+    const cat1Rows = spaceId
+      ? await ctx.db
+          .query('events')
+          .withIndex('by_space_and_time', (q) =>
+            q.eq('spaceId', spaceId).gte('startTime', from).lte('startTime', to)
+          )
+          .filter((q) => q.neq(q.field('status'), 'cancelled'))
+          .order('asc')
+          .collect()
+      : [];
 
     const userRsvps = await ctx.db
       .query('eventRsvps')
@@ -487,32 +547,40 @@ export const listByDateRange = query({
     const optOutIds = await loadOptOutEventIds(ctx, userId);
 
     const communityIdSet = new Set<string>();
-    for (const e of rows) {
-      if (e.communityId) {
-        communityIdSet.add(e.communityId as string);
-      }
+    for (const e of cat1Rows) {
+      if (e.communityId) communityIdSet.add(e.communityId as string);
     }
     const communityNameById = new Map<string, string>();
     for (const cidStr of communityIdSet) {
       const c = await ctx.db.get(cidStr as Id<'communities'>);
-      if (c) {
-        communityNameById.set(cidStr, c.name);
-      }
+      if (c) communityNameById.set(cidStr, c.name);
     }
 
-    const result: Array<
-      (typeof rows)[0] & {
-        communityName?: string;
-        isSavedToMyCalendar: boolean;
-      }
-    > = [];
-    for (const ev of rows) {
+    type SharedMemberProfile = {
+      id: string;
+      displayName: string;
+      color: string;
+      /** True when this member row belongs to the current viewer — used to skip self-circle on recipient side. */
+      isViewer: boolean;
+    };
+
+    type ResultEvent = (typeof cat1Rows)[0] & {
+      communityName?: string;
+      isSavedToMyCalendar: boolean;
+      sharedMemberProfiles?: SharedMemberProfile[];
+    };
+
+    const result: ResultEvent[] = [];
+    const seenIds = new Set<string>();
+
+    for (const ev of cat1Rows) {
       const idStr = ev._id as string;
       const rsvpStatus = rsvpByEventId.get(idStr);
       let communityName: string | undefined;
       let isSavedToMyCalendar = false;
 
       if (ev.communityId) {
+        // Community events: keep existing RSVP/save logic — no change here.
         communityName = communityNameById.get(ev.communityId as string);
         isSavedToMyCalendar = computeIsSavedToMyCalendar({
           requiresRsvp: ev.requiresRsvp,
@@ -524,10 +592,94 @@ export const listByDateRange = query({
         // must still respect personal-calendar saved state — only include if
         // actively saved. This mirrors listCommunityEventsForDate filtering.
         if (!isSavedToMyCalendar) continue;
+      } else {
+        // Personal events are private by default.
+        // Only return this event if the caller is the creator, was explicitly
+        // shared with (via sharedWithFamilyMemberIds or sharedWithUserIds), or
+        // the event was explicitly shared with the whole family (allFamily).
+        const isCreator = (ev.createdBy as string) === (userId as string);
+        const isAllFamily = ev.allFamily === true;
+        const isInUserIds = (ev.sharedWithUserIds ?? []).some(
+          (id) => (id as string) === (userId as string)
+        );
+        // Use myMemberIdsAllSpaces (not myMemberIdsInSpace) so that when User A
+        // saves the viewer's entity row ID from spaceA into sharedWithFamilyMemberIds,
+        // the viewer's lookup succeeds even if their resolved primary space is spaceB.
+        const isInMemberIds = (ev.sharedWithFamilyMemberIds ?? []).some((mid) =>
+          myMemberIdsAllSpaces.has(mid)
+        );
+        if (!isCreator && !isAllFamily && !isInUserIds && !isInMemberIds) {
+          continue;
+        }
       }
 
+      seenIds.add(idStr);
       result.push({ ...ev, communityName, isSavedToMyCalendar });
     }
+
+    // ── Category 2: personal events explicitly shared with viewer from ANY space ─
+    // This handles the cross-space case: the event creator's spaceId differs from
+    // the viewer's resolved spaceId, so the by_space_and_time index never returns it.
+    //
+    // TODO: Add a dedicated index on sharedWithUserIds / sharedWithFamilyMemberIds
+    //       when event volume warrants it. For MVP, the full scan is acceptable
+    //       because personal sharing is rare relative to total event volume.
+    const cat2Candidates = await ctx.db
+      .query('events')
+      .filter((q) =>
+        q.and(
+          q.neq(q.field('status'), 'cancelled'),
+          q.gte(q.field('startTime'), from),
+          q.lte(q.field('startTime'), to)
+        )
+      )
+      .collect();
+
+    for (const ev of cat2Candidates) {
+      const idStr = ev._id as string;
+      if (seenIds.has(idStr)) continue; // already included from Cat 1
+      if (ev.communityId) continue; // community events use separate RSVP/save logic
+      if ((ev.createdBy as string) === (userId as string)) continue; // creator always sees via Cat 1
+
+      const sharedUserIds = (ev.sharedWithUserIds ?? []) as string[];
+      const sharedMemberIds = ev.sharedWithFamilyMemberIds ?? [];
+
+      const isSharedWithViewer =
+        sharedUserIds.includes(userId as string) ||
+        sharedMemberIds.some((mid) => myMemberIdsAllSpaces.has(mid));
+
+      if (!isSharedWithViewer) continue;
+
+      seenIds.add(idStr);
+      result.push({ ...ev, communityName: undefined, isSavedToMyCalendar: false });
+    }
+
+    // Re-sort ascending by startTime since Cat 2 events were appended unordered.
+    result.sort((a, b) => a.startTime - b.startTime);
+
+    // Resolve sharedMemberProfiles for personal events.
+    // Fetching member rows server-side makes circle display cross-space-safe:
+    // a recipient's local member map is keyed by their own space's IDs and cannot
+    // resolve IDs from the creator's space; the server has no such limitation.
+    for (let i = 0; i < result.length; i++) {
+      const ev = result[i];
+      if (ev.communityId) continue;
+      const mids = (ev.sharedWithFamilyMemberIds ?? []) as string[];
+      if (mids.length === 0) continue;
+      const profiles: SharedMemberProfile[] = [];
+      for (const mid of mids) {
+        const row = await ctx.db.get(mid as Id<'members'>);
+        if (!row) continue;
+        profiles.push({
+          id: mid,
+          displayName: row.displayName ?? '?',
+          color: row.color ?? '#36a9e2',
+          isViewer: row.matchedUserId === userId || row.userId === userId,
+        });
+      }
+      result[i] = { ...ev, sharedMemberProfiles: profiles };
+    }
+
     return result;
   },
 });

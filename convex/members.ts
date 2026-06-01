@@ -60,14 +60,27 @@ export async function resolveMySpaceId(
     .query('members')
     .withIndex('by_user', (q) => q.eq('userId', userId))
     .collect();
+
+  // Priority 1 — member access row: user was explicitly invited into a family space.
+  // This is the normal post-invite state created by matchOnPhone (new users) or joinFamily flows.
   const memberRow = rows.find(
     (r) => r.role === 'member' && resolveKind(r) === 'access'
   );
+  if (memberRow) return memberRow.spaceId;
+
+  // Priority 2 — matched entity row: user was phone-matched into a family space but
+  // no 'access' row was created yet (legacy users who joined before the matchOnPhone fix
+  // that auto-creates the access row). Their userId is stamped on the entity row via
+  // matchOnPhone, so the by_user index returns it. Use that space so they can see
+  // shared events instead of falling back to their own isolated space.
+  const entityRow = rows.find((r) => resolveKind(r) === 'entity');
+  if (entityRow) return entityRow.spaceId;
+
+  // Priority 3 — admin access row: creator of their own personal/family space.
   const adminRow = rows.find(
     (r) => r.role === 'admin' && resolveKind(r) === 'access'
   );
-  const spaceRow = memberRow ?? adminRow;
-  return spaceRow?.spaceId ?? null;
+  return adminRow?.spaceId ?? null;
 }
 
 const PERMISSION_DENIED =

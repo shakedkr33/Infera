@@ -5,6 +5,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import EventScreen from '@/lib/components/event/EventScreen';
+import type { FamilyMemberChip } from '@/lib/components/event/ParticipantsCard';
 import type {
   EventAttachmentDraft,
   EventData,
@@ -103,7 +104,8 @@ type ConvexTask = NonNullable<
 
 function convexEventToEventData(
   event: ConvexEvent,
-  tasks: ConvexTask[]
+  tasks: ConvexTask[],
+  familyMembers: FamilyMemberChip[] = []
 ): EventData {
   const start = new Date(event.startTime);
   const end = new Date(event.endTime);
@@ -135,13 +137,54 @@ function convexEventToEventData(
 
   const isLink = Boolean(event.onlineUrl?.trim());
 
-  const participants: Participant[] = (event.participants ?? []).map(
-    (name) => ({
-      id: name,
-      name,
-      color: '#36a9e2',
-    })
+  // Restore family sharing fields from the DB event record.
+  const eventRecord = event as unknown as {
+    sharedWithFamilyMemberIds?: string[];
+    allFamily?: boolean;
+    participants?: string[];
+  };
+  const familyIds = eventRecord.sharedWithFamilyMemberIds ?? [];
+  const allFamilyFlag = eventRecord.allFamily ?? false;
+
+  // Build lookup maps from the current user's family member list.
+  const familyMemberById = new Map<string, FamilyMemberChip>(
+    familyMembers.map((fm) => [fm._id, fm])
   );
+  // Cross-reference by display name to identify family member names stored in the
+  // legacy participants array (where names were saved alongside family member IDs).
+  const familyMemberByName = new Map<string, FamilyMemberChip>(
+    familyMembers
+      .filter((fm) => Boolean(fm.displayName))
+      .map((fm) => [fm.displayName as string, fm])
+  );
+  const familyIdsSet = new Set(familyIds);
+
+  // External participants: names from the DB participants array that do NOT
+  // correspond to any family member in sharedWithFamilyMemberIds.
+  // This correctly handles old events where family member names were saved
+  // in the participants array alongside their IDs in sharedWithFamilyMemberIds.
+  const externalParticipants: Participant[] = (eventRecord.participants ?? [])
+    .filter((name) => {
+      const fm = familyMemberByName.get(name);
+      return !fm || !familyIdsSet.has(fm._id);
+    })
+    .map((name) => ({ id: name, name, color: '#36a9e2' }));
+
+  // Family participants: reconstructed from sharedWithFamilyMemberIds with the
+  // correct entity row IDs so onFamilyChange filtering works during editing.
+  const familyParticipants: Participant[] = familyIds
+    .map((id) => familyMemberById.get(id))
+    .filter((fm): fm is FamilyMemberChip => fm != null)
+    .map((fm) => ({
+      id: fm._id,
+      name: fm.displayName ?? '',
+      color: fm.color ?? '#36a9e2',
+    }));
+
+  const participants: Participant[] = [
+    ...externalParticipants,
+    ...familyParticipants,
+  ];
 
   const eventTasks: EventTask[] = tasks.map((t) => ({
     id: t._id,
@@ -183,6 +226,8 @@ function convexEventToEventData(
     remindersEnabled,
     reminders,
     participants,
+    sharedWithFamilyMemberIds: familyIds.length > 0 ? familyIds : undefined,
+    allFamily: allFamilyFlag || undefined,
     tasks: eventTasks,
     tasksVisibleToParticipants: event.tasksVisibleToParticipants ?? false,
     showAllTasksToAll: false,
@@ -205,6 +250,18 @@ export default function EditEventScreen(): React.JSX.Element {
   const event = useQuery(api.events.getById, { eventId });
   const eventTasks = useQuery(api.eventTasks.listByEvent, { eventId });
   const currentUserId = useQuery(api.users.getMyId);
+  const serverFamilyContacts = useQuery(api.members.listMyFamilyContacts);
+  const familyMembers: FamilyMemberChip[] = useMemo(
+    () =>
+      (serverFamilyContacts?.members ?? [])
+        .filter((m) => m._id !== serverFamilyContacts?.selfEntityId)
+        .map((m) => ({
+          _id: m._id,
+          displayName: m.displayName,
+          color: m.color,
+        })),
+    [serverFamilyContacts]
+  );
   const communityMembersPack = useQuery(
     api.communities.getCommunityMembers,
     event?.communityId ? { communityId: event.communityId } : 'skip'
@@ -294,6 +351,18 @@ export default function EditEventScreen(): React.JSX.Element {
         generateUploadUrl
       );
 
+      // Build the participants list for persistence:
+      // - Family members are tracked via sharedWithFamilyMemberIds (by entity row ID).
+      // - The participants field stores ALL display names (family + external) so the
+      //   profileCirclesExtraCount formula (totalParticipants - familyIds.length) in
+      //   index.tsx / calendar.tsx gives the correct external count.
+      const participantNames =
+        data.participants.length > 0
+          ? data.participants
+              .map((p) => p.name)
+              .filter((n) => n.trim().length > 0)
+          : undefined;
+
       await updateEventMutation({
         id: eventId,
         title: data.title.trim(),
@@ -315,9 +384,15 @@ export default function EditEventScreen(): React.JSX.Element {
         locationUrl: data.onlineUrl ? undefined : data.locationUrl || undefined,
         tasksVisibleToParticipants: data.tasksVisibleToParticipants,
         requiresRsvp: rsvpRequired,
-        participants:
-          data.participants.length > 0
-            ? data.participants.map((p) => p.name)
+        participants: participantNames,
+        // Preserve family sharing fields — previously these were omitted and
+        // therefore silently cleared on every edit, which broke visibility for
+        // shared family members.
+        allFamily: data.allFamily || undefined,
+        sharedWithFamilyMemberIds:
+          data.sharedWithFamilyMemberIds &&
+          data.sharedWithFamilyMemberIds.length > 0
+            ? data.sharedWithFamilyMemberIds
             : undefined,
         attachments: resolvedAttachments,
         reminders: data.remindersEnabled
@@ -466,15 +541,23 @@ export default function EditEventScreen(): React.JSX.Element {
   // useMemo ensures initialData is stable and computed as a hook (before any early
   // returns). This prevents the useState lazy initializer in EventScreen from
   // running with undefined initialData during Expo Router's animation/pre-render.
+  // Gate on serverFamilyContacts so family member IDs are available when the form
+  // loads — this allows convexEventToEventData to reconstruct participants with the
+  // correct entity row IDs instead of raw names.
   const initialData = useMemo<EventData | null>(
     () => {
-      if (event === undefined || event === null || eventTasks === undefined) {
+      if (
+        event === undefined ||
+        event === null ||
+        eventTasks === undefined ||
+        serverFamilyContacts === undefined
+      ) {
         return null;
       }
-      return convexEventToEventData(event, eventTasks);
+      return convexEventToEventData(event, eventTasks, familyMembers);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [event, eventTasks]
+    [event, eventTasks, serverFamilyContacts]
   );
 
   const headerTitle = isCommunityEvent ? 'עריכת אירוע קהילתי' : 'עריכת אירוע';

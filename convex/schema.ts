@@ -371,7 +371,8 @@ export default defineSchema({
     removedAt: v.optional(v.number()),
   })
     .index('by_user', ['userId'])
-    .index('by_user_event', ['userId', 'eventId']),
+    .index('by_user_event', ['userId', 'eventId'])
+    .index('by_event', ['eventId']),
 
   /** הסרה ידנית מיומן אישי כשעדיין קיים RSVP yes (אירוע עבר ממצב RSVP לפתוח) */
   communityEventPersonalCalendarOptOuts: defineTable({

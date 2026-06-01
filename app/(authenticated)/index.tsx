@@ -25,6 +25,8 @@ import type { ImportantItem } from '@/components/InlineImportantItemsSection';
 import { InlineImportantItemsSection } from '@/components/InlineImportantItemsSection';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
+import type { ProfileCircle } from '@/components/ProfileCircles';
+import { ProfileCircles } from '@/components/ProfileCircles';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
@@ -54,6 +56,36 @@ function isSameDay(a: Date, b: Date): boolean {
   );
 }
 
+function getEmptyStateCopy(selectedDate: Date): {
+  title: string;
+  subtitle: string;
+} {
+  const sel = new Date(
+    selectedDate.getFullYear(),
+    selectedDate.getMonth(),
+    selectedDate.getDate()
+  );
+  const now = new Date();
+  const tod = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (sel.getTime() === tod.getTime()) {
+    return {
+      title: 'היום פנוי 🎉',
+      subtitle: 'אין לך אירועים או משימות היום.',
+    };
+  }
+  if (sel.getTime() < tod.getTime()) {
+    return {
+      title: 'לא היו פעילויות ביום הזה',
+      subtitle: 'לא היו אירועים או משימות בתאריך הזה.',
+    };
+  }
+  return {
+    title: 'אין פעילויות מתוכננות',
+    subtitle: 'אין אירועים או משימות בתאריך הזה.',
+  };
+}
+
 // Tasks that are derived from community event important items (both the legacy
 // per-item copies and the Sprint 2 bundle task) are shown nested under the
 // event on Home and must not appear as standalone task cards there.
@@ -65,14 +97,6 @@ function isEventDerivedImportantItemTask(task: {
     task.sourceType === 'community_event_important_items_bundle'
   );
 }
-
-// ─── Mood data ────────────────────────────────────────────────────────────────
-
-const MOODS = [
-  { value: 2, label: 'טוב', emoji: '😊' },
-  { value: 1, label: 'רגיל', emoji: '😐' },
-  { value: 0, label: 'עמוס', emoji: '😓' },
-] as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -121,6 +145,12 @@ type Item = {
   taskSource?: 'personal_task' | 'event_task';
   /** eventId for routing event_task items to the correct event detail screen */
   taskEventId?: string;
+  /** Resolved family-member profiles to display as overlapping circles on the card */
+  profileCircles?: ProfileCircle[];
+  /** Count of external (non-family) participants, shown as "+N" after the circles */
+  profileCirclesExtraCount?: number;
+  /** Semantic context: 'sharedWith' for personal items, 'alsoAddedToCalendar' for community events */
+  profileCirclesContext?: 'sharedWith' | 'alsoAddedToCalendar';
 };
 
 type UndatedTask = {
@@ -144,108 +174,6 @@ type OverdueTask = UndatedTask & {
   /** Raw ms timestamp of the actual due time (dueAt takes priority over dueDate for time). */
   dueAt?: number;
 };
-
-// ─── Inline face mood (cream/boho tone — emoji cannot be recolored) ─────────
-
-function FaceMood({ value }: { value: 0 | 1 | 2 }) {
-  return (
-    <View
-      style={{
-        width: 46,
-        height: 46,
-        borderRadius: 23,
-        backgroundColor: '#F5E6C8',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-      }}
-    >
-      {/* Eyes */}
-      <View
-        style={{
-          flexDirection: 'row',
-          gap: 7,
-          marginTop: -4,
-          alignItems: 'center',
-        }}
-      >
-        <View
-          style={{
-            width: 4,
-            height: 4,
-            borderRadius: 2,
-            backgroundColor: '#4a3728',
-          }}
-        />
-        <View
-          style={{
-            width: 4,
-            height: 4,
-            borderRadius: 2,
-            backgroundColor: '#4a3728',
-          }}
-        />
-      </View>
-      {/* Mouth — happy */}
-      {value === 2 && (
-        <View
-          style={{
-            width: 18,
-            height: 9,
-            borderBottomLeftRadius: 9,
-            borderBottomRightRadius: 9,
-            borderWidth: 2,
-            borderColor: '#4a3728',
-            borderTopWidth: 0,
-            marginTop: 5,
-          }}
-        />
-      )}
-      {/* Mouth — neutral */}
-      {value === 1 && (
-        <View
-          style={{
-            width: 14,
-            height: 2,
-            backgroundColor: '#4a3728',
-            borderRadius: 1,
-            marginTop: 7,
-          }}
-        />
-      )}
-      {/* Mouth — stressed: small open oval (anxious, not sad) */}
-      {value === 0 && (
-        <View
-          style={{
-            width: 13,
-            height: 9,
-            borderRadius: 6,
-            borderWidth: 2,
-            borderColor: '#4a3728',
-            marginTop: 6,
-          }}
-        />
-      )}
-      {/* Sweat drop for עמוס — teardrop shape */}
-      {value === 0 && (
-        <View
-          style={{
-            position: 'absolute',
-            top: 5,
-            right: 7,
-            width: 5,
-            height: 9,
-            borderTopLeftRadius: 2,
-            borderTopRightRadius: 2,
-            borderBottomLeftRadius: 5,
-            borderBottomRightRadius: 5,
-            backgroundColor: 'rgba(100,160,220,0.7)',
-          }}
-        />
-      )}
-    </View>
-  );
-}
 
 // ─── Subtask types ────────────────────────────────────────────────────────────
 
@@ -504,6 +432,38 @@ export default function HomeScreen() {
     return { byUserId, byMemberId, selfEntityId };
   }, [familyContacts?.members, familyContacts?.selfEntityId]);
 
+  // Full-profile lookup maps for ProfileCircles (need name, not just initials).
+  // Excludes the current user so they never appear in their own shared-with list.
+  const familyProfilesByUserId = useMemo(() => {
+    const map = new Map<string, ProfileCircle>();
+    const currentUserId = currentUser?._id as string | undefined;
+    for (const member of familyContacts?.members ?? []) {
+      const uid = (member as { matchedUserId?: string }).matchedUserId;
+      if (!uid || uid === currentUserId) continue;
+      map.set(uid, {
+        id: uid,
+        name: (member.displayName ?? '?') as string,
+        color: (member.color ?? '#36a9e2') as string,
+      });
+    }
+    return map;
+  }, [familyContacts?.members, currentUser?._id]);
+
+  const familyProfilesByMemberId = useMemo(() => {
+    const map = new Map<string, ProfileCircle>();
+    const selfEntityId = familyContacts?.selfEntityId as string | undefined;
+    for (const member of familyContacts?.members ?? []) {
+      const mid = member._id as string;
+      if (mid === selfEntityId) continue;
+      map.set(mid, {
+        id: mid,
+        name: (member.displayName ?? '?') as string,
+        color: (member.color ?? '#36a9e2') as string,
+      });
+    }
+    return map;
+  }, [familyContacts?.members, familyContacts?.selfEntityId]);
+
   // ── Convex: tasks mutations ────────────────────────────────────────────────
   const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
   const softDeleteTaskMutation = useMutation(api.tasks.softDeleteTask);
@@ -511,7 +471,6 @@ export default function HomeScreen() {
   const [showToast, setShowToast] = useState(true);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [moodByDate, setMoodByDate] = useState<Record<string, number>>({});
   const [calendarMode, setCalendarMode] = useState<'carousel' | 'month'>(
     'carousel'
   );
@@ -582,8 +541,12 @@ export default function HomeScreen() {
   });
   const todayISO = new Date().toISOString().split('T')[0];
 
-  const today = new Date();
+  // Stable reference — creating a new Date() on every render would cause the
+  // scroll-to-today useEffect (which lists `today` in its deps) to re-fire on
+  // every render, jumping the carousel back to today after any state update.
+  const today = useMemo(() => new Date(), []);
   const isSelectedToday = isSameDay(selectedDate, today);
+  const emptyDayCopy = getEmptyStateCopy(selectedDate);
   const year = today.getFullYear();
   const month = today.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -613,12 +576,22 @@ export default function HomeScreen() {
   });
   const communityEvents = communityEventsQuery ?? [];
 
+  // Community event IDs for the current date — used to fetch "also added" family data
+  const communityEventIds = useMemo(
+    () => communityEvents.map((ev) => ev._id as Id<'events'>),
+    [communityEvents]
+  );
+
+  // For each community event, which family members (same space) also added it to their calendar
+  const familyAlsoAdded =
+    useQuery(
+      api.profileCircles.getFamilyAlsoAddedCommunityEvents,
+      communityEventIds.length > 0 ? { eventIds: communityEventIds } : 'skip'
+    ) ?? {};
+
   // ── Personal events for selected date ─────────────────────────────────────
   const personalEventData =
-    useQuery(
-      api.events.listByDateRange,
-      spaceId ? { spaceId: spaceId as Id<'spaces'>, from, to } : 'skip'
-    ) ?? [];
+    useQuery(api.events.listByDateRange, { from, to }) ?? [];
 
   /**
    * Space-scoped `listByDateRange` returns every event in the user's space,
@@ -869,9 +842,17 @@ export default function HomeScreen() {
         isSavedToMyCalendar: ev.isSavedToMyCalendar,
         myAssignedTasks: myTasks.length > 0 ? myTasks : undefined,
         importantItems: communityImportantItemsById[String(ev._id)],
+        profileCircles: familyAlsoAdded[String(ev._id)] ?? [],
+        profileCirclesExtraCount: 0,
+        profileCirclesContext: 'alsoAddedToCalendar' as const,
       };
     });
-  }, [communityEvents, tasksByEvent, communityImportantItemsById]);
+  }, [
+    communityEvents,
+    tasksByEvent,
+    communityImportantItemsById,
+    familyAlsoAdded,
+  ]);
 
   // ── Assigned event task items mapped to Item shape ────────────────────────
   const assignedTaskItems: Item[] = useMemo(
@@ -918,6 +899,83 @@ export default function HomeScreen() {
             ? (ev as { isSavedToMyCalendar?: boolean }).isSavedToMyCalendar
             : undefined;
         const myTasks = tasksByEvent[String(ev._id)] ?? [];
+
+        // Profile circles for personal (non-community) events only.
+        // Community events that appear in the personal space are handled by
+        // communityEventItems (which uses familyAlsoAdded for "גם הוסיפו ליומן").
+        let profileCircles: ProfileCircle[] = [];
+        let profileCirclesExtraCount = 0;
+        let profileCirclesContext: 'sharedWith' | 'alsoAddedToCalendar' =
+          'sharedWith';
+
+        if (!communityIdStr) {
+          const evShared = ev as {
+            createdBy?: string;
+            allFamily?: boolean;
+            sharedWithUserIds?: string[];
+            sharedWithFamilyMemberIds?: string[];
+            participants?: string[];
+            sharedMemberProfiles?: Array<{
+              id: string;
+              displayName: string;
+              color: string;
+              isViewer: boolean;
+            }>;
+          };
+          const currentUserId = currentUser?._id as string | undefined;
+          const isCreator = !!currentUserId && evShared.createdBy === currentUserId;
+
+          // Total participant names (family + external) stored at save time.
+          const totalParticipants = evShared.participants?.length ?? 0;
+
+          if (isCreator) {
+            // Creator's view: show the selected family recipients.
+            // Uses server-resolved sharedMemberProfiles so the display is reliable
+            // even if the local map has a key mismatch (e.g. admin row vs entity row).
+            if (evShared.allFamily) {
+              profileCircles = [...familyProfilesByUserId.values()];
+              profileCirclesExtraCount = Math.max(
+                0,
+                totalParticipants - profileCircles.length
+              );
+            } else {
+              const resolved = evShared.sharedMemberProfiles ?? [];
+              for (const p of resolved) {
+                profileCircles.push({ id: p.id, name: p.displayName, color: p.color });
+              }
+              // External count = total participants minus family member IDs
+              const familyCount = (evShared.sharedWithFamilyMemberIds ?? []).length;
+              profileCirclesExtraCount = Math.max(0, totalParticipants - familyCount);
+            }
+          } else {
+            // Recipient's view: show the creator's circle + all other recipients.
+            // Other-recipient circles come from server-resolved sharedMemberProfiles
+            // (cross-space safe — the local map can't resolve creator-space IDs).
+            // The isViewer flag from the server skips the current viewer's circle.
+            const resolved = evShared.sharedMemberProfiles ?? [];
+            const creatorId = evShared.createdBy;
+            const circles: ProfileCircle[] = [];
+            if (creatorId) {
+              const creatorProfile =
+                familyProfilesByUserId.get(creatorId) ??
+                familyProfilesByMemberId.get(creatorId);
+              if (creatorProfile) circles.push(creatorProfile);
+            }
+            for (const p of resolved) {
+              if (p.isViewer) continue;
+              circles.push({ id: p.id, name: p.displayName, color: p.color });
+            }
+            profileCircles = circles.slice(0, 3);
+            profileCirclesExtraCount = Math.max(0, circles.length - 3);
+          }
+          profileCirclesContext = 'sharedWith';
+        } else {
+          // Community event appearing via personal space — use familyAlsoAdded
+          profileCircles = familyAlsoAdded[String(ev._id)] ?? [];
+          profileCirclesExtraCount = 0;
+          profileCirclesContext = 'alsoAddedToCalendar';
+        }
+
         return {
           id: ev._id,
           time: ev.allDay
@@ -953,9 +1011,20 @@ export default function HomeScreen() {
           // Carry importantItems from community data so they survive deduplication
           // regardless of which version of the event wins the seen-id check.
           importantItems: communityImportantItemsById[String(ev._id)],
+          profileCircles,
+          profileCirclesExtraCount,
+          profileCirclesContext,
         };
       }),
-    [personalEventsForHome, tasksByEvent, communityImportantItemsById]
+    [
+      personalEventsForHome,
+      tasksByEvent,
+      communityImportantItemsById,
+      familyProfilesByUserId,
+      familyProfilesByMemberId,
+      familyAlsoAdded,
+      currentUser,
+    ]
   );
 
   // FIXED: linked (shared) events mapped to Item shape
@@ -1205,15 +1274,24 @@ export default function HomeScreen() {
   // ── Empty states ───────────────────────────────────────────────────────────
   const hasEventsOrTasks =
     allItems.length > 0 ||
+    allDayEvents.length > 0 ||
     undatedTasks.length > 0 ||
     (isSelectedToday && overdueTasks.length > 0) ||
     selectedDayUntimedTasks.length > 0;
   const hasBirthdays = contextBirthdays.length > 0;
-  const hasDayData = allItems.filter((i) => !i.allDay).length > 0;
+  // hasDayData gates the Timeline section (including the all-day strip inside it).
+  // Must include all-day events so they render even when no timed events exist.
+  const hasDayData = allItems.length > 0 || allDayEvents.length > 0;
+
+  // Derived counts used by the honest empty-state logic below.
+  // Include all-day events so the activity count matches what is actually shown.
+  const todayCount = allItems.length + allDayEvents.length;
+  const overdueCount = overdueTasks.length;
+  // hasOverdueTasks is scoped to today — overdue section only renders for today.
+  const hasOverdueTasks = isSelectedToday && overdueCount > 0;
 
   const shouldShowEventsEmptyState = !hasEventsOrTasks;
   const shouldShowBirthdaysEmptyState = !hasBirthdays;
-  const canShowMoodFeatures = hasEventsOrTasks;
   // TODO: בעתיד לחבר לסטטוס אמיתי של משתמש חדש מ-Convex
 
   // TODO: להוסיף בעתיד מסך/התראות לאירועים שנדחו כדי לאפשר חרטה
@@ -1314,9 +1392,10 @@ export default function HomeScreen() {
     }
   };
 
-  // Scroll date carousel to today on mount
-  // With row-reverse, day 1 is rightmost. Today's position from the left =
-  // (totalDays - 1 - todayIndex) * PILL_WIDTH
+  // Scroll date carousel to today on mount only.
+  // Empty deps = runs exactly once after first render. `today` is now stable
+  // (useMemo with []) so it can't accidentally re-trigger this anyway, but
+  // keeping deps empty makes the intent explicit and guards against future drift.
   useEffect(() => {
     const PILL_WIDTH = 50;
     const todayIndex = today.getDate() - 1;
@@ -1329,7 +1408,8 @@ export default function HomeScreen() {
     setTimeout(() => {
       dateScrollRef.current?.scrollTo({ x: offset, animated: false });
     }, 80);
-  }, [daysInMonth, today]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => setShowToast(false), 5000);
@@ -1474,20 +1554,6 @@ export default function HomeScreen() {
     return timedIncomplete[0] ?? null;
   })();
 
-  // ── Per-date mood ──────────────────────────────────────────────────────────
-  const selectedDateKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
-  const currentDayMood: number | null = moodByDate[selectedDateKey] ?? null;
-  const setCurrentDayMood = (value: number | null) => {
-    setMoodByDate((prev) => {
-      if (value === null) {
-        const next = { ...prev };
-        delete next[selectedDateKey];
-        return next;
-      }
-      return { ...prev, [selectedDateKey]: value };
-    });
-  };
-
   // ── Birthday strip: filter to next 30 days only (Home Screen only) ─────────
   const thirtyDaysFromNow = new Date(
     today.getTime() + 30 * 24 * 60 * 60 * 1000
@@ -1498,18 +1564,30 @@ export default function HomeScreen() {
       (a, b) => getNextOccurrence(a).getTime() - getNextOccurrence(b).getTime()
     );
 
-  // ── Helpers to scroll date carousel back to today ──────────────────────────
-  const scrollToToday = () => {
+  // ── Helpers to scroll the date carousel to any date ───────────────────────
+  // The carousel renders current month (days 1–N) then the first 7 days of the
+  // next month, in a row-reverse ScrollView (RTL), so index 0 is rightmost.
+  const scrollToDate = (date: Date) => {
     const PILL_WIDTH = 50;
-    const todayIndex = today.getDate() - 1;
     const totalDays = daysInMonth + 7;
-    const reversedIndex = totalDays - 1 - todayIndex;
+    let dayIndex: number;
+    if (date.getMonth() === month && date.getFullYear() === year) {
+      dayIndex = date.getDate() - 1;
+    } else if (date.getDate() <= 7) {
+      // First 7 days of the following month that are included in the carousel.
+      dayIndex = daysInMonth + date.getDate() - 1;
+    } else {
+      return; // date outside the visible carousel range — nothing to scroll to
+    }
+    const reversedIndex = totalDays - 1 - dayIndex;
     const offset = Math.max(
       0,
       reversedIndex * PILL_WIDTH - (screenWidth - 32 - 38) / 2 + 21
     );
     dateScrollRef.current?.scrollTo({ x: offset, animated: true });
   };
+
+  const scrollToToday = () => scrollToDate(today);
 
   // ══════════════════════════════════════════════════════════════════════════
   // RENDER
@@ -1589,7 +1667,10 @@ export default function HomeScreen() {
                 return (
                   <Pressable
                     key={i}
-                    onPress={() => setSelectedDate(day)}
+                    onPress={() => {
+                      setSelectedDate(day);
+                      scrollToDate(day);
+                    }}
                     style={[
                       stylesRtl.dayPill,
                       isSelected && stylesRtl.dayPillSelected,
@@ -1626,8 +1707,12 @@ export default function HomeScreen() {
         {hasEventsOrTasks && (
           <Text style={stylesRtl.subtitleCount}>
             {isSummaryMode
-              ? `${allItems.filter((i) => !i.allDay).length} פעילויות ביום זה`
-              : `יש לך ${allItems.filter((i) => !i.allDay).length} פעילויות היום`}
+              ? `${todayCount} פעילויות ביום זה`
+              : hasOverdueTasks && todayCount === 0
+                ? overdueCount === 1
+                  ? 'יש לך משימה אחת ממתינה'
+                  : `יש לך ${overdueCount} משימות ממתינות`
+                : `יש לך ${todayCount} פעילויות היום`}
           </Text>
         )}
 
@@ -1835,6 +1920,28 @@ export default function HomeScreen() {
                       </Pressable>
                     </View>
                   ) : null}
+                  {/* Profile circles — "משותף עם" for personal, "גם הוסיפו ליומן" for community */}
+                  {nextEvent.type === 'event' &&
+                  ((nextEvent.profileCircles &&
+                    nextEvent.profileCircles.length > 0) ||
+                    (nextEvent.profileCirclesExtraCount ?? 0) > 0) ? (
+                    <View
+                      style={{
+                        flexDirection: 'row-reverse',
+                        alignItems: 'center',
+                        gap: 6,
+                        marginTop: 8,
+                      }}
+                    >
+                      <ProfileCircles
+                        profiles={nextEvent.profileCircles ?? []}
+                        extraCount={nextEvent.profileCirclesExtraCount}
+                        context={
+                          nextEvent.profileCirclesContext ?? 'sharedWith'
+                        }
+                      />
+                    </View>
+                  ) : null}
                   {/* TODO: wire real traffic data here */}
                 </View>
               </View>
@@ -1899,17 +2006,38 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* ── Empty day state (data exists but not today) ──────────────────── */}
+        {/* ── Empty day state (data exists but not for this day) ───────────── */}
         {hasEventsOrTasks &&
           !hasDayData &&
           selectedDayUntimedTasks.length === 0 && (
             <View style={stylesRtl.emptyDayContainer}>
               <MaterialIcons name="calendar-today" size={28} color="#d1d5db" />
-              <Text style={stylesRtl.emptyDayTitle}>היום פנוי 🎉</Text>
-              <Text style={stylesRtl.emptyDaySubtitle}>
-                אין לך אירועים או משימות בתאריך הזה.
-              </Text>
+              {hasOverdueTasks ? (
+                <>
+                  <Text style={stylesRtl.emptyDayTitle}>אין אירועים היום</Text>
+                  <Text style={stylesRtl.emptyDaySubtitle}>
+                    {overdueCount === 1
+                      ? 'יש משימה אחת שעדיין מחכה לך'
+                      : `יש ${overdueCount} משימות שעדיין מחכות לך`}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={stylesRtl.emptyDayTitle}>
+                    {emptyDayCopy.title}
+                  </Text>
+                  <Text style={stylesRtl.emptyDaySubtitle}>
+                    {emptyDayCopy.subtitle}
+                  </Text>
+                </>
+              )}
               <Pressable
+                onPress={() =>
+                  router.push({
+                    pathname: '/(authenticated)/event/new',
+                    params: { selectedDate: String(selectedDate.getTime()) },
+                  } as Parameters<typeof router.push>[0])
+                }
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="הוספת אירוע"
@@ -2763,6 +2891,33 @@ export default function HomeScreen() {
                                       </Text>
                                     </Pressable>
                                   ) : null}
+
+                                  {/* Profile circles — only for event items */}
+                                  {item.type === 'event' &&
+                                  ((item.profileCircles &&
+                                    item.profileCircles.length > 0) ||
+                                    (item.profileCirclesExtraCount ?? 0) >
+                                      0) ? (
+                                    <View
+                                      style={{
+                                        flexDirection: 'row-reverse',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        marginTop: 6,
+                                      }}
+                                    >
+                                      <ProfileCircles
+                                        profiles={item.profileCircles ?? []}
+                                        extraCount={
+                                          item.profileCirclesExtraCount
+                                        }
+                                        context={
+                                          item.profileCirclesContext ??
+                                          'sharedWith'
+                                        }
+                                      />
+                                    </View>
+                                  ) : null}
                                 </View>
                               </View>
                             </View>
@@ -3236,82 +3391,6 @@ export default function HomeScreen() {
                 </Pressable>
               </View>
             </Modal>
-          </View>
-        )}
-
-        {/* ── Mood section — shown only when user has events/tasks ──────────── */}
-        {canShowMoodFeatures && (
-          <View
-            style={{ paddingHorizontal: 24, marginTop: 8, marginBottom: 40 }}
-          >
-            <Text style={stylesRtl.moodTitle}>איך הרגיש היום שלך?</Text>
-            {currentDayMood === null ? (
-              <View style={{ flexDirection: 'row-reverse', gap: 10 }}>
-                {MOODS.map((mood) => (
-                  <Pressable
-                    key={mood.value}
-                    onPress={() => setCurrentDayMood(mood.value)}
-                    style={{
-                      flex: 1,
-                      backgroundColor: '#fff',
-                      borderRadius: 16,
-                      paddingVertical: 14,
-                      alignItems: 'center',
-                      gap: 4,
-                      shadowColor: '#000',
-                      shadowOffset: { width: 0, height: 1 },
-                      shadowOpacity: 0.05,
-                      shadowRadius: 4,
-                      elevation: 1,
-                    }}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityLabel={mood.label}
-                  >
-                    <FaceMood value={mood.value} />
-                    <Text
-                      style={{
-                        fontSize: 13,
-                        fontWeight: '600',
-                        color: '#374151',
-                      }}
-                    >
-                      {mood.label}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            ) : (
-              <Pressable
-                onPress={() => setCurrentDayMood(null)}
-                style={{
-                  backgroundColor: '#f0f7ff',
-                  borderRadius: 16,
-                  padding: 14,
-                  flexDirection: 'row-reverse',
-                  alignItems: 'center',
-                  gap: 10,
-                }}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="שנה את הרגש שנבחר"
-              >
-                {currentDayMood !== null && (
-                  <FaceMood value={currentDayMood as 0 | 1 | 2} />
-                )}
-                <Text
-                  style={{ fontSize: 14, fontWeight: '700', color: '#111517' }}
-                >
-                  {MOODS.find((m) => m.value === currentDayMood)?.label}
-                </Text>
-                <MaterialIcons
-                  name="edit"
-                  size={14}
-                  color="#94a3b8"
-                  style={{ marginRight: 'auto' }}
-                />
-              </Pressable>
-            )}
           </View>
         )}
       </ScrollView>
@@ -4018,15 +4097,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#36a9e2',
     textAlign: 'right',
-  },
-
-  // ── Mood section ────────────────────────────────────────────────────────────
-  moodTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111517',
-    textAlign: 'right',
-    marginBottom: 16,
   },
 
   // ── Toast ───────────────────────────────────────────────────────────────────
