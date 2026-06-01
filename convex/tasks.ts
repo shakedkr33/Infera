@@ -804,12 +804,68 @@ export const listMyTasks = query({
       })
     );
 
-    return tasks.map((task) => ({
-      ...task,
-      communityName: task.communityId
-        ? communityNameMap.get(String(task.communityId))
-        : undefined,
-    }));
+    // Batch-resolve member assignee display names directly from the DB.
+    // This mirrors the resolution used in getTaskDetails so task cards and the
+    // detail sheet always show the same name for the same assignee.
+    const allMemberIds = new Set<string>();
+    for (const task of tasks) {
+      for (const mid of task.assignedToMemberIds ?? [])
+        allMemberIds.add(String(mid));
+      if (task.assignedToMemberId)
+        allMemberIds.add(String(task.assignedToMemberId));
+    }
+
+    const memberProfileMap = new Map<
+      string,
+      { name: string; color: string | null }
+    >();
+    await Promise.all(
+      [...allMemberIds].map(async (mid) => {
+        const member = await ctx.db.get(mid as Id<'members'>);
+        if (!member) return;
+        let name =
+          (member as { displayName?: string }).displayName?.trim() ?? '';
+        if (!name) {
+          const matchedId = (member as { matchedUserId?: string })
+            .matchedUserId;
+          if (matchedId) {
+            const user = await ctx.db.get(matchedId as Id<'users'>);
+            name =
+              (user as { fullName?: string } | null)?.fullName?.trim() ?? '';
+          }
+        }
+        memberProfileMap.set(mid, {
+          name,
+          color: (member as { color?: string }).color ?? null,
+        });
+      })
+    );
+
+    return tasks.map((task) => {
+      const seenMids = new Set<string>();
+      const assigneeMemberProfiles: {
+        id: string;
+        name: string;
+        color: string | null;
+      }[] = [];
+      for (const rawMid of [
+        ...(task.assignedToMemberIds?.map(String) ?? []),
+        ...(task.assignedToMemberId ? [String(task.assignedToMemberId)] : []),
+      ]) {
+        if (seenMids.has(rawMid)) continue;
+        seenMids.add(rawMid);
+        const profile = memberProfileMap.get(rawMid);
+        if (profile) assigneeMemberProfiles.push({ id: rawMid, ...profile });
+      }
+
+      return {
+        ...task,
+        communityName: task.communityId
+          ? communityNameMap.get(String(task.communityId))
+          : undefined,
+        assigneeMemberProfiles,
+      };
+    });
   },
 });
 
@@ -1045,6 +1101,118 @@ export const getById = query({
   handler: async (ctx, { id }) => {
     // TODO: לאמת שהמשתמש הנוכחי שייך ל-space של המשימה
     return await ctx.db.get(id);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// שליפת פרטי משימה מועשרת להצגה במסך Task Details
+// ─────────────────────────────────────────────────────────────
+export const getTaskDetails = query({
+  args: { id: v.id('tasks') },
+  handler: async (ctx, { id }) => {
+    const currentUserId = await getAuthUserId(ctx);
+    if (!currentUserId) return null;
+
+    const task = await ctx.db.get(id);
+    if (!task) return null;
+
+    // ── Creator profile ──────────────────────────────────────────────────────
+    const creator = task.createdBy ? await ctx.db.get(task.createdBy) : null;
+    const creatorProfile = creator
+      ? {
+          id: task.createdBy as string,
+          name: (creator as { fullName?: string }).fullName ?? 'משתמש',
+          color: (creator as { profileColor?: string }).profileColor ?? null,
+        }
+      : null;
+
+    // ── User assignees ────────────────────────────────────────────────────────
+    // assignedToUserIds is the authoritative multi-assignee list.
+    // Fall back to the legacy single assignedTo field only when the array is absent/empty.
+    const rawUserIds: string[] =
+      task.assignedToUserIds && task.assignedToUserIds.length > 0
+        ? [...task.assignedToUserIds]
+        : task.assignedTo
+          ? [task.assignedTo]
+          : [];
+
+    const seenUsers = new Set<string>();
+    const userAssigneeIds = rawUserIds.filter((uid) => {
+      if (seenUsers.has(uid)) return false;
+      seenUsers.add(uid);
+      return true;
+    });
+
+    // ── Member assignees (family entities without an app account) ─────────────
+    // assignedToMemberIds holds people who were added via family contacts but
+    // have no matched userId — e.g. a manually-added member like Shalev.
+    const rawMemberIds: string[] =
+      task.assignedToMemberIds && task.assignedToMemberIds.length > 0
+        ? [...task.assignedToMemberIds]
+        : task.assignedToMemberId
+          ? [task.assignedToMemberId]
+          : [];
+
+    const seenMembers = new Set<string>();
+    const memberAssigneeIds = rawMemberIds.filter((mid) => {
+      if (seenMembers.has(mid)) return false;
+      seenMembers.add(mid);
+      return true;
+    });
+
+    // ── Resolve assignee profiles ─────────────────────────────────────────────
+    const assignees: {
+      id: string;
+      name: string;
+      color: string | null;
+      kind: 'user' | 'member';
+    }[] = [];
+
+    for (const uid of userAssigneeIds) {
+      const user = await ctx.db.get(uid as Id<'users'>);
+      if (user) {
+        assignees.push({
+          id: uid,
+          name: (user as { fullName?: string }).fullName ?? 'משתמש',
+          color: (user as { profileColor?: string }).profileColor ?? null,
+          kind: 'user',
+        });
+      }
+    }
+
+    for (const mid of memberAssigneeIds) {
+      const member = await ctx.db.get(mid as Id<'members'>);
+      if (member) {
+        let memberName =
+          (member as { displayName?: string }).displayName?.trim() ?? '';
+        if (!memberName) {
+          const matchedId = (member as { matchedUserId?: string })
+            .matchedUserId;
+          if (matchedId) {
+            const linkedUser = await ctx.db.get(matchedId as Id<'users'>);
+            memberName =
+              (linkedUser as { fullName?: string } | null)?.fullName?.trim() ??
+              '';
+          }
+        }
+        assignees.push({
+          id: mid,
+          name: memberName,
+          color: (member as { color?: string }).color ?? null,
+          kind: 'member',
+        });
+      }
+    }
+
+    const currentUserIsCreator = task.createdBy === currentUserId;
+
+    return {
+      ...task,
+      creatorProfile,
+      assignees,
+      currentUserId,
+      currentUserIsCreator,
+    };
   },
 });
 

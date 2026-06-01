@@ -28,9 +28,11 @@ import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import type { ProfileCircle } from '@/components/ProfileCircles';
 import { ProfileCircles } from '@/components/ProfileCircles';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
+import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { getTextAlign } from '@/lib/rtl';
@@ -115,6 +117,8 @@ type Item = {
   assigneeColor: string;
   /** First-letter initials of the primary non-self assignee. Undefined = no real assignee to show. */
   assigneeInitials?: string;
+  /** All non-self assignees for multi-circle display on compact task cards. */
+  assigneeDisplays?: { initials: string; color: string }[];
   completed: boolean;
   allDay?: boolean;
   pending?: boolean;
@@ -161,6 +165,8 @@ type UndatedTask = {
   assigneeInitials?: string;
   /** Background color for the assignee circle. */
   assigneeColor?: string;
+  /** All non-self assignees for multi-circle display on compact task cards. */
+  assigneeDisplays?: { initials: string; color: string }[];
   /** Subtask/checklist items for expand-and-toggle support on Home. */
   subtasks?: HomeSubtask[];
 };
@@ -346,46 +352,98 @@ function formatOverdueDate(
 // ─── Assignee resolution helper ───────────────────────────────────────────────
 
 /**
- * Returns the first non-self shared/assigned user indicator found on a task.
- * Checks all four Convex task assignment fields in priority order:
- *   assignedTo → assignedToUserIds → assignedToMemberId → assignedToMemberIds
- * Returns undefined when there is no other-user indicator to display.
+ * Like resolveNonSelfAssignee but returns ALL non-self assignees so compact
+ * task cards can render multiple overlapping circles (e.g. ינ + של).
+ * Resolution order mirrors resolveAssigneeDisplays in tasks.tsx:
+ *   1. If viewer is an assignee but not creator, show the creator's circle first.
+ *   2. User-ID assignees (excluding viewer).
+ *   3. Member-entity assignees (excluding viewer's selfEntityId), using
+ *      task-embedded assigneeMemberProfiles as primary name source.
  */
-function resolveNonSelfAssignee(
+function resolveAllNonSelfAssignees(
   task: {
     assignedTo?: unknown;
     assignedToUserIds?: unknown;
     assignedToMemberId?: unknown;
     assignedToMemberIds?: unknown;
+    createdBy?: unknown;
+    assigneeMemberProfiles?: {
+      id: string;
+      name: string;
+      color: string | null;
+    }[];
   },
   currentUserId: string | undefined,
   byUserId: Map<string, { initials: string; color: string }>,
   byMemberId: Map<string, { initials: string; color: string }>,
   selfEntityId: string | undefined
-): { initials: string; color: string } | undefined {
-  // Check user-ID fields first (assignedTo is the primary assignee).
-  const userCandidates: string[] = [
-    ...(task.assignedTo ? [task.assignedTo as string] : []),
+): { initials: string; color: string }[] {
+  const displays: { initials: string; color: string }[] = [];
+  const seen = new Set<string>();
+
+  const creatorId = task.createdBy as string | undefined;
+  const isCreator = !!currentUserId && creatorId === currentUserId;
+
+  const userAssignees: string[] = [
     ...((task.assignedToUserIds as string[] | undefined) ?? []),
+    ...(task.assignedTo ? [task.assignedTo as string] : []),
   ];
-  for (const id of userCandidates) {
-    if (!id || id === currentUserId) continue;
-    const info = byUserId.get(id);
-    if (info) return info;
-  }
-
-  // Fall back to member-entity ID fields (family members without an account).
-  const memberCandidates: string[] = [
-    ...(task.assignedToMemberId ? [task.assignedToMemberId as string] : []),
+  const memberAssignees: string[] = [
     ...((task.assignedToMemberIds as string[] | undefined) ?? []),
+    ...(task.assignedToMemberId ? [task.assignedToMemberId as string] : []),
   ];
-  for (const id of memberCandidates) {
-    if (!id || id === selfEntityId) continue;
-    const info = byMemberId.get(id);
-    if (info) return info;
+
+  const viewerIsUserAssignee =
+    currentUserId !== undefined && userAssignees.includes(currentUserId);
+  const viewerIsMemberAssignee =
+    selfEntityId !== undefined && memberAssignees.includes(selfEntityId);
+  const viewerIsAssignee = viewerIsUserAssignee || viewerIsMemberAssignee;
+
+  // When the viewer is an assignee (but not the creator), show the creator circle first.
+  if (
+    !isCreator &&
+    viewerIsAssignee &&
+    creatorId &&
+    creatorId !== currentUserId
+  ) {
+    const info = byUserId.get(creatorId);
+    if (info?.initials && !seen.has(`u:${creatorId}`)) {
+      seen.add(`u:${creatorId}`);
+      displays.push(info);
+    }
   }
 
-  return undefined;
+  for (const uid of userAssignees) {
+    if (!uid || uid === currentUserId) continue;
+    if (seen.has(`u:${uid}`)) continue;
+    const info = byUserId.get(uid);
+    if (info?.initials) {
+      seen.add(`u:${uid}`);
+      displays.push(info);
+    }
+  }
+
+  const profiles = task.assigneeMemberProfiles ?? [];
+  for (const mid of memberAssignees) {
+    if (!mid || mid === selfEntityId) continue;
+    if (seen.has(`m:${mid}`)) continue;
+    const embedded = profiles.find((p) => p.id === mid);
+    if (embedded?.name) {
+      const initials = getAvatarInitials(embedded.name);
+      if (initials) {
+        seen.add(`m:${mid}`);
+        displays.push({ initials, color: embedded.color ?? '#36a9e2' });
+        continue;
+      }
+    }
+    const info = byMemberId.get(mid);
+    if (info?.initials) {
+      seen.add(`m:${mid}`);
+      displays.push(info);
+    }
+  }
+
+  return displays;
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -416,12 +474,10 @@ export default function HomeScreen() {
     const selfEntityId = familyContacts?.selfEntityId as string | undefined;
 
     for (const member of familyContacts?.members ?? []) {
-      const name = (member.displayName ?? '').trim() || '?';
-      const words = name.split(' ').filter(Boolean);
-      const initials =
-        words.length >= 2 ? `${words[0][0]}${words[1][0]}` : name.slice(0, 2);
+      const name = (member.displayName ?? '').trim();
+      const initials = getAvatarInitials(name);
       const info = {
-        initials: initials.toUpperCase(),
+        initials,
         color: (member.color ?? '#36a9e2') as string,
       };
       if (member.matchedUserId) {
@@ -440,9 +496,11 @@ export default function HomeScreen() {
     for (const member of familyContacts?.members ?? []) {
       const uid = (member as { matchedUserId?: string }).matchedUserId;
       if (!uid || uid === currentUserId) continue;
+      const name = (member.displayName ?? '').trim();
+      if (!name) continue;
       map.set(uid, {
         id: uid,
-        name: (member.displayName ?? '?') as string,
+        name,
         color: (member.color ?? '#36a9e2') as string,
       });
     }
@@ -455,9 +513,11 @@ export default function HomeScreen() {
     for (const member of familyContacts?.members ?? []) {
       const mid = member._id as string;
       if (mid === selfEntityId) continue;
+      const name = (member.displayName ?? '').trim();
+      if (!name) continue;
       map.set(mid, {
         id: mid,
-        name: (member.displayName ?? '?') as string,
+        name,
         color: (member.color ?? '#36a9e2') as string,
       });
     }
@@ -499,6 +559,16 @@ export default function HomeScreen() {
 
   // ── Undated tasks "show all" modal ─────────────────────────────────────────
   const [showAllUndated, setShowAllUndated] = useState(false);
+
+  // ── Task detail sheet ──────────────────────────────────────────────────────
+  const [taskSheetTaskId, setTaskSheetTaskId] = useState<string | null>(null);
+  const [taskSheetVisible, setTaskSheetVisible] = useState(false);
+
+  const openTaskSheet = (id: string) => {
+    setTaskSheetTaskId(id);
+    setTaskSheetVisible(true);
+  };
+  const closeTaskSheet = () => setTaskSheetVisible(false);
 
   const openEventSheet = (item: Item) => {
     if (Date.now() - lastDragCloseTime.current < 600) return;
@@ -660,7 +730,7 @@ export default function HomeScreen() {
               })
             : '';
           const currentUserId = currentUser?._id as string | undefined;
-          const assigneeInfo = resolveNonSelfAssignee(
+          const assigneeDisplays = resolveAllNonSelfAssignees(
             t,
             currentUserId,
             memberMaps.byUserId,
@@ -676,8 +746,10 @@ export default function HomeScreen() {
             icon: 'check-box',
             iconBg: '#E7F5FF',
             iconColor: '#228BE6',
-            assigneeColor: assigneeInfo?.color ?? '#E7F5FF',
-            assigneeInitials: assigneeInfo?.initials,
+            assigneeColor: assigneeDisplays[0]?.color ?? '#E7F5FF',
+            assigneeInitials: assigneeDisplays[0]?.initials,
+            assigneeDisplays:
+              assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
             completed: t.completed,
             taskSource: 'personal_task' as const,
             subtasks: (t.subtasks ?? []).map((s) => ({
@@ -705,7 +777,7 @@ export default function HomeScreen() {
       )
       .map((t) => {
         const currentUserId = currentUser?._id as string | undefined;
-        const assigneeInfo = resolveNonSelfAssignee(
+        const assigneeDisplays = resolveAllNonSelfAssignees(
           t,
           currentUserId,
           memberMaps.byUserId,
@@ -716,8 +788,10 @@ export default function HomeScreen() {
           id: t._id,
           title: t.title,
           completed: t.completed,
-          assigneeInitials: assigneeInfo?.initials,
-          assigneeColor: assigneeInfo?.color,
+          assigneeInitials: assigneeDisplays[0]?.initials,
+          assigneeColor: assigneeDisplays[0]?.color,
+          assigneeDisplays:
+            assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
           dueDate: t.dueDate ?? undefined,
           hasTime: t.hasTime ?? false,
           dueAt: t.dueAt ?? undefined,
@@ -753,7 +827,7 @@ export default function HomeScreen() {
           !isEventDerivedImportantItemTask(t)
       )
       .map((t) => {
-        const assigneeInfo = resolveNonSelfAssignee(
+        const assigneeDisplays = resolveAllNonSelfAssignees(
           t,
           currentUserId,
           memberMaps.byUserId,
@@ -764,8 +838,10 @@ export default function HomeScreen() {
           id: t._id,
           title: t.title,
           completed: t.completed,
-          assigneeInitials: assigneeInfo?.initials,
-          assigneeColor: assigneeInfo?.color,
+          assigneeInitials: assigneeDisplays[0]?.initials,
+          assigneeColor: assigneeDisplays[0]?.color,
+          assigneeDisplays:
+            assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
           subtasks: (t.subtasks ?? []).map((s) => ({
             id: s.id,
             title: s.title,
@@ -923,7 +999,8 @@ export default function HomeScreen() {
             }>;
           };
           const currentUserId = currentUser?._id as string | undefined;
-          const isCreator = !!currentUserId && evShared.createdBy === currentUserId;
+          const isCreator =
+            !!currentUserId && evShared.createdBy === currentUserId;
 
           // Total participant names (family + external) stored at save time.
           const totalParticipants = evShared.participants?.length ?? 0;
@@ -933,7 +1010,10 @@ export default function HomeScreen() {
             // Uses server-resolved sharedMemberProfiles so the display is reliable
             // even if the local map has a key mismatch (e.g. admin row vs entity row).
             if (evShared.allFamily) {
-              profileCircles = [...familyProfilesByUserId.values()];
+              // Use byMemberId so manual family members (entity rows with no
+              // matchedUserId) are included alongside app-user family members.
+              // selfEntityId is already excluded from familyProfilesByMemberId.
+              profileCircles = [...familyProfilesByMemberId.values()];
               profileCirclesExtraCount = Math.max(
                 0,
                 totalParticipants - profileCircles.length
@@ -941,11 +1021,21 @@ export default function HomeScreen() {
             } else {
               const resolved = evShared.sharedMemberProfiles ?? [];
               for (const p of resolved) {
-                profileCircles.push({ id: p.id, name: p.displayName, color: p.color });
+                // Safety: never show the current viewer's own circle.
+                if (p.isViewer) continue;
+                profileCircles.push({
+                  id: p.id,
+                  name: p.displayName,
+                  color: p.color,
+                });
               }
-              // External count = total participants minus family member IDs
-              const familyCount = (evShared.sharedWithFamilyMemberIds ?? []).length;
-              profileCirclesExtraCount = Math.max(0, totalParticipants - familyCount);
+              // External count = total participants minus family member IDs.
+              const familyCount = (evShared.sharedWithFamilyMemberIds ?? [])
+                .length;
+              profileCirclesExtraCount = Math.max(
+                0,
+                totalParticipants - familyCount
+              );
             }
           } else {
             // Recipient's view: show the creator's circle + all other recipients.
@@ -965,8 +1055,17 @@ export default function HomeScreen() {
               if (p.isViewer) continue;
               circles.push({ id: p.id, name: p.displayName, color: p.color });
             }
-            profileCircles = circles.slice(0, 3);
-            profileCirclesExtraCount = Math.max(0, circles.length - 3);
+            // External participants are never shown as circles; count them in +N.
+            // participants stores all display names (family + external) so
+            // subtracting the family member ID count gives external count.
+            const externalCount = Math.max(
+              0,
+              totalParticipants -
+                (evShared.sharedWithFamilyMemberIds?.length ?? 0)
+            );
+            // Pass all circles unsliced; ProfileCircles handles maxVisible cap.
+            profileCircles = circles;
+            profileCirclesExtraCount = externalCount;
           }
           profileCirclesContext = 'sharedWith';
         } else {
@@ -1184,7 +1283,7 @@ export default function HomeScreen() {
         .filter((t) => !isEventDerivedImportantItemTask(t))
         .map((t) => {
           const currentUserId = currentUser?._id as string | undefined;
-          const assigneeInfo = resolveNonSelfAssignee(
+          const assigneeDisplays = resolveAllNonSelfAssignees(
             t,
             currentUserId,
             memberMaps.byUserId,
@@ -1195,8 +1294,10 @@ export default function HomeScreen() {
             id: t._id,
             title: t.title,
             completed: t.completed,
-            assigneeInitials: assigneeInfo?.initials,
-            assigneeColor: assigneeInfo?.color,
+            assigneeInitials: assigneeDisplays[0]?.initials,
+            assigneeColor: assigneeDisplays[0]?.color,
+            assigneeDisplays:
+              assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
             subtasks: (t.subtasks ?? []).map((s) => ({
               id: s.id,
               title: s.title,
@@ -1265,10 +1366,7 @@ export default function HomeScreen() {
 
   // Navigate to the task edit/details screen.
   const handleTaskPress = (id: string) => {
-    router.push({
-      pathname: '/(authenticated)/task/[id]',
-      params: { id },
-    } as never);
+    openTaskSheet(id);
   };
 
   // ── Empty states ───────────────────────────────────────────────────────────
@@ -1373,10 +1471,7 @@ export default function HomeScreen() {
 
   const handleCardPress = (item: Item) => {
     if (item.type === 'task') {
-      router.push({
-        pathname: '/(authenticated)/task/[id]',
-        params: { id: item.id },
-      });
+      openTaskSheet(item.id);
     } else if (item.communityId) {
       // Community events → open the standard event detail bottom sheet
       openEventSheet(item);
@@ -1843,28 +1938,42 @@ export default function HomeScreen() {
                     >
                       {nextEvent.title}
                     </Text>
-                    {nextEvent.type === 'task' && nextEvent.assigneeInitials ? (
+                    {nextEvent.type === 'task' &&
+                    (nextEvent.assigneeDisplays?.length ?? 0) > 0 ? (
                       <View
-                        style={[
-                          stylesRtl.assigneeCircle,
-                          {
-                            backgroundColor:
-                              nextEvent.assigneeColor ?? '#36a9e2',
-                            marginLeft: 8,
-                          },
-                        ]}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          marginLeft: 8,
+                        }}
                       >
-                        <Text
-                          style={{
-                            fontSize: 9,
-                            color: '#fff',
-                            fontWeight: '700',
-                            textAlign: 'center',
-                            includeFontPadding: false,
-                          }}
-                        >
-                          {nextEvent.assigneeInitials}
-                        </Text>
+                        {(nextEvent.assigneeDisplays ?? [])
+                          .slice(0, 3)
+                          .map((d, i) => (
+                            <View
+                              key={`${d.initials}:${d.color}`}
+                              style={[
+                                stylesRtl.assigneeCircle,
+                                {
+                                  backgroundColor: d.color,
+                                  marginLeft: i === 0 ? 0 : -6,
+                                  zIndex: 3 - i,
+                                },
+                              ]}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 9,
+                                  color: '#fff',
+                                  fontWeight: '700',
+                                  textAlign: 'center',
+                                  includeFontPadding: false,
+                                }}
+                              >
+                                {d.initials}
+                              </Text>
+                            </View>
+                          ))}
                       </View>
                     ) : null}
                   </View>
@@ -2331,7 +2440,7 @@ export default function HomeScreen() {
                                 <CommunityEventNameTag name={item.groupName} />
                               </View>
                             ) : null}
-                            {/* Title + assignee circle */}
+                            {/* Title + assignee circles (tasks) / profile circles (events) */}
                             <View
                               style={{
                                 flexDirection: 'row-reverse',
@@ -2347,23 +2456,50 @@ export default function HomeScreen() {
                               >
                                 {item.title}
                               </Text>
-                              {item.assigneeInitials ? (
+                              {(item.assigneeDisplays?.length ?? 0) > 0 ? (
                                 <View
-                                  style={[
-                                    stylesRtl.assigneeCircle,
-                                    { backgroundColor: item.assigneeColor },
-                                  ]}
+                                  style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                  }}
                                 >
-                                  <Text
-                                    style={{
-                                      fontSize: 9,
-                                      color: '#fff',
-                                      fontWeight: '700',
-                                    }}
-                                  >
-                                    {item.assigneeInitials}
-                                  </Text>
+                                  {(item.assigneeDisplays ?? [])
+                                    .slice(0, 3)
+                                    .map((d, i) => (
+                                      <View
+                                        key={`${d.initials}:${d.color}`}
+                                        style={[
+                                          stylesRtl.assigneeCircle,
+                                          {
+                                            backgroundColor: d.color,
+                                            marginLeft: i === 0 ? 0 : -6,
+                                            zIndex: 3 - i,
+                                          },
+                                        ]}
+                                      >
+                                        <Text
+                                          style={{
+                                            fontSize: 9,
+                                            color: '#fff',
+                                            fontWeight: '700',
+                                          }}
+                                        >
+                                          {d.initials}
+                                        </Text>
+                                      </View>
+                                    ))}
                                 </View>
+                              ) : item.type === 'event' &&
+                                ((item.profileCircles?.length ?? 0) > 0 ||
+                                  (item.profileCirclesExtraCount ?? 0) > 0) ? (
+                                <ProfileCircles
+                                  profiles={item.profileCircles ?? []}
+                                  extraCount={item.profileCirclesExtraCount}
+                                  context={
+                                    item.profileCirclesContext ?? 'sharedWith'
+                                  }
+                                  size={22}
+                                />
                               ) : null}
                             </View>
                             {item.location ? (
@@ -2575,7 +2711,7 @@ export default function HomeScreen() {
                                       />
                                     </View>
                                   ) : null}
-                                  {/* Title row: title + assignee circles only */}
+                                  {/* Title row: title + assignee circles (tasks) / profile circles (events) */}
                                   <View
                                     style={{
                                       flexDirection: 'row-reverse',
@@ -2592,34 +2728,56 @@ export default function HomeScreen() {
                                     >
                                       {item.title}
                                     </Text>
-                                    {/* Assignee circle — only when there is a real named assignee */}
-                                    {item.assigneeInitials ? (
+                                    {(item.assigneeDisplays?.length ?? 0) >
+                                    0 ? (
                                       <View
                                         style={{
-                                          flexDirection: 'row-reverse',
-                                          gap: 4,
+                                          flexDirection: 'row',
+                                          alignItems: 'center',
                                         }}
                                       >
-                                        <View
-                                          style={[
-                                            stylesRtl.assigneeCircle,
-                                            {
-                                              backgroundColor:
-                                                item.assigneeColor,
-                                            },
-                                          ]}
-                                        >
-                                          <Text
-                                            style={{
-                                              fontSize: 9,
-                                              color: '#fff',
-                                              fontWeight: '700',
-                                            }}
-                                          >
-                                            {item.assigneeInitials}
-                                          </Text>
-                                        </View>
+                                        {(item.assigneeDisplays ?? [])
+                                          .slice(0, 3)
+                                          .map((d, i) => (
+                                            <View
+                                              key={`${d.initials}:${d.color}`}
+                                              style={[
+                                                stylesRtl.assigneeCircle,
+                                                {
+                                                  backgroundColor: d.color,
+                                                  marginLeft: i === 0 ? 0 : -6,
+                                                  zIndex: 3 - i,
+                                                },
+                                              ]}
+                                            >
+                                              <Text
+                                                style={{
+                                                  fontSize: 9,
+                                                  color: '#fff',
+                                                  fontWeight: '700',
+                                                }}
+                                              >
+                                                {d.initials}
+                                              </Text>
+                                            </View>
+                                          ))}
                                       </View>
+                                    ) : item.type === 'event' &&
+                                      ((item.profileCircles?.length ?? 0) >
+                                        0 ||
+                                        (item.profileCirclesExtraCount ?? 0) >
+                                          0) ? (
+                                      <ProfileCircles
+                                        profiles={item.profileCircles ?? []}
+                                        extraCount={
+                                          item.profileCirclesExtraCount
+                                        }
+                                        context={
+                                          item.profileCirclesContext ??
+                                          'sharedWith'
+                                        }
+                                        size={22}
+                                      />
                                     ) : null}
                                   </View>
 
@@ -2892,32 +3050,6 @@ export default function HomeScreen() {
                                     </Pressable>
                                   ) : null}
 
-                                  {/* Profile circles — only for event items */}
-                                  {item.type === 'event' &&
-                                  ((item.profileCircles &&
-                                    item.profileCircles.length > 0) ||
-                                    (item.profileCirclesExtraCount ?? 0) >
-                                      0) ? (
-                                    <View
-                                      style={{
-                                        flexDirection: 'row-reverse',
-                                        alignItems: 'center',
-                                        gap: 6,
-                                        marginTop: 6,
-                                      }}
-                                    >
-                                      <ProfileCircles
-                                        profiles={item.profileCircles ?? []}
-                                        extraCount={
-                                          item.profileCirclesExtraCount
-                                        }
-                                        context={
-                                          item.profileCirclesContext ??
-                                          'sharedWith'
-                                        }
-                                      />
-                                    </View>
-                                  ) : null}
                                 </View>
                               </View>
                             </View>
@@ -3010,26 +3142,35 @@ export default function HomeScreen() {
                     >
                       {task.title}
                     </Text>
-                    {task.assigneeInitials ? (
+                    {(task.assigneeDisplays?.length ?? 0) > 0 ? (
                       <View
-                        style={{
-                          width: 22,
-                          height: 22,
-                          borderRadius: 11,
-                          backgroundColor: task.assigneeColor ?? '#36a9e2',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
+                        style={{ flexDirection: 'row', alignItems: 'center' }}
                       >
-                        <Text
-                          style={{
-                            fontSize: 9,
-                            color: '#fff',
-                            fontWeight: '700',
-                          }}
-                        >
-                          {task.assigneeInitials}
-                        </Text>
+                        {(task.assigneeDisplays ?? [])
+                          .slice(0, 3)
+                          .map((d, i) => (
+                            <View
+                              key={`${d.initials}:${d.color}`}
+                              style={[
+                                stylesRtl.assigneeCircle,
+                                {
+                                  backgroundColor: d.color,
+                                  marginLeft: i === 0 ? 0 : -6,
+                                  zIndex: 3 - i,
+                                },
+                              ]}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 9,
+                                  color: '#fff',
+                                  fontWeight: '700',
+                                }}
+                              >
+                                {d.initials}
+                              </Text>
+                            </View>
+                          ))}
                       </View>
                     ) : null}
                   </Pressable>
@@ -3099,26 +3240,35 @@ export default function HomeScreen() {
                       >
                         {task.title}
                       </Text>
-                      {task.assigneeInitials ? (
+                      {(task.assigneeDisplays?.length ?? 0) > 0 ? (
                         <View
-                          style={{
-                            width: 22,
-                            height: 22,
-                            borderRadius: 11,
-                            backgroundColor: task.assigneeColor ?? '#36a9e2',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
+                          style={{ flexDirection: 'row', alignItems: 'center' }}
                         >
-                          <Text
-                            style={{
-                              fontSize: 9,
-                              color: '#fff',
-                              fontWeight: '700',
-                            }}
-                          >
-                            {task.assigneeInitials}
-                          </Text>
+                          {(task.assigneeDisplays ?? [])
+                            .slice(0, 3)
+                            .map((d, i) => (
+                              <View
+                                key={`${d.initials}:${d.color}`}
+                                style={[
+                                  stylesRtl.assigneeCircle,
+                                  {
+                                    backgroundColor: d.color,
+                                    marginLeft: i === 0 ? 0 : -6,
+                                    zIndex: 3 - i,
+                                  },
+                                ]}
+                              >
+                                <Text
+                                  style={{
+                                    fontSize: 9,
+                                    color: '#fff',
+                                    fontWeight: '700',
+                                  }}
+                                >
+                                  {d.initials}
+                                </Text>
+                              </View>
+                            ))}
                         </View>
                       ) : null}
                     </View>
@@ -3415,6 +3565,13 @@ export default function HomeScreen() {
       <NotificationsDrawer
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
+      />
+
+      {/* ── Task Detail Sheet ───────────────────────────────────────────────── */}
+      <TaskDetailsBottomSheet
+        taskId={taskSheetTaskId}
+        visible={taskSheetVisible}
+        onClose={closeTaskSheet}
       />
 
       {/* ── Event Detail Sheet ──────────────────────────────────────────────── */}

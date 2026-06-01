@@ -331,6 +331,7 @@ export function EventDetailsBottomSheet({
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
+  const familyContactsForDetails = useQuery(api.members.listMyFamilyContacts);
 
   const showCalendarRemoveConfirmation = useCallback(
     (eventIdToRemove: Id<'events'>): void => {
@@ -722,6 +723,21 @@ export function EventDetailsBottomSheet({
   const isEventCreator =
     Boolean(displayEvent?.createdBy && currentUserId) &&
     displayEvent?.createdBy === currentUserId;
+
+  // For personal (non-community) events: resolve creator's display name so we
+  // can show "נוצר ע״י [firstName]" when the viewer is NOT the creator.
+  const creatorDisplayName = (() => {
+    if (!displayEvent?.createdBy || isEventCreator || displayEvent?.communityId)
+      return undefined;
+    const creatorUserId = displayEvent.createdBy as string;
+    const member = familyContactsForDetails?.members?.find(
+      (m) => (m as { matchedUserId?: string }).matchedUserId === creatorUserId
+    );
+    const fullName = (member?.displayName ?? '').trim();
+    if (!fullName) return undefined;
+    // Return only the first word (first name)
+    return fullName.split(' ')[0] ?? fullName;
+  })();
   const isCommunityOwnerOrAdmin =
     myMembership?.role === 'owner' || myMembership?.role === 'admin';
   const canManageCommunityEvent =
@@ -1153,6 +1169,14 @@ export function EventDetailsBottomSheet({
                   showMemberRsvpButtons &&
                   hasManualParticipantNames ? (
                     <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {creatorDisplayName ? (
+                    <View style={styles.rsvpManualParticipantsBlock}>
+                      <Text style={styles.rsvpManualParticipantsTitle}>
+                        {`נוצר ע״י ${creatorDisplayName}`}
+                      </Text>
+                    </View>
                   ) : null}
 
                   {hasManualParticipantNames ? (

@@ -42,9 +42,11 @@ import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import type { ProfileCircle } from '@/components/ProfileCircles';
 import { ProfileCircles } from '@/components/ProfileCircles';
+import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { APP_IS_RTL, rtl } from '@/lib/rtl';
@@ -142,6 +144,10 @@ interface CalendarEvent {
   eventVisualKind?: 'community' | 'shared' | 'personal';
   /** True when the current viewer created this event; false for Type B (shared-with-viewer) events */
   isViewerCreator?: boolean;
+  /** Resolved family-member profiles for compact card circles (personal events only) */
+  profileCircles?: ProfileCircle[];
+  profileCirclesExtraCount?: number;
+  profileCirclesContext?: 'sharedWith' | 'alsoAddedToCalendar';
 }
 
 interface BirthdayInfo {
@@ -260,6 +266,8 @@ type TimelineEventRow = MockTimelineEvent & {
   assigneeInitials?: string;
   /** Background colour for the assignee avatar — only for personal task rows */
   assigneeColor?: string;
+  /** All non-self assignees for multi-circle display on compact task rows. */
+  assigneeDisplays?: { initials: string; color: string }[];
   /** Resolved family-member profiles to display as overlapping circles on the card */
   profileCircles?: ProfileCircle[];
   /** Count of external (non-family) participants, shown as "+N" after the circles */
@@ -276,6 +284,8 @@ type CalendarDayTask = {
   isOverdue: boolean;
   assigneeInitials?: string;
   assigneeColor?: string;
+  /** All non-self assignees for multi-circle display on compact task cards. */
+  assigneeDisplays?: { initials: string; color: string }[];
   subtasks?: { id: string; title: string; completed: boolean }[];
 };
 
@@ -301,37 +311,93 @@ function isEventDerivedImportantItemTask(task: {
  * Resolves the first non-self assignee on a task for avatar display.
  * Mirrors the same function in the Home screen.
  */
-function resolveNonSelfAssigneeCalendar(
+/**
+ * Like resolveNonSelfAssigneeCalendar but returns ALL non-self assignees for
+ * multi-circle display (e.g. ינ + של) on compact calendar task cards.
+ */
+function resolveAllNonSelfAssigneesCalendar(
   task: {
     assignedTo?: unknown;
     assignedToUserIds?: unknown;
     assignedToMemberId?: unknown;
     assignedToMemberIds?: unknown;
+    createdBy?: unknown;
+    assigneeMemberProfiles?: {
+      id: string;
+      name: string;
+      color: string | null;
+    }[];
   },
   currentUserId: string | undefined,
   byUserId: Map<string, { initials: string; color: string }>,
   byMemberId: Map<string, { initials: string; color: string }>,
   selfEntityId: string | undefined
-): { initials: string; color: string } | undefined {
-  const userCandidates: string[] = [
-    ...(task.assignedTo ? [task.assignedTo as string] : []),
+): { initials: string; color: string }[] {
+  const displays: { initials: string; color: string }[] = [];
+  const seen = new Set<string>();
+
+  const creatorId = task.createdBy as string | undefined;
+  const isCreator = !!currentUserId && creatorId === currentUserId;
+
+  const userAssignees: string[] = [
     ...((task.assignedToUserIds as string[] | undefined) ?? []),
+    ...(task.assignedTo ? [task.assignedTo as string] : []),
   ];
-  for (const id of userCandidates) {
-    if (!id || id === currentUserId) continue;
-    const info = byUserId.get(id);
-    if (info) return info;
-  }
-  const memberCandidates: string[] = [
-    ...(task.assignedToMemberId ? [task.assignedToMemberId as string] : []),
+  const memberAssignees: string[] = [
     ...((task.assignedToMemberIds as string[] | undefined) ?? []),
+    ...(task.assignedToMemberId ? [task.assignedToMemberId as string] : []),
   ];
-  for (const id of memberCandidates) {
-    if (!id || id === selfEntityId) continue;
-    const info = byMemberId.get(id);
-    if (info) return info;
+
+  const viewerIsUserAssignee =
+    currentUserId !== undefined && userAssignees.includes(currentUserId);
+  const viewerIsMemberAssignee =
+    selfEntityId !== undefined && memberAssignees.includes(selfEntityId);
+  const viewerIsAssignee = viewerIsUserAssignee || viewerIsMemberAssignee;
+
+  if (
+    !isCreator &&
+    viewerIsAssignee &&
+    creatorId &&
+    creatorId !== currentUserId
+  ) {
+    const info = byUserId.get(creatorId);
+    if (info?.initials && !seen.has(`u:${creatorId}`)) {
+      seen.add(`u:${creatorId}`);
+      displays.push(info);
+    }
   }
-  return undefined;
+
+  for (const uid of userAssignees) {
+    if (!uid || uid === currentUserId) continue;
+    if (seen.has(`u:${uid}`)) continue;
+    const info = byUserId.get(uid);
+    if (info?.initials) {
+      seen.add(`u:${uid}`);
+      displays.push(info);
+    }
+  }
+
+  const profiles = task.assigneeMemberProfiles ?? [];
+  for (const mid of memberAssignees) {
+    if (!mid || mid === selfEntityId) continue;
+    if (seen.has(`m:${mid}`)) continue;
+    const embedded = profiles.find((p) => p.id === mid);
+    if (embedded?.name) {
+      const initials = getAvatarInitials(embedded.name);
+      if (initials) {
+        seen.add(`m:${mid}`);
+        displays.push({ initials, color: embedded.color ?? '#36a9e2' });
+        continue;
+      }
+    }
+    const info = byMemberId.get(mid);
+    if (info?.initials) {
+      seen.add(`m:${mid}`);
+      displays.push(info);
+    }
+  }
+
+  return displays;
 }
 
 /**
@@ -997,6 +1063,7 @@ interface CalendarDayEventsSheetProps {
     event: CalendarEvent,
     pressEvent: GestureResponderEvent
   ) => void;
+  onOpenTaskSheet: (id: string) => void;
 }
 
 function CalendarDayEventsSheet({
@@ -1008,6 +1075,7 @@ function CalendarDayEventsSheet({
   tasks = [],
   onEventNavigate,
   onEventLongPress,
+  onOpenTaskSheet,
 }: CalendarDayEventsSheetProps): React.JSX.Element {
   return (
     <Modal
@@ -1091,7 +1159,10 @@ function CalendarDayEventsSheet({
 
             {tasks.map((task) => (
               <View key={task.id} style={{ marginBottom: 8 }}>
-                <CalendarTaskCard task={task} />
+                <CalendarTaskCard
+                  task={task}
+                  onOpenTaskSheet={onOpenTaskSheet}
+                />
               </View>
             ))}
           </ScrollView>
@@ -1146,6 +1217,9 @@ export default function CalendarScreen(): React.JSX.Element {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
   const lastDragCloseTime = useRef<number>(0);
+
+  const [taskSheetTaskId, setTaskSheetTaskId] = useState<string | null>(null);
+  const [taskSheetVisible, setTaskSheetVisible] = useState(false);
   const {
     unseenCount,
     markAllSeen,
@@ -1312,12 +1386,10 @@ export default function CalendarScreen(): React.JSX.Element {
     const byMemberId = new Map<string, { initials: string; color: string }>();
     const selfEntityId = familyContacts?.selfEntityId as string | undefined;
     for (const member of familyContacts?.members ?? []) {
-      const name = (member.displayName ?? '').trim() || '?';
-      const words = name.split(' ').filter(Boolean);
-      const initials =
-        words.length >= 2 ? `${words[0][0]}${words[1][0]}` : name.slice(0, 2);
+      const name = (member.displayName ?? '').trim();
+      const initials = getAvatarInitials(name);
       const info = {
-        initials: initials.toUpperCase(),
+        initials,
         color: (member.color ?? '#36a9e2') as string,
       };
       if (member.matchedUserId)
@@ -1335,9 +1407,11 @@ export default function CalendarScreen(): React.JSX.Element {
     for (const member of familyContacts?.members ?? []) {
       const uid = (member as { matchedUserId?: string }).matchedUserId;
       if (!uid || uid === currentUserId) continue;
+      const name = (member.displayName ?? '').trim();
+      if (!name) continue;
       map.set(uid, {
         id: uid,
-        name: (member.displayName ?? '?') as string,
+        name,
         color: (member.color ?? '#36a9e2') as string,
       });
     }
@@ -1350,9 +1424,11 @@ export default function CalendarScreen(): React.JSX.Element {
     for (const member of familyContacts?.members ?? []) {
       const mid = member._id as string;
       if (mid === selfEntityId) continue;
+      const name = (member.displayName ?? '').trim();
+      if (!name) continue;
       map.set(mid, {
         id: mid,
-        name: (member.displayName ?? '?') as string,
+        name,
         color: (member.color ?? '#36a9e2') as string,
       });
     }
@@ -1428,11 +1504,69 @@ export default function CalendarScreen(): React.JSX.Element {
       const day = d.getDate();
       if (!eventsByDay[day]) eventsByDay[day] = [];
       const isSavedCommunityInSpace = Boolean(ev.communityId);
-      const evCreatedBy = (ev as { createdBy?: string }).createdBy;
+      const evS = ev as {
+        createdBy?: string;
+        allFamily?: boolean;
+        sharedWithUserIds?: string[];
+        sharedWithFamilyMemberIds?: string[];
+        participants?: string[];
+        sharedMemberProfiles?: Array<{
+          id: string;
+          displayName: string;
+          color: string;
+          isViewer: boolean;
+        }>;
+      };
       const calGridUserId = currentUser?._id as string | undefined;
       const isViewerCreator = isSavedCommunityInSpace
         ? undefined
-        : !!calGridUserId && evCreatedBy === calGridUserId;
+        : !!calGridUserId && evS.createdBy === calGridUserId;
+
+      // Profile circles for compact personal event cards in the day list
+      let gridPc: ProfileCircle[] = [];
+      let gridPcExtra = 0;
+      let gridPcContext: 'sharedWith' | 'alsoAddedToCalendar' = 'sharedWith';
+      if (isSavedCommunityInSpace) {
+        gridPc = familyAllSaved[ev._id as string] ?? [];
+        gridPcContext = 'alsoAddedToCalendar';
+      } else {
+        const totalParticipants = evS.participants?.length ?? 0;
+        if (isViewerCreator) {
+          if (evS.allFamily) {
+            gridPc = [...familyProfilesByMemberId.values()];
+            gridPcExtra = Math.max(0, totalParticipants - gridPc.length);
+          } else {
+            const resolved = evS.sharedMemberProfiles ?? [];
+            for (const p of resolved) {
+              if (p.isViewer) continue;
+              gridPc.push({ id: p.id, name: p.displayName, color: p.color });
+            }
+            const familyCount = (evS.sharedWithFamilyMemberIds ?? []).length;
+            gridPcExtra = Math.max(0, totalParticipants - familyCount);
+          }
+        } else {
+          const resolved = evS.sharedMemberProfiles ?? [];
+          const creatorId = evS.createdBy;
+          const circles: ProfileCircle[] = [];
+          if (creatorId) {
+            const cp =
+              familyProfilesByUserId.get(creatorId) ??
+              familyProfilesByMemberId.get(creatorId);
+            if (cp) circles.push(cp);
+          }
+          for (const p of resolved) {
+            if (p.isViewer) continue;
+            circles.push({ id: p.id, name: p.displayName, color: p.color });
+          }
+          const externalCount = Math.max(
+            0,
+            totalParticipants - (evS.sharedWithFamilyMemberIds?.length ?? 0)
+          );
+          gridPc = circles;
+          gridPcExtra = externalCount;
+        }
+      }
+
       const personalRow = {
         id: ev._id,
         listKey: `${ev._id}-personal`,
@@ -1451,6 +1585,9 @@ export default function CalendarScreen(): React.JSX.Element {
           ? ('community' as const)
           : ('personal' as const),
         isViewerCreator,
+        profileCircles: gridPc.length > 0 ? gridPc : undefined,
+        profileCirclesExtraCount: gridPcExtra > 0 ? gridPcExtra : undefined,
+        profileCirclesContext: gridPcContext,
       };
       if (!eventsByDay[day].some((e) => e.id === personalRow.id)) {
         eventsByDay[day].push(personalRow);
@@ -1521,6 +1658,9 @@ export default function CalendarScreen(): React.JSX.Element {
     linkedEvents,
     aggregateCommunityEvents,
     currentUser?._id,
+    familyProfilesByUserId,
+    familyProfilesByMemberId,
+    familyAllSaved,
   ]);
 
   // === Dynamic panel heights ===
@@ -1668,7 +1808,7 @@ export default function CalendarScreen(): React.JSX.Element {
         );
       })
       .map((t) => {
-        const assigneeInfo = resolveNonSelfAssigneeCalendar(
+        const assigneeDisplays = resolveAllNonSelfAssigneesCalendar(
           t,
           currentUserId,
           memberMaps.byUserId,
@@ -1683,8 +1823,10 @@ export default function CalendarScreen(): React.JSX.Element {
               ? `${String(new Date(t.dueAt).getHours()).padStart(2, '0')}:${String(new Date(t.dueAt).getMinutes()).padStart(2, '0')}`
               : '',
           isOverdue: calcTaskOverdue(t.dueDate ?? 0, t.dueAt, t.hasTime, nowMs),
-          assigneeInitials: assigneeInfo?.initials,
-          assigneeColor: assigneeInfo?.color,
+          assigneeInitials: assigneeDisplays[0]?.initials,
+          assigneeColor: assigneeDisplays[0]?.color,
+          assigneeDisplays:
+            assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
           subtasks: (t.subtasks ?? []).map((s) => ({
             id: s.id,
             title: s.title,
@@ -1717,7 +1859,7 @@ export default function CalendarScreen(): React.JSX.Element {
         );
       })
       .map((t) => {
-        const assigneeInfo = resolveNonSelfAssigneeCalendar(
+        const assigneeDisplays = resolveAllNonSelfAssigneesCalendar(
           t,
           currentUserId,
           memberMaps.byUserId,
@@ -1732,8 +1874,10 @@ export default function CalendarScreen(): React.JSX.Element {
               ? `${String(new Date(t.dueAt).getHours()).padStart(2, '0')}:${String(new Date(t.dueAt).getMinutes()).padStart(2, '0')}`
               : '',
           isOverdue: calcTaskOverdue(t.dueDate ?? 0, t.dueAt, t.hasTime, nowMs),
-          assigneeInitials: assigneeInfo?.initials,
-          assigneeColor: assigneeInfo?.color,
+          assigneeInitials: assigneeDisplays[0]?.initials,
+          assigneeColor: assigneeDisplays[0]?.color,
+          assigneeDisplays:
+            assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
           subtasks: (t.subtasks ?? []).map((s) => ({
             id: s.id,
             title: s.title,
@@ -2231,11 +2375,16 @@ export default function CalendarScreen(): React.JSX.Element {
             // Uses server-resolved sharedMemberProfiles so display is reliable
             // even if the local map has a key mismatch.
             if (evS.allFamily) {
-              pc1 = [...familyProfilesByUserId.values()];
+              // Use byMemberId so manual family members (entity rows with no
+              // matchedUserId) are included alongside app-user family members.
+              // selfEntityId is already excluded from familyProfilesByMemberId.
+              pc1 = [...familyProfilesByMemberId.values()];
               pc1Extra = Math.max(0, totalParticipants - pc1.length);
             } else {
               const resolved = evS.sharedMemberProfiles ?? [];
               for (const p of resolved) {
+                // Safety: never show the current viewer's own circle.
+                if (p.isViewer) continue;
                 pc1.push({ id: p.id, name: p.displayName, color: p.color });
               }
               const familyCount = (evS.sharedWithFamilyMemberIds ?? []).length;
@@ -2258,8 +2407,16 @@ export default function CalendarScreen(): React.JSX.Element {
               if (p.isViewer) continue;
               circles.push({ id: p.id, name: p.displayName, color: p.color });
             }
-            pc1 = circles.slice(0, 3);
-            pc1Extra = Math.max(0, circles.length - 3);
+            // External participants are never shown as circles; count them in +N.
+            // participants stores all display names (family + external) so
+            // subtracting the family member ID count gives external count.
+            const externalCount = Math.max(
+              0,
+              totalParticipants - (evS.sharedWithFamilyMemberIds?.length ?? 0)
+            );
+            // Pass all circles unsliced; ProfileCircles handles maxVisible cap.
+            pc1 = circles;
+            pc1Extra = externalCount;
           }
         }
 
@@ -2388,7 +2545,7 @@ export default function CalendarScreen(): React.JSX.Element {
             : '';
 
         const currentUserId = currentUser?._id as string | undefined;
-        const assigneeInfo = resolveNonSelfAssigneeCalendar(
+        const assigneeDisplays = resolveAllNonSelfAssigneesCalendar(
           t,
           currentUserId,
           memberMaps.byUserId,
@@ -2412,8 +2569,10 @@ export default function CalendarScreen(): React.JSX.Element {
             title: s.title,
             completed: s.completed,
           })),
-          assigneeInitials: assigneeInfo?.initials,
-          assigneeColor: assigneeInfo?.color,
+          assigneeInitials: assigneeDisplays[0]?.initials,
+          assigneeColor: assigneeDisplays[0]?.color,
+          assigneeDisplays:
+            assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
         });
       }
 
@@ -2730,6 +2889,10 @@ export default function CalendarScreen(): React.JSX.Element {
               }}
               onEventPress={handleOpenEventDetails}
               onNavigate={handleNavigateToLocation}
+              onOpenTaskSheet={(id) => {
+                setTaskSheetTaskId(id);
+                setTaskSheetVisible(true);
+              }}
               onAddPress={(dateStr) => {
                 router.push({
                   pathname: '/(authenticated)/event/new',
@@ -2853,6 +3016,10 @@ export default function CalendarScreen(): React.JSX.Element {
                       tasks={visibleDayTasks}
                       onEventPress={handleOpenEventDetails}
                       onClose={() => setSelectedDay(null)}
+                      onOpenTaskSheet={(id) => {
+                        setTaskSheetTaskId(id);
+                        setTaskSheetVisible(true);
+                      }}
                     />
                   )}
               </ScrollView>
@@ -2864,6 +3031,11 @@ export default function CalendarScreen(): React.JSX.Element {
         <NotificationsDrawer
           isOpen={isNotificationsOpen}
           onClose={() => setIsNotificationsOpen(false)}
+        />
+        <TaskDetailsBottomSheet
+          taskId={taskSheetTaskId}
+          visible={taskSheetVisible}
+          onClose={() => setTaskSheetVisible(false)}
         />
         <EventDetailsBottomSheet
           event={selectedEvent}
@@ -2893,6 +3065,11 @@ export default function CalendarScreen(): React.JSX.Element {
           onClose={closeDayEventsSheet}
           onEventLongPress={handleExpandedEventLongPress}
           onEventNavigate={handleExpandedEventNavigate}
+          onOpenTaskSheet={(id) => {
+            closeDayEventsSheet();
+            setTaskSheetTaskId(id);
+            setTaskSheetVisible(true);
+          }}
           visible={
             daySheetDay !== null &&
             (sheetDayData != null || sheetDayTasks.length > 0)
@@ -3399,10 +3576,13 @@ function DayCell({
 
 interface CalendarTaskCardProps {
   task: CalendarDayTask;
+  onOpenTaskSheet: (id: string) => void;
 }
 
-function CalendarTaskCard({ task }: CalendarTaskCardProps): React.JSX.Element {
-  const router = useRouter();
+function CalendarTaskCard({
+  task,
+  onOpenTaskSheet,
+}: CalendarTaskCardProps): React.JSX.Element {
   const [subtasksExpanded, setSubtasksExpanded] = useState(false);
   const subtasks = task.subtasks ?? [];
   const completedCount = subtasks.filter((s) => s.completed).length;
@@ -3412,12 +3592,7 @@ function CalendarTaskCard({ task }: CalendarTaskCardProps): React.JSX.Element {
   return (
     <Pressable
       style={styles.eventCard}
-      onPress={() =>
-        router.push({
-          pathname: '/(authenticated)/task/[id]',
-          params: { id: rawId },
-        } as never)
-      }
+      onPress={() => onOpenTaskSheet(rawId)}
       accessible={true}
       accessibilityRole="button"
       accessibilityLabel={`משימה: ${task.title}${task.time ? `, ${task.time}` : ''}${task.isOverdue ? ', באיחור' : ''}`}
@@ -3450,16 +3625,23 @@ function CalendarTaskCard({ task }: CalendarTaskCardProps): React.JSX.Element {
               <Text style={styles.overdueBadgeText}>באיחור</Text>
             </View>
           ) : null}
-          {task.assigneeInitials ? (
-            <View
-              style={[
-                styles.taskAssigneeAvatar,
-                { backgroundColor: task.assigneeColor ?? PRIMARY_BLUE },
-              ]}
-            >
-              <Text style={styles.taskAssigneeInitials}>
-                {task.assigneeInitials}
-              </Text>
+          {(task.assigneeDisplays?.length ?? 0) > 0 ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {(task.assigneeDisplays ?? []).slice(0, 3).map((d, i) => (
+                <View
+                  key={`${d.initials}:${d.color}`}
+                  style={[
+                    styles.taskAssigneeAvatar,
+                    {
+                      backgroundColor: d.color,
+                      marginLeft: i === 0 ? 0 : -6,
+                      zIndex: 3 - i,
+                    },
+                  ]}
+                >
+                  <Text style={styles.taskAssigneeInitials}>{d.initials}</Text>
+                </View>
+              ))}
             </View>
           ) : null}
         </View>
@@ -3567,6 +3749,7 @@ interface DayEventsListProps {
   tasks?: CalendarDayTask[];
   onEventPress: (event: CalendarEvent) => void;
   onClose: () => void;
+  onOpenTaskSheet: (id: string) => void;
 }
 
 function DayEventsList({
@@ -3577,6 +3760,7 @@ function DayEventsList({
   tasks = [],
   onEventPress,
   onClose,
+  onOpenTaskSheet,
 }: DayEventsListProps): React.JSX.Element {
   const router = useRouter();
   const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
@@ -3769,7 +3953,16 @@ function DayEventsList({
                       <Text style={dStyles.locationText}>{event.location}</Text>
                     </View>
                   )}
-                  {(event.assigneeColors?.length ?? 0) > 0 && (
+                  {(event.profileCircles?.length ?? 0) > 0 ||
+                  (event.profileCirclesExtraCount ?? 0) > 0 ? (
+                    <View style={{ marginTop: 4 }}>
+                      <ProfileCircles
+                        profiles={event.profileCircles ?? []}
+                        extraCount={event.profileCirclesExtraCount ?? 0}
+                        context={event.profileCirclesContext ?? 'sharedWith'}
+                      />
+                    </View>
+                  ) : (event.assigneeColors?.length ?? 0) > 0 ? (
                     <View style={dStyles.assigneeDots}>
                       {event.assigneeColors?.slice(0, 4).map((color) => (
                         <View
@@ -3781,7 +3974,7 @@ function DayEventsList({
                         />
                       ))}
                     </View>
-                  )}
+                  ) : null}
                 </View>
                 <View
                   style={[
@@ -3819,7 +4012,16 @@ function DayEventsList({
                       <Text style={dStyles.locationText}>{event.location}</Text>
                     </View>
                   )}
-                  {(event.assigneeColors?.length ?? 0) > 0 && (
+                  {(event.profileCircles?.length ?? 0) > 0 ||
+                  (event.profileCirclesExtraCount ?? 0) > 0 ? (
+                    <View style={{ marginTop: 4 }}>
+                      <ProfileCircles
+                        profiles={event.profileCircles ?? []}
+                        extraCount={event.profileCirclesExtraCount ?? 0}
+                        context={event.profileCirclesContext ?? 'sharedWith'}
+                      />
+                    </View>
+                  ) : (event.assigneeColors?.length ?? 0) > 0 ? (
                     <View style={dStyles.assigneeDots}>
                       {event.assigneeColors?.slice(0, 4).map((color) => (
                         <View
@@ -3831,7 +4033,7 @@ function DayEventsList({
                         />
                       ))}
                     </View>
-                  )}
+                  ) : null}
                 </View>
                 <View
                   style={[
@@ -3854,7 +4056,7 @@ function DayEventsList({
       {/* Personal Task Cards — unified CalendarTaskCard */}
       {tasks.map((task) => (
         <View key={task.id} style={{ marginBottom: 8 }}>
-          <CalendarTaskCard task={task} />
+          <CalendarTaskCard task={task} onOpenTaskSheet={onOpenTaskSheet} />
         </View>
       ))}
 
@@ -3917,12 +4119,14 @@ function TimelineView({
   onEventPress,
   onNavigate,
   onAddPress,
+  onOpenTaskSheet,
 }: {
   data: TimelineDayGroup[];
   onTodayLayout?: (y: number) => void;
   onEventPress: (event: CalendarEvent) => void;
   onNavigate: (location: string, locationUrl?: string) => void;
   onAddPress: (dateStr: string) => void;
+  onOpenTaskSheet: (id: string) => void;
 }): React.JSX.Element {
   const [openGaps, setOpenGaps] = useState<Record<string, boolean>>({});
   const myImportantItemChecks =
@@ -4059,8 +4263,10 @@ function TimelineView({
                                 isOverdue: event.isOverdue ?? false,
                                 assigneeInitials: event.assigneeInitials,
                                 assigneeColor: event.assigneeColor,
+                                assigneeDisplays: event.assigneeDisplays,
                                 subtasks: event.subtasks,
                               }}
+                              onOpenTaskSheet={onOpenTaskSheet}
                             />
                           ) : (
                             /* ── Regular event card ── */
@@ -4091,7 +4297,7 @@ function TimelineView({
 
                               {/* Card inner content */}
                               <View style={styles.eventCardContent}>
-                                {/* Header: category tag + community name tag */}
+                                {/* Header: category tag + community name tag + profile circles */}
                                 <View style={styles.eventCardHeader}>
                                   <View
                                     style={[
@@ -4117,6 +4323,20 @@ function TimelineView({
                                   {event.communityName ? (
                                     <CommunityEventNameTag
                                       name={event.communityName}
+                                    />
+                                  ) : null}
+                                  {(event.profileCircles?.length ?? 0) > 0 ||
+                                  (event.profileCirclesExtraCount ?? 0) > 0 ? (
+                                    <ProfileCircles
+                                      profiles={event.profileCircles ?? []}
+                                      extraCount={
+                                        event.profileCirclesExtraCount ?? 0
+                                      }
+                                      context={
+                                        event.profileCirclesContext ??
+                                        'sharedWith'
+                                      }
+                                      size={22}
                                     />
                                   ) : null}
                                 </View>
@@ -4171,23 +4391,6 @@ function TimelineView({
                                       </Text>
                                     </Pressable>
                                   </>
-                                ) : null}
-
-                                {/* Family profile circles */}
-                                {(event.profileCircles?.length ?? 0) > 0 ||
-                                (event.profileCirclesExtraCount ?? 0) > 0 ? (
-                                  <View style={styles.profileCirclesRow}>
-                                    <ProfileCircles
-                                      profiles={event.profileCircles ?? []}
-                                      extraCount={
-                                        event.profileCirclesExtraCount ?? 0
-                                      }
-                                      context={
-                                        event.profileCirclesContext ??
-                                        'sharedWith'
-                                      }
-                                    />
-                                  </View>
                                 ) : null}
                               </View>
                             </Pressable>

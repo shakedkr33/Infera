@@ -55,11 +55,15 @@ async function buildFamilyProfiles(
     } else {
       const user = await ctx.db.get(uid as Id<'users'>);
       if (user) {
-        profileByUserId.set(uid, {
-          id: uid,
-          name: (user as { fullName?: string }).fullName ?? '?',
-          color: (user as { profileColor?: string }).profileColor ?? '#36a9e2',
-        });
+        const userName = (user as { fullName?: string }).fullName?.trim();
+        if (userName) {
+          profileByUserId.set(uid, {
+            id: uid,
+            name: userName,
+            color:
+              (user as { profileColor?: string }).profileColor ?? '#36a9e2',
+          });
+        }
       }
     }
   }

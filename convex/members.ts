@@ -296,21 +296,31 @@ export const listMyFamilyContacts = query({
         : null,
       members: [
         ...(adminEntry ? [adminEntry] : []),
-        // FIXED: e164ToLocal applied to all entity rows, not just admin entry
-        ...entities.map((m) => {
-          const localPhone = m.selectedPhoneNumber
-            ? e164ToLocal(m.selectedPhoneNumber)
-            : undefined;
-          return {
-            _id: m._id,
-            selectedPhoneNumber: m.selectedPhoneNumber,
-            maskedPhone: localPhone ? maskPhone(localPhone) : undefined,
-            matchedUserId: m.matchedUserId,
-            inviteStatus: m.inviteStatus,
-            displayName: m.displayName,
-            color: m.color,
-          };
-        }),
+        // Enrich each entity row: for matched members whose displayName is missing,
+        // fall back to the linked user's fullName so clients always receive a usable name.
+        ...(await Promise.all(
+          entities.map(async (m) => {
+            const localPhone = m.selectedPhoneNumber
+              ? e164ToLocal(m.selectedPhoneNumber)
+              : undefined;
+            let displayName = m.displayName?.trim() || undefined;
+            if (!displayName && m.matchedUserId) {
+              const user = await ctx.db.get(m.matchedUserId);
+              displayName =
+                (user as { fullName?: string } | null)?.fullName?.trim() ||
+                undefined;
+            }
+            return {
+              _id: m._id,
+              selectedPhoneNumber: m.selectedPhoneNumber,
+              maskedPhone: localPhone ? maskPhone(localPhone) : undefined,
+              matchedUserId: m.matchedUserId,
+              inviteStatus: m.inviteStatus,
+              displayName,
+              color: m.color,
+            };
+          })
+        )),
       ],
     };
   },

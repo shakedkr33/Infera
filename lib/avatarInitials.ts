@@ -5,20 +5,23 @@ type InitialsSource = {
   name?: string | null;
 };
 
-export function getAvatarInitials(source: InitialsSource): string {
-  const firstName = source.firstName?.trim();
-  const lastName = source.lastName?.trim();
+// Accepts either a plain display-name string (new callers) or the legacy
+// InitialsSource object shape (MainScreenHeader, profile, family-profile).
+export function getAvatarInitials(input: string | InitialsSource): string {
+  if (typeof input === 'string') {
+    const name = input.trim();
+    if (!name) return '';
+    const firstWord = name.split(/\s+/)[0] ?? '';
+    const chars = Array.from(firstWord); // Unicode-safe Hebrew slicing
+    return (chars[0] ?? '') + (chars[1] ?? '');
+  }
 
+  // Legacy: object with firstName / lastName / fullName / name
+  const firstName = input.firstName?.trim();
+  const lastName = input.lastName?.trim();
   if (firstName && lastName) {
-    return `${firstName[0]}${lastName[0]}`;
+    return (Array.from(firstName)[0] ?? '') + (Array.from(lastName)[0] ?? '');
   }
-
-  const displayName = source.fullName?.trim() || source.name?.trim() || '';
-  const parts = displayName.split(/\s+/).filter(Boolean);
-
-  if (parts.length >= 2) {
-    return `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}`;
-  }
-
-  return parts[0]?.[0] ?? '';
+  const displayName = input.fullName?.trim() || input.name?.trim() || '';
+  return getAvatarInitials(displayName);
 }

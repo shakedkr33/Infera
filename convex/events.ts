@@ -318,7 +318,7 @@ export const getById = query({
     const viewerMemberIds = new Set(
       viewerMemberRows.map((r) => r._id as string)
     );
-    const sharedUserIds = ((event.sharedWithUserIds ?? []) as string[]);
+    const sharedUserIds = (event.sharedWithUserIds ?? []) as string[];
     const sharedMemberIds = event.sharedWithFamilyMemberIds ?? [];
     const isExplicitlyShared =
       sharedUserIds.includes(userId as string) ||
@@ -651,7 +651,11 @@ export const listByDateRange = query({
       if (!isSharedWithViewer) continue;
 
       seenIds.add(idStr);
-      result.push({ ...ev, communityName: undefined, isSavedToMyCalendar: false });
+      result.push({
+        ...ev,
+        communityName: undefined,
+        isSavedToMyCalendar: false,
+      });
     }
 
     // Re-sort ascending by startTime since Cat 2 events were appended unordered.
@@ -670,9 +674,11 @@ export const listByDateRange = query({
       for (const mid of mids) {
         const row = await ctx.db.get(mid as Id<'members'>);
         if (!row) continue;
+        const dn = row.displayName?.trim();
+        if (!dn) continue;
         profiles.push({
           id: mid,
-          displayName: row.displayName ?? '?',
+          displayName: dn,
           color: row.color ?? '#36a9e2',
           isViewer: row.matchedUserId === userId || row.userId === userId,
         });

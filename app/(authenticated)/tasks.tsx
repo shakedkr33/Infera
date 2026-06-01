@@ -19,9 +19,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
+import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { getAvatarInitials } from '@/lib/avatarInitials';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { getTaskCategoryLabel } from '@/lib/types/task';
 
@@ -97,6 +99,7 @@ type DisplayTask = {
   eventStartTime?: number;
   eventAllDay?: boolean;
   communityName?: string;
+  assigneeMemberProfiles?: { id: string; name: string; color: string | null }[];
   subtasks: SubtaskRow[];
   hasAttachments: boolean;
   hasReminders: boolean;
@@ -161,14 +164,6 @@ const MINE_GROUPS: {
 
 function normalizeText(value: string): string {
   return value.trim().toLowerCase();
-}
-
-function initialsFromName(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}` || '??';
-  }
-  return name.trim().replace(/\s/g, '').slice(0, 2) || '??';
 }
 
 function dayStart(timestamp: number): number {
@@ -298,8 +293,9 @@ function resolveAssigneeNames(
     | 'assignedToMemberId'
     | 'assignedToUserIds'
     | 'assignedToMemberIds'
+    | 'assigneeMemberProfiles'
   >,
-  currentUserId: string | undefined,
+  _currentUserId: string | undefined,
   maps: MemberMaps
 ): string[] {
   const names: string[] = [];
@@ -313,21 +309,22 @@ function resolveAssigneeNames(
   const userIds = [...task.assignedToUserIds];
   if (task.assignedTo) userIds.push(task.assignedTo);
   for (const userId of userIds) {
-    addName(
-      `user:${userId}`,
-      userId === currentUserId
-        ? 'אני'
-        : (maps.userNames.get(userId) ?? 'בן משפחה')
-    );
+    addName(`user:${userId}`, maps.userNames.get(userId) ?? '');
   }
 
   const memberIds = [...task.assignedToMemberIds];
   if (task.assignedToMemberId) memberIds.push(task.assignedToMemberId);
   for (const memberId of memberIds) {
-    addName(`member:${memberId}`, maps.memberNames.get(memberId) ?? 'בן משפחה');
+    // Primary: task-embedded profile resolved directly from the DB.
+    // Fallback: listMyFamilyContacts-based map (for freshly added members).
+    const embedded = task.assigneeMemberProfiles?.find(
+      (p) => p.id === memberId
+    );
+    const name = embedded?.name ?? maps.memberNames.get(memberId) ?? '';
+    addName(`member:${memberId}`, name);
   }
 
-  return names;
+  return names.filter((n) => n.length > 0);
 }
 
 function resolveAssigneeDisplays(
@@ -337,6 +334,8 @@ function resolveAssigneeDisplays(
     | 'assignedToMemberId'
     | 'assignedToUserIds'
     | 'assignedToMemberIds'
+    | 'createdBy'
+    | 'assigneeMemberProfiles'
   >,
   currentUserId: string | undefined,
   maps: MemberMaps
@@ -349,28 +348,59 @@ function resolveAssigneeDisplays(
     displays.push({
       key,
       name,
-      initials: initialsFromName(name),
+      initials: getAvatarInitials(name),
       color: color ?? PRIMARY_BLUE,
     });
   };
 
+  const currentUserIsCreator = task.createdBy === currentUserId;
+  const currentUserIsAssignee =
+    currentUserId !== undefined &&
+    (task.assignedToUserIds.includes(currentUserId) ||
+      task.assignedTo === currentUserId);
+  const currentMemberIsAssignee =
+    maps.selfEntityId !== undefined &&
+    (task.assignedToMemberIds.includes(maps.selfEntityId) ||
+      task.assignedToMemberId === maps.selfEntityId);
+  const viewerIsAssignee = currentUserIsAssignee || currentMemberIsAssignee;
+
+  // ── For assignee viewers who are NOT the creator ───────────────────────────
+  // Show the creator's avatar so the assignee knows who assigned the task.
+  if (!currentUserIsCreator && viewerIsAssignee && task.createdBy) {
+    const creatorName = maps.userNames.get(task.createdBy);
+    if (creatorName && task.createdBy !== currentUserId) {
+      addDisplay(
+        `user:${task.createdBy}`,
+        creatorName,
+        maps.userColors.get(task.createdBy)
+      );
+    }
+  }
+
+  // ── User assignees ─────────────────────────────────────────────────────────
   const userIds = [...task.assignedToUserIds];
   if (task.assignedTo) userIds.push(task.assignedTo);
   for (const userId of userIds) {
-    // Never show the current user's own avatar — on "My Tasks" the viewer
-    // is implied; only other participants should be visible.
-    if (userId === currentUserId) continue;
-    const name = maps.userNames.get(userId) ?? 'בן משפחה';
+    if (userId === currentUserId) continue; // viewer never shown in avatars
+    const name = maps.userNames.get(userId) ?? '';
     addDisplay(`user:${userId}`, name, maps.userColors.get(userId));
   }
 
+  // ── Member assignees (family entities without an app account) ─────────────
+  // Use the task-embedded profile (resolved directly from the DB in listMyTasks)
+  // as the primary name source. Fall back to listMyFamilyContacts-based maps for
+  // members added after the task was last fetched.
   const memberIds = [...task.assignedToMemberIds];
   if (task.assignedToMemberId) memberIds.push(task.assignedToMemberId);
   for (const memberId of memberIds) {
-    // Skip the self-entity row (current user's own family entity)
-    if (memberId === maps.selfEntityId) continue;
-    const name = maps.memberNames.get(memberId) ?? 'בן משפחה';
-    addDisplay(`member:${memberId}`, name, maps.memberColors.get(memberId));
+    if (memberId === maps.selfEntityId) continue; // viewer's own entity never shown
+    const embedded = task.assigneeMemberProfiles?.find(
+      (p) => p.id === memberId
+    );
+    const name = embedded?.name ?? maps.memberNames.get(memberId) ?? '';
+    const color =
+      embedded?.color ?? maps.memberColors.get(memberId) ?? undefined;
+    addDisplay(`member:${memberId}`, name, color);
   }
 
   return displays;
@@ -530,6 +560,9 @@ export default function TasksScreen() {
     null
   );
   const lastDragCloseTimeRef = useRef<number>(0);
+
+  const [taskSheetTaskId, setTaskSheetTaskId] = useState<string | null>(null);
+  const [taskSheetVisible, setTaskSheetVisible] = useState(false);
   const {
     unseenCount,
     markAllSeen,
@@ -588,11 +621,11 @@ export default function TasksScreen() {
     const memberColors = new Map<string, string>();
 
     if (currentUserId) {
-      userNames.set(currentUserId, 'אני');
+      userNames.set(currentUserId, currentUser?.fullName?.trim() || '');
       userColors.set(currentUserId, PRIMARY_BLUE);
     }
     for (const member of members) {
-      const name = member.displayName?.trim() || 'בן משפחה';
+      const name = member.displayName?.trim() || '';
       const color = member.color ?? PRIMARY_BLUE;
       memberNames.set(member._id, name);
       memberColors.set(member._id, color);
@@ -613,7 +646,12 @@ export default function TasksScreen() {
       memberColors,
       visibleAssigneeCount,
     };
-  }, [currentUserId, familyContacts?.members, familyContacts?.selfEntityId]);
+  }, [
+    currentUserId,
+    currentUser?.fullName,
+    familyContacts?.members,
+    familyContacts?.selfEntityId,
+  ]);
 
   const allTasks: DisplayTask[] = useMemo(() => {
     const byId = new Map<string, DisplayTask>();
@@ -651,6 +689,10 @@ export default function TasksScreen() {
         assignedToMemberIds,
         communityId: row.communityId ? String(row.communityId) : undefined,
         communityName: row.communityName ?? undefined,
+        assigneeMemberProfiles:
+          (row.assigneeMemberProfiles as
+            | { id: string; name: string; color: string | null }[]
+            | undefined) ?? [],
         sourceType: row.sourceType,
         sourceEventId: row.sourceEventId
           ? String(row.sourceEventId)
@@ -1019,7 +1061,7 @@ export default function TasksScreen() {
   };
 
   const handleTaskPress = (task: DisplayTask): void => {
-    const isEditable =
+    const isPersonalTask =
       task.kind === 'task' &&
       !task.communityId &&
       !task.sourceEventId &&
@@ -1027,8 +1069,9 @@ export default function TasksScreen() {
       task.category !== 'קהילות' &&
       task.category !== 'אירועי יומן';
 
-    if (isEditable) {
-      router.push(`/(authenticated)/task/${task.id}` as never);
+    if (isPersonalTask) {
+      setTaskSheetTaskId(task.id);
+      setTaskSheetVisible(true);
       return;
     }
 
@@ -1254,6 +1297,11 @@ export default function TasksScreen() {
         onClose={() => setIsNotificationsOpen(false)}
         direction="rtl"
       />
+      <TaskDetailsBottomSheet
+        taskId={taskSheetTaskId}
+        visible={taskSheetVisible}
+        onClose={() => setTaskSheetVisible(false)}
+      />
       <EventDetailsBottomSheet
         event={eventSheetEvent}
         eventId={eventSheetEventId}
@@ -1474,7 +1522,7 @@ function TaskCard({
               <TaskIndicators task={task} hasSubtasks={hasSubtasks} />
               <AssigneeAvatars
                 assignees={task.assigneeDisplays}
-                showEveryone={task.responsibilityLabel === 'כולם'}
+                showEveryone={false}
               />
             </View>
             <Text style={styles.taskMeta} numberOfLines={1}>
@@ -1620,9 +1668,10 @@ function AssigneeAvatars({
       </View>
     );
   }
-  if (assignees.length === 0) return null;
-  const visible = assignees.slice(0, 3);
-  const extraCount = assignees.length - visible.length;
+  const resolved = assignees.filter((a) => a.initials.length > 0);
+  if (resolved.length === 0) return null;
+  const visible = resolved.slice(0, 3);
+  const extraCount = resolved.length - visible.length;
 
   return (
     <View style={styles.assigneeAvatars}>
@@ -1731,7 +1780,7 @@ function EmptyState({ activeFilter }: { activeFilter: TaskTab }) {
 
 function buildVisibleTags(
   task: DisplayTask,
-  isOverdue: boolean
+  _isOverdue: boolean
 ): {
   label: string;
   style?: object;
@@ -1742,14 +1791,6 @@ function buildVisibleTags(
     style?: object;
     textStyle?: object;
   }[] = [];
-
-  if (isOverdue) {
-    tags.push({
-      label: 'המועד עבר',
-      style: styles.tagOverdue,
-      textStyle: styles.tagTextOverdue,
-    });
-  }
 
   // "חשוב לזכור" chip for important-to-remember tasks
   if (task.sourceType === 'community_event_important_item') {
@@ -1788,12 +1829,6 @@ function buildVisibleTags(
       label: task.category,
       style: styles.categoryTag,
       textStyle: styles.categoryTagText,
-    });
-  }
-
-  if (task.responsibilityLabel && tags.length < 3) {
-    tags.push({
-      label: task.responsibilityLabel,
     });
   }
 
