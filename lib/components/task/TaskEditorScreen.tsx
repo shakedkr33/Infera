@@ -796,19 +796,19 @@ export default function TaskEditorScreen({
    */
   const handleDelete = (): void => {
     if (!taskId || !existingTask) return;
-    const assignedUserIds =
-      (existingTask.assignedToUserIds as string[] | undefined) ?? [];
-    const assignedMemberIds =
-      (existingTask.assignedToMemberIds as string[] | undefined) ?? [];
-    const otherUsers = assignedUserIds.filter(
-      (id) => id !== String(currentUserId)
-    );
-    const shared = otherUsers.length > 0 || assignedMemberIds.length > 0;
-
-    const alertTitle = shared ? 'למחוק את המשימה המשותפת?' : 'למחוק את המשימה?';
-    const alertMessage = shared
-      ? 'המשימה תוסר גם אצל מי ששיתפת איתו. אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.'
-      : 'אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.';
+    const otherUserIds = (
+      (existingTask.assignedToUserIds as string[] | undefined) ?? []
+    ).filter((id) => id !== String(currentUserId));
+    const hasMemberAssignees =
+      ((existingTask.assignedToMemberIds as string[] | undefined) ?? [])
+        .length > 0;
+    const isShared = otherUserIds.length > 0 || hasMemberAssignees;
+    const alertTitle = isShared
+      ? 'למחוק את המשימה המשותפת?'
+      : 'למחוק את המשימה?';
+    const alertMessage = isShared
+      ? 'המשימה תוסר לכל המשתתפים. אפשר לשחזר אותה מ״נמחקו לאחרונה״ בהגדרות.'
+      : 'המשימה תוסר. אפשר לשחזר אותה מ״נמחקו לאחרונה״ בהגדרות.';
 
     Alert.alert(alertTitle, alertMessage, [
       { text: 'ביטול', style: 'cancel' },

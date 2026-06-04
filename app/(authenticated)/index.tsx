@@ -1448,9 +1448,12 @@ export default function HomeScreen() {
       handleOpenItemEvent(item);
       return;
     }
+    const isShared = (item.profileCircles?.length ?? 0) > 0;
     Alert.alert(
-      'למחוק את המשימה?',
-      'אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.',
+      isShared ? 'למחוק את המשימה המשותפת?' : 'למחוק את המשימה?',
+      isShared
+        ? 'המשימה תוסר לכל המשתתפים. אפשר לשחזר אותה מ״נמחקו לאחרונה״ בהגדרות.'
+        : 'המשימה תוסר. אפשר לשחזר אותה מ״נמחקו לאחרונה״ בהגדרות.',
       [
         { text: 'ביטול', style: 'cancel' },
         {

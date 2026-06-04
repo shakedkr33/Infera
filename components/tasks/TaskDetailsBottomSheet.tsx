@@ -2,9 +2,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   I18nManager,
@@ -87,6 +88,32 @@ function tomorrowMs(
   return tomorrow.getTime();
 }
 
+function canShowPostpone(task: {
+  dueDate?: number | null;
+  dueAt?: number | null;
+  completed?: boolean;
+  completedAt?: number | null;
+}): boolean {
+  const dueTs = task.dueAt ?? task.dueDate;
+  if (!dueTs) return false;
+  if (task.completed || task.completedAt) return false;
+
+  const due = new Date(dueTs);
+  const today = new Date();
+  const dueStart = new Date(
+    due.getFullYear(),
+    due.getMonth(),
+    due.getDate()
+  ).getTime();
+  const todayStart = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate()
+  ).getTime();
+
+  return dueStart <= todayStart;
+}
+
 // ─── Avatar Circle ────────────────────────────────────────────────────────────
 
 function AvatarCircle({
@@ -137,48 +164,6 @@ function DetailRow({
       />
       <View style={{ flex: 1 }}>{children}</View>
     </View>
-  );
-}
-
-// ─── Quick Action Button ──────────────────────────────────────────────────────
-
-function ActionBtn({
-  icon,
-  label,
-  onPress,
-  variant = 'default',
-}: {
-  icon: string;
-  label: string;
-  onPress: () => void;
-  variant?: 'default' | 'primary' | 'danger';
-}): React.JSX.Element {
-  const bgMap = {
-    default: '#f1f5f9',
-    primary: '#36a9e2',
-    danger: '#fff1f2',
-  };
-  const colorMap = {
-    default: '#334155',
-    primary: '#fff',
-    danger: '#ef4444',
-  };
-  return (
-    <Pressable
-      onPress={onPress}
-      accessible
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      style={({ pressed }) => [
-        s.actionBtn,
-        { backgroundColor: bgMap[variant], opacity: pressed ? 0.75 : 1 },
-      ]}
-    >
-      <MaterialIcons name={icon as never} size={18} color={colorMap[variant]} />
-      <Text style={[s.actionBtnLabel, { color: colorMap[variant] }]}>
-        {label}
-      </Text>
-    </Pressable>
   );
 }
 
@@ -233,7 +218,7 @@ function AssignmentSection({
               <AvatarCircle key={a.id} name={a.name} color={a.color} />
             ))}
             <Text style={[s.detailText, { textAlign: HEB_TEXT_ALIGN }]}>
-              {`משויך ל: ${visibleAssignees.map((a) => a.name).join(', ')}`}
+              {'משויך ל:'}
             </Text>
           </View>
         </DetailRow>
@@ -287,26 +272,66 @@ export function TaskDetailsBottomSheet({
   const updateTask = useMutation(api.tasks.update);
   const softDelete = useMutation(api.tasks.softDeleteTask);
 
+  const [isToggling, setIsToggling] = useState(false);
+  const [isPostponing, setIsPostponing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const handleToggle = useCallback(async () => {
     if (!task) return;
-    await toggleCompleted({ id: task._id });
+    setIsToggling(true);
+    try {
+      await toggleCompleted({ id: task._id });
+    } finally {
+      setIsToggling(false);
+    }
   }, [task, toggleCompleted]);
 
   const handlePostpone = useCallback(async () => {
     if (!task) return;
-    const newDue = tomorrowMs(task.dueDate ?? task.dueAt, task.hasTime);
-    await updateTask({
-      id: task._id,
-      dueDate: newDue,
-      ...(task.hasTime ? { hasTime: true, dueAt: newDue } : {}),
-    });
+    setIsPostponing(true);
+    try {
+      const newDue = tomorrowMs(task.dueDate ?? task.dueAt, task.hasTime);
+      await updateTask({
+        id: task._id,
+        dueDate: newDue,
+        ...(task.hasTime ? { hasTime: true, dueAt: newDue } : {}),
+      });
+    } finally {
+      setIsPostponing(false);
+    }
   }, [task, updateTask]);
 
-  const handleDelete = useCallback(async () => {
-    if (!task) return;
-    onClose();
-    await softDelete({ id: task._id });
-  }, [task, softDelete, onClose]);
+  const handleDelete = useCallback(() => {
+    if (!task || isDeleting) return;
+
+    const isShared =
+      task.assignees.some(
+        (a) => a.kind === 'user' && a.id !== task.currentUserId
+      ) || task.assignees.some((a) => a.kind === 'member');
+    const title = isShared ? 'למחוק את המשימה המשותפת?' : 'למחוק את המשימה?';
+    const message = isShared
+      ? 'המשימה תוסר לכל המשתתפים. אפשר לשחזר אותה מ״נמחקו לאחרונה״ בהגדרות.'
+      : 'המשימה תוסר. אפשר לשחזר אותה מ״נמחקו לאחרונה״ בהגדרות.';
+
+    Alert.alert(title, message, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'מחק',
+        style: 'destructive',
+        onPress: async () => {
+          setIsDeleting(true);
+          try {
+            onClose();
+            await softDelete({ id: task._id });
+          } catch {
+            Alert.alert('שגיאה', 'לא הצלחנו למחוק את המשימה. נסה שוב.');
+          } finally {
+            setIsDeleting(false);
+          }
+        },
+      },
+    ]);
+  }, [task, isDeleting, softDelete, onClose]);
 
   const handleEdit = useCallback(() => {
     if (!taskId) return;
@@ -327,7 +352,15 @@ export function TaskDetailsBottomSheet({
     task.category !== 'קהילות' &&
     task.category !== 'אירועי יומן';
 
-  const isDeletable = !!isEditable && task.assignees.length === 0;
+  // Mirrors isPersonallyDeletableDisplayTask from tasks.tsx:
+  // creator-only, not a community reminder (communityId with no sourceType).
+  // Does NOT require zero assignees — owner can delete shared tasks (matches swipe delete).
+  const isDeletable =
+    !!task &&
+    task.currentUserIsCreator === true &&
+    !(task.communityId && !task.sourceType);
+
+  const showPostpone = task ? canShowPostpone(task) : false;
 
   const dueTs = task?.dueAt ?? task?.dueDate;
   const categoryLabel = task ? getCategoryLabel(task.category) : null;
@@ -353,211 +386,305 @@ export function TaskDetailsBottomSheet({
             },
           ]}
         >
-          {/* Handle */}
-          <View style={s.handleRow}>
-            <View style={s.handle} />
-          </View>
-
-          {task === undefined ? (
-            <View style={s.center}>
-              <ActivityIndicator color="#36a9e2" />
+          <View style={{ flex: 1 }}>
+            {/* Handle */}
+            <View style={s.handleRow}>
+              <View style={s.handle} />
             </View>
-          ) : task === null ? (
-            <View style={s.center}>
-              <Text style={{ color: '#94a3b8', fontSize: 15 }}>
-                המשימה לא נמצאה
-              </Text>
-            </View>
-          ) : (
-            /* flex: 1 so ScrollView + sticky footer fill remaining sheet height */
-            <View style={s.sheetBody}>
-              {/* ── Header: title + edit + close ── */}
-              <View style={[s.header, { flexDirection: HEB_ROW }]}>
-                {/* Close (X) button — left side in RTL = physical right */}
-                <Pressable
-                  onPress={onClose}
-                  accessible
-                  accessibilityRole="button"
-                  accessibilityLabel="סגור"
-                  style={s.closeBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <MaterialIcons name="close" size={22} color="#64748b" />
-                </Pressable>
 
-                <Text
-                  style={[s.title, { textAlign: HEB_TEXT_ALIGN, flex: 1 }]}
-                  numberOfLines={2}
-                >
-                  {task.title}
+            {task === undefined ? (
+              <View
+                style={{
+                  height: 160,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <ActivityIndicator color="#36a9e2" />
+              </View>
+            ) : task === null ? (
+              <View
+                style={{
+                  height: 160,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text style={{ color: '#94a3b8', fontSize: 15 }}>
+                  המשימה לא נמצאה
                 </Text>
-
-                {isEditable ? (
+              </View>
+            ) : (
+              <>
+                {/* ── Header: title + edit + close ── */}
+                <View style={[s.header, { flexDirection: HEB_ROW }]}>
+                  {/* Close (X) button — left side in RTL = physical right */}
                   <Pressable
-                    onPress={handleEdit}
+                    onPress={onClose}
                     accessible
                     accessibilityRole="button"
-                    accessibilityLabel="עריכת משימה"
-                    style={s.editBtn}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    accessibilityLabel="סגור"
+                    style={s.closeBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <MaterialIcons name="edit" size={16} color="#36a9e2" />
-                    <Text style={s.editBtnLabel}>עריכה</Text>
+                    <MaterialIcons name="close" size={22} color="#64748b" />
                   </Pressable>
-                ) : null}
-              </View>
 
-              {/* Status badge */}
-              <View
-                style={[
-                  s.badgeRow,
-                  { flexDirection: HEB_ROW, justifyContent: 'flex-end' },
-                ]}
-              >
+                  <Text
+                    style={[s.title, { textAlign: HEB_TEXT_ALIGN, flex: 1 }]}
+                    numberOfLines={2}
+                  >
+                    {task.title}
+                  </Text>
+
+                  {isEditable ? (
+                    <Pressable
+                      onPress={handleEdit}
+                      accessible
+                      accessibilityRole="button"
+                      accessibilityLabel="עריכת משימה"
+                      style={s.editBtn}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <MaterialIcons name="edit" size={16} color="#36a9e2" />
+                      <Text style={s.editBtnLabel}>עריכה</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                {/* Status badge */}
                 <View
                   style={[
-                    s.badge,
-                    {
-                      backgroundColor: task.completed ? '#dcfce7' : '#fef3c7',
-                    },
+                    s.badgeRow,
+                    { flexDirection: HEB_ROW, justifyContent: 'flex-start' },
                   ]}
                 >
-                  <Text
+                  <View
                     style={[
-                      s.badgeText,
-                      { color: task.completed ? '#16a34a' : '#d97706' },
+                      s.badge,
+                      {
+                        backgroundColor: task.completed ? '#dcfce7' : '#fef3c7',
+                      },
                     ]}
                   >
-                    {task.completed ? 'בוצע ✓' : 'לביצוע'}
-                  </Text>
+                    <Text
+                      style={[
+                        s.badgeText,
+                        { color: task.completed ? '#16a34a' : '#d97706' },
+                      ]}
+                    >
+                      {task.completed ? 'בוצע ✓' : 'לביצוע'}
+                    </Text>
+                  </View>
                 </View>
-              </View>
 
-              {/* ── Scrollable content ── */}
-              <ScrollView
-                style={s.detailsScroll}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: 8 }}
-              >
-                <View style={s.detailsCard}>
-                  {/* Due date */}
-                  {dueTs ? (
-                    <DetailRow icon="event">
-                      <Text
-                        style={[s.detailText, { textAlign: HEB_TEXT_ALIGN }]}
+                {/* ── Action block — fixed position between badge and scroll ── */}
+                <View style={s.actionBlock}>
+                  {task.completed ? (
+                    <Pressable
+                      onPress={handleToggle}
+                      disabled={isToggling}
+                      accessible
+                      accessibilityRole="button"
+                      accessibilityLabel="בטל סימון"
+                      style={({ pressed }) => ({
+                        opacity: pressed || isToggling ? 0.75 : 1,
+                      })}
+                    >
+                      <View style={s.undoActionButton}>
+                        {isToggling ? (
+                          <ActivityIndicator size="small" color="#16a34a" />
+                        ) : (
+                          <Text style={s.undoActionText}>בטל סימון ✓</Text>
+                        )}
+                      </View>
+                    </Pressable>
+                  ) : (
+                    <>
+                      {/* Primary: סמן כבוצע */}
+                      <Pressable
+                        onPress={handleToggle}
+                        disabled={isToggling || isPostponing}
+                        accessible
+                        accessibilityRole="button"
+                        accessibilityLabel="סמן כבוצע"
+                        style={({ pressed }) => ({
+                          opacity: pressed || isToggling ? 0.75 : 1,
+                        })}
                       >
-                        {formatDate(dueTs, task.hasTime)}
-                      </Text>
-                    </DetailRow>
-                  ) : null}
+                        <View style={s.primaryActionButton}>
+                          {isToggling ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Text style={s.primaryActionText}>סמן כבוצע</Text>
+                          )}
+                        </View>
+                      </Pressable>
 
-                  {/* Category (Hebrew only) */}
-                  {categoryLabel ? (
-                    <DetailRow icon="label-outline">
-                      <Text
-                        style={[s.detailText, { textAlign: HEB_TEXT_ALIGN }]}
-                      >
-                        {categoryLabel}
-                      </Text>
-                    </DetailRow>
-                  ) : null}
+                      {/* Secondary row: דחה למחר + מחק */}
+                      {showPostpone || isDeletable ? (
+                        <View style={s.secondaryActionsRow}>
+                          {showPostpone ? (
+                            <Pressable
+                              onPress={handlePostpone}
+                              disabled={isPostponing || isToggling}
+                              accessible
+                              accessibilityRole="button"
+                              accessibilityLabel="דחה למחר"
+                              style={({ pressed }) => ({
+                                flex: 1,
+                                opacity: pressed || isPostponing ? 0.75 : 1,
+                              })}
+                            >
+                              <View style={s.secondaryPostponeButton}>
+                                {isPostponing ? (
+                                  <ActivityIndicator
+                                    size="small"
+                                    color="#0284c7"
+                                  />
+                                ) : (
+                                  <Text style={s.secondaryPostponeText}>
+                                    דחה למחר
+                                  </Text>
+                                )}
+                              </View>
+                            </Pressable>
+                          ) : null}
 
-                  {/* Creator + assignees */}
-                  <AssignmentSection
-                    creatorProfile={task.creatorProfile ?? null}
-                    currentUserIsCreator={task.currentUserIsCreator}
-                    assignees={task.assignees}
-                    currentUserId={task.currentUserId ?? null}
-                  />
+                          {isDeletable ? (
+                            <Pressable
+                              onPress={handleDelete}
+                              disabled={
+                                isToggling || isPostponing || isDeleting
+                              }
+                              accessible
+                              accessibilityRole="button"
+                              accessibilityLabel="מחק משימה"
+                              style={({ pressed }) => ({
+                                flex: 1,
+                                opacity: pressed || isDeleting ? 0.75 : 1,
+                              })}
+                            >
+                              <View style={s.deleteActionButton}>
+                                {isDeleting ? (
+                                  <ActivityIndicator
+                                    size="small"
+                                    color="#dc2626"
+                                  />
+                                ) : (
+                                  <Text style={s.deleteActionText}>מחק</Text>
+                                )}
+                              </View>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      ) : null}
+                    </>
+                  )}
+                </View>
 
-                  {/* Notes */}
-                  {task.description ? (
-                    <DetailRow icon="notes">
+                {/* ── Scrollable content ── */}
+                <ScrollView
+                  style={s.detailsScroll}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{
+                    paddingBottom: Math.max(insets.bottom, 16),
+                  }}
+                >
+                  <View style={s.detailsCard}>
+                    {/* Due date */}
+                    {dueTs ? (
+                      <DetailRow icon="event">
+                        <Text
+                          style={[s.detailText, { textAlign: HEB_TEXT_ALIGN }]}
+                        >
+                          {formatDate(dueTs, task.hasTime)}
+                        </Text>
+                      </DetailRow>
+                    ) : null}
+
+                    {/* Category (Hebrew only) */}
+                    {categoryLabel ? (
+                      <DetailRow icon="label-outline">
+                        <Text
+                          style={[s.detailText, { textAlign: HEB_TEXT_ALIGN }]}
+                        >
+                          {categoryLabel}
+                        </Text>
+                      </DetailRow>
+                    ) : null}
+
+                    {/* Creator + assignees */}
+                    <AssignmentSection
+                      creatorProfile={task.creatorProfile ?? null}
+                      currentUserIsCreator={task.currentUserIsCreator}
+                      assignees={task.assignees}
+                      currentUserId={task.currentUserId ?? null}
+                    />
+
+                    {/* Notes */}
+                    {task.description ? (
+                      <DetailRow icon="notes">
+                        <Text
+                          style={[
+                            s.detailText,
+                            { textAlign: HEB_TEXT_ALIGN, lineHeight: 20 },
+                          ]}
+                        >
+                          {task.description}
+                        </Text>
+                      </DetailRow>
+                    ) : null}
+                  </View>
+
+                  {/* Subtasks — simple list, no toggleable circles */}
+                  {task.subtasks && task.subtasks.length > 0 ? (
+                    <View style={s.subtasksCard}>
                       <Text
                         style={[
-                          s.detailText,
-                          { textAlign: HEB_TEXT_ALIGN, lineHeight: 20 },
+                          s.subtasksHeader,
+                          { textAlign: HEB_TEXT_ALIGN },
                         ]}
                       >
-                        {task.description}
+                        {`תתי־משימות (${task.subtasks.filter((sub) => sub.completed).length}/${task.subtasks.length})`}
                       </Text>
-                    </DetailRow>
+                      {task.subtasks.map((sub) => (
+                        <View
+                          key={sub.id}
+                          style={[s.subtaskRow, { flexDirection: HEB_ROW }]}
+                        >
+                          <Text
+                            style={[
+                              s.subtaskBullet,
+                              {
+                                color: sub.completed ? '#22c55e' : '#cbd5e1',
+                              },
+                            ]}
+                          >
+                            {sub.completed ? '✓' : '–'}
+                          </Text>
+                          <Text
+                            style={[
+                              s.subtaskText,
+                              {
+                                textAlign: HEB_TEXT_ALIGN,
+                                color: sub.completed ? '#94a3b8' : '#334155',
+                                textDecorationLine: sub.completed
+                                  ? 'line-through'
+                                  : 'none',
+                              },
+                            ]}
+                          >
+                            {sub.title}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
                   ) : null}
-                </View>
-
-                {/* Subtasks — simple list, no toggleable circles */}
-                {task.subtasks && task.subtasks.length > 0 ? (
-                  <View style={s.subtasksCard}>
-                    <Text
-                      style={[s.subtasksHeader, { textAlign: HEB_TEXT_ALIGN }]}
-                    >
-                      {`תתי־משימות (${task.subtasks.filter((sub) => sub.completed).length}/${task.subtasks.length})`}
-                    </Text>
-                    {task.subtasks.map((sub) => (
-                      <View
-                        key={sub.id}
-                        style={[s.subtaskRow, { flexDirection: HEB_ROW }]}
-                      >
-                        <Text
-                          style={[
-                            s.subtaskBullet,
-                            { color: sub.completed ? '#22c55e' : '#cbd5e1' },
-                          ]}
-                        >
-                          {sub.completed ? '✓' : '–'}
-                        </Text>
-                        <Text
-                          style={[
-                            s.subtaskText,
-                            {
-                              textAlign: HEB_TEXT_ALIGN,
-                              color: sub.completed ? '#94a3b8' : '#334155',
-                              textDecorationLine: sub.completed
-                                ? 'line-through'
-                                : 'none',
-                            },
-                          ]}
-                        >
-                          {sub.title}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-              </ScrollView>
-
-              {/* ── Sticky footer: quick actions ── */}
-              <View
-                style={[
-                  s.actions,
-                  {
-                    flexDirection: HEB_ROW,
-                    paddingBottom: Math.max(insets.bottom, 16),
-                  },
-                ]}
-              >
-                <ActionBtn
-                  icon="update"
-                  label="דחה למחר"
-                  onPress={handlePostpone}
-                />
-                <ActionBtn
-                  icon={task.completed ? 'undo' : 'check-circle-outline'}
-                  label={task.completed ? 'בטל סימון' : 'סמן כבוצע'}
-                  variant="primary"
-                  onPress={handleToggle}
-                />
-                {isDeletable ? (
-                  <ActionBtn
-                    icon="delete-outline"
-                    label="מחק"
-                    variant="danger"
-                    onPress={handleDelete}
-                  />
-                ) : null}
-              </View>
-            </View>
-          )}
+                </ScrollView>
+              </>
+            )}
+          </View>
         </Animated.View>
       </View>
     </Modal>
@@ -589,8 +716,6 @@ const s = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: '#d1d5db',
   },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  sheetBody: { flex: 1 },
 
   closeBtn: {
     padding: 4,
@@ -687,21 +812,91 @@ const s = StyleSheet.create({
   },
   subtaskText: { flex: 1, fontSize: 14 },
 
-  actions: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    gap: 8,
-    justifyContent: 'flex-start',
+  actionBlock: {
+    width: '100%',
+    paddingHorizontal: 32,
+    marginTop: 12,
+    marginBottom: 14,
   },
-  actionBtn: {
-    flex: 1,
-    flexDirection: 'column',
+  secondaryActionsRow: {
+    width: '100%',
+    flexDirection: 'row-reverse',
+    gap: 10,
+    marginTop: 10,
+    alignItems: 'center',
+  },
+
+  primaryActionButton: {
+    width: '100%',
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: '#36a9e2',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 12,
-    borderRadius: 12,
-    minHeight: 60,
+    paddingHorizontal: 18,
+    shadowOpacity: 0,
+    elevation: 0,
   },
-  actionBtnLabel: { fontSize: 12, fontWeight: '600' },
+  primaryActionText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: 'rtl',
+  },
+
+  undoActionButton: {
+    width: '100%',
+    minHeight: 52,
+    borderRadius: 18,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1.5,
+    borderColor: '#bbf7d0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  undoActionText: {
+    color: '#16a34a',
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: 'rtl',
+  },
+
+  secondaryPostponeButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: '#eff8fd',
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  secondaryPostponeText: {
+    color: '#0284c7',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: 'rtl',
+  },
+
+  deleteActionButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  deleteActionText: {
+    color: '#dc2626',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: 'rtl',
+  },
 });

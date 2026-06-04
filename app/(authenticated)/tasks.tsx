@@ -1010,8 +1010,8 @@ export default function TasksScreen() {
     const shared = isSharedTask(task, currentUserId);
     const title = shared ? 'למחוק את המשימה המשותפת?' : 'למחוק את המשימה?';
     const message = shared
-      ? 'המשימה תוסר גם אצל מי ששיתפת איתו. אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.'
-      : 'אפשר לשחזר אותה מ׳נמחקו לאחרונה׳ תוך 30 יום.';
+      ? 'המשימה תוסר לכל המשתתפים. אפשר לשחזר אותה מ״נמחקו לאחרונה״ בהגדרות.'
+      : 'המשימה תוסר. אפשר לשחזר אותה מ״נמחקו לאחרונה״ בהגדרות.';
     Alert.alert(title, message, [
       { text: 'ביטול', style: 'cancel' },
       {
