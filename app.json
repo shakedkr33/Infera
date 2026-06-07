@@ -16,6 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.shakedkr.inyomi",
+      "buildNumber": "2",
       "infoPlist": {
         "ExpoLocalization_supportsRTL": true,
         "ExpoLocalization_forcesRTL": true,
