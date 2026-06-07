@@ -337,10 +337,16 @@ export const updateMyProfile = mutation({
       // listMyFamilyContacts reads from, causing entity rows to land in the wrong space.
       const spaceId = await resolveMySpaceId(ctx, userId);
       console.log(
-        '[PROFILE SYNC] resolveMySpaceId result:',
-        spaceId,
-        'contacts count:',
-        resolvedContacts.length
+        '[PROFILE SYNC] ownerUserId:', userId,
+        '| resolvedSpaceId:', spaceId,
+        '| contacts count:', resolvedContacts.length,
+        '| contacts:', JSON.stringify(
+          resolvedContacts.map((c) => ({
+            name: (c as Record<string, unknown>).name,
+            type: (c as Record<string, unknown>).type,
+            hasPhone: !!(c as Record<string, unknown>).selectedPhoneNumber,
+          }))
+        )
       );
       if (spaceId) {
         // Fetch all current members rows for this space to detect existing phone entries
@@ -348,6 +354,13 @@ export const updateMyProfile = mutation({
           .query('members')
           .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
           .collect();
+
+        console.log(
+          '[PROFILE SYNC] existingMembers in space before sync:',
+          existingMembers
+            .filter((m) => m.kind === 'entity' || m.displayName)
+            .map((m) => ({ id: m._id, displayName: m.displayName, kind: m.kind, memberType: m.memberType }))
+        );
 
         // FIXED: kind: 'entity' stamped on all family member inserts and updates
         // (rows without kind field are handled by resolveKind() for backward-compat)
@@ -360,9 +373,14 @@ export const updateMyProfile = mutation({
           console.log(
             '[PROFILE SYNC] processing contact:',
             contact.name,
-            'isManual:',
-            isManual
+            '| type:', (contact as Record<string, unknown>).type,
+            '| isManual:', isManual
           );
+
+          const memberType =
+            (contact.type as 'person' | 'pet' | undefined) === 'pet'
+              ? ('pet' as const)
+              : ('person' as const);
 
           if (isManual) {
             // Manual member — no phone, dedup by displayName within this space.
@@ -371,15 +389,24 @@ export const updateMyProfile = mutation({
             );
             console.log(
               '[PROFILE SYNC] manual member existing row:',
-              existing?._id ?? 'none'
+              existing?._id ?? 'none',
+              '| displayName match target:', contact.name
             );
             if (existing) {
               await ctx.db.patch(existing._id, {
                 kind: 'entity', // stamp kind on pre-existing rows opportunistically
                 displayName: contact.name ?? existing.displayName,
                 color: contact.color ?? existing.color,
+                memberType,
               });
               touchedEntityIds.add(existing._id);
+              console.log(
+                '[PROFILE SYNC] PATCHED entity row:',
+                existing._id,
+                '| name:', contact.name,
+                '| memberType:', memberType,
+                '| spaceId:', spaceId
+              );
             } else {
               const newId = await ctx.db.insert('members', {
                 spaceId,
@@ -389,8 +416,20 @@ export const updateMyProfile = mutation({
                 displayName: contact.name,
                 color: contact.color,
                 inviteStatus: 'none',
+                memberType,
               });
               touchedEntityIds.add(newId);
+              console.log(
+                '[PROFILE SYNC] INSERTED new entity row:',
+                newId,
+                '| table: members',
+                '| name:', contact.name,
+                '| memberType:', memberType,
+                '| role: member | kind: entity | isManual: true',
+                '| ownerUserId:', userId,
+                '| spaceId:', spaceId,
+                '| inviteStatus: none'
+              );
             }
             continue;
           }
@@ -430,8 +469,17 @@ export const updateMyProfile = mutation({
               userId: matchedId ?? existing.userId,
               displayName: contact.name ?? existing.displayName,
               color: contact.color ?? existing.color,
+              memberType,
             });
             touchedEntityIds.add(existing._id);
+            console.log(
+              '[PROFILE SYNC] PATCHED phone-contact row:',
+              existing._id,
+              '| name:', contact.name,
+              '| memberType:', memberType,
+              '| phone:', normalizedPhone,
+              '| spaceId:', spaceId
+            );
           } else {
             const newId = await ctx.db.insert('members', {
               spaceId,
@@ -444,8 +492,20 @@ export const updateMyProfile = mutation({
               inviteStatus: contact.inviteStatus ?? 'none',
               matchedUserId: matchedId,
               userId: matchedId,
+              memberType,
             });
             touchedEntityIds.add(newId);
+            console.log(
+              '[PROFILE SYNC] INSERTED phone-contact row:',
+              newId,
+              '| table: members',
+              '| name:', contact.name,
+              '| memberType:', memberType,
+              '| phone:', normalizedPhone,
+              '| ownerUserId:', userId,
+              '| spaceId:', spaceId,
+              '| matchedUserId:', matchedId ?? 'none'
+            );
           }
         }
 
@@ -458,9 +518,21 @@ export const updateMyProfile = mutation({
               m.role === 'member' &&
               Boolean(m.displayName));
           if (isEntityRow && !touchedEntityIds.has(m._id)) {
+            console.log(
+              '[PROFILE SYNC] ORPHAN DELETE:',
+              m._id,
+              '| displayName:', m.displayName,
+              '| memberType:', m.memberType,
+              '| kind:', m.kind
+            );
             await ctx.db.delete(m._id);
           }
         }
+
+        console.log(
+          '[PROFILE SYNC] sync complete | spaceId:', spaceId,
+          '| touchedIds:', [...touchedEntityIds]
+        );
       }
     }
   },

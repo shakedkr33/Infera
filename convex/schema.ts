@@ -75,6 +75,9 @@ export default defineSchema({
     inviteStatus: v.optional(
       v.union(v.literal('none'), v.literal('invited'), v.literal('joined'))
     ),
+    // ── Profile type: distinguishes pets from people in entity rows ───────────
+    // Absent on rows created before this field was added; treat absent as 'person'.
+    memberType: v.optional(v.union(v.literal('person'), v.literal('pet'))),
   })
     .index('by_space', ['spaceId'])
     .index('by_user', ['userId'])

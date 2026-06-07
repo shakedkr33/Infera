@@ -202,7 +202,27 @@ export const listMyFamilyContacts = query({
     // always resolve the same spaceId for the same user.
     const spaceId = await resolveMySpaceId(ctx, userId);
 
+    console.log(
+      '[LIST CONTACTS] userId:', userId,
+      '| resolvedSpaceId:', spaceId ?? 'null — no space found'
+    );
+
     if (!spaceId) return { selfEntityId: null, members: [] };
+
+    // Inspect the caller's access/entity rows so we can diagnose wrong-space issues.
+    const callerRows = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    console.log(
+      '[LIST CONTACTS] caller membership rows:',
+      callerRows.map((r) => ({
+        id: r._id,
+        spaceId: r.spaceId,
+        role: r.role,
+        kind: r.kind ?? resolveKind(r),
+      }))
+    );
 
     // Primary path: use by_kind index for rows that have kind stamped
     const indexedEntities = await ctx.db
@@ -221,6 +241,17 @@ export const listMyFamilyContacts = query({
 
     const unstampedEntities = allRows.filter(
       (r) => r.kind === undefined && resolveKind(r) === 'entity'
+    );
+
+    console.log(
+      '[LIST CONTACTS] indexedEntities (kind=entity):', indexedEntities.length,
+      '| unstampedEntities:', unstampedEntities.length,
+      '| rows:', indexedEntities.map((r) => ({
+        id: r._id,
+        displayName: r.displayName,
+        memberType: r.memberType,
+        kind: r.kind,
+      }))
     );
 
     // Merge, deduplicate by _id
@@ -255,6 +286,7 @@ export const listMyFamilyContacts = query({
       maskedPhone: string | undefined;
       matchedUserId: Id<'users'> | undefined;
       inviteStatus: 'joined';
+      memberType: 'person';
     } | null = null;
 
     if (adminAccessRow && adminAccessRow.userId !== userId) {
@@ -280,9 +312,51 @@ export const listMyFamilyContacts = query({
           maskedPhone: adminPhoneLocal ? maskPhone(adminPhoneLocal) : undefined,
           matchedUserId: adminAccessRow.userId,
           inviteStatus: 'joined',
+          memberType: 'person',
         };
       }
     }
+
+    const enrichedEntities = await Promise.all(
+      entities.map(async (m) => {
+        const localPhone = m.selectedPhoneNumber
+          ? e164ToLocal(m.selectedPhoneNumber)
+          : undefined;
+        let displayName = m.displayName?.trim() || undefined;
+        if (!displayName && m.matchedUserId) {
+          const user = await ctx.db.get(m.matchedUserId);
+          displayName =
+            (user as { fullName?: string } | null)?.fullName?.trim() ||
+            undefined;
+        }
+        return {
+          _id: m._id,
+          selectedPhoneNumber: m.selectedPhoneNumber,
+          maskedPhone: localPhone ? maskPhone(localPhone) : undefined,
+          matchedUserId: m.matchedUserId,
+          inviteStatus: m.inviteStatus,
+          displayName,
+          color: m.color,
+          // Rows without memberType were created before this field existed — treat as 'person'.
+          memberType: (m.memberType ?? 'person') as 'person' | 'pet',
+        };
+      })
+    );
+
+    const finalMembers = [
+      ...(adminEntry ? [adminEntry] : []),
+      ...enrichedEntities,
+    ];
+
+    console.log(
+      '[LIST CONTACTS] returning members to client:',
+      finalMembers.map((m) => ({
+        id: m._id,
+        displayName: m.displayName,
+        memberType: m.memberType,
+        hasPhone: !!m.selectedPhoneNumber,
+      }))
+    );
 
     return {
       selfEntityId: selfEntityRow?._id ?? null,
@@ -294,34 +368,7 @@ export const listMyFamilyContacts = query({
             matchedUserId: selfEntityRow.matchedUserId,
           }
         : null,
-      members: [
-        ...(adminEntry ? [adminEntry] : []),
-        // Enrich each entity row: for matched members whose displayName is missing,
-        // fall back to the linked user's fullName so clients always receive a usable name.
-        ...(await Promise.all(
-          entities.map(async (m) => {
-            const localPhone = m.selectedPhoneNumber
-              ? e164ToLocal(m.selectedPhoneNumber)
-              : undefined;
-            let displayName = m.displayName?.trim() || undefined;
-            if (!displayName && m.matchedUserId) {
-              const user = await ctx.db.get(m.matchedUserId);
-              displayName =
-                (user as { fullName?: string } | null)?.fullName?.trim() ||
-                undefined;
-            }
-            return {
-              _id: m._id,
-              selectedPhoneNumber: m.selectedPhoneNumber,
-              maskedPhone: localPhone ? maskPhone(localPhone) : undefined,
-              matchedUserId: m.matchedUserId,
-              inviteStatus: m.inviteStatus,
-              displayName,
-              color: m.color,
-            };
-          })
-        )),
-      ],
+      members: finalMembers,
     };
   },
 });

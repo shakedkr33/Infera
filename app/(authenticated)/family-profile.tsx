@@ -237,10 +237,12 @@ export default function FamilyProfileScreen() {
   // FIXED: admin entry now includes phone from users record, shown as linked user not manual.
   // sourceType derived from selectedPhoneNumber so FamilyMemberManagementCard shows the
   // correct secondary label (masked phone) instead of "פרופיל ידני".
+  // FIXED: pets visible to non-admin members — allServerMembers now carries memberType
+  // from the database; non-admin view filters out pets here and shows them in the pets section.
   const displayMembers: FamilyMember[] = isAdmin
     ? mergedPersonMembers
     : allServerMembers
-        .filter((m) => m._id !== selfEntityId)
+        .filter((m) => m._id !== selfEntityId && m.memberType !== 'pet')
         .map((contact) => {
           const phone = contact.selectedPhoneNumber;
           return {
@@ -256,6 +258,24 @@ export default function FamilyProfileScreen() {
               contact.maskedPhone ?? (phone ? maskPhone(phone) : undefined),
           };
         });
+
+  // FIXED: non-admin members now see pets in the pets section.
+  // Admin reads from local editor state (petMembers) so in-progress edits are reflected.
+  // Non-admin reads from the server query filtered to memberType === 'pet'.
+  const displayPetMembers: FamilyMember[] = isAdmin
+    ? petMembers
+    : allServerMembers
+        .filter((m) => m.memberType === 'pet')
+        .map((contact) => ({
+          id: contact._id,
+          name: contact.displayName ?? '',
+          color: contact.color ?? '#36a9e2',
+          type: 'pet' as const,
+          selectedPhoneNumber: contact.selectedPhoneNumber,
+          matchedUserId: contact.matchedUserId,
+          inviteStatus: contact.inviteStatus as FamilyMember['inviteStatus'],
+          sourceType: 'manual' as const,
+        }));
 
   // Look up the real Convex entity row _id from serverFamilyContacts for a given local member.
   // Used to pass to removeMember so removeEntityMember is called with the correct Convex ID,
@@ -672,7 +692,7 @@ export default function FamilyProfileScreen() {
             הוסיפו את חיית המחמד שלכם כדי לעקוב אחרי כל המשימות והאירועים שלה
           </Text>
           <View className="bg-white rounded-3xl p-5 mb-4" style={shadows.soft}>
-            {petMembers.length === 0 && !isAddingNewPet ? (
+            {displayPetMembers.length === 0 && !isAddingNewPet ? (
               <View className="items-center py-3" style={styles.dashedBorder}>
                 <MaterialIcons name="pets" size={38} color="#d1d5db" />
                 <Text className="text-gray-400 font-semibold mt-2 mb-1 text-center">
@@ -704,7 +724,7 @@ export default function FamilyProfileScreen() {
             ) : (
               <>
                 {/* FIXED: pet edit form only for admins */}
-                {petMembers.map((member) =>
+                {displayPetMembers.map((member) =>
                   isAdmin && editingId === member.id && pendingMember ? (
                     renderEditCard(member)
                   ) : (
