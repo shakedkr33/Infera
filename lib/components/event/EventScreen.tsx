@@ -225,6 +225,18 @@ export default function EventScreen({
   // (registered once on mount) always calls the latest version of the function.
   const handleBackRef = useRef<() => void>(() => undefined);
 
+  // Track whether the user has manually changed end date / end time in this
+  // session. When false the field is still "auto-generated" and we can safely
+  // overwrite it whenever start changes. When true we must preserve the user's
+  // choice. Initialised to true in edit-mode (existing event data is treated as
+  // intentional) and false in create-mode (fields start as auto-generated).
+  const endDateUserEdited = useRef<boolean>(
+    initialData ? initialData.endDate !== undefined : false
+  );
+  const endTimeUserEdited = useRef<boolean>(
+    initialData ? initialData.endTime !== undefined : false
+  );
+
   // FIXED: success sheet shown after personal event save
   const [savedEvent, setSavedEvent] = useState<EventData | null>(null);
   const [savedEventId, setSavedEventId] = useState<string | null>(null);
@@ -279,6 +291,8 @@ export default function EventScreen({
           setSavedEvent({ ...event });
           setSavedEventId(newEventId);
           setEvent(makeEmptyEvent(selectedDate));
+          endDateUserEdited.current = false;
+          endTimeUserEdited.current = false;
         }
       } else {
         // Details mode without onSave — just go back
@@ -401,8 +415,13 @@ export default function EventScreen({
       const base = makeEmptyEvent(selectedDate);
       setEvent(initialData ? { ...base, ...initialData } : base);
       setIsDirty(false);
+      // Restore edit-tracking flags to the initial state for this session
+      endDateUserEdited.current = initialData?.endDate !== undefined;
+      endTimeUserEdited.current = initialData?.endTime !== undefined;
     } else {
       setEvent(makeEmptyEvent(selectedDate));
+      endDateUserEdited.current = false;
+      endTimeUserEdited.current = false;
     }
     goBack();
   };
@@ -506,14 +525,79 @@ export default function EventScreen({
                 isAllDay={event.isAllDay}
                 onChange={(updates) => {
                   const patch: Partial<EventData> = {};
-                  if (updates.startDate !== undefined)
-                    patch.date = updates.startDate;
-                  if (updates.startTime !== undefined)
-                    patch.startTime = updates.startTime;
+
+                  // ── Track user intent on end fields ──────────────────────
+                  // Only mark as "manually edited" when the user explicitly
+                  // changes the end date/time independently (not when a day-chip
+                  // sets both startDate + endDate simultaneously).
+                  if (
+                    updates.endDate !== undefined &&
+                    updates.startDate === undefined
+                  ) {
+                    endDateUserEdited.current = true;
+                  }
+                  if (
+                    updates.endTime !== undefined &&
+                    updates.startTime === undefined
+                  ) {
+                    endTimeUserEdited.current = true;
+                  }
+
+                  // Apply explicit end values from the update
                   if (updates.endDate !== undefined)
                     patch.endDate = updates.endDate;
                   if (updates.endTime !== undefined)
                     patch.endTime = updates.endTime;
+
+                  // ── Auto-fill end time (+1 h) when start time changes ──
+                  if (updates.startTime !== undefined) {
+                    patch.startTime = updates.startTime;
+                    if (
+                      !endTimeUserEdited.current &&
+                      updates.endTime === undefined
+                    ) {
+                      const startDateForCalc =
+                        updates.startDate ?? event.date;
+                      const { endDate: autoEndDate, endTime: autoEndTime } =
+                        applyDuration(startDateForCalc, updates.startTime, 60);
+                      patch.endTime = autoEndTime;
+                      if (!endDateUserEdited.current) {
+                        patch.endDate = autoEndDate;
+                      }
+                    }
+                  }
+
+                  // ── Auto-fill end date when start date changes ─────────
+                  if (updates.startDate !== undefined) {
+                    patch.date = updates.startDate;
+                    if (
+                      !endDateUserEdited.current &&
+                      updates.endDate === undefined
+                    ) {
+                      if (!endTimeUserEdited.current && event.startTime) {
+                        // Both end date and end time are auto-generated →
+                        // recalculate fully so cross-midnight stays correct.
+                        const timeToUse =
+                          patch.startTime ?? event.startTime;
+                        const {
+                          endDate: autoEndDate,
+                          endTime: autoEndTime,
+                        } = applyDuration(
+                          updates.startDate,
+                          timeToUse,
+                          60
+                        );
+                        patch.endDate = autoEndDate;
+                        // Only set endTime if the startTime block didn't already
+                        if (patch.endTime === undefined)
+                          patch.endTime = autoEndTime;
+                      } else {
+                        // End time was user-set → just slide end date to match
+                        patch.endDate = updates.startDate;
+                      }
+                    }
+                  }
+
                   if (updates.isAllDay !== undefined) {
                     patch.isAllDay = updates.isAllDay;
                     if (updates.isAllDay) {
@@ -524,6 +608,7 @@ export default function EventScreen({
                       patch.reminders = [makeReminder('hour_before')];
                     }
                   }
+
                   updateEvent(patch);
                 }}
               />
