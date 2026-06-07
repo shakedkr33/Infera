@@ -34,6 +34,17 @@ interface SubtasksSectionProps {
   onAllowEditingChange: (v: boolean) => void;
   /** Called every time the pending (not-yet-committed) draft title changes */
   onPendingDraftChange?: (title: string) => void;
+  /**
+   * When false, subtasks are rendered read-only (participant mode with toggle OFF).
+   * Defaults to true for backward compatibility.
+   */
+  canEditSubtasks?: boolean;
+  /**
+   * When false, the "משתתפים יכולים לערוך" toggle is hidden.
+   * Only the task creator should see/change this.
+   * Defaults to true for backward compatibility.
+   */
+  showToggle?: boolean;
 }
 
 function createSubtaskId(): string {
@@ -125,6 +136,8 @@ export function SubtasksSection({
   onSubtasksChange,
   onAllowEditingChange,
   onPendingDraftChange,
+  canEditSubtasks = true,
+  showToggle = true,
 }: SubtasksSectionProps): React.JSX.Element {
   const [draftTitle, setDraftTitle] = useState('');
   const [focusDraftTick, setFocusDraftTick] = useState(0);
@@ -253,80 +266,116 @@ export function SubtasksSection({
     item: st,
     drag,
     isActive,
-  }: RenderItemParams<SubTask>) => (
-    <OpacityDecorator activeOpacity={0.75}>
-      <View style={[s.subtaskRow, isActive && s.subtaskRowActive]}>
-        {/* Drag handle – RTL: appears visually on the left */}
-        <TouchableOpacity
-          onPressIn={drag}
-          style={s.dragHandle}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="גרור לסידור מחדש"
-          hitSlop={6}
-        >
-          <MaterialIcons name="drag-handle" size={22} color="#b0bec5" />
-        </TouchableOpacity>
+  }: RenderItemParams<SubTask>) => {
+    if (!canEditSubtasks) {
+      // Read-only row for participants when toggle is OFF
+      return (
+        <View style={s.subtaskRow}>
+          <View style={s.dragHandlePlaceholder} />
+          <View
+            style={[s.checkbox, st.completed && s.checkboxChecked]}
+            accessible={true}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: st.completed }}
+            accessibilityLabel={st.title || 'תת־משימה'}
+          >
+            {st.completed ? (
+              <MaterialIcons name="check" size={14} color="#fff" />
+            ) : null}
+          </View>
+          <TextInput
+            style={[s.subtaskInput, st.completed && s.subtaskInputCompleted]}
+            value={st.title}
+            editable={false}
+            textAlign="right"
+            accessible={true}
+            accessibilityLabel={st.title || 'תת־משימה'}
+          />
+          <SubtaskAttachmentPreview
+            attachment={st.attachment}
+            onImageThumbnailPress={(uri) => setImagePreviewUri(uri)}
+          />
+          <View style={s.imageBtnPlaceholder} />
+          <View style={s.removeBtnPlaceholder} />
+        </View>
+      );
+    }
 
-        <Pressable
-          onPress={() => toggleSubtask(st.id)}
-          style={[s.checkbox, st.completed && s.checkboxChecked]}
-          accessible={true}
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: st.completed }}
-          accessibilityLabel={st.title || 'תת־משימה'}
-        >
-          {st.completed ? (
-            <MaterialIcons name="check" size={14} color="#fff" />
-          ) : null}
-        </Pressable>
+    return (
+      <OpacityDecorator activeOpacity={0.75}>
+        <View style={[s.subtaskRow, isActive && s.subtaskRowActive]}>
+          {/* Drag handle – RTL: appears visually on the left */}
+          <TouchableOpacity
+            onPressIn={drag}
+            style={s.dragHandle}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="גרור לסידור מחדש"
+            hitSlop={6}
+          >
+            <MaterialIcons name="drag-handle" size={22} color="#b0bec5" />
+          </TouchableOpacity>
 
-        <TextInput
-          style={[s.subtaskInput, st.completed && s.subtaskInputCompleted]}
-          value={st.title}
-          onChangeText={(text) => updateSubtask(st.id, text)}
-          placeholder="הוספת תת־משימה..."
-          placeholderTextColor="#9ca3af"
-          textAlign="right"
-          returnKeyType="done"
-          onSubmitEditing={() => setFocusDraftTick((tick) => tick + 1)}
-          accessible={true}
-          accessibilityLabel={st.title || 'תת־משימה'}
-        />
+          <Pressable
+            onPress={() => toggleSubtask(st.id)}
+            style={[s.checkbox, st.completed && s.checkboxChecked]}
+            accessible={true}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: st.completed }}
+            accessibilityLabel={st.title || 'תת־משימה'}
+          >
+            {st.completed ? (
+              <MaterialIcons name="check" size={14} color="#fff" />
+            ) : null}
+          </Pressable>
 
-        <SubtaskAttachmentPreview
-          attachment={st.attachment}
-          onImageThumbnailPress={(uri) => setImagePreviewUri(uri)}
-        />
+          <TextInput
+            style={[s.subtaskInput, st.completed && s.subtaskInputCompleted]}
+            value={st.title}
+            onChangeText={(text) => updateSubtask(st.id, text)}
+            placeholder="הוספת תת־משימה..."
+            placeholderTextColor="#9ca3af"
+            textAlign="right"
+            returnKeyType="done"
+            onSubmitEditing={() => setFocusDraftTick((tick) => tick + 1)}
+            accessible={true}
+            accessibilityLabel={st.title || 'תת־משימה'}
+          />
 
-        <Pressable
-          onPress={() => onAttachButtonPress(st)}
-          style={s.imageBtn}
-          hitSlop={10}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel={
-            st.attachment?.localUri || st.attachment?.storageId
-              ? 'הסר או החלף קובץ'
-              : 'הוסף קובץ או תמונה'
-          }
-        >
-          <MaterialIcons name="attach-file" size={22} color={PRIMARY} />
-        </Pressable>
+          <SubtaskAttachmentPreview
+            attachment={st.attachment}
+            onImageThumbnailPress={(uri) => setImagePreviewUri(uri)}
+          />
 
-        <Pressable
-          onPress={() => requestRemoveSubtask(st)}
-          style={s.removeBtn}
-          hitSlop={10}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="מחיקת תת־משימה"
-        >
-          <MaterialIcons name="close" size={18} color="#94a3b8" />
-        </Pressable>
-      </View>
-    </OpacityDecorator>
-  );
+          <Pressable
+            onPress={() => onAttachButtonPress(st)}
+            style={s.imageBtn}
+            hitSlop={10}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel={
+              st.attachment?.localUri || st.attachment?.storageId
+                ? 'הסר או החלף קובץ'
+                : 'הוסף קובץ או תמונה'
+            }
+          >
+            <MaterialIcons name="attach-file" size={22} color={PRIMARY} />
+          </Pressable>
+
+          <Pressable
+            onPress={() => requestRemoveSubtask(st)}
+            style={s.removeBtn}
+            hitSlop={10}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="מחיקת תת־משימה"
+          >
+            <MaterialIcons name="close" size={18} color="#94a3b8" />
+          </Pressable>
+        </View>
+      </OpacityDecorator>
+    );
+  };
 
   return (
     <View>
@@ -388,37 +437,49 @@ export function SubtasksSection({
       </Modal>
 
       <View style={s.header}>
-        <Pressable
-          style={s.addBtn}
-          onPress={() => {
-            setFocusDraftTick((tick) => tick + 1);
-          }}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="הוסף תת־משימה"
-        >
-          <MaterialIcons name="add-circle" size={20} color={PRIMARY} />
-          <Text style={s.addBtnText}>+ הוסף תת־משימה</Text>
-        </Pressable>
+        {canEditSubtasks ? (
+          <Pressable
+            style={s.addBtn}
+            onPress={() => {
+              setFocusDraftTick((tick) => tick + 1);
+            }}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="הוסף תת־משימה"
+          >
+            <MaterialIcons name="add-circle" size={20} color={PRIMARY} />
+            <Text style={s.addBtnText}>+ הוסף תת־משימה</Text>
+          </Pressable>
+        ) : (
+          <View />
+        )}
         <Text style={s.title}>תתי־משימות</Text>
       </View>
 
-      <View style={s.toggleRow}>
-        <Switch
-          value={allowEditing}
-          onValueChange={onAllowEditingChange}
-          trackColor={{ true: PRIMARY, false: '#e2e8f0' }}
-          thumbColor="#fff"
-          accessible={true}
-          accessibilityLabel="משתתפים יכולים לערוך"
-        />
-        <View style={s.toggleTextBlock}>
-          <Text style={s.toggleLabel}>משתתפים יכולים לערוך</Text>
-          <Text style={s.helperText}>
-            מתאים לרשימות קניות או משימות משותפות
-          </Text>
+      {showToggle ? (
+        <View style={s.toggleRow}>
+          <Switch
+            value={allowEditing}
+            onValueChange={onAllowEditingChange}
+            trackColor={{ true: PRIMARY, false: '#e2e8f0' }}
+            thumbColor="#fff"
+            accessible={true}
+            accessibilityLabel="משתתפים יכולים לערוך"
+          />
+          <View style={s.toggleTextBlock}>
+            <Text style={s.toggleLabel}>משתתפים יכולים לערוך</Text>
+            <Text style={s.helperText}>
+              מתאים לרשימות קניות או משימות משותפות
+            </Text>
+          </View>
         </View>
-      </View>
+      ) : null}
+
+      {!canEditSubtasks && subtasks.length > 0 ? (
+        <Text style={s.readOnlyHint}>
+          יוצר/ת המשימה לא אפשר/ה עריכת תתי־משימות
+        </Text>
+      ) : null}
 
       <View style={s.list}>
         {/* DraggableFlatList handles reorder; scrollEnabled=false lets the
@@ -427,43 +488,45 @@ export function SubtasksSection({
           data={subtasks}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          onDragEnd={({ data }) => onSubtasksChange(data)}
+          onDragEnd={canEditSubtasks ? ({ data }) => onSubtasksChange(data) : () => undefined}
           scrollEnabled={false}
-          activationDistance={8}
+          activationDistance={canEditSubtasks ? 8 : 9999}
           disableScrollViewPanResponder={true}
           containerStyle={{ overflow: 'visible' }}
           ItemSeparatorComponent={() => <View style={s.divider} />}
         />
 
-        {/* New subtask draft row */}
-        <View style={s.subtaskRow}>
-          <View style={s.dragHandlePlaceholder} />
-          <Pressable
-            style={s.emptyCheckbox}
-            onPress={commitDraft}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="הוסף תת־משימה"
-          >
-            <MaterialIcons name="add" size={16} color={PRIMARY} />
-          </Pressable>
-          <TextInput
-            ref={draftInputRef}
-            style={s.subtaskInput}
-            value={draftTitle}
-            onChangeText={setDraftTitle}
-            placeholder="הוסיפי תת־משימה..."
-            placeholderTextColor="#9ca3af"
-            textAlign="right"
-            returnKeyType="done"
-            blurOnSubmit={false}
-            onSubmitEditing={commitDraft}
-            accessible={true}
-            accessibilityLabel="הוסיפי תת־משימה"
-          />
-          <View style={s.imageBtnPlaceholder} />
-          <View style={s.removeBtnPlaceholder} />
-        </View>
+        {/* New subtask draft row — hidden in read-only mode */}
+        {canEditSubtasks ? (
+          <View style={s.subtaskRow}>
+            <View style={s.dragHandlePlaceholder} />
+            <Pressable
+              style={s.emptyCheckbox}
+              onPress={commitDraft}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="הוסף תת־משימה"
+            >
+              <MaterialIcons name="add" size={16} color={PRIMARY} />
+            </Pressable>
+            <TextInput
+              ref={draftInputRef}
+              style={s.subtaskInput}
+              value={draftTitle}
+              onChangeText={setDraftTitle}
+              placeholder="הוסיפי תת־משימה..."
+              placeholderTextColor="#9ca3af"
+              textAlign="right"
+              returnKeyType="done"
+              blurOnSubmit={false}
+              onSubmitEditing={commitDraft}
+              accessible={true}
+              accessibilityLabel="הוסיפי תת־משימה"
+            />
+            <View style={s.imageBtnPlaceholder} />
+            <View style={s.removeBtnPlaceholder} />
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -612,6 +675,12 @@ const s = StyleSheet.create({
     textDecorationLine: 'line-through',
   },
   divider: { height: 1, backgroundColor: '#e5e7eb' },
+  readOnlyHint: {
+    fontSize: 11,
+    color: '#94a3b8',
+    textAlign: 'right',
+    marginBottom: 8,
+  },
   previewOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.82)',

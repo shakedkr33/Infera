@@ -513,6 +513,19 @@ function isPersonallyDeletableTask(
   return true;
 }
 
+/**
+ * Returns true if userId is the creator or an active assignee of the task.
+ * Used to gate participant-level read/write access.
+ */
+function isUserParticipantInTask(
+  task: Doc<'tasks'>,
+  userId: Id<'users'>
+): boolean {
+  if (task.createdBy === userId) return true;
+  if (task.assignedTo === userId) return true;
+  return (task.assignedToUserIds ?? []).some((id) => id === userId);
+}
+
 /** When no assignee was chosen in the UI, persist creator as assignee (no orphan tasks). */
 function normalizeAssigneesForWrite(
   fallbackUserId: Id<'users'>,
@@ -1085,6 +1098,10 @@ export const toggleCompleted = mutation({
     const task = await ctx.db.get(id);
     if (!task) throw new Error('משימה לא נמצאה');
 
+    if (!isUserParticipantInTask(task, userId)) {
+      throw new Error('אין הרשאה לעדכן משימה זו');
+    }
+
     const nowCompleted = !task.completed;
     await ctx.db.patch(id, {
       completed: nowCompleted,
@@ -1253,6 +1270,59 @@ export const update = mutation({
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
 
+    const isCreator = existing.createdBy === userId;
+    const isParticipant = isUserParticipantInTask(existing, userId);
+
+    if (!isParticipant) {
+      throw new Error('אין הרשאה לעדכן משימה זו');
+    }
+
+    if (!isCreator) {
+      if (
+        fields.title !== undefined &&
+        fields.title.trim() !== existing.title
+      ) {
+        throw new Error('רק יוצר/ת המשימה יכול/ה לשנות את שם המשימה');
+      }
+      if (
+        fields.category !== undefined &&
+        fields.category !== existing.category
+      ) {
+        throw new Error('רק יוצר/ת המשימה יכול/ה לשנות את קטגוריית המשימה');
+      }
+      if (
+        fields.recurrenceType !== undefined &&
+        fields.recurrenceType !== (existing.recurrenceType ?? 'none')
+      ) {
+        throw new Error('רק יוצר/ת המשימה יכול/ה לשנות את הגדרת החזרה');
+      }
+      if (
+        fields.allowParticipantEditing !== undefined &&
+        fields.allowParticipantEditing !== (existing.allowParticipantEditing ?? false)
+      ) {
+        throw new Error('רק יוצר/ת המשימה יכול/ה לשנות הגדרה זו');
+      }
+      if (subtasks !== undefined && !(existing.allowParticipantEditing ?? false)) {
+        const existingSnap = JSON.stringify(
+          (existing.subtasks ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+          }))
+        );
+        const newSnap = JSON.stringify(
+          (sanitizeSubtasks(subtasks) ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+          }))
+        );
+        if (existingSnap !== newSnap) {
+          throw new Error('יוצר/ת המשימה לא אפשר/ה עריכת תתי־משימות');
+        }
+      }
+    }
+
     validateTaskCategory(fields.category);
     const now = Date.now();
     const cleared = new Set(clearFields ?? []);
@@ -1413,6 +1483,19 @@ export const update = mutation({
         nextMemberIds.length > 0 ? nextMemberIds : undefined;
     }
 
+    if (!isCreator) {
+      // Participants cannot modify task-level reminders — they manage their own
+      // via the separate updateMyTaskReminder mutation.
+      patch.reminderType = existing.reminderType ?? 'none';
+      patch.customReminderAt = existing.customReminderAt;
+      patch.reminders = existing.reminders;
+      // Participants cannot modify assignees
+      patch.assignedTo = existing.assignedTo;
+      patch.assignedToMemberId = existing.assignedToMemberId;
+      patch.assignedToUserIds = existing.assignedToUserIds;
+      patch.assignedToMemberIds = existing.assignedToMemberIds;
+    }
+
     await ctx.db.patch(id, patch);
   },
 });
@@ -1425,6 +1508,16 @@ export const toggleSubtaskCompleted = mutation({
 
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
+
+    if (!isUserParticipantInTask(existing, userId)) {
+      throw new Error('אין הרשאה לעדכן משימה זו');
+    }
+    if (
+      existing.createdBy !== userId &&
+      !(existing.allowParticipantEditing ?? false)
+    ) {
+      throw new Error('יוצר/ת המשימה לא אפשר/ה עריכת תתי־משימות');
+    }
 
     const subtasks = existing.subtasks ?? [];
     const nextSubtasks = subtasks.map((subtask) =>
@@ -1464,6 +1557,16 @@ export const setSubtaskAttachment = mutation({
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
 
+    if (!isUserParticipantInTask(existing, userId)) {
+      throw new Error('אין הרשאה לעדכן משימה זו');
+    }
+    if (
+      existing.createdBy !== userId &&
+      !(existing.allowParticipantEditing ?? false)
+    ) {
+      throw new Error('יוצר/ת המשימה לא אפשר/ה עריכת תתי־משימות');
+    }
+
     const subtasks = (existing.subtasks ?? []).map((st) =>
       st.id === subtaskId ? { ...st, attachment: attachment ?? undefined } : st
     );
@@ -1483,6 +1586,16 @@ export const addSubtask = mutation({
 
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
+
+    if (!isUserParticipantInTask(existing, userId)) {
+      throw new Error('אין הרשאה לעדכן משימה זו');
+    }
+    if (
+      existing.createdBy !== userId &&
+      !(existing.allowParticipantEditing ?? false)
+    ) {
+      throw new Error('יוצר/ת המשימה לא אפשר/ה עריכת תתי־משימות');
+    }
 
     const newSubtask = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -1506,6 +1619,16 @@ export const removeSubtask = mutation({
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
 
+    if (!isUserParticipantInTask(existing, userId)) {
+      throw new Error('אין הרשאה לעדכן משימה זו');
+    }
+    if (
+      existing.createdBy !== userId &&
+      !(existing.allowParticipantEditing ?? false)
+    ) {
+      throw new Error('יוצר/ת המשימה לא אפשר/ה עריכת תתי־משימות');
+    }
+
     await ctx.db.patch(id, {
       subtasks: (existing.subtasks ?? []).filter((st) => st.id !== subtaskId),
       updatedAt: Date.now(),
@@ -1521,6 +1644,16 @@ export const reorderSubtasks = mutation({
 
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
+
+    if (!isUserParticipantInTask(existing, userId)) {
+      throw new Error('אין הרשאה לעדכן משימה זו');
+    }
+    if (
+      existing.createdBy !== userId &&
+      !(existing.allowParticipantEditing ?? false)
+    ) {
+      throw new Error('יוצר/ת המשימה לא אפשר/ה עריכת תתי־משימות');
+    }
 
     const subtaskMap = new Map(
       (existing.subtasks ?? []).map((st) => [st.id, st])
@@ -1943,5 +2076,127 @@ export const listRecentlyDeleted = query({
       deletedAt: task.deletedAt,
       deleteExpiresAt: task.deleteExpiresAt,
     }));
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// תזכורת אישית של המשתתף — קריאה
+// ─────────────────────────────────────────────────────────────
+export const getMyTaskReminder = query({
+  args: { taskId: v.id('tasks') },
+  handler: async (ctx, { taskId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    return await ctx.db
+      .query('taskParticipantSettings')
+      .withIndex('by_task_user', (q) =>
+        q.eq('taskId', taskId).eq('userId', userId)
+      )
+      .unique();
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// עדכון תזכורת אישית של המשתתף בלבד
+// לא משפיע על תזכורות שאר המשתתפים / היוצר
+// ─────────────────────────────────────────────────────────────
+export const updateMyTaskReminder = mutation({
+  args: {
+    taskId: v.id('tasks'),
+    reminders: v.optional(v.array(taskReminderValidator)),
+    reminderType: v.optional(taskReminderTypeValidator),
+    customReminderAt: v.optional(v.number()),
+  },
+  handler: async (ctx, { taskId, reminders, reminderType, customReminderAt }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(taskId);
+    if (!task) throw new Error('משימה לא נמצאה');
+
+    if (!isUserParticipantInTask(task, userId)) {
+      throw new Error('אין הרשאה לעדכן תזכורת למשימה זו');
+    }
+
+    const existing = await ctx.db
+      .query('taskParticipantSettings')
+      .withIndex('by_task_user', (q) =>
+        q.eq('taskId', taskId).eq('userId', userId)
+      )
+      .unique();
+
+    const settingsData = { reminders, reminderType, customReminderAt };
+
+    if (existing) {
+      if (existing.leftAt !== undefined) {
+        throw new Error('עזבת את המשימה הזו');
+      }
+      await ctx.db.patch(existing._id, settingsData);
+    } else {
+      await ctx.db.insert('taskParticipantSettings', {
+        taskId,
+        userId,
+        ...settingsData,
+      });
+    }
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// עזיבת משימה משותפת (משתתף שאינו יוצר)
+// המשימה נשארת אצל שאר המשתתפים והיוצר
+// ─────────────────────────────────────────────────────────────
+export const leaveTask = mutation({
+  args: { taskId: v.id('tasks') },
+  handler: async (ctx, { taskId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(taskId);
+    if (!task) throw new Error('משימה לא נמצאה');
+
+    if (task.createdBy === userId) {
+      throw new Error(
+        'יוצר/ת המשימה לא יכול/ה לעזוב. מחק/י את המשימה במקום.'
+      );
+    }
+
+    if (!isUserParticipantInTask(task, userId)) {
+      throw new Error('אינך משתתף/ת במשימה זו');
+    }
+
+    // Remove user from assignees
+    const newUserIds = (task.assignedToUserIds ?? []).filter(
+      (id) => String(id) !== String(userId)
+    );
+    const newAssignedTo =
+      task.assignedTo === userId
+        ? (newUserIds[0] ?? task.createdBy)
+        : task.assignedTo;
+
+    await ctx.db.patch(taskId, {
+      assignedToUserIds: newUserIds.length > 0 ? newUserIds : undefined,
+      assignedTo: newAssignedTo,
+      updatedAt: Date.now(),
+    });
+
+    // Record the leave in taskParticipantSettings
+    const existing = await ctx.db
+      .query('taskParticipantSettings')
+      .withIndex('by_task_user', (q) =>
+        q.eq('taskId', taskId).eq('userId', userId)
+      )
+      .unique();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, { leftAt: Date.now() });
+    } else {
+      await ctx.db.insert('taskParticipantSettings', {
+        taskId,
+        userId,
+        leftAt: Date.now(),
+      });
+    }
   },
 });

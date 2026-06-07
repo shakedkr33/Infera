@@ -2,13 +2,14 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
   Dimensions,
   I18nManager,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -42,6 +43,34 @@ const HEB_ROW: 'row' | 'row-reverse' = shouldSupplyInvertedRtlValues
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SHEET_HEIGHT = SCREEN_HEIGHT * 0.72;
+
+// ─── Reminder helpers ─────────────────────────────────────────────────────────
+
+const REMINDER_TYPE_LABELS: Record<string, string> = {
+  morning: 'בבוקר',
+  evening: 'בערב',
+  at_time: 'בזמן',
+  hour_before: 'שעה לפני',
+  custom: 'מותאם אישית',
+};
+
+type ReminderEntry = { label?: string | null; type?: string | null };
+
+function buildReminderLabel(
+  reminders: ReminderEntry[] | null | undefined,
+  reminderType: string | null | undefined
+): string {
+  if (reminders && reminders.length > 0) {
+    const labels = reminders
+      .map((r) => r.label?.trim() || REMINDER_TYPE_LABELS[r.type ?? ''] || '')
+      .filter(Boolean);
+    if (labels.length > 0) return labels.join('، ');
+  }
+  if (reminderType && reminderType in REMINDER_TYPE_LABELS) {
+    return REMINDER_TYPE_LABELS[reminderType];
+  }
+  return 'ללא';
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -227,6 +256,69 @@ function AssignmentSection({
   );
 }
 
+// ─── Attachment Thumbnail ─────────────────────────────────────────────────────
+// Resolves a Convex storage ID to a URL and renders an image thumb or file chip.
+
+type TaskAttachment = {
+  storageId: Id<'_storage'>;
+  originalName: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedAt: number;
+  uploadedBy: Id<'users'>;
+};
+
+function AttachmentThumbnail({
+  attachment,
+  onImagePress,
+}: {
+  attachment: TaskAttachment;
+  onImagePress: (url: string) => void;
+}): React.JSX.Element | null {
+  const url = useQuery(api.events.getAttachmentUrl, {
+    storageId: attachment.storageId,
+  });
+  const isImage = attachment.mimeType.startsWith('image/');
+
+  if (isImage) {
+    if (url === undefined) {
+      return (
+        <View style={s.thumbPlaceholder}>
+          <ActivityIndicator color="#36a9e2" size="small" />
+        </View>
+      );
+    }
+    if (!url) return null;
+    return (
+      <Pressable
+        onPress={() => onImagePress(url)}
+        style={s.thumbPressable}
+        hitSlop={4}
+        accessible
+        accessibilityRole="button"
+        accessibilityLabel={`פתח תמונה: ${attachment.displayName}`}
+      >
+        <Image source={{ uri: url }} style={s.thumb} resizeMode="cover" />
+      </Pressable>
+    );
+  }
+
+  // Non-image file — show a compact chip with name
+  return (
+    <View
+      style={s.fileChip}
+      accessible
+      accessibilityLabel={`קובץ: ${attachment.displayName}`}
+    >
+      <MaterialIcons name="insert-drive-file" size={16} color="#36a9e2" />
+      <Text style={s.fileChipText} numberOfLines={1}>
+        {attachment.displayName || attachment.originalName}
+      </Text>
+    </View>
+  );
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export interface TaskDetailsBottomSheetProps {
@@ -275,6 +367,32 @@ export function TaskDetailsBottomSheet({
   const [isToggling, setIsToggling] = useState(false);
   const [isPostponing, setIsPostponing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
+
+  // Personal reminder for the current user.
+  // Creators: reminder lives directly on the task doc (task.reminders / task.reminderType).
+  // Participants: reminder lives in taskParticipantSettings — fetched via getMyTaskReminder.
+  const isCreatorLoaded = task !== undefined && task !== null;
+  const myTaskReminder = useQuery(
+    api.tasks.getMyTaskReminder,
+    taskId && isCreatorLoaded && !task.currentUserIsCreator
+      ? { taskId: taskId as Id<'tasks'> }
+      : 'skip'
+  );
+
+  const reminderLabel = useMemo(() => {
+    if (!task) return null;
+    if (task.currentUserIsCreator) {
+      return buildReminderLabel(
+        (task as { reminders?: ReminderEntry[] }).reminders,
+        (task as { reminderType?: string }).reminderType
+      );
+    }
+    return buildReminderLabel(
+      myTaskReminder?.reminders as ReminderEntry[] | null | undefined,
+      myTaskReminder?.reminderType
+    );
+  }, [task, myTaskReminder]);
 
   const handleToggle = useCallback(async () => {
     if (!task) return;
@@ -635,6 +753,37 @@ export function TaskDetailsBottomSheet({
                         </Text>
                       </DetailRow>
                     ) : null}
+
+                    {/* Personal reminder */}
+                    {reminderLabel !== null ? (
+                      <DetailRow icon="notifications-none">
+                        <View
+                          style={[
+                            s.inlineRow,
+                            { flexDirection: HEB_ROW, justifyContent: 'flex-end' },
+                          ]}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={[
+                                s.reminderRowLabel,
+                                { textAlign: HEB_TEXT_ALIGN },
+                              ]}
+                            >
+                              התזכורת שלך
+                            </Text>
+                            <Text
+                              style={[
+                                s.detailText,
+                                { textAlign: HEB_TEXT_ALIGN },
+                              ]}
+                            >
+                              {reminderLabel}
+                            </Text>
+                          </View>
+                        </View>
+                      </DetailRow>
+                    ) : null}
                   </View>
 
                   {/* Subtasks — simple list, no toggleable circles */}
@@ -681,11 +830,71 @@ export function TaskDetailsBottomSheet({
                       ))}
                     </View>
                   ) : null}
+
+                  {/* Attachments / Files & Images */}
+                  {task.attachments && task.attachments.length > 0 ? (
+                    <View style={s.attachmentsCard}>
+                      <Text
+                        style={[
+                          s.subtasksHeader,
+                          { textAlign: HEB_TEXT_ALIGN },
+                        ]}
+                      >
+                        קבצים ותמונות
+                      </Text>
+                      <View style={s.attachmentsRow}>
+                        {(
+                          task.attachments as TaskAttachment[]
+                        ).map((att) => (
+                          <AttachmentThumbnail
+                            key={att.storageId as string}
+                            attachment={att}
+                            onImagePress={(url) => setSelectedImageUrl(url)}
+                          />
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
                 </ScrollView>
               </>
             )}
           </View>
         </Animated.View>
+
+        {/* Image lightbox — rendered inside the same Modal so it sits above the sheet */}
+        {selectedImageUrl ? (
+          <Modal
+            visible
+            transparent
+            animationType="fade"
+            onRequestClose={() => setSelectedImageUrl(null)}
+          >
+            <View style={s.lightboxOverlay}>
+              <Pressable
+                style={StyleSheet.absoluteFill}
+                onPress={() => setSelectedImageUrl(null)}
+                accessible={false}
+              />
+              <Pressable
+                style={s.lightboxCloseBtn}
+                onPress={() => setSelectedImageUrl(null)}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="סגור תמונה"
+                hitSlop={12}
+              >
+                <MaterialIcons name="close" size={24} color="#fff" />
+              </Pressable>
+              <Image
+                source={{ uri: selectedImageUrl }}
+                style={s.lightboxImage}
+                resizeMode="contain"
+                accessible
+                accessibilityLabel="תמונה מצורפת"
+              />
+            </View>
+          </Modal>
+        ) : null}
       </View>
     </Modal>
   );
@@ -898,5 +1107,89 @@ const s = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'center',
     writingDirection: 'rtl',
+  },
+
+  reminderRowLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    marginBottom: 2,
+  },
+
+  // ── Attachments ──────────────────────────────────────────────────────────────
+  attachmentsCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  attachmentsRow: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  thumbPressable: {
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  thumb: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    backgroundColor: '#e5e7eb',
+  },
+  thumbPlaceholder: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    backgroundColor: '#e5e7eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fileChip: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#e8f5fd',
+    borderRadius: 10,
+    maxWidth: 160,
+  },
+  fileChipText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+    textAlign: 'right',
+  },
+
+  // ── Image lightbox ───────────────────────────────────────────────────────────
+  lightboxOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.88)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lightboxCloseBtn: {
+    position: 'absolute',
+    top: 52,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  lightboxImage: {
+    width: '90%',
+    height: '75%',
+    borderRadius: 12,
   },
 });

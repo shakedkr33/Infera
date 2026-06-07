@@ -552,4 +552,47 @@ export default defineSchema({
     .index('by_recipient_and_source', ['savedByUserId', 'sourceEventId'])
     .index('by_source', ['sourceEventId'])
     .index('by_space', ['spaceId']),
+
+  // ═══════════════════════════════════════════════════════
+  // הגדרות אישיות של משתתף במשימה משותפת
+  // מאחסן תזכורות אישיות וסטטוס עזיבה לכל משתתף
+  // ═══════════════════════════════════════════════════════
+  taskParticipantSettings: defineTable({
+    taskId: v.id('tasks'),
+    userId: v.id('users'),
+    reminderType: v.optional(
+      v.union(
+        v.literal('none'),
+        v.literal('morning'),
+        v.literal('evening'),
+        v.literal('at_time'),
+        v.literal('hour_before'),
+        v.literal('custom')
+      )
+    ),
+    customReminderAt: v.optional(v.number()),
+    reminders: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          type: v.union(
+            v.literal('morning'),
+            v.literal('evening'),
+            v.literal('at_time'),
+            v.literal('hour_before'),
+            v.literal('custom')
+          ),
+          customAmount: v.optional(v.number()),
+          customUnit: v.optional(
+            v.union(v.literal('minutes'), v.literal('hours'), v.literal('days'))
+          ),
+          customReminderAt: v.optional(v.number()),
+          label: v.optional(v.string()),
+        })
+      )
+    ),
+    leftAt: v.optional(v.number()),
+  })
+    .index('by_task_user', ['taskId', 'userId'])
+    .index('by_user', ['userId']),
 });

@@ -611,8 +611,52 @@ export default function TaskEditorScreen({
   const updateTask = useMutation(api.tasks.update);
   const softDeleteTask = useMutation(api.tasks.softDeleteTask);
   const generateUploadUrl = useMutation(api.events.generateUploadUrl);
+  const updateMyTaskReminder = useMutation(api.tasks.updateMyTaskReminder);
+  const leaveTaskMutation = useMutation(api.tasks.leaveTask);
 
   const currentUserId = currentUser?._id as Id<'users'> | undefined;
+
+  // ── Permission flags ──────────────────────────────────────────────────────
+  const isCreator =
+    !isCreate &&
+    !!currentUserId &&
+    !!existingTask &&
+    String((existingTask as { createdBy?: unknown }).createdBy) ===
+      String(currentUserId);
+
+  const isParticipantNotCreator =
+    !isCreate &&
+    !isCreator &&
+    !!currentUserId &&
+    !!existingTask &&
+    (
+      ((existingTask as { assignedToUserIds?: string[] }).assignedToUserIds ??
+        []).some((id) => String(id) === String(currentUserId)) ||
+      String(
+        (existingTask as { assignedTo?: unknown }).assignedTo
+      ) === String(currentUserId)
+    );
+
+  /** Creator (or new task) gets full editing. Participants have limited access. */
+  const canFullyEdit = isCreate || isCreator;
+
+  /** Whether the current participant can edit subtasks (creator always can). */
+  const canEditSubtasks =
+    canFullyEdit ||
+    (isParticipantNotCreator &&
+      (existingTask as { allowParticipantEditing?: boolean } | null | undefined)
+        ?.allowParticipantEditing === true);
+
+  // Personal reminder for participant — loaded from taskParticipantSettings
+  const myTaskReminder = useQuery(
+    api.tasks.getMyTaskReminder,
+    !isCreate && taskId && isParticipantNotCreator
+      ? { taskId: taskId as Id<'tasks'> }
+      : 'skip'
+  );
+
+  // Track whether we have initialized the participant's personal reminder into draft
+  const participantReminderInitializedRef = useRef(false);
   const currentUserIdRef = useRef(currentUserId);
   currentUserIdRef.current = currentUserId;
   const selfEntity = familyContacts?.selfEntity as
@@ -644,6 +688,8 @@ export default function TaskEditorScreen({
       const nextDraft = draftFromTask(existingTask as EditableTask);
       setDraft(nextDraft);
       editSnapshotRef.current = stableSerializeTaskDraft(nextDraft);
+      // Reset personal reminder init flag when task changes
+      participantReminderInitializedRef.current = false;
     }
   }, [existingTask]);
 
@@ -780,6 +826,19 @@ export default function TaskEditorScreen({
     setDraft((prev) => ({ ...prev, ...updates, reminderError: undefined }));
   }, []);
 
+  // Override draft reminders with the participant's personal reminder once loaded.
+  // Must appear after updateDraft to satisfy TypeScript block-scope rules.
+  useEffect(() => {
+    if (
+      isParticipantNotCreator &&
+      myTaskReminder !== undefined &&
+      !participantReminderInitializedRef.current
+    ) {
+      participantReminderInitializedRef.current = true;
+      updateDraft({ reminders: myTaskReminder?.reminders ?? [] });
+    }
+  }, [isParticipantNotCreator, myTaskReminder, updateDraft]);
+
   const navigateToDestination = useCallback((): void => {
     router.replace(destination as never);
   }, [destination]);
@@ -831,6 +890,35 @@ export default function TaskEditorScreen({
         },
       },
     ]);
+  };
+
+  const handleLeave = (): void => {
+    if (!taskId) return;
+    Alert.alert(
+      'לעזוב את המשימה?',
+      'המשימה תוסר מהרשימה שלך, אבל תישאר אצל שאר המשתתפים.',
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'עזוב משימה',
+          style: 'destructive',
+          onPress: async () => {
+            setIsDeleting(true);
+            try {
+              await leaveTaskMutation({ taskId: taskId as Id<'tasks'> });
+              navigateToDestination();
+            } catch (error) {
+              Alert.alert(
+                'שגיאה',
+                'לא הצלחנו לעזוב את המשימה. נסה שוב.'
+              );
+            } finally {
+              setIsDeleting(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const selectDateOption = (option: TaskDateOption): void => {
@@ -976,7 +1064,7 @@ export default function TaskEditorScreen({
   };
 
   const handleSave = async (): Promise<void> => {
-    if (!draft.title.trim()) {
+    if (canFullyEdit && !draft.title.trim()) {
       setTitleError(true);
       return;
     }
@@ -1165,6 +1253,47 @@ export default function TaskEditorScreen({
             resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
         });
         setDraft(createEmptyDraft(currentUserId));
+      } else if (isParticipantNotCreator) {
+        // Participant: save personal reminder separately, then update allowed fields only
+        await updateMyTaskReminder({
+          taskId: taskId as Id<'tasks'>,
+          reminders:
+            normalizedReminders.length > 0 ? normalizedReminders : undefined,
+          reminderType: firstReminder?.type ?? 'none',
+          customReminderAt:
+            firstReminder?.type === 'custom'
+              ? firstReminder.customReminderAt
+              : undefined,
+        });
+
+        // Only pass fields that participants are allowed to change.
+        // Omit title, category, recurrence, assignees — backend keeps existing.
+        const restrictedClearFieldKeys: string[] = [
+          'reminderType',
+          'customReminderAt',
+          'reminders',
+          'assignedTo',
+          'assignedToMemberId',
+          'assignedToUserIds',
+          'assignedToMemberIds',
+          'allowParticipantEditing',
+        ];
+        const participantClearFields = (
+          clearFields as string[]
+        ).filter(
+          (f) => !restrictedClearFieldKeys.includes(f)
+        ) as ClearableTaskField[];
+
+        await updateTask({
+          id: taskId as Id<'tasks'>,
+          dueDate: payload.dueDate,
+          hasTime: payload.hasTime,
+          dueAt: payload.dueAt,
+          description: payload.description,
+          attachments: resolvedAttachments,
+          subtasks: canEditSubtasks ? payload.subtasks : undefined,
+          clearFields: participantClearFields,
+        });
       } else {
         await updateTask({
           id: taskId as Id<'tasks'>,
@@ -1267,7 +1396,9 @@ export default function TaskEditorScreen({
     applyAssigneeSelection(new Set(visibleAssigneeIds));
   };
 
-  const isCtaDisabled = !draft.title.trim() || isSaving || isDeleting;
+  // Participants don't need to fill the title (it's read-only for them)
+  const isCtaDisabled =
+    (canFullyEdit && !draft.title.trim()) || isSaving || isDeleting;
 
   /**
    * Whether the current user can soft-delete this task from the editor.
@@ -1302,7 +1433,11 @@ export default function TaskEditorScreen({
       <View style={styles.header}>
         <View style={styles.headerSpacer} />
         <Text style={styles.headerTitle}>
-          {isCreate ? 'יצירת משימה' : 'עריכת משימה'}
+          {isCreate
+            ? 'יצירת משימה'
+            : isParticipantNotCreator
+              ? 'צפייה במשימה'
+              : 'עריכת משימה'}
         </Text>
         <Pressable
           onPress={handleBack}
@@ -1329,17 +1464,31 @@ export default function TaskEditorScreen({
             <Text style={styles.sectionTitle}>שם המשימה</Text>
             <TextInput
               value={draft.title}
-              onChangeText={(title) => {
-                setTitleError(false);
-                updateDraft({ title });
-              }}
+              onChangeText={
+                canFullyEdit
+                  ? (title) => {
+                      setTitleError(false);
+                      updateDraft({ title });
+                    }
+                  : undefined
+              }
+              editable={canFullyEdit}
               placeholder="מה צריך לעשות?"
               placeholderTextColor="#94a3b8"
-              style={[styles.titleInput, titleError && styles.inputError]}
+              style={[
+                styles.titleInput,
+                titleError && styles.inputError,
+                !canFullyEdit && styles.fieldReadOnly,
+              ]}
               textAlign="right"
               accessible={true}
               accessibilityLabel="שם המשימה"
             />
+            {!canFullyEdit ? (
+              <Text style={styles.fieldLockedHint}>
+                רק יוצר/ת המשימה יכול/ה לשנות את הפרטים האלה
+              </Text>
+            ) : null}
             {titleError ? (
               <Text style={styles.errorText}>נא להזין שם משימה</Text>
             ) : null}
@@ -1412,19 +1561,23 @@ export default function TaskEditorScreen({
 
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>שיוך</Text>
-            <View style={styles.chipsWrap}>
+            <View style={[styles.chipsWrap, !canFullyEdit && styles.chipsReadOnly]}>
               {TASK_CATEGORIES.map((category) => (
                 <Chip
                   key={category.key}
                   label={category.label}
                   active={draft.category === category.key}
-                  onPress={() => updateDraft({ category: category.key })}
+                  onPress={
+                    canFullyEdit
+                      ? () => updateDraft({ category: category.key })
+                      : () => undefined
+                  }
                 />
               ))}
             </View>
           </View>
 
-          {hasDueDate ? (
+          {hasDueDate && canFullyEdit ? (
             <View style={styles.card}>
               <View style={styles.toggleRow}>
                 <Switch
@@ -1501,7 +1654,9 @@ export default function TaskEditorScreen({
           ) : null}
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>תזכורת</Text>
+            <Text style={styles.sectionTitle}>
+              {isParticipantNotCreator ? 'התזכורת שלך' : 'תזכורת'}
+            </Text>
             {!hasDueDate ? (
               <Text style={styles.helperText}>בחרי מועד כדי להפעיל תזכורת</Text>
             ) : (
@@ -1550,6 +1705,7 @@ export default function TaskEditorScreen({
             )}
           </View>
 
+          {canFullyEdit ? (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>משויך ל...</Text>
             <ScrollView
@@ -1619,6 +1775,7 @@ export default function TaskEditorScreen({
               })}
             </ScrollView>
           </View>
+          ) : null}
 
           <View style={styles.card}>
             <SubtasksSection
@@ -1631,6 +1788,8 @@ export default function TaskEditorScreen({
               onPendingDraftChange={(title) => {
                 pendingSubtaskTitleRef.current = title;
               }}
+              canEditSubtasks={canEditSubtasks}
+              showToggle={canFullyEdit}
             />
           </View>
 
@@ -1704,6 +1863,34 @@ export default function TaskEditorScreen({
                 ]}
               >
                 {isDeleting ? 'מוחק...' : 'מחק משימה'}
+              </Text>
+            </Pressable>
+          ) : null}
+
+          {isParticipantNotCreator ? (
+            <Pressable
+              style={[
+                styles.leaveButton,
+                isDeleting && styles.deleteButtonDisabled,
+              ]}
+              onPress={handleLeave}
+              disabled={isDeleting || isSaving}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="עזיבת משימה"
+            >
+              <MaterialIcons
+                name="exit-to-app"
+                size={18}
+                color={isDeleting ? '#9ca3af' : '#f97316'}
+              />
+              <Text
+                style={[
+                  styles.leaveButtonText,
+                  isDeleting && styles.deleteButtonTextDisabled,
+                ]}
+              >
+                {isDeleting ? 'עוזב...' : 'עזוב משימה'}
               </Text>
             </Pressable>
           ) : null}
@@ -2227,6 +2414,26 @@ const styles = StyleSheet.create({
   deleteButtonDisabled: { opacity: 0.4 },
   deleteButtonText: { color: '#ef4444', fontSize: 14, fontWeight: '600' },
   deleteButtonTextDisabled: { color: '#9ca3af' },
+  leaveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 8,
+  },
+  leaveButtonText: { color: '#f97316', fontSize: 14, fontWeight: '600' },
+  fieldReadOnly: {
+    backgroundColor: '#f1f5f9',
+    color: '#64748b',
+  },
+  fieldLockedHint: {
+    marginTop: 6,
+    fontSize: 11,
+    color: '#94a3b8',
+    textAlign: 'right',
+  },
+  chipsReadOnly: { opacity: 0.7 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.32)',
