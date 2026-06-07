@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  FlatList,
   Image,
   Linking,
   Modal,
@@ -25,6 +26,7 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
+import { InlineSubtasksEditor } from '@/lib/components/task/InlineSubtasksEditor';
 import { getTaskCategoryLabel } from '@/lib/types/task';
 
 const PRIMARY_BLUE = '#36A9E2';
@@ -549,8 +551,6 @@ export default function TasksScreen() {
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
-  const scrollViewRef = useRef<ScrollView>(null);
-
   // ── Event bottom sheet (for "פתח אירוע" action) ──────────────────────────
   const [eventSheetVisible, setEventSheetVisible] = useState(false);
   const [eventSheetEventId, setEventSheetEventId] = useState<string | null>(
@@ -920,6 +920,31 @@ export default function TasksScreen() {
   const hasVisibleContent =
     hasMineTasks || trackingTasks.length > 0 || completedTasks.length > 0;
 
+  type ListSectionItem =
+    | { type: 'mine' }
+    | { type: 'tracking' }
+    | { type: 'completed' }
+    | { type: 'empty' }
+    | { type: 'spacer' };
+
+  const listSections = useMemo((): ListSectionItem[] => {
+    const sections: ListSectionItem[] = [];
+    if (hasVisibleContent) {
+      if (hasMineTasks) sections.push({ type: 'mine' });
+      if (trackingTasks.length > 0) sections.push({ type: 'tracking' });
+      if (completedTasks.length > 0) sections.push({ type: 'completed' });
+    } else {
+      sections.push({ type: 'empty' });
+    }
+    sections.push({ type: 'spacer' });
+    return sections;
+  }, [
+    hasVisibleContent,
+    hasMineTasks,
+    trackingTasks.length,
+    completedTasks.length,
+  ]);
+
   const toggleTaskCompletion = async (task: DisplayTask): Promise<void> => {
     try {
       if (task.kind === 'eventTask') {
@@ -1143,15 +1168,22 @@ export default function TasksScreen() {
         </ScrollView>
 
         {/* Tasks List */}
-        <ScrollView
-          ref={scrollViewRef}
+        <FlatList
+          data={listSections}
+          keyExtractor={(item, index) => item.type + String(index)}
           style={styles.tasksScrollView}
           contentContainerStyle={styles.tasksContent}
           showsVerticalScrollIndicator={false}
-        >
-          {hasVisibleContent ? (
-            <>
-              {hasMineTasks ? (
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item }) => {
+            if (item.type === 'empty') {
+              return <EmptyState activeFilter={activeFilter} />;
+            }
+            if (item.type === 'spacer') {
+              return <View style={styles.bottomSpacer} />;
+            }
+            if (item.type === 'mine') {
+              return (
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>לביצוע שלי</Text>
                   {MINE_GROUPS.map((group) =>
@@ -1175,9 +1207,10 @@ export default function TasksScreen() {
                     ) : null
                   )}
                 </View>
-              ) : null}
-
-              {trackingTasks.length > 0 ? (
+              );
+            }
+            if (item.type === 'tracking') {
+              return (
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>במעקב</Text>
                   <Text style={styles.sectionHelper}>משימות שהוקצו לאחרים</Text>
@@ -1241,9 +1274,10 @@ export default function TasksScreen() {
                     );
                   })}
                 </View>
-              ) : null}
-
-              {completedTasks.length > 0 ? (
+              );
+            }
+            if (item.type === 'completed') {
+              return (
                 <View style={styles.section}>
                   <View style={styles.sectionHeaderRow}>
                     {hasMoreCompletedTasks ? (
@@ -1283,14 +1317,11 @@ export default function TasksScreen() {
                     />
                   ))}
                 </View>
-              ) : null}
-            </>
-          ) : (
-            <EmptyState activeFilter={activeFilter} />
-          )}
-
-          <View style={styles.bottomSpacer} />
-        </ScrollView>
+              );
+            }
+            return null;
+          }}
+        />
       </View>
       <NotificationsDrawer
         isOpen={isNotificationsOpen}
@@ -1576,50 +1607,58 @@ function TaskCard({
               </View>
               {isExpanded ? (
                 <View style={styles.subtasksList}>
-                  {task.subtasks.map((subtask) => (
-                    <Pressable
-                      key={subtask.id}
-                      style={styles.subtaskItem}
-                      onPress={(event) => {
-                        event.stopPropagation();
-                        onToggleSubtask(subtask.id);
-                      }}
-                      accessible={true}
-                      accessibilityRole="checkbox"
-                      accessibilityState={{ checked: subtask.completed }}
-                      accessibilityLabel={subtask.title}
-                    >
-                      <View
-                        style={[
-                          styles.subtaskCheckbox,
-                          subtask.completed && styles.subtaskCheckboxChecked,
-                        ]}
+                  {task.kind === 'task' ? (
+                    <InlineSubtasksEditor
+                      taskId={task.id}
+                      subtasks={task.subtasks}
+                      onOpenImagePreview={onOpenImagePreview}
+                    />
+                  ) : (
+                    task.subtasks.map((subtask) => (
+                      <Pressable
+                        key={subtask.id}
+                        style={styles.subtaskItem}
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          onToggleSubtask(subtask.id);
+                        }}
+                        accessible={true}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: subtask.completed }}
+                        accessibilityLabel={subtask.title}
                       >
-                        {subtask.completed ? (
-                          <MaterialIcons
-                            name="check"
-                            size={13}
-                            color="#ffffff"
+                        <View
+                          style={[
+                            styles.subtaskCheckbox,
+                            subtask.completed && styles.subtaskCheckboxChecked,
+                          ]}
+                        >
+                          {subtask.completed ? (
+                            <MaterialIcons
+                              name="check"
+                              size={13}
+                              color="#ffffff"
+                            />
+                          ) : null}
+                        </View>
+                        <Text
+                          style={[
+                            styles.subtaskText,
+                            subtask.completed && styles.subtaskTextCompleted,
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {subtask.title}
+                        </Text>
+                        {getSubtaskAttachment(subtask) ? (
+                          <SubtaskAttachmentButton
+                            attachment={getSubtaskAttachment(subtask)}
+                            onOpenImagePreview={onOpenImagePreview}
                           />
                         ) : null}
-                      </View>
-                      <Text
-                        style={[
-                          styles.subtaskText,
-                          subtask.completed && styles.subtaskTextCompleted,
-                        ]}
-                        numberOfLines={2}
-                      >
-                        {subtask.title}
-                      </Text>
-                      {getSubtaskAttachment(subtask) ? (
-                        <SubtaskAttachmentButton
-                          attachment={getSubtaskAttachment(subtask)}
-                          onOpenImagePreview={onOpenImagePreview}
-                        />
-                      ) : null}
-                    </Pressable>
-                  ))}
+                      </Pressable>
+                    ))
+                  )}
                 </View>
               ) : null}
             </View>

@@ -1440,6 +1440,107 @@ export const toggleSubtaskCompleted = mutation({
   },
 });
 
+export const setSubtaskAttachment = mutation({
+  args: {
+    id: v.id('tasks'),
+    subtaskId: v.string(),
+    attachment: v.optional(
+      v.object({
+        id: v.string(),
+        type: v.union(v.literal('image'), v.literal('file')),
+        storageId: v.id('_storage'),
+        mimeType: v.string(),
+        sizeBytes: v.number(),
+        createdAt: v.number(),
+        originalName: v.optional(v.string()),
+        displayName: v.optional(v.string()),
+      })
+    ),
+  },
+  handler: async (ctx, { id, subtaskId, attachment }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const existing = await ctx.db.get(id);
+    if (!existing) throw new Error('משימה לא נמצאה');
+
+    const subtasks = (existing.subtasks ?? []).map((st) =>
+      st.id === subtaskId ? { ...st, attachment: attachment ?? undefined } : st
+    );
+
+    await ctx.db.patch(id, { subtasks, updatedAt: Date.now() });
+  },
+});
+
+export const addSubtask = mutation({
+  args: { id: v.id('tasks'), title: v.string() },
+  handler: async (ctx, { id, title }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const trimmed = title.trim();
+    if (!trimmed) return;
+
+    const existing = await ctx.db.get(id);
+    if (!existing) throw new Error('משימה לא נמצאה');
+
+    const newSubtask = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      title: trimmed,
+      completed: false,
+    };
+
+    await ctx.db.patch(id, {
+      subtasks: [...(existing.subtasks ?? []), newSubtask],
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const removeSubtask = mutation({
+  args: { id: v.id('tasks'), subtaskId: v.string() },
+  handler: async (ctx, { id, subtaskId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const existing = await ctx.db.get(id);
+    if (!existing) throw new Error('משימה לא נמצאה');
+
+    await ctx.db.patch(id, {
+      subtasks: (existing.subtasks ?? []).filter((st) => st.id !== subtaskId),
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const reorderSubtasks = mutation({
+  args: { id: v.id('tasks'), orderedIds: v.array(v.string()) },
+  handler: async (ctx, { id, orderedIds }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const existing = await ctx.db.get(id);
+    if (!existing) throw new Error('משימה לא נמצאה');
+
+    const subtaskMap = new Map(
+      (existing.subtasks ?? []).map((st) => [st.id, st])
+    );
+    const reordered = orderedIds
+      .map((sid) => subtaskMap.get(sid))
+      .filter((st): st is NonNullable<typeof st> => st !== undefined);
+
+    // append any subtasks not in the provided order list (safety)
+    for (const st of existing.subtasks ?? []) {
+      if (!orderedIds.includes(st.id)) reordered.push(st);
+    }
+
+    await ctx.db.patch(id, {
+      subtasks: reordered,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
 // ─────────────────────────────────────────────────────────────
 // מחיקת משימה
 // ─────────────────────────────────────────────────────────────
