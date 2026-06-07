@@ -596,6 +596,8 @@ export default function TaskEditorScreen({
   const [discardOpen, setDiscardOpen] = useState(false);
   const numListRef = useRef<FlatList<number>>(null);
   const editSnapshotRef = useRef<string | null>(null);
+  // Tracks the SubtasksSection draft input title so it can be flushed on save
+  const pendingSubtaskTitleRef = useRef('');
 
   const destination = normalizeReturnRoute(returnTo);
   const mySpace = useQuery(api.users.getMySpace);
@@ -1002,7 +1004,20 @@ export default function TaskEditorScreen({
     });
 
     const recurrenceType = hasDueDate ? draft.recurrenceType : 'none';
-    const normalizedSubtasks = normalizeSubtasks(draft.subtasks);
+    // Flush any pending subtask title typed but not yet committed via the + button
+    const pendingTitle = pendingSubtaskTitleRef.current.trim();
+    const subtasksWithPending =
+      pendingTitle.length > 0
+        ? [
+            ...draft.subtasks,
+            {
+              id: `${Date.now()}-flush`,
+              title: pendingTitle,
+              completed: false,
+            },
+          ]
+        : draft.subtasks;
+    const normalizedSubtasks = normalizeSubtasks(subtasksWithPending);
 
     setIsSaving(true);
     try {
@@ -1613,6 +1628,9 @@ export default function TaskEditorScreen({
               onAllowEditingChange={(allowParticipantEditing) =>
                 updateDraft({ allowParticipantEditing })
               }
+              onPendingDraftChange={(title) => {
+                pendingSubtaskTitleRef.current = title;
+              }}
             />
           </View>
 

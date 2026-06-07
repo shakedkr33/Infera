@@ -11,9 +11,14 @@ import {
   Switch,
   Text,
   TextInput,
+  TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
+import type { RenderItemParams } from 'react-native-draggable-flatlist';
+import DraggableFlatList, {
+  OpacityDecorator,
+} from 'react-native-draggable-flatlist';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { AttachmentSourceSheet } from '@/lib/components/attachments/AttachmentSourceSheet';
@@ -27,6 +32,8 @@ interface SubtasksSectionProps {
   allowEditing: boolean;
   onSubtasksChange: (st: SubTask[]) => void;
   onAllowEditingChange: (v: boolean) => void;
+  /** Called every time the pending (not-yet-committed) draft title changes */
+  onPendingDraftChange?: (title: string) => void;
 }
 
 function createSubtaskId(): string {
@@ -117,6 +124,7 @@ export function SubtasksSection({
   allowEditing,
   onSubtasksChange,
   onAllowEditingChange,
+  onPendingDraftChange,
 }: SubtasksSectionProps): React.JSX.Element {
   const [draftTitle, setDraftTitle] = useState('');
   const [focusDraftTick, setFocusDraftTick] = useState(0);
@@ -138,6 +146,11 @@ export function SubtasksSection({
     }
     return undefined;
   }, [focusDraftTick]);
+
+  // Notify parent of pending draft changes so save can flush it
+  useEffect(() => {
+    onPendingDraftChange?.(draftTitle);
+  }, [draftTitle, onPendingDraftChange]);
 
   const commitDraft = (): void => {
     const title = draftTitle.trim();
@@ -236,6 +249,85 @@ export function SubtasksSection({
     openAttachmentPickerFor(st.id);
   };
 
+  const renderItem = ({
+    item: st,
+    drag,
+    isActive,
+  }: RenderItemParams<SubTask>) => (
+    <OpacityDecorator activeOpacity={0.75}>
+      <View style={[s.subtaskRow, isActive && s.subtaskRowActive]}>
+        {/* Drag handle – RTL: appears visually on the left */}
+        <TouchableOpacity
+          onPressIn={drag}
+          style={s.dragHandle}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="גרור לסידור מחדש"
+          hitSlop={6}
+        >
+          <MaterialIcons name="drag-handle" size={22} color="#b0bec5" />
+        </TouchableOpacity>
+
+        <Pressable
+          onPress={() => toggleSubtask(st.id)}
+          style={[s.checkbox, st.completed && s.checkboxChecked]}
+          accessible={true}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: st.completed }}
+          accessibilityLabel={st.title || 'תת־משימה'}
+        >
+          {st.completed ? (
+            <MaterialIcons name="check" size={14} color="#fff" />
+          ) : null}
+        </Pressable>
+
+        <TextInput
+          style={[s.subtaskInput, st.completed && s.subtaskInputCompleted]}
+          value={st.title}
+          onChangeText={(text) => updateSubtask(st.id, text)}
+          placeholder="הוספת תת־משימה..."
+          placeholderTextColor="#9ca3af"
+          textAlign="right"
+          returnKeyType="done"
+          onSubmitEditing={() => setFocusDraftTick((tick) => tick + 1)}
+          accessible={true}
+          accessibilityLabel={st.title || 'תת־משימה'}
+        />
+
+        <SubtaskAttachmentPreview
+          attachment={st.attachment}
+          onImageThumbnailPress={(uri) => setImagePreviewUri(uri)}
+        />
+
+        <Pressable
+          onPress={() => onAttachButtonPress(st)}
+          style={s.imageBtn}
+          hitSlop={10}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel={
+            st.attachment?.localUri || st.attachment?.storageId
+              ? 'הסר או החלף קובץ'
+              : 'הוסף קובץ או תמונה'
+          }
+        >
+          <MaterialIcons name="attach-file" size={22} color={PRIMARY} />
+        </Pressable>
+
+        <Pressable
+          onPress={() => requestRemoveSubtask(st)}
+          style={s.removeBtn}
+          hitSlop={10}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="מחיקת תת־משימה"
+        >
+          <MaterialIcons name="close" size={18} color="#94a3b8" />
+        </Pressable>
+      </View>
+    </OpacityDecorator>
+  );
+
   return (
     <View>
       <AttachmentSourceSheet
@@ -279,10 +371,7 @@ export function SubtasksSection({
               <View
                 style={[
                   s.previewImageFrame,
-                  {
-                    width: previewMaxW,
-                    height: previewMaxH,
-                  },
+                  { width: previewMaxW, height: previewMaxH },
                 ]}
               >
                 <Image
@@ -332,72 +421,23 @@ export function SubtasksSection({
       </View>
 
       <View style={s.list}>
-        {subtasks.map((st, idx) => (
-          <View key={st.id}>
-            <View style={s.subtaskRow}>
-              <Pressable
-                onPress={() => toggleSubtask(st.id)}
-                style={[s.checkbox, st.completed && s.checkboxChecked]}
-                accessible={true}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: st.completed }}
-                accessibilityLabel={st.title || 'תת־משימה חדשה'}
-              >
-                {st.completed ? (
-                  <MaterialIcons name="check" size={14} color="#fff" />
-                ) : null}
-              </Pressable>
-              <TextInput
-                style={[
-                  s.subtaskInput,
-                  st.completed && s.subtaskInputCompleted,
-                ]}
-                value={st.title}
-                onChangeText={(text) => updateSubtask(st.id, text)}
-                placeholder={
-                  idx === 0 ? 'למשל: לקנות חלב...' : 'הוספת תת־משימה נוספת...'
-                }
-                placeholderTextColor="#9ca3af"
-                textAlign="right"
-                returnKeyType="done"
-                onSubmitEditing={() => setFocusDraftTick((tick) => tick + 1)}
-                accessible={true}
-                accessibilityLabel={st.title || 'תת־משימה'}
-              />
-              <SubtaskAttachmentPreview
-                attachment={st.attachment}
-                onImageThumbnailPress={(uri) => setImagePreviewUri(uri)}
-              />
-              <Pressable
-                onPress={() => onAttachButtonPress(st)}
-                style={s.imageBtn}
-                hitSlop={10}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  st.attachment?.localUri || st.attachment?.storageId
-                    ? 'הסר או החלף קובץ'
-                    : 'הוסף קובץ או תמונה'
-                }
-              >
-                <MaterialIcons name="attach-file" size={22} color={PRIMARY} />
-              </Pressable>
-              <Pressable
-                onPress={() => requestRemoveSubtask(st)}
-                style={s.removeBtn}
-                hitSlop={10}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="מחיקת תת־משימה"
-              >
-                <MaterialIcons name="close" size={18} color="#94a3b8" />
-              </Pressable>
-            </View>
-            <View style={s.divider} />
-          </View>
-        ))}
+        {/* DraggableFlatList handles reorder; scrollEnabled=false lets the
+            parent ScrollView handle page scrolling while drag still works. */}
+        <DraggableFlatList
+          data={subtasks}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          onDragEnd={({ data }) => onSubtasksChange(data)}
+          scrollEnabled={false}
+          activationDistance={8}
+          disableScrollViewPanResponder={true}
+          containerStyle={{ overflow: 'visible' }}
+          ItemSeparatorComponent={() => <View style={s.divider} />}
+        />
 
+        {/* New subtask draft row */}
         <View style={s.subtaskRow}>
+          <View style={s.dragHandlePlaceholder} />
           <Pressable
             style={s.emptyCheckbox}
             onPress={commitDraft}
@@ -468,7 +508,24 @@ const s = StyleSheet.create({
     borderColor: '#f3f4f6',
     padding: 14,
   },
-  subtaskRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8 },
+  subtaskRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    minHeight: 48,
+  },
+  subtaskRowActive: {
+    backgroundColor: '#f0f9ff',
+    borderRadius: 8,
+  },
+  dragHandle: {
+    width: 30,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dragHandlePlaceholder: { width: 30 },
   checkbox: {
     width: 24,
     height: 24,
@@ -554,7 +611,7 @@ const s = StyleSheet.create({
     color: '#9ca3af',
     textDecorationLine: 'line-through',
   },
-  divider: { height: 1, backgroundColor: '#e5e7eb', marginVertical: 8 },
+  divider: { height: 1, backgroundColor: '#e5e7eb' },
   previewOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.82)',
