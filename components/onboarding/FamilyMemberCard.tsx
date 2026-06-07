@@ -31,8 +31,9 @@ function deriveFamilyMemberBadge(member: FamilyMember): FamilyMemberBadge {
 
 interface DisplayCardProps {
   member: FamilyMember;
-  onEdit: () => void;
-  onRemove: () => void;
+  // Optional: only required when isAdmin === true; safe to omit for read-only (non-admin) views.
+  onEdit?: () => void;
+  onRemove?: () => void;
   // FIXED: role-aware display card — edit/remove hidden for members
   isAdmin?: boolean;
 }

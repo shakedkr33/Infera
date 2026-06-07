@@ -61,22 +61,36 @@ export async function resolveMySpaceId(
     .withIndex('by_user', (q) => q.eq('userId', userId))
     .collect();
 
-  // Priority 1 — member access row: user was explicitly invited into a family space.
-  // This is the normal post-invite state created by matchOnPhone (new users) or joinFamily flows.
+  // Priority 1 — member access row in a space where this user also has a matched entity row.
+  // This covers the normal post-invite state AND guards against stale access rows that point
+  // to a different (empty) space: we only pick an access row whose spaceId matches at least
+  // one entity row for this user, confirming the admin wrote real data there.
+  const entitySpaceIds = new Set(
+    rows
+      .filter((r) => resolveKind(r) === 'entity')
+      .map((r) => r.spaceId)
+  );
+  const memberAccessInEntitySpace = rows.find(
+    (r) =>
+      r.role === 'member' &&
+      resolveKind(r) === 'access' &&
+      entitySpaceIds.has(r.spaceId)
+  );
+  if (memberAccessInEntitySpace) return memberAccessInEntitySpace.spaceId;
+
+  // Priority 2 — any member access row (invited into a family space, no entity row yet).
+  // Handles the window between invite acceptance and the admin writing entity rows.
   const memberRow = rows.find(
     (r) => r.role === 'member' && resolveKind(r) === 'access'
   );
   if (memberRow) return memberRow.spaceId;
 
-  // Priority 2 — matched entity row: user was phone-matched into a family space but
-  // no 'access' row was created yet (legacy users who joined before the matchOnPhone fix
-  // that auto-creates the access row). Their userId is stamped on the entity row via
-  // matchOnPhone, so the by_user index returns it. Use that space so they can see
-  // shared events instead of falling back to their own isolated space.
+  // Priority 3 — matched entity row: phone-matched but no access row created yet.
+  // Legacy path for users who joined before the matchOnPhone fix.
   const entityRow = rows.find((r) => resolveKind(r) === 'entity');
   if (entityRow) return entityRow.spaceId;
 
-  // Priority 3 — admin access row: creator of their own personal/family space.
+  // Priority 4 — admin access row: creator of their own personal/family space.
   const adminRow = rows.find(
     (r) => r.role === 'admin' && resolveKind(r) === 'access'
   );
@@ -754,5 +768,53 @@ export const dedupeEntityRows = internalMutation({
     }
 
     return { duplicatesFound, duplicatesRemoved };
+  },
+});
+
+// ── fixMemberAccessSpace ──────────────────────────────────────────────────────
+// One-time dashboard mutation: moves a member's access row from a stale space
+// to the correct family space. Call via Convex dashboard — NOT from app code.
+export const fixMemberAccessSpace = internalMutation({
+  args: {
+    userId: v.id('users'),
+    fromSpaceId: v.id('spaces'),
+    toSpaceId: v.id('spaces'),
+  },
+  handler: async (ctx, { userId, fromSpaceId, toSpaceId }) => {
+    const rows = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+
+    const accessRow = rows.find(
+      (r) =>
+        r.spaceId === fromSpaceId &&
+        r.role === 'member' &&
+        resolveKind(r) === 'access'
+    );
+
+    if (!accessRow) {
+      console.log('[FIX SPACE] No access row found in fromSpaceId for user', userId);
+      return { fixed: false };
+    }
+
+    const existingInTarget = rows.find(
+      (r) =>
+        r.spaceId === toSpaceId &&
+        r.role === 'member' &&
+        resolveKind(r) === 'access'
+    );
+
+    if (existingInTarget) {
+      // Already has access to toSpaceId — delete the stale fromSpaceId access row.
+      await ctx.db.delete(accessRow._id);
+      console.log('[FIX SPACE] Deleted stale access row', accessRow._id, 'user already in toSpaceId');
+      return { fixed: true, action: 'deleted_stale' };
+    }
+
+    // Move: patch the access row's spaceId to the correct family space.
+    await ctx.db.patch(accessRow._id, { spaceId: toSpaceId });
+    console.log('[FIX SPACE] Moved access row', accessRow._id, 'from', fromSpaceId, '→', toSpaceId);
+    return { fixed: true, action: 'patched' };
   },
 });

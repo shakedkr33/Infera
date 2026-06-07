@@ -732,9 +732,11 @@ export default function FamilyProfileScreen() {
                       key={member.id}
                       member={member}
                       isAdmin={isAdmin}
-                      onEdit={() => startEditMember(member)}
-                      onRemove={() =>
-                        removeMember(member.id, findEntityRowId(member))
+                      onEdit={isAdmin ? () => startEditMember(member) : undefined}
+                      onRemove={
+                        isAdmin
+                          ? () => removeMember(member.id, findEntityRowId(member))
+                          : undefined
                       }
                     />
                   )
