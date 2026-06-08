@@ -487,6 +487,24 @@ export const listByCommunity = query({
 // spaceId is resolved server-side via resolveMySpaceId so the server
 // is always authoritative about which family space the caller belongs to.
 //
+// ─────────────────────────────────────────────────────────────
+// אירועים קשורים ליום הולדת
+// ─────────────────────────────────────────────────────────────
+export const listByRelatedBirthday = query({
+  args: { birthdayId: v.string() },
+  handler: async (ctx, { birthdayId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    return await ctx.db
+      .query('events')
+      .withIndex('by_related_birthday', (q) =>
+        q.eq('relatedBirthdayId', birthdayId)
+      )
+      .filter((q) => q.eq(q.field('createdBy'), userId))
+      .collect();
+  },
+});
+
 // Two categories are merged:
 //   Category 1 — events in the viewer's resolved space (creator + saved community)
 //   Category 2 — personal events explicitly shared with the viewer from ANY space
@@ -722,6 +740,10 @@ export const create = mutation({
     // Reminder offsets in minutes before event start
     reminders: v.optional(v.array(v.number())),
     importantItems: v.optional(v.array(importantItemObject)),
+    // ── Birthday relation (optional) ─────────────────────────────────────────
+    relatedType: v.optional(v.literal('birthday')),
+    relatedBirthdayId: v.optional(v.string()),
+    relatedBirthdayName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);

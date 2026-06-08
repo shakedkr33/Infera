@@ -1,4 +1,14 @@
-import { createContext, type ReactNode, useContext, useState } from 'react';
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useState,
+} from 'react';
+import {
+  loadPersistedBirthdays,
+  persistBirthdays,
+} from '@/lib/birthdayStorage';
 import type { Birthday } from '@/lib/types/birthday';
 import { BirthdayCardSheet } from './BirthdayCardSheet';
 import { BirthdayEditSheet } from './BirthdayEditSheet';
@@ -27,7 +37,8 @@ export function useBirthdaySheets(): BirthdaySheetsContextValue {
   return context;
 }
 
-const MOCK_BIRTHDAYS: Birthday[] = [
+// Seeded only when there is no saved data yet (first launch).
+const SEED_BIRTHDAYS: Birthday[] = [
   {
     id: '1',
     name: 'דני כהן',
@@ -81,12 +92,30 @@ interface ProviderProps {
 export function BirthdaySheetsProvider({
   children,
 }: ProviderProps): React.JSX.Element {
-  const [birthdays, setBirthdays] = useState<Birthday[]>(MOCK_BIRTHDAYS);
+  const [birthdays, setBirthdays] = useState<Birthday[]>([]);
   const [selectedBirthday, setSelectedBirthday] = useState<Birthday | null>(
     null
   );
   const [cardSheetVisible, setCardSheetVisible] = useState(false);
   const [editSheetVisible, setEditSheetVisible] = useState(false);
+
+  // Load persisted birthdays on mount; seed once on first launch.
+  useEffect(() => {
+    loadPersistedBirthdays().then((saved) => {
+      if (saved !== null) {
+        setBirthdays(saved);
+      } else {
+        setBirthdays(SEED_BIRTHDAYS);
+        persistBirthdays(SEED_BIRTHDAYS);
+      }
+    });
+  }, []);
+
+  // Update state and immediately persist to AsyncStorage.
+  const updateBirthdays = (next: Birthday[]): void => {
+    setBirthdays(next);
+    persistBirthdays(next);
+  };
 
   const openBirthdayCard = (birthday: Birthday): void => {
     setSelectedBirthday(birthday);
@@ -116,14 +145,14 @@ export function BirthdaySheetsProvider({
 
   const handleSave = (data: Partial<Birthday>): void => {
     if (data.id && data.id !== '') {
-      setBirthdays((prev) =>
-        prev.map((b) =>
+      updateBirthdays(
+        birthdays.map((b) =>
           b.id === data.id ? { ...b, ...data, updatedAt: Date.now() } : b
         )
       );
     } else {
-      setBirthdays((prev) => [
-        ...prev,
+      updateBirthdays([
+        ...birthdays,
         {
           id: Date.now().toString(),
           name: data.name ?? '',
@@ -143,7 +172,7 @@ export function BirthdaySheetsProvider({
   };
 
   const deleteBirthday = (id: string): void => {
-    setBirthdays((prev) => prev.filter((b) => b.id !== id));
+    updateBirthdays(birthdays.filter((b) => b.id !== id));
     if (selectedBirthday?.id === id) {
       closeAll();
     }
@@ -179,7 +208,7 @@ export function BirthdaySheetsProvider({
         onDelete={handleDelete}
       />
       <BirthdayEditSheet
-        key={selectedBirthday?.id || selectedBirthday?.contactId || 'create'} //
+        key={selectedBirthday?.id || selectedBirthday?.contactId || 'create'}
         birthday={selectedBirthday ?? undefined}
         visible={editSheetVisible}
         onClose={closeAll}

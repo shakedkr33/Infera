@@ -164,6 +164,11 @@ interface EventScreenProps {
    * Applied once via useState initializer — not reactive to prop changes.
    */
   initialData?: Partial<EventData>;
+  /**
+   * Pre-fill only the event title on create without triggering edit mode.
+   * Ignored when initialData is provided (initialData.title takes precedence).
+   */
+  prefillTitle?: string;
   /** Override the header title (e.g. "עריכת אירוע" for edit mode). */
   customHeaderTitle?: string;
   /**
@@ -187,6 +192,7 @@ export default function EventScreen({
   onRsvpRequiredChange,
   showSuccessSheet = true,
   initialData,
+  prefillTitle,
   customHeaderTitle,
   onSave,
   onDismiss,
@@ -198,8 +204,9 @@ export default function EventScreen({
   // TODO: replace MOCK_EVENT with Convex query using _eventId
   const [event, setEvent] = useState<EventData>(() => {
     const base = isCreate ? makeEmptyEvent(selectedDate) : MOCK_EVENT;
-    if (!initialData) return base;
-    return { ...base, ...initialData };
+    if (initialData) return { ...base, ...initialData };
+    if (prefillTitle) return { ...base, title: prefillTitle };
+    return base;
   });
 
   // FIXED: load family members for the family sharing section in ParticipantsCard.
@@ -313,6 +320,10 @@ export default function EventScreen({
   const handleSuccessDone = () => {
     setSavedEvent(null);
     setSavedEventId(null);
+    if (onDismiss) {
+      onDismiss();
+      return;
+    }
     if (router.canGoBack()) {
       router.back();
     } else {
@@ -556,8 +567,7 @@ export default function EventScreen({
                       !endTimeUserEdited.current &&
                       updates.endTime === undefined
                     ) {
-                      const startDateForCalc =
-                        updates.startDate ?? event.date;
+                      const startDateForCalc = updates.startDate ?? event.date;
                       const { endDate: autoEndDate, endTime: autoEndTime } =
                         applyDuration(startDateForCalc, updates.startTime, 60);
                       patch.endTime = autoEndTime;
@@ -577,16 +587,9 @@ export default function EventScreen({
                       if (!endTimeUserEdited.current && event.startTime) {
                         // Both end date and end time are auto-generated →
                         // recalculate fully so cross-midnight stays correct.
-                        const timeToUse =
-                          patch.startTime ?? event.startTime;
-                        const {
-                          endDate: autoEndDate,
-                          endTime: autoEndTime,
-                        } = applyDuration(
-                          updates.startDate,
-                          timeToUse,
-                          60
-                        );
+                        const timeToUse = patch.startTime ?? event.startTime;
+                        const { endDate: autoEndDate, endTime: autoEndTime } =
+                          applyDuration(updates.startDate, timeToUse, 60);
                         patch.endDate = autoEndDate;
                         // Only set endTime if the startTime block didn't already
                         if (patch.endTime === undefined)

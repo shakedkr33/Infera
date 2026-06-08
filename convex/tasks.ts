@@ -948,6 +948,25 @@ export const listUndated = query({
 });
 
 // ─────────────────────────────────────────────────────────────
+// שליפת משימות קשורות ליום הולדת לפי birthdayId
+// ─────────────────────────────────────────────────────────────
+export const listByRelatedBirthday = query({
+  args: { birthdayId: v.string() },
+  handler: async (ctx, { birthdayId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    return await ctx.db
+      .query('tasks')
+      .withIndex('by_related_birthday', (q) =>
+        q.eq('relatedBirthdayId', birthdayId)
+      )
+      .filter((q) => q.eq(q.field('deletedAt'), undefined))
+      .order('desc')
+      .collect();
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // יצירת משימה חדשה
 // ─────────────────────────────────────────────────────────────
 export const create = mutation({
@@ -972,6 +991,9 @@ export const create = mutation({
     allowParticipantEditing: v.optional(v.boolean()),
     attachments: v.optional(v.array(taskAttachmentArgValidator)),
     communityId: v.optional(v.id('communities')),
+    relatedType: v.optional(v.literal('birthday')),
+    relatedBirthdayId: v.optional(v.string()),
+    relatedBirthdayName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1298,11 +1320,15 @@ export const update = mutation({
       }
       if (
         fields.allowParticipantEditing !== undefined &&
-        fields.allowParticipantEditing !== (existing.allowParticipantEditing ?? false)
+        fields.allowParticipantEditing !==
+          (existing.allowParticipantEditing ?? false)
       ) {
         throw new Error('רק יוצר/ת המשימה יכול/ה לשנות הגדרה זו');
       }
-      if (subtasks !== undefined && !(existing.allowParticipantEditing ?? false)) {
+      if (
+        subtasks !== undefined &&
+        !(existing.allowParticipantEditing ?? false)
+      ) {
         const existingSnap = JSON.stringify(
           (existing.subtasks ?? []).map((s) => ({
             id: s.id,
@@ -2108,7 +2134,10 @@ export const updateMyTaskReminder = mutation({
     reminderType: v.optional(taskReminderTypeValidator),
     customReminderAt: v.optional(v.number()),
   },
-  handler: async (ctx, { taskId, reminders, reminderType, customReminderAt }) => {
+  handler: async (
+    ctx,
+    { taskId, reminders, reminderType, customReminderAt }
+  ) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
 
@@ -2157,9 +2186,7 @@ export const leaveTask = mutation({
     if (!task) throw new Error('משימה לא נמצאה');
 
     if (task.createdBy === userId) {
-      throw new Error(
-        'יוצר/ת המשימה לא יכול/ה לעזוב. מחק/י את המשימה במקום.'
-      );
+      throw new Error('יוצר/ת המשימה לא יכול/ה לעזוב. מחק/י את המשימה במקום.');
     }
 
     if (!isUserParticipantInTask(task, userId)) {

@@ -142,11 +142,16 @@ export default defineSchema({
         })
       )
     ),
+    // ── Birthday relation (optional, set on creation only) ────────────────────
+    relatedType: v.optional(v.literal('birthday')),
+    relatedBirthdayId: v.optional(v.string()),
+    relatedBirthdayName: v.optional(v.string()),
   })
     .index('by_space_and_time', ['spaceId', 'startTime'])
     .index('by_creator', ['createdBy'])
     .index('by_space', ['spaceId'])
-    .index('by_community_date', ['communityId', 'startTime']),
+    .index('by_community_date', ['communityId', 'startTime'])
+    .index('by_related_birthday', ['relatedBirthdayId']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת משימות
@@ -263,6 +268,10 @@ export default defineSchema({
     ),
     sourceEventId: v.optional(v.id('events')),
     sourceImportantItemId: v.optional(v.string()),
+    // ── Birthday relation (optional, set on creation only) ────────────────────
+    relatedType: v.optional(v.literal('birthday')),
+    relatedBirthdayId: v.optional(v.string()),
+    relatedBirthdayName: v.optional(v.string()),
     // ── Soft delete (MVP) ─────────────────────────────────────────────────────
     deletedAt: v.optional(v.number()), // ms timestamp when soft-deleted
     deleteExpiresAt: v.optional(v.number()), // ms timestamp after which hard-delete is safe
@@ -274,7 +283,8 @@ export default defineSchema({
     .index('by_space', ['spaceId'])
     .index('by_community', ['communityId'])
     .index('by_assigned_source_event', ['assignedTo', 'sourceEventId'])
-    .index('by_deleted_by', ['deletedBy', 'deletedAt']),
+    .index('by_deleted_by', ['deletedBy', 'deletedAt'])
+    .index('by_related_birthday', ['relatedBirthdayId']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת ימי הולדת

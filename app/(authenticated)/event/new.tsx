@@ -234,6 +234,9 @@ export default function NewEventScreen(): React.JSX.Element {
     sourceDate,
     sourceMonth,
     sourceCollapsed,
+    prefillTitle,
+    relatedBirthdayId,
+    relatedBirthdayName,
   } = useLocalSearchParams<{
     communityId?: string;
     selectedDate?: string;
@@ -243,6 +246,9 @@ export default function NewEventScreen(): React.JSX.Element {
     sourceDate?: string;
     sourceMonth?: string;
     sourceCollapsed?: string;
+    prefillTitle?: string;
+    relatedBirthdayId?: string;
+    relatedBirthdayName?: string;
   }>();
   const router = useRouter();
   // FIXED: added generateUploadUrl + upload loop before createEvent for file attachments
@@ -271,9 +277,13 @@ export default function NewEventScreen(): React.JSX.Element {
     return undefined;
   }, [selectedDateParam, dateParam]);
 
-  // Navigate back to the exact Calendar context the user came from.
-  // Only used when returnTo is set (i.e., navigated here from Calendar).
+  // Navigate back to the exact context the user came from.
+  // Only used when returnTo is set.
   const navigateToReturnTarget = useCallback((): void => {
+    if (returnTo === '/(authenticated)/birthdays') {
+      router.replace('/(authenticated)/birthdays' as never);
+      return;
+    }
     if (returnTo === 'calendar') {
       if (sourceView === 'timeline') {
         router.replace({
@@ -384,6 +394,9 @@ export default function NewEventScreen(): React.JSX.Element {
         reminders: data.remindersEnabled
           ? data.reminders.map((r) => r.offsetMinutes)
           : [],
+        relatedType: relatedBirthdayId ? 'birthday' : undefined,
+        relatedBirthdayId: relatedBirthdayId || undefined,
+        relatedBirthdayName: relatedBirthdayName || undefined,
       });
 
       const tasksToCreate = data.tasks.filter(
@@ -428,6 +441,8 @@ export default function NewEventScreen(): React.JSX.Element {
       createEvent,
       createEventTasks,
       generateUploadUrl,
+      relatedBirthdayId,
+      relatedBirthdayName,
       setTaskAssignee,
       spaceId,
       toggleEventTaskCompleted,
@@ -444,6 +459,7 @@ export default function NewEventScreen(): React.JSX.Element {
       mode="create"
       onSave={handlePersonalSave}
       selectedDate={selectedDate}
+      prefillTitle={prefillTitle || undefined}
       onDismiss={returnTo ? navigateToReturnTarget : undefined}
     />
   );
