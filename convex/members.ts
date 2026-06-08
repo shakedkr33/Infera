@@ -66,9 +66,7 @@ export async function resolveMySpaceId(
   // to a different (empty) space: we only pick an access row whose spaceId matches at least
   // one entity row for this user, confirming the admin wrote real data there.
   const entitySpaceIds = new Set(
-    rows
-      .filter((r) => resolveKind(r) === 'entity')
-      .map((r) => r.spaceId)
+    rows.filter((r) => resolveKind(r) === 'entity').map((r) => r.spaceId)
   );
   const memberAccessInEntitySpace = rows.find(
     (r) =>
@@ -216,27 +214,7 @@ export const listMyFamilyContacts = query({
     // always resolve the same spaceId for the same user.
     const spaceId = await resolveMySpaceId(ctx, userId);
 
-    console.log(
-      '[LIST CONTACTS] userId:', userId,
-      '| resolvedSpaceId:', spaceId ?? 'null — no space found'
-    );
-
     if (!spaceId) return { selfEntityId: null, members: [] };
-
-    // Inspect the caller's access/entity rows so we can diagnose wrong-space issues.
-    const callerRows = await ctx.db
-      .query('members')
-      .withIndex('by_user', (q) => q.eq('userId', userId))
-      .collect();
-    console.log(
-      '[LIST CONTACTS] caller membership rows:',
-      callerRows.map((r) => ({
-        id: r._id,
-        spaceId: r.spaceId,
-        role: r.role,
-        kind: r.kind ?? resolveKind(r),
-      }))
-    );
 
     // Primary path: use by_kind index for rows that have kind stamped
     const indexedEntities = await ctx.db
@@ -255,17 +233,6 @@ export const listMyFamilyContacts = query({
 
     const unstampedEntities = allRows.filter(
       (r) => r.kind === undefined && resolveKind(r) === 'entity'
-    );
-
-    console.log(
-      '[LIST CONTACTS] indexedEntities (kind=entity):', indexedEntities.length,
-      '| unstampedEntities:', unstampedEntities.length,
-      '| rows:', indexedEntities.map((r) => ({
-        id: r._id,
-        displayName: r.displayName,
-        memberType: r.memberType,
-        kind: r.kind,
-      }))
     );
 
     // Merge, deduplicate by _id
@@ -361,16 +328,6 @@ export const listMyFamilyContacts = query({
       ...(adminEntry ? [adminEntry] : []),
       ...enrichedEntities,
     ];
-
-    console.log(
-      '[LIST CONTACTS] returning members to client:',
-      finalMembers.map((m) => ({
-        id: m._id,
-        displayName: m.displayName,
-        memberType: m.memberType,
-        hasPhone: !!m.selectedPhoneNumber,
-      }))
-    );
 
     return {
       selfEntityId: selfEntityRow?._id ?? null,
@@ -794,7 +751,10 @@ export const fixMemberAccessSpace = internalMutation({
     );
 
     if (!accessRow) {
-      console.log('[FIX SPACE] No access row found in fromSpaceId for user', userId);
+      console.log(
+        '[FIX SPACE] No access row found in fromSpaceId for user',
+        userId
+      );
       return { fixed: false };
     }
 
@@ -808,13 +768,24 @@ export const fixMemberAccessSpace = internalMutation({
     if (existingInTarget) {
       // Already has access to toSpaceId — delete the stale fromSpaceId access row.
       await ctx.db.delete(accessRow._id);
-      console.log('[FIX SPACE] Deleted stale access row', accessRow._id, 'user already in toSpaceId');
+      console.log(
+        '[FIX SPACE] Deleted stale access row',
+        accessRow._id,
+        'user already in toSpaceId'
+      );
       return { fixed: true, action: 'deleted_stale' };
     }
 
     // Move: patch the access row's spaceId to the correct family space.
     await ctx.db.patch(accessRow._id, { spaceId: toSpaceId });
-    console.log('[FIX SPACE] Moved access row', accessRow._id, 'from', fromSpaceId, '→', toSpaceId);
+    console.log(
+      '[FIX SPACE] Moved access row',
+      accessRow._id,
+      'from',
+      fromSpaceId,
+      '→',
+      toSpaceId
+    );
     return { fixed: true, action: 'patched' };
   },
 });
