@@ -1701,6 +1701,7 @@ export default function HomeScreen() {
           variant="home"
           onNotificationsPress={handleBellPress}
           notificationsCount={unseenCount}
+          returnTo="/(authenticated)"
         />
       </View>
 
@@ -2766,8 +2767,7 @@ export default function HomeScreen() {
                                           ))}
                                       </View>
                                     ) : item.type === 'event' &&
-                                      ((item.profileCircles?.length ?? 0) >
-                                        0 ||
+                                      ((item.profileCircles?.length ?? 0) > 0 ||
                                         (item.profileCirclesExtraCount ?? 0) >
                                           0) ? (
                                       <ProfileCircles
@@ -3052,7 +3052,6 @@ export default function HomeScreen() {
                                       </Text>
                                     </Pressable>
                                   ) : null}
-
                                 </View>
                               </View>
                             </View>

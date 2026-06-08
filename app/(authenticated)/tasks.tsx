@@ -1113,6 +1113,7 @@ export default function TasksScreen() {
             onAdd={() => router.push('/(authenticated)/task/new' as never)}
             onNotificationsPress={handleBellPress}
             notificationsCount={unseenCount}
+            returnTo="/(authenticated)/tasks"
           />
         </View>
 

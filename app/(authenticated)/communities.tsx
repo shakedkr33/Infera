@@ -811,6 +811,7 @@ export default function CommunitiesScreen() {
           onAdd={() => router.push('/(authenticated)/community-create')}
           onNotificationsPress={handleBellPress}
           notificationsCount={unseenCount}
+          returnTo="/(authenticated)/communities"
         />
       </View>
 
