@@ -760,7 +760,10 @@ export function TaskDetailsBottomSheet({
                         <View
                           style={[
                             s.inlineRow,
-                            { flexDirection: HEB_ROW, justifyContent: 'flex-end' },
+                            {
+                              flexDirection: HEB_ROW,
+                              justifyContent: 'flex-end',
+                            },
                           ]}
                         >
                           <View style={{ flex: 1 }}>
@@ -843,9 +846,7 @@ export function TaskDetailsBottomSheet({
                         קבצים ותמונות
                       </Text>
                       <View style={s.attachmentsRow}>
-                        {(
-                          task.attachments as TaskAttachment[]
-                        ).map((att) => (
+                        {(task.attachments as TaskAttachment[]).map((att) => (
                           <AttachmentThumbnail
                             key={att.storageId as string}
                             attachment={att}

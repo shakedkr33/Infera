@@ -124,6 +124,9 @@ interface TaskEditorProps {
   mode: 'create' | 'edit';
   taskId?: string;
   returnTo?: string;
+  prefillTitle?: string;
+  relatedBirthdayId?: string;
+  relatedBirthdayName?: string;
 }
 
 type EditableSubtaskRow = {
@@ -581,6 +584,9 @@ export default function TaskEditorScreen({
   mode,
   taskId,
   returnTo,
+  prefillTitle,
+  relatedBirthdayId,
+  relatedBirthdayName,
 }: TaskEditorProps): React.JSX.Element {
   const isCreate = mode === 'create';
   const [draft, setDraft] = useState<TaskDraft>(EMPTY_DRAFT);
@@ -629,13 +635,11 @@ export default function TaskEditorScreen({
     !isCreator &&
     !!currentUserId &&
     !!existingTask &&
-    (
-      ((existingTask as { assignedToUserIds?: string[] }).assignedToUserIds ??
-        []).some((id) => String(id) === String(currentUserId)) ||
-      String(
-        (existingTask as { assignedTo?: unknown }).assignedTo
-      ) === String(currentUserId)
-    );
+    ((
+      (existingTask as { assignedToUserIds?: string[] }).assignedToUserIds ?? []
+    ).some((id) => String(id) === String(currentUserId)) ||
+      String((existingTask as { assignedTo?: unknown }).assignedTo) ===
+        String(currentUserId));
 
   /** Creator (or new task) gets full editing. Participants have limited access. */
   const canFullyEdit = isCreate || isCreator;
@@ -679,8 +683,11 @@ export default function TaskEditorScreen({
       setTitleError(false);
       setTimeError(null);
       setDiscardOpen(false);
-      setDraft(createEmptyDraft(currentUserIdRef.current));
-    }, [isCreate])
+      const emptyDraft = createEmptyDraft(currentUserIdRef.current);
+      setDraft(
+        prefillTitle ? { ...emptyDraft, title: prefillTitle } : emptyDraft
+      );
+    }, [isCreate, prefillTitle])
   );
 
   useEffect(() => {
@@ -908,10 +915,7 @@ export default function TaskEditorScreen({
               await leaveTaskMutation({ taskId: taskId as Id<'tasks'> });
               navigateToDestination();
             } catch (error) {
-              Alert.alert(
-                'שגיאה',
-                'לא הצלחנו לעזוב את המשימה. נסה שוב.'
-              );
+              Alert.alert('שגיאה', 'לא הצלחנו לעזוב את המשימה. נסה שוב.');
             } finally {
               setIsDeleting(false);
             }
@@ -1251,6 +1255,9 @@ export default function TaskEditorScreen({
           spaceId: mySpace as Id<'spaces'>,
           attachments:
             resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
+          relatedType: relatedBirthdayId ? 'birthday' : undefined,
+          relatedBirthdayId: relatedBirthdayId ?? undefined,
+          relatedBirthdayName: relatedBirthdayName ?? undefined,
         });
         setDraft(createEmptyDraft(currentUserId));
       } else if (isParticipantNotCreator) {
@@ -1278,9 +1285,7 @@ export default function TaskEditorScreen({
           'assignedToMemberIds',
           'allowParticipantEditing',
         ];
-        const participantClearFields = (
-          clearFields as string[]
-        ).filter(
+        const participantClearFields = (clearFields as string[]).filter(
           (f) => !restrictedClearFieldKeys.includes(f)
         ) as ClearableTaskField[];
 
@@ -1561,7 +1566,9 @@ export default function TaskEditorScreen({
 
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>שיוך</Text>
-            <View style={[styles.chipsWrap, !canFullyEdit && styles.chipsReadOnly]}>
+            <View
+              style={[styles.chipsWrap, !canFullyEdit && styles.chipsReadOnly]}
+            >
               {TASK_CATEGORIES.map((category) => (
                 <Chip
                   key={category.key}
@@ -1706,75 +1713,77 @@ export default function TaskEditorScreen({
           </View>
 
           {canFullyEdit ? (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>משויך ל...</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.assigneesRow}
-            >
-              <Pressable
-                style={[
-                  styles.assigneeChip,
-                  styles.everyoneChip,
-                  allAssigneesSelected && styles.assigneeChipActive,
-                ]}
-                onPress={selectEveryone}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityState={{ selected: allAssigneesSelected }}
-                accessibilityLabel="כולם"
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>משויך ל...</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.assigneesRow}
               >
-                <MaterialIcons
-                  name="groups"
-                  size={20}
-                  color={allAssigneesSelected ? PRIMARY : '#64748b'}
-                />
-                <Text
+                <Pressable
                   style={[
-                    styles.assigneeText,
-                    allAssigneesSelected && styles.assigneeTextActive,
+                    styles.assigneeChip,
+                    styles.everyoneChip,
+                    allAssigneesSelected && styles.assigneeChipActive,
                   ]}
+                  onPress={selectEveryone}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: allAssigneesSelected }}
+                  accessibilityLabel="כולם"
                 >
-                  כולם
-                </Text>
-              </Pressable>
-              {assignees.map((assignee) => {
-                const active = selectedAssigneeIds.has(assignee.id);
-                return (
-                  <Pressable
-                    key={assignee.id}
+                  <MaterialIcons
+                    name="groups"
+                    size={20}
+                    color={allAssigneesSelected ? PRIMARY : '#64748b'}
+                  />
+                  <Text
                     style={[
-                      styles.assigneeChip,
-                      active && styles.assigneeChipActive,
+                      styles.assigneeText,
+                      allAssigneesSelected && styles.assigneeTextActive,
                     ]}
-                    onPress={() => toggleAssignee(assignee)}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={assignee.label}
                   >
-                    <View
+                    כולם
+                  </Text>
+                </Pressable>
+                {assignees.map((assignee) => {
+                  const active = selectedAssigneeIds.has(assignee.id);
+                  return (
+                    <Pressable
+                      key={assignee.id}
                       style={[
-                        styles.avatarCircle,
-                        { backgroundColor: assignee.color },
+                        styles.assigneeChip,
+                        active && styles.assigneeChipActive,
                       ]}
+                      onPress={() => toggleAssignee(assignee)}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={assignee.label}
                     >
-                      <Text style={styles.avatarText}>{assignee.initials}</Text>
-                    </View>
-                    <Text
-                      style={[
-                        styles.assigneeText,
-                        active && styles.assigneeTextActive,
-                      ]}
-                    >
-                      {assignee.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
+                      <View
+                        style={[
+                          styles.avatarCircle,
+                          { backgroundColor: assignee.color },
+                        ]}
+                      >
+                        <Text style={styles.avatarText}>
+                          {assignee.initials}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          styles.assigneeText,
+                          active && styles.assigneeTextActive,
+                        ]}
+                      >
+                        {assignee.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
           ) : null}
 
           <View style={styles.card}>
