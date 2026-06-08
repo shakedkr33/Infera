@@ -82,6 +82,8 @@ export function BirthdayEditSheet({
       year,
       photoUri,
       contactId: birthday?.contactId ?? null,
+      source: birthday?.source ?? 'manual',
+      phoneNumber: birthday?.phoneNumber ?? null,
     });
   };
 
@@ -167,7 +169,7 @@ export function BirthdayEditSheet({
 
           {/* 3. שורת תאריך – תמיד מוצגת, מציגה את הבחירה הנוכחית */}
           <View style={s.field}>
-            <Text style={s.label}>תאריך</Text>
+            <Text style={s.label}>תאריך לידה</Text>
             <View style={s.dateRow}>
               {/* צד שמאל: אייקון + תאריך */}
               <View style={s.dateRowLeft}>

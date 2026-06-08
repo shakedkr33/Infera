@@ -2739,6 +2739,7 @@ export default function CalendarScreen(): React.JSX.Element {
             title="היומן שלי"
             onNotificationsPress={handleBellPress}
             notificationsCount={unseenCount}
+            returnTo="/(authenticated)/calendar"
           />
 
           {/* View Toggle — iOS: rtl.flexDirection. Android: LTR track so pill translateX matches segments (חודשי right). */}

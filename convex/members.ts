@@ -61,22 +61,36 @@ export async function resolveMySpaceId(
     .withIndex('by_user', (q) => q.eq('userId', userId))
     .collect();
 
-  // Priority 1 — member access row: user was explicitly invited into a family space.
-  // This is the normal post-invite state created by matchOnPhone (new users) or joinFamily flows.
+  // Priority 1 — member access row in a space where this user also has a matched entity row.
+  // This covers the normal post-invite state AND guards against stale access rows that point
+  // to a different (empty) space: we only pick an access row whose spaceId matches at least
+  // one entity row for this user, confirming the admin wrote real data there.
+  const entitySpaceIds = new Set(
+    rows
+      .filter((r) => resolveKind(r) === 'entity')
+      .map((r) => r.spaceId)
+  );
+  const memberAccessInEntitySpace = rows.find(
+    (r) =>
+      r.role === 'member' &&
+      resolveKind(r) === 'access' &&
+      entitySpaceIds.has(r.spaceId)
+  );
+  if (memberAccessInEntitySpace) return memberAccessInEntitySpace.spaceId;
+
+  // Priority 2 — any member access row (invited into a family space, no entity row yet).
+  // Handles the window between invite acceptance and the admin writing entity rows.
   const memberRow = rows.find(
     (r) => r.role === 'member' && resolveKind(r) === 'access'
   );
   if (memberRow) return memberRow.spaceId;
 
-  // Priority 2 — matched entity row: user was phone-matched into a family space but
-  // no 'access' row was created yet (legacy users who joined before the matchOnPhone fix
-  // that auto-creates the access row). Their userId is stamped on the entity row via
-  // matchOnPhone, so the by_user index returns it. Use that space so they can see
-  // shared events instead of falling back to their own isolated space.
+  // Priority 3 — matched entity row: phone-matched but no access row created yet.
+  // Legacy path for users who joined before the matchOnPhone fix.
   const entityRow = rows.find((r) => resolveKind(r) === 'entity');
   if (entityRow) return entityRow.spaceId;
 
-  // Priority 3 — admin access row: creator of their own personal/family space.
+  // Priority 4 — admin access row: creator of their own personal/family space.
   const adminRow = rows.find(
     (r) => r.role === 'admin' && resolveKind(r) === 'access'
   );
@@ -202,7 +216,27 @@ export const listMyFamilyContacts = query({
     // always resolve the same spaceId for the same user.
     const spaceId = await resolveMySpaceId(ctx, userId);
 
+    console.log(
+      '[LIST CONTACTS] userId:', userId,
+      '| resolvedSpaceId:', spaceId ?? 'null — no space found'
+    );
+
     if (!spaceId) return { selfEntityId: null, members: [] };
+
+    // Inspect the caller's access/entity rows so we can diagnose wrong-space issues.
+    const callerRows = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    console.log(
+      '[LIST CONTACTS] caller membership rows:',
+      callerRows.map((r) => ({
+        id: r._id,
+        spaceId: r.spaceId,
+        role: r.role,
+        kind: r.kind ?? resolveKind(r),
+      }))
+    );
 
     // Primary path: use by_kind index for rows that have kind stamped
     const indexedEntities = await ctx.db
@@ -221,6 +255,17 @@ export const listMyFamilyContacts = query({
 
     const unstampedEntities = allRows.filter(
       (r) => r.kind === undefined && resolveKind(r) === 'entity'
+    );
+
+    console.log(
+      '[LIST CONTACTS] indexedEntities (kind=entity):', indexedEntities.length,
+      '| unstampedEntities:', unstampedEntities.length,
+      '| rows:', indexedEntities.map((r) => ({
+        id: r._id,
+        displayName: r.displayName,
+        memberType: r.memberType,
+        kind: r.kind,
+      }))
     );
 
     // Merge, deduplicate by _id
@@ -255,6 +300,7 @@ export const listMyFamilyContacts = query({
       maskedPhone: string | undefined;
       matchedUserId: Id<'users'> | undefined;
       inviteStatus: 'joined';
+      memberType: 'person';
     } | null = null;
 
     if (adminAccessRow && adminAccessRow.userId !== userId) {
@@ -280,9 +326,51 @@ export const listMyFamilyContacts = query({
           maskedPhone: adminPhoneLocal ? maskPhone(adminPhoneLocal) : undefined,
           matchedUserId: adminAccessRow.userId,
           inviteStatus: 'joined',
+          memberType: 'person',
         };
       }
     }
+
+    const enrichedEntities = await Promise.all(
+      entities.map(async (m) => {
+        const localPhone = m.selectedPhoneNumber
+          ? e164ToLocal(m.selectedPhoneNumber)
+          : undefined;
+        let displayName = m.displayName?.trim() || undefined;
+        if (!displayName && m.matchedUserId) {
+          const user = await ctx.db.get(m.matchedUserId);
+          displayName =
+            (user as { fullName?: string } | null)?.fullName?.trim() ||
+            undefined;
+        }
+        return {
+          _id: m._id,
+          selectedPhoneNumber: m.selectedPhoneNumber,
+          maskedPhone: localPhone ? maskPhone(localPhone) : undefined,
+          matchedUserId: m.matchedUserId,
+          inviteStatus: m.inviteStatus,
+          displayName,
+          color: m.color,
+          // Rows without memberType were created before this field existed — treat as 'person'.
+          memberType: (m.memberType ?? 'person') as 'person' | 'pet',
+        };
+      })
+    );
+
+    const finalMembers = [
+      ...(adminEntry ? [adminEntry] : []),
+      ...enrichedEntities,
+    ];
+
+    console.log(
+      '[LIST CONTACTS] returning members to client:',
+      finalMembers.map((m) => ({
+        id: m._id,
+        displayName: m.displayName,
+        memberType: m.memberType,
+        hasPhone: !!m.selectedPhoneNumber,
+      }))
+    );
 
     return {
       selfEntityId: selfEntityRow?._id ?? null,
@@ -294,34 +382,7 @@ export const listMyFamilyContacts = query({
             matchedUserId: selfEntityRow.matchedUserId,
           }
         : null,
-      members: [
-        ...(adminEntry ? [adminEntry] : []),
-        // Enrich each entity row: for matched members whose displayName is missing,
-        // fall back to the linked user's fullName so clients always receive a usable name.
-        ...(await Promise.all(
-          entities.map(async (m) => {
-            const localPhone = m.selectedPhoneNumber
-              ? e164ToLocal(m.selectedPhoneNumber)
-              : undefined;
-            let displayName = m.displayName?.trim() || undefined;
-            if (!displayName && m.matchedUserId) {
-              const user = await ctx.db.get(m.matchedUserId);
-              displayName =
-                (user as { fullName?: string } | null)?.fullName?.trim() ||
-                undefined;
-            }
-            return {
-              _id: m._id,
-              selectedPhoneNumber: m.selectedPhoneNumber,
-              maskedPhone: localPhone ? maskPhone(localPhone) : undefined,
-              matchedUserId: m.matchedUserId,
-              inviteStatus: m.inviteStatus,
-              displayName,
-              color: m.color,
-            };
-          })
-        )),
-      ],
+      members: finalMembers,
     };
   },
 });
@@ -707,5 +768,53 @@ export const dedupeEntityRows = internalMutation({
     }
 
     return { duplicatesFound, duplicatesRemoved };
+  },
+});
+
+// ── fixMemberAccessSpace ──────────────────────────────────────────────────────
+// One-time dashboard mutation: moves a member's access row from a stale space
+// to the correct family space. Call via Convex dashboard — NOT from app code.
+export const fixMemberAccessSpace = internalMutation({
+  args: {
+    userId: v.id('users'),
+    fromSpaceId: v.id('spaces'),
+    toSpaceId: v.id('spaces'),
+  },
+  handler: async (ctx, { userId, fromSpaceId, toSpaceId }) => {
+    const rows = await ctx.db
+      .query('members')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+
+    const accessRow = rows.find(
+      (r) =>
+        r.spaceId === fromSpaceId &&
+        r.role === 'member' &&
+        resolveKind(r) === 'access'
+    );
+
+    if (!accessRow) {
+      console.log('[FIX SPACE] No access row found in fromSpaceId for user', userId);
+      return { fixed: false };
+    }
+
+    const existingInTarget = rows.find(
+      (r) =>
+        r.spaceId === toSpaceId &&
+        r.role === 'member' &&
+        resolveKind(r) === 'access'
+    );
+
+    if (existingInTarget) {
+      // Already has access to toSpaceId — delete the stale fromSpaceId access row.
+      await ctx.db.delete(accessRow._id);
+      console.log('[FIX SPACE] Deleted stale access row', accessRow._id, 'user already in toSpaceId');
+      return { fixed: true, action: 'deleted_stale' };
+    }
+
+    // Move: patch the access row's spaceId to the correct family space.
+    await ctx.db.patch(accessRow._id, { spaceId: toSpaceId });
+    console.log('[FIX SPACE] Moved access row', accessRow._id, 'from', fromSpaceId, '→', toSpaceId);
+    return { fixed: true, action: 'patched' };
   },
 });

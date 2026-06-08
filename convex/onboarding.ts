@@ -107,6 +107,11 @@ export const finishOnboarding = mutation({
     if (resolvedFamilyContacts && Array.isArray(resolvedFamilyContacts)) {
       const now = Date.now();
       for (const contact of resolvedFamilyContacts as FamilyContactEntry[]) {
+        const memberType =
+          (contact.type as 'person' | 'pet' | undefined) === 'pet'
+            ? ('pet' as const)
+            : ('person' as const);
+
         if (!contact.selectedPhoneNumber) {
           await ctx.db.insert('members', {
             spaceId,
@@ -116,6 +121,7 @@ export const finishOnboarding = mutation({
             displayName: contact.name,
             color: contact.color,
             inviteStatus: 'none',
+            memberType,
           });
           continue;
         }
@@ -133,6 +139,7 @@ export const finishOnboarding = mutation({
           inviteStatus: contact.inviteStatus ?? 'none',
           matchedUserId: matchedId,
           userId: matchedId,
+          memberType,
         });
       }
     }

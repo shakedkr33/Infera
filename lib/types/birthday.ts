@@ -6,6 +6,8 @@ export interface Birthday {
   year?: number | null;
   photoUri?: string | null;
   contactId?: string | null;
+  source?: 'manual' | 'contact';
+  phoneNumber?: string | null;
   createdAt: number;
   updatedAt: number;
 }

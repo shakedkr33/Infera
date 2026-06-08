@@ -1,6 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Birthday } from '@/lib/types/birthday';
 import {
   formatBirthdayDate,
@@ -16,6 +16,7 @@ interface BirthdayCardSheetProps {
   visible: boolean;
   onClose: () => void;
   onEdit: () => void;
+  onDelete: () => void;
 }
 
 export function BirthdayCardSheet({
@@ -23,11 +24,23 @@ export function BirthdayCardSheet({
   visible,
   onClose,
   onEdit,
+  onDelete,
 }: BirthdayCardSheetProps): React.JSX.Element | null {
   if (!birthday) return null;
 
   const age = getAge(birthday);
   const countdown = getCountdownLabel(birthday);
+
+  const handleDelete = (): void => {
+    Alert.alert('מחיקה', 'האם למחוק את יום ההולדת?', [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'מחק',
+        style: 'destructive',
+        onPress: onDelete,
+      },
+    ]);
+  };
 
   const handleCreateEvent = (): void => {
     onClose();
@@ -46,7 +59,7 @@ export function BirthdayCardSheet({
   };
 
   return (
-    <BottomSheet visible={visible} onClose={onClose}>
+    <BottomSheet visible={visible} onClose={onClose} maxHeight={560}>
       {/* Header */}
       <View style={s.header}>
         <Text style={s.headerTitle}>יום הולדת 🎂</Text>
@@ -134,6 +147,16 @@ export function BirthdayCardSheet({
         >
           <Text style={s.footerBtnText}>צפייה בכל ימי ההולדת</Text>
         </Pressable>
+        <Pressable
+          style={s.deleteBtn}
+          onPress={handleDelete}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="מחק יום הולדת"
+        >
+          <MaterialIcons name="delete" size={18} color="#ef4444" />
+          <Text style={s.deleteBtnText}>מחק יום הולדת</Text>
+        </Pressable>
       </View>
     </BottomSheet>
   );
@@ -163,31 +186,31 @@ const s = StyleSheet.create({
   profile: {
     alignItems: 'center',
     paddingHorizontal: 24,
-    paddingBottom: 24,
+    paddingBottom: 16,
   },
   avatar: {
-    width: 112,
-    height: 112,
-    borderRadius: 56,
-    borderWidth: 5,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 3,
     borderColor: '#fff',
-    marginBottom: 16,
+    marginBottom: 10,
   },
   avatarPlaceholder: {
-    width: 112,
-    height: 112,
-    borderRadius: 56,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: '#e5e7eb',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 5,
+    borderWidth: 3,
     borderColor: '#fff',
-    marginBottom: 16,
+    marginBottom: 10,
   },
-  initials: { fontSize: 32, fontWeight: '700', color: '#64748b' },
-  name: { fontSize: 28, fontWeight: '700', color: '#0f172a', marginBottom: 8 },
-  date: { fontSize: 18, color: '#64748b', marginBottom: 4 },
-  age: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
+  initials: { fontSize: 24, fontWeight: '700', color: '#64748b' },
+  name: { fontSize: 22, fontWeight: '700', color: '#0f172a', marginBottom: 4 },
+  date: { fontSize: 15, color: '#64748b', marginBottom: 2 },
+  age: { fontSize: 13, color: '#94a3b8', marginBottom: 10 },
   badge: {
     backgroundColor: PRIMARY,
     paddingHorizontal: 20,
@@ -199,7 +222,7 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingHorizontal: 24,
-    marginBottom: 32,
+    marginBottom: 16,
   },
   action: { alignItems: 'center', gap: 8 },
   actionIcon: {
@@ -217,13 +240,21 @@ const s = StyleSheet.create({
     elevation: 2,
   },
   actionText: { fontSize: 13, fontWeight: '500', color: '#475569' },
-  footer: { paddingHorizontal: 24, paddingBottom: 40 },
+  footer: { paddingHorizontal: 24, paddingBottom: 16, gap: 4 },
   footerBtn: {
     backgroundColor: '#f1f5f9',
-    height: 56,
+    height: 52,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   footerBtnText: { fontSize: 15, fontWeight: '700', color: PRIMARY },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 44,
+  },
+  deleteBtnText: { fontSize: 14, fontWeight: '600', color: '#ef4444' },
 });

@@ -23,6 +23,7 @@ export type MainScreenHeaderProps = {
   avatarColor?: string;
   avatarInitials?: string;
   variant?: 'default' | 'home';
+  returnTo?: string;
 };
 
 export function MainScreenHeader({
@@ -36,6 +37,7 @@ export function MainScreenHeader({
   avatarColor,
   avatarInitials,
   variant = 'default',
+  returnTo,
 }: MainScreenHeaderProps): React.JSX.Element {
   const router = useRouter();
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -52,7 +54,10 @@ export function MainScreenHeader({
       onProfilePress();
       return;
     }
-    router.push('/(authenticated)/profile');
+    router.push({
+      pathname: '/(authenticated)/profile',
+      params: { returnTo: returnTo ?? '' },
+    });
   };
 
   return (

@@ -8,5 +8,5 @@
     "strictNullChecks": true
   },
   "include": ["**/*.ts", "**/*.tsx", "nativewind-env.d.ts"],
-  "exclude": ["node_modules", ".expo"]
+  "exclude": ["node_modules", ".expo", "convex/__tests__"]
 }

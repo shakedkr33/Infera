@@ -1,6 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import {
+  Alert,
   FlatList,
   Image,
   Pressable,
@@ -9,7 +10,13 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { MainScreenHeader } from '@/components/MainScreenHeader';
+import {
+  AddPersonBottomSheet,
+  type SelectedContactData,
+} from '@/components/onboarding/AddPersonBottomSheet';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
@@ -17,67 +24,96 @@ import { getCountdownLabel } from '@/lib/utils/birthday';
 const PRIMARY = '#36a9e2';
 
 export default function BirthdaysScreen(): React.JSX.Element {
-  const { openBirthdayCard, openBirthdayCreate, birthdays } =
+  const { openBirthdayCard, openBirthdayEdit, deleteBirthday, birthdays } =
     useBirthdaySheets();
   const [search, setSearch] = useState('');
+  const [showAddSheet, setShowAddSheet] = useState(false);
+
+  const handleSwipeDelete = (birthday: Birthday): void => {
+    Alert.alert('מחיקה', 'האם למחוק את יום ההולדת?', [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'מחק',
+        style: 'destructive',
+        onPress: () => deleteBirthday(birthday.id),
+      },
+    ]);
+  };
 
   const filteredBirthdays = birthdays.filter((b) => b.name.includes(search));
 
-  const renderItem = ({ item }: { item: Birthday }): React.JSX.Element => (
-    <Pressable
-      style={s.card}
-      onPress={() => openBirthdayCard(item)}
-      accessible={true}
-      accessibilityRole="button"
-      accessibilityLabel={`יום הולדת ${item.name}`}
-    >
-      <View style={s.cardContent}>
-        {item.photoUri ? (
-          <Image source={{ uri: item.photoUri }} style={s.avatar} />
-        ) : (
-          <View style={s.avatarPlaceholder}>
-            <Text style={s.initials}>{item.name.substring(0, 2)}</Text>
-          </View>
-        )}
-        <View style={s.cardInfo}>
-          <Text style={s.cardName}>{item.name}</Text>
-          <View style={s.cardBadge}>
-            <Text style={s.cardBadgeText}>{getCountdownLabel(item)}</Text>
-          </View>
-        </View>
-      </View>
-      <Text style={s.cardDate}>
-        {item.day}.{item.month}
-      </Text>
-    </Pressable>
-  );
+  const handleContactSelected = (data: SelectedContactData): void => {
+    const prefill: Birthday = {
+      id: '',
+      name: data.name,
+      day: 1,
+      month: new Date().getMonth() + 1,
+      year: null,
+      photoUri: null,
+      contactId: data.contactId ?? null,
+      source: 'contact',
+      phoneNumber: data.phone ?? null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    openBirthdayEdit(prefill);
+  };
 
-  const listFooter = (
-    <Pressable
-      style={s.importBtn}
-      onPress={openBirthdayCreate}
-      accessible={true}
-      accessibilityRole="button"
-      accessibilityLabel="ייבוא מאנשי קשר"
-    >
-      <MaterialIcons name="contacts" size={22} color={PRIMARY} />
-      <Text style={s.importBtnText}>ייבוא מאנשי קשר</Text>
-    </Pressable>
-  );
+  const renderItem = ({ item }: { item: Birthday }): React.JSX.Element => {
+    const renderDeleteAction = () => (
+      <Pressable
+        style={s.swipeDeleteAction}
+        onPress={() => handleSwipeDelete(item)}
+        accessible={true}
+        accessibilityRole="button"
+        accessibilityLabel={`מחק את יום ההולדת של ${item.name}`}
+      >
+        <MaterialIcons name="delete-outline" size={26} color="#ffffff" />
+        <Text style={s.swipeActionLabel}>מחק</Text>
+      </Pressable>
+    );
+
+    return (
+      <Swipeable renderRightActions={renderDeleteAction}>
+        <Pressable
+          style={s.card}
+          onPress={() => openBirthdayCard(item)}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel={`יום הולדת ${item.name}`}
+        >
+          <View style={s.cardContent}>
+            {item.photoUri ? (
+              <Image source={{ uri: item.photoUri }} style={s.avatar} />
+            ) : (
+              <View style={s.avatarPlaceholder}>
+                <Text style={s.initials}>{item.name.substring(0, 2)}</Text>
+              </View>
+            )}
+            <View style={s.cardInfo}>
+              <Text style={s.cardName}>{item.name}</Text>
+              <View style={s.cardBadge}>
+                <Text style={s.cardBadgeText}>{getCountdownLabel(item)}</Text>
+              </View>
+            </View>
+          </View>
+          <Text style={s.cardDate}>
+            {item.day}.{item.month}
+          </Text>
+        </Pressable>
+      </Swipeable>
+    );
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
-      <View style={s.header}>
-        <Text style={s.headerTitle}>🎂 ימי הולדת</Text>
-        <Pressable
-          onPress={openBirthdayCreate}
-          style={s.addBtn}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="הוסף יום הולדת"
-        >
-          <MaterialIcons name="add" size={24} color={PRIMARY} />
-        </Pressable>
+      <View style={s.headerSurface}>
+        <MainScreenHeader
+          title="ימי הולדת 🎂"
+          showAdd={true}
+          onAdd={() => setShowAddSheet(true)}
+          returnTo="/(authenticated)/birthdays"
+        />
       </View>
 
       <View style={s.searchContainer}>
@@ -102,30 +138,26 @@ export default function BirthdaysScreen(): React.JSX.Element {
         contentContainerStyle={s.listContent}
         renderItem={renderItem}
         showsVerticalScrollIndicator={false}
-        ListFooterComponent={listFooter}
+      />
+
+      <AddPersonBottomSheet
+        visible={showAddSheet}
+        onClose={() => setShowAddSheet(false)}
+        onContactSelected={handleContactSelected}
+        onManual={() => openBirthdayEdit(undefined)}
       />
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
+  headerSurface: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 0,
+    backgroundColor: '#ffffff',
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: '#111517' },
-  addBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#eff6ff',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderBottomColor: '#f0f0f0',
   },
   searchContainer: { paddingHorizontal: 24, paddingVertical: 16 },
   searchBox: {
@@ -195,22 +227,19 @@ const s = StyleSheet.create({
   },
   cardBadgeText: { fontSize: 12, fontWeight: '700', color: PRIMARY },
   cardDate: { fontSize: 12, color: '#9ca3af' },
-  importBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  swipeDeleteAction: {
+    backgroundColor: '#ef4444',
     justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#eff6ff',
-    height: 56,
-    borderRadius: 16,
-    marginTop: 8,
-    borderWidth: 2,
-    borderColor: `${PRIMARY}20`,
-    borderStyle: 'dashed',
+    alignItems: 'center',
+    width: 80,
+    marginBottom: 12,
+    borderRadius: 24,
+    gap: 4,
   },
-  importBtnText: {
-    fontSize: 16,
+  swipeActionLabel: {
+    color: '#ffffff',
+    fontSize: 11,
     fontWeight: '600',
-    color: PRIMARY,
+    textAlign: 'center',
   },
 });

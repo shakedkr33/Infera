@@ -2,7 +2,7 @@
 import { useAuthActions } from '@convex-dev/auth/react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
   Alert,
@@ -30,6 +30,7 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const { signOut } = useAuthActions();
   const { isPremium, isConfigured, isExpoGo, presentPaywall, customerData } =
     useRevenueCat();
@@ -124,6 +125,12 @@ export default function ProfileScreen() {
     );
   };
 
+  const handleClose = (): void => {
+    const destination =
+      returnTo && returnTo.length > 0 ? returnTo : '/(authenticated)';
+    router.replace(destination as never);
+  };
+
   // Debug-only preview helpers — only used inside IS_DEV_MODE block
   const openPaywallPreview = () => router.push('/(auth)/paywall?preview=true');
   const openSignInPreview = () => router.push('/(auth)/sign-in?preview=true');
@@ -144,7 +151,19 @@ export default function ProfileScreen() {
             resizeMode="contain"
             accessibilityLabel="InYomi logo"
           />
-          <Text style={styles.headerTitle}>הגדרות</Text>
+          <View style={styles.headerRightGroup}>
+            <Text style={styles.headerTitle}>הגדרות</Text>
+            <TouchableOpacity
+              onPress={handleClose}
+              style={styles.closeBtn}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="סגור הגדרות"
+              hitSlop={8}
+            >
+              <MaterialIcons name="close" size={22} color="#64748b" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Profile card — tapping opens family-profile (profile management) */}
@@ -443,10 +462,23 @@ const styles = StyleSheet.create({
     height: 88,
     backgroundColor: 'transparent',
   },
+  headerRightGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   headerTitle: {
     fontSize: 20,
     fontWeight: '700',
     color: '#1e293b',
+  },
+  closeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // ── Cards ──────────────────────────────────────────────────────────────────

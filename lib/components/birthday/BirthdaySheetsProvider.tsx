@@ -1,6 +1,4 @@
-import * as Contacts from 'expo-contacts';
 import { createContext, type ReactNode, useContext, useState } from 'react';
-import { Alert } from 'react-native';
 import type { Birthday } from '@/lib/types/birthday';
 import { BirthdayCardSheet } from './BirthdayCardSheet';
 import { BirthdayEditSheet } from './BirthdayEditSheet';
@@ -10,6 +8,7 @@ interface BirthdaySheetsContextValue {
   openBirthdayEdit: (birthday?: Birthday) => void;
   openBirthdayCreate: () => void;
   closeAll: () => void;
+  deleteBirthday: (id: string) => void;
   birthdays: Birthday[];
   findBirthdayByName: (name: string) => Birthday | undefined;
 }
@@ -99,29 +98,8 @@ export function BirthdaySheetsProvider({
     setEditSheetVisible(true);
   };
 
-  const openBirthdayCreate = async (): Promise<void> => {
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('הרשאות נדרשות', 'נא לאפשר גישה לאנשי קשר');
-      return;
-    }
-
-    const contact = await Contacts.presentContactPickerAsync();
-    if (!contact) return;
-
-    const prefillBirthday: Birthday = {
-      id: '',
-      name: contact.name || '',
-      day: 1,
-      month: new Date().getMonth() + 1,
-      year: null,
-      photoUri: contact.image?.uri ?? null,
-      contactId: contact.id,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    setSelectedBirthday(prefillBirthday);
+  const openBirthdayCreate = (): void => {
+    setSelectedBirthday(null);
     setEditSheetVisible(true);
   };
 
@@ -154,6 +132,8 @@ export function BirthdaySheetsProvider({
           year: data.year ?? null,
           photoUri: data.photoUri ?? null,
           contactId: data.contactId ?? null,
+          source: data.source ?? 'manual',
+          phoneNumber: data.phoneNumber ?? null,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
@@ -162,10 +142,16 @@ export function BirthdaySheetsProvider({
     closeAll();
   };
 
+  const deleteBirthday = (id: string): void => {
+    setBirthdays((prev) => prev.filter((b) => b.id !== id));
+    if (selectedBirthday?.id === id) {
+      closeAll();
+    }
+  };
+
   const handleDelete = (): void => {
     if (selectedBirthday?.id) {
-      setBirthdays((prev) => prev.filter((b) => b.id !== selectedBirthday.id));
-      closeAll();
+      deleteBirthday(selectedBirthday.id);
     }
   };
 
@@ -177,6 +163,7 @@ export function BirthdaySheetsProvider({
     openBirthdayEdit,
     openBirthdayCreate,
     closeAll,
+    deleteBirthday,
     birthdays,
     findBirthdayByName,
   };
@@ -189,6 +176,7 @@ export function BirthdaySheetsProvider({
         visible={cardSheetVisible}
         onClose={closeAll}
         onEdit={handleEdit}
+        onDelete={handleDelete}
       />
       <BirthdayEditSheet
         key={selectedBirthday?.id || selectedBirthday?.contactId || 'create'} //
