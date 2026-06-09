@@ -1,11 +1,12 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import { useQuery } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
 import type { Birthday } from '@/lib/types/birthday';
 import {
   formatBirthdayDate,
@@ -49,6 +50,8 @@ export function BirthdayCardSheet({
     string | null
   >(null);
 
+  const unlinkBirthdayRelation = useMutation(api.events.unlinkBirthdayRelation);
+
   const relatedTasks = useQuery(
     api.tasks.listByRelatedBirthday,
     birthday ? { birthdayId: birthday.id } : 'skip'
@@ -73,6 +76,25 @@ export function BirthdayCardSheet({
         onPress: onDelete,
       },
     ]);
+  };
+
+  const handleUnlinkEvent = (eventId: string): void => {
+    Alert.alert(
+      'הסרה מרשימת האירועים הקשורים',
+      'האירוע יוסר מרשימת האירועים הקשורים ליום ההולדת הזה. האירוע עצמו לא יימחק.',
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'הסר',
+          style: 'destructive',
+          onPress: () => {
+            unlinkBirthdayRelation({ eventId: eventId as Id<'events'> }).catch(
+              () => Alert.alert('שגיאה', 'לא ניתן להסיר את הקישור')
+            );
+          },
+        },
+      ]
+    );
   };
 
   const handleCreateEvent = (): void => {
@@ -241,32 +263,65 @@ export function BirthdayCardSheet({
       {hasRelatedEvents ? (
         <View style={s.relatedSection}>
           <Text style={s.relatedTitle}>אירועים קשורים</Text>
-          {relatedEvents.map((ev) => (
-            <Pressable
-              key={ev._id as string}
-              style={s.relatedEventRow}
-              onPress={() => setSelectedRelatedEventId(ev._id as string)}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel={`פתח אירוע: ${ev.title}`}
-            >
-              <MaterialIcons name="chevron-left" size={16} color="#94a3b8" />
-              <View style={s.relatedEventInfo}>
-                <Text style={s.relatedEventTitle} numberOfLines={1}>
-                  {ev.title}
-                </Text>
-                <Text style={s.relatedEventDate}>
-                  {formatEventDate(ev.startTime)}
-                </Text>
+          {relatedEvents.map((ev) => {
+            const isCancelled = ev.status === 'cancelled';
+            return (
+              <View key={ev._id as string} style={s.relatedEventRowContainer}>
+                <Pressable
+                  style={s.relatedEventRow}
+                  onPress={() => setSelectedRelatedEventId(ev._id as string)}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={`פתח אירוע: ${ev.title}`}
+                >
+                  <MaterialIcons
+                    name="chevron-left"
+                    size={16}
+                    color="#94a3b8"
+                  />
+                  <View style={s.relatedEventInfo}>
+                    <View style={s.relatedEventTitleRow}>
+                      <Text
+                        style={[
+                          s.relatedEventTitle,
+                          isCancelled && s.relatedEventTitleCancelled,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {ev.title}
+                      </Text>
+                      {isCancelled ? (
+                        <View style={s.cancelledBadge}>
+                          <Text style={s.cancelledBadgeText}>בוטל</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    <Text style={s.relatedEventDate}>
+                      {formatEventDate(ev.startTime)}
+                    </Text>
+                  </View>
+                  <MaterialIcons
+                    name="event"
+                    size={16}
+                    color={isCancelled ? '#9ca3af' : PRIMARY}
+                    style={s.relatedEventIcon}
+                  />
+                </Pressable>
+                {isCancelled ? (
+                  <Pressable
+                    onPress={() => handleUnlinkEvent(ev._id as string)}
+                    style={s.unlinkBtn}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel="הסר מרשימת האירועים הקשורים"
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <MaterialIcons name="close" size={14} color="#94a3b8" />
+                  </Pressable>
+                ) : null}
               </View>
-              <MaterialIcons
-                name="event"
-                size={16}
-                color={PRIMARY}
-                style={s.relatedEventIcon}
-              />
-            </Pressable>
-          ))}
+            );
+          })}
         </View>
       ) : null}
 
@@ -438,7 +493,12 @@ const s = StyleSheet.create({
     color: '#334155',
     textAlign: 'right',
   },
+  relatedEventRowContainer: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+  },
   relatedEventRow: {
+    flex: 1,
     flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: 8,
@@ -451,17 +511,47 @@ const s = StyleSheet.create({
     flex: 1,
     alignItems: 'flex-end',
   },
+  relatedEventTitleRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
   relatedEventTitle: {
     fontSize: 14,
     color: '#334155',
     fontWeight: '500',
     textAlign: 'right',
   },
+  relatedEventTitleCancelled: {
+    color: '#94a3b8',
+    textDecorationLine: 'line-through',
+  },
   relatedEventDate: {
     fontSize: 12,
     color: '#94a3b8',
     textAlign: 'right',
     marginTop: 1,
+  },
+  cancelledBadge: {
+    backgroundColor: '#fee2e2',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  cancelledBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#dc2626',
+  },
+  unlinkBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 4,
   },
   footer: { paddingHorizontal: 24, paddingBottom: 16, gap: 4 },
   footerBtn: {

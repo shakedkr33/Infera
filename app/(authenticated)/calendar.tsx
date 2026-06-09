@@ -4326,6 +4326,13 @@ function TimelineView({
                                       name={event.communityName}
                                     />
                                   ) : null}
+                                  {event.cancelled ? (
+                                    <View style={styles.cancelledChip}>
+                                      <Text style={styles.cancelledChipText}>
+                                        בוטל
+                                      </Text>
+                                    </View>
+                                  ) : null}
                                   {(event.profileCircles?.length ?? 0) > 0 ||
                                   (event.profileCirclesExtraCount ?? 0) > 0 ? (
                                     <ProfileCircles
@@ -4859,6 +4866,17 @@ const styles = StyleSheet.create({
   },
   eventCardCancelled: {
     opacity: 0.6,
+  },
+  cancelledChip: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: '#fee2e2',
+  },
+  cancelledChipText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#dc2626',
   },
   eventAccentBar: {
     position: 'absolute',

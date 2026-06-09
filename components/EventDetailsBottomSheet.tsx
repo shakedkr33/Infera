@@ -285,6 +285,9 @@ export function EventDetailsBottomSheet({
 
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const deleteEventMutation = useMutation(api.events.deleteEvent);
+  const softDeletePersonalEventMutation = useMutation(
+    api.events.softDeletePersonalEvent
+  );
   const addImportantItemsToMyTasks = useMutation(
     api.tasks.addEventImportantItemsToMyTasks
   );
@@ -605,6 +608,26 @@ export function EventDetailsBottomSheet({
     );
   };
 
+  const handleRemoveFromCalendar = (): void => {
+    if (!convexEventId) return;
+    Alert.alert(
+      'להסיר מהיומן?',
+      'האירוע יעבור ל\u05F3נמחקו לאחרונה\u05F3 וניתן יהיה לשחזר אותו במשך 30 יום.',
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'הסר מהיומן',
+          style: 'destructive',
+          onPress: () => {
+            softDeletePersonalEventMutation({ eventId: convexEventId })
+              .then(() => onClose())
+              .catch(() => Alert.alert('שגיאה', 'לא ניתן להסיר את האירוע'));
+          },
+        },
+      ]
+    );
+  };
+
   const handleNavigate = (): void => {
     const location = displayEvent?.location?.trim();
     if (!location) return;
@@ -771,12 +794,22 @@ export function EventDetailsBottomSheet({
         convexEventId && isEventCreator && displayEvent?.status !== 'cancelled'
       );
 
-  const canDelete = Boolean(
+  // Community-only: hard-delete a cancelled community event within 24h grace period
+  const canDeleteFromCommunity = Boolean(
     convexEventId &&
       displayEvent?.status === 'cancelled' &&
       displayEvent.cancelledAt !== undefined &&
       Date.now() - (displayEvent.cancelledAt as number) < 24 * 60 * 60 * 1000 &&
-      (displayEvent.communityId ? canManageCommunityEvent : isEventCreator)
+      displayEvent.communityId &&
+      canManageCommunityEvent
+  );
+
+  // Personal-only: soft-delete (remove from calendar) a cancelled personal event
+  const canRemoveFromCalendar = Boolean(
+    convexEventId &&
+      displayEvent?.status === 'cancelled' &&
+      !displayEvent.communityId &&
+      isEventCreator
   );
 
   /** Owner/admin/creator: no RSVP prompt on community events — mirror event/[id].tsx */
@@ -1019,7 +1052,7 @@ export function EventDetailsBottomSheet({
                   />
                 </View>
 
-                {canDelete ? (
+                {canDeleteFromCommunity ? (
                   <Pressable
                     accessible={true}
                     accessibilityLabel="הסר אירוע מהקהילה"
@@ -1035,6 +1068,23 @@ export function EventDetailsBottomSheet({
                     <Text style={styles.deleteEventBtnText}>
                       הסר אירוע מהקהילה
                     </Text>
+                  </Pressable>
+                ) : null}
+
+                {canRemoveFromCalendar ? (
+                  <Pressable
+                    accessible={true}
+                    accessibilityLabel="הסר מהיומן"
+                    accessibilityRole="button"
+                    onPress={handleRemoveFromCalendar}
+                    style={styles.deleteEventBtn}
+                  >
+                    <MaterialIcons
+                      color="#dc2626"
+                      name="delete-outline"
+                      size={18}
+                    />
+                    <Text style={styles.deleteEventBtnText}>הסר מהיומן</Text>
                   </Pressable>
                 ) : null}
 

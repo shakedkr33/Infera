@@ -495,13 +495,14 @@ export const listByRelatedBirthday = query({
   handler: async (ctx, { birthdayId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    return await ctx.db
+    const rows = await ctx.db
       .query('events')
       .withIndex('by_related_birthday', (q) =>
         q.eq('relatedBirthdayId', birthdayId)
       )
       .filter((q) => q.eq(q.field('createdBy'), userId))
       .collect();
+    return rows.filter((ev) => ev.deletedAt === undefined);
   },
 });
 
@@ -530,7 +531,7 @@ export const listByDateRange = query({
       .withIndex('by_user', (q) => q.eq('userId', userId))
       .collect();
     // For Category 1 visibility (same-space events), restrict to the viewer's resolved space.
-    const myMemberIdsInSpace = new Set(
+    const _myMemberIdsInSpace = new Set(
       spaceId
         ? myMemberRows
             .filter((r) => (r.spaceId as string) === (spaceId as string))
@@ -543,13 +544,14 @@ export const listByDateRange = query({
     );
 
     // ── Category 1: events in the viewer's resolved space ──────────────────────
+    // Note: cancelled personal events are included (visible in calendar with badge).
+    // Only community cancelled events and soft-deleted events are excluded.
     const cat1Rows = spaceId
       ? await ctx.db
           .query('events')
           .withIndex('by_space_and_time', (q) =>
             q.eq('spaceId', spaceId).gte('startTime', from).lte('startTime', to)
           )
-          .filter((q) => q.neq(q.field('status'), 'cancelled'))
           .order('asc')
           .collect()
       : [];
@@ -592,6 +594,11 @@ export const listByDateRange = query({
     const seenIds = new Set<string>();
 
     for (const ev of cat1Rows) {
+      // Skip soft-deleted events (personal "removed from calendar")
+      if (ev.deletedAt !== undefined) continue;
+      // Skip cancelled community events — they should not appear in personal calendar
+      if (ev.communityId && ev.status === 'cancelled') continue;
+
       const idStr = ev._id as string;
       const rsvpStatus = rsvpByEventId.get(idStr);
       let communityName: string | undefined;
@@ -620,7 +627,7 @@ export const listByDateRange = query({
         const isInUserIds = (ev.sharedWithUserIds ?? []).some(
           (id) => (id as string) === (userId as string)
         );
-        // Use myMemberIdsAllSpaces (not myMemberIdsInSpace) so that when User A
+        // Use myMemberIdsAllSpaces (not _myMemberIdsInSpace) so that when User A
         // saves the viewer's entity row ID from spaceA into sharedWithFamilyMemberIds,
         // the viewer's lookup succeeds even if their resolved primary space is spaceB.
         const isInMemberIds = (ev.sharedWithFamilyMemberIds ?? []).some((mid) =>
@@ -658,6 +665,7 @@ export const listByDateRange = query({
       if (seenIds.has(idStr)) continue; // already included from Cat 1
       if (ev.communityId) continue; // community events use separate RSVP/save logic
       if ((ev.createdBy as string) === (userId as string)) continue; // creator always sees via Cat 1
+      if (ev.deletedAt !== undefined) continue; // skip soft-deleted events
 
       const sharedUserIds = (ev.sharedWithUserIds ?? []) as string[];
       const sharedMemberIds = ev.sharedWithFamilyMemberIds ?? [];
@@ -1142,6 +1150,48 @@ export const remove = mutation({
     if (!existing) throw new Error('אירוע לא נמצא');
 
     await ctx.db.delete(id);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// מחיקה רכה של אירוע אישי (הסרה מהיומן — ניתן לשחזור ב-30 יום)
+// ─────────────────────────────────────────────────────────────
+export const softDeletePersonalEvent = mutation({
+  args: { eventId: v.id('events') },
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (event.communityId)
+      throw new Error('לא ניתן להסיר אירוע קהילה בצורה זו');
+    if (event.createdBy !== userId) throw new Error('אין הרשאה');
+
+    const now = Date.now();
+    await ctx.db.patch(eventId, {
+      deletedAt: now,
+      deletedBy: userId,
+    });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// ביטול קישור יום הולדת מאירוע (הסרה מסעיף "אירועים קשורים" בלבד)
+// ─────────────────────────────────────────────────────────────
+export const unlinkBirthdayRelation = mutation({
+  args: { eventId: v.id('events') },
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (event.createdBy !== userId) throw new Error('אין הרשאה');
+
+    await ctx.db.patch(eventId, {
+      relatedType: undefined,
+      relatedBirthdayId: undefined,
+      relatedBirthdayName: undefined,
+    });
   },
 });
 
