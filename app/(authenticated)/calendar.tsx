@@ -43,9 +43,11 @@ import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import type { ProfileCircle } from '@/components/ProfileCircles';
 import { ProfileCircles } from '@/components/ProfileCircles';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
+import { UpgradeModal } from '@/components/UpgradeModal';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
@@ -1225,6 +1227,16 @@ export default function CalendarScreen(): React.JSX.Element {
     markAllSeen,
     isLoading: notifLoading,
   } = useNotifications();
+  const { isExpiredFree } = useEffectiveAccess();
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
+
+  function handleGatedCreateAction(action: () => void): void {
+    if (isExpiredFree) {
+      setUpgradeModalVisible(true);
+      return;
+    }
+    action();
+  }
 
   const handleBellPress = (): void => {
     if (!isNotificationsOpen) {
@@ -2237,6 +2249,10 @@ export default function CalendarScreen(): React.JSX.Element {
   const handleExpandedCreateForDay = useCallback(
     (cellDate: Date) => {
       setEventEditMenu(null);
+      if (isExpiredFree) {
+        setUpgradeModalVisible(true);
+        return;
+      }
       const ts = new Date(
         cellDate.getFullYear(),
         cellDate.getMonth(),
@@ -2260,7 +2276,7 @@ export default function CalendarScreen(): React.JSX.Element {
         },
       } as Parameters<typeof router.push>[0]);
     },
-    [router, snapState, displayYear, displayMonth]
+    [router, snapState, displayYear, displayMonth, isExpiredFree]
   );
 
   // ── Auto-switch to timeline view when community filter is active
@@ -2895,15 +2911,17 @@ export default function CalendarScreen(): React.JSX.Element {
                 setTaskSheetVisible(true);
               }}
               onAddPress={(dateStr) => {
-                router.push({
-                  pathname: '/(authenticated)/event/new',
-                  params: {
-                    date: dateStr,
-                    returnTo: 'calendar',
-                    sourceView: 'timeline',
-                    sourceDate: dateStr,
-                  },
-                } as Parameters<typeof router.push>[0]);
+                handleGatedCreateAction(() => {
+                  router.push({
+                    pathname: '/(authenticated)/event/new',
+                    params: {
+                      date: dateStr,
+                      returnTo: 'calendar',
+                      sourceView: 'timeline',
+                      sourceDate: dateStr,
+                    },
+                  } as Parameters<typeof router.push>[0]);
+                });
               }}
             />
           </ScrollView>
@@ -3089,6 +3107,11 @@ export default function CalendarScreen(): React.JSX.Element {
           visible={eventEditMenu != null}
           x={eventEditMenu?.x ?? 0}
           y={eventEditMenu?.y ?? 0}
+        />
+        <UpgradeModal
+          visible={upgradeModalVisible}
+          reason="general"
+          onClose={() => setUpgradeModalVisible(false)}
         />
       </View>
     </SafeAreaView>
@@ -3765,6 +3788,16 @@ function DayEventsList({
 }: DayEventsListProps): React.JSX.Element {
   const router = useRouter();
   const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
+  const { isExpiredFree: listIsExpiredFree } = useEffectiveAccess();
+  const [listUpgradeModalVisible, setListUpgradeModalVisible] = useState(false);
+
+  function handleGatedAdd(action: () => void): void {
+    if (listIsExpiredFree) {
+      setListUpgradeModalVisible(true);
+      return;
+    }
+    action();
+  }
 
   const dayLabel = useMemo((): string => {
     const date = new Date(year, month, dayData.day);
@@ -3823,17 +3856,19 @@ function DayEventsList({
               onPress={() => {
                 const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayData.day).padStart(2, '0')}`;
                 const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
-                router.push({
-                  pathname: '/(authenticated)/event/new',
-                  params: {
-                    date: dateStr,
-                    returnTo: 'calendar',
-                    sourceView: 'month',
-                    sourceDate: dateStr,
-                    sourceMonth: monthStr,
-                    sourceCollapsed: 'true',
-                  },
-                } as Parameters<typeof router.push>[0]);
+                handleGatedAdd(() => {
+                  router.push({
+                    pathname: '/(authenticated)/event/new',
+                    params: {
+                      date: dateStr,
+                      returnTo: 'calendar',
+                      sourceView: 'month',
+                      sourceDate: dateStr,
+                      sourceMonth: monthStr,
+                      sourceCollapsed: 'true',
+                    },
+                  } as Parameters<typeof router.push>[0]);
+                });
               }}
               accessible={true}
               accessibilityLabel="הוסף אירוע חדש"
@@ -3848,17 +3883,19 @@ function DayEventsList({
               onPress={() => {
                 const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayData.day).padStart(2, '0')}`;
                 const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
-                router.push({
-                  pathname: '/(authenticated)/event/new',
-                  params: {
-                    date: dateStr,
-                    returnTo: 'calendar',
-                    sourceView: 'month',
-                    sourceDate: dateStr,
-                    sourceMonth: monthStr,
-                    sourceCollapsed: 'true',
-                  },
-                } as Parameters<typeof router.push>[0]);
+                handleGatedAdd(() => {
+                  router.push({
+                    pathname: '/(authenticated)/event/new',
+                    params: {
+                      date: dateStr,
+                      returnTo: 'calendar',
+                      sourceView: 'month',
+                      sourceDate: dateStr,
+                      sourceMonth: monthStr,
+                      sourceCollapsed: 'true',
+                    },
+                  } as Parameters<typeof router.push>[0]);
+                });
               }}
               accessible={true}
               accessibilityLabel="הוסף אירוע חדש"
@@ -4068,6 +4105,11 @@ function DayEventsList({
           <Text style={dStyles.emptyText}>אין אירועים מתוכננים ליום זה</Text>
         </View>
       )}
+      <UpgradeModal
+        visible={listUpgradeModalVisible}
+        reason="general"
+        onClose={() => setListUpgradeModalVisible(false)}
+      />
     </Animated.View>
   );
 }

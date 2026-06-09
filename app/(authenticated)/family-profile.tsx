@@ -27,10 +27,12 @@ import {
   FamilyMemberEditCard,
   FamilyMemberManagementCard,
 } from '../../components/onboarding/FamilyMemberCard';
+import { UpgradeModal } from '../../components/UpgradeModal';
 import { colors, shadows } from '../../constants/theme';
 import type { FamilyMember } from '../../contexts/OnboardingContext';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import { api } from '../../convex/_generated/api';
+import { useEffectiveAccess } from '../../hooks/useEffectiveAccess';
 // FIXED: verified family member status reactivity after matchedUserId update
 import {
   MAX_PEOPLE,
@@ -125,6 +127,18 @@ export default function FamilyProfileScreen() {
   };
 
   const [isSavingOptionalSetup, setIsSavingOptionalSetup] = useState(false);
+  const { effectiveAccess } = useEffectiveAccess();
+  const canExpandFamilyProfile =
+    effectiveAccess === 'trial_active' || effectiveAccess === 'family';
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
+
+  function handleGatedFamilyExpansionAction(action: () => void): void {
+    if (!canExpandFamilyProfile) {
+      setUpgradeModalVisible(true);
+      return;
+    }
+    action();
+  }
 
   const handleSaveOptionalSetup = (): void => {
     if (isSavingOptionalSetup) return;
@@ -562,8 +576,10 @@ export default function FamilyProfileScreen() {
               {/* FIXED: restored button box with NativeWind layout + dynamic pressed state via style function */}
               <Pressable
                 onPress={() => {
-                  setOpenSheetToContacts(true);
-                  openAddPersonSheet();
+                  handleGatedFamilyExpansionAction(() => {
+                    setOpenSheetToContacts(true);
+                    openAddPersonSheet();
+                  });
                 }}
                 accessible={true}
                 accessibilityRole="button"
@@ -589,8 +605,10 @@ export default function FamilyProfileScreen() {
               </Pressable>
               <Pressable
                 onPress={() => {
-                  cancelPending();
-                  startManualAddPerson();
+                  handleGatedFamilyExpansionAction(() => {
+                    cancelPending();
+                    startManualAddPerson();
+                  });
                 }}
                 accessible={true}
                 accessibilityRole="button"
@@ -701,7 +719,9 @@ export default function FamilyProfileScreen() {
                 {/* FIXED: pet add button hidden for members */}
                 {isAdmin && canAddPet && (
                   <Pressable
-                    onPress={handleAddPet}
+                    onPress={() =>
+                      handleGatedFamilyExpansionAction(handleAddPet)
+                    }
                     accessible={true}
                     accessibilityRole="button"
                     accessibilityLabel="הוספת חיית מחמד"
@@ -732,10 +752,13 @@ export default function FamilyProfileScreen() {
                       key={member.id}
                       member={member}
                       isAdmin={isAdmin}
-                      onEdit={isAdmin ? () => startEditMember(member) : undefined}
+                      onEdit={
+                        isAdmin ? () => startEditMember(member) : undefined
+                      }
                       onRemove={
                         isAdmin
-                          ? () => removeMember(member.id, findEntityRowId(member))
+                          ? () =>
+                              removeMember(member.id, findEntityRowId(member))
                           : undefined
                       }
                     />
@@ -762,7 +785,9 @@ export default function FamilyProfileScreen() {
                 {isAdmin &&
                   (canAddPet ? (
                     <Pressable
-                      onPress={handleAddPet}
+                      onPress={() =>
+                        handleGatedFamilyExpansionAction(handleAddPet)
+                      }
                       accessible={true}
                       accessibilityRole="button"
                       accessibilityLabel="הוספת חיית מחמד נוספת"
@@ -834,6 +859,12 @@ export default function FamilyProfileScreen() {
         }
         onManual={startManualAddPerson}
         openContactsDirectly={openSheetToContacts}
+      />
+
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason="family"
+        onClose={() => setUpgradeModalVisible(false)}
       />
 
       {/* FIXED: delete confirmation dialog text aligned right (RTL) */}

@@ -16,16 +16,47 @@ import { Platform } from 'react-native';
 type RevenueCatPlatform = 'ios' | 'android';
 
 // ============================================================================
-// Entitlement & Product IDs
+// Subscription Tier Type
 // ============================================================================
 
-// Entitlement ID ב-RevenueCat Dashboard - כל המוצרים מקושרים לזה
+export type SubscriptionTier = 'personal' | 'family' | null;
+
+// ============================================================================
+// Entitlement IDs
+// ============================================================================
+
+export const PERSONAL_ENTITLEMENT_ID = 'personal';
+export const FAMILY_ENTITLEMENT_ID = 'family';
+
+/** @deprecated Legacy entitlement — kept for backward compatibility only.
+ *  Do NOT use for tier mapping. Use PERSONAL/FAMILY entitlements instead. */
 export const ENTITLEMENT_ID = 'InYomi Pro';
 
-// Product identifiers - תואמים ל-Offerings ב-RevenueCat Dashboard
+// ============================================================================
+// Package Identifiers (RevenueCat Offering packages)
+// ============================================================================
+
+export const PACKAGE_IDS = {
+  personalMonthly: 'personal_monthly',
+  personalAnnual: 'personal_annual',
+  familyMonthly: 'family_monthly',
+  familyAnnual: 'family_annual',
+} as const;
+
+// ============================================================================
+// Product Identifiers (App Store / Google Play)
+// ============================================================================
+
 export const PRODUCT_IDS = {
+  personalMonthly: 'inyomi_personal_monthly',
+  personalAnnual: 'inyomi_personal_annual',
+  familyMonthly: 'inyomi_family_monthly',
+  familyAnnual: 'inyomi_family_annual',
+  /** @deprecated Legacy — kept for old paywall backward compatibility */
   monthly: 'monthly',
+  /** @deprecated Legacy — kept for old paywall backward compatibility */
   yearly: 'yearly',
+  /** @deprecated Legacy — kept for old paywall backward compatibility */
   lifetime: 'lifetime',
 } as const;
 

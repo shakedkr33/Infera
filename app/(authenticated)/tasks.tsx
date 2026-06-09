@@ -21,9 +21,11 @@ import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
+import { UpgradeModal } from '@/components/UpgradeModal';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { InlineSubtasksEditor } from '@/lib/components/task/InlineSubtasksEditor';
@@ -550,6 +552,16 @@ export default function TasksScreen() {
   );
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const { isExpiredFree } = useEffectiveAccess();
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
+
+  function handleGatedCreateAction(action: () => void): void {
+    if (isExpiredFree) {
+      setUpgradeModalVisible(true);
+      return;
+    }
+    action();
+  }
 
   // ── Event bottom sheet (for "פתח אירוע" action) ──────────────────────────
   const [eventSheetVisible, setEventSheetVisible] = useState(false);
@@ -946,6 +958,11 @@ export default function TasksScreen() {
   ]);
 
   const toggleTaskCompletion = async (task: DisplayTask): Promise<void> => {
+    // Community event tasks are always free — only gate personal/family tasks.
+    if (isExpiredFree && !task.communityId && task.kind !== 'eventTask') {
+      setUpgradeModalVisible(true);
+      return;
+    }
     try {
       if (task.kind === 'eventTask') {
         await toggleEventTaskCompletedMutation({
@@ -976,6 +993,10 @@ export default function TasksScreen() {
     subtaskId: string
   ): Promise<void> => {
     if (task.kind !== 'task') return;
+    if (isExpiredFree && !task.communityId) {
+      setUpgradeModalVisible(true);
+      return;
+    }
     try {
       await toggleSubtaskMutation({
         id: task.id as Id<'tasks'>,
@@ -1032,6 +1053,12 @@ export default function TasksScreen() {
 
   const handleSoftDelete = (task: DisplayTask): void => {
     if (!currentUserId) return;
+    // handleSoftDelete is only called for isPersonallyDeletableDisplayTask,
+    // which excludes community tasks — so any expiredFree check here is safe.
+    if (isExpiredFree) {
+      setUpgradeModalVisible(true);
+      return;
+    }
     const shared = isSharedTask(task, currentUserId);
     const title = shared ? 'למחוק את המשימה המשותפת?' : 'למחוק את המשימה?';
     const message = shared
@@ -1110,7 +1137,11 @@ export default function TasksScreen() {
           <MainScreenHeader
             title="המשימות שלי"
             showAdd={true}
-            onAdd={() => router.push('/(authenticated)/task/new' as never)}
+            onAdd={() =>
+              handleGatedCreateAction(() =>
+                router.push('/(authenticated)/task/new' as never)
+              )
+            }
             onNotificationsPress={handleBellPress}
             notificationsCount={unseenCount}
             returnTo="/(authenticated)/tasks"
@@ -1347,6 +1378,11 @@ export default function TasksScreen() {
           setEventSheetEvent(null);
         }}
         onNavigate={() => {}}
+      />
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason="general"
+        onClose={() => setUpgradeModalVisible(false)}
       />
       <Modal
         visible={previewImageUri !== null}

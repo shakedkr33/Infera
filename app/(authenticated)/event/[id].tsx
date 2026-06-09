@@ -22,8 +22,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
+import { UpgradeModal } from '@/components/UpgradeModal';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
 import { isOpenCommunityCalendarActionVisible } from '@/lib/openCommunityCalendarUi';
@@ -300,6 +302,8 @@ export default function EventDetailScreen() {
   const [importantItemsCopyError, setImportantItemsCopyError] = useState<
     string | null
   >(null);
+  const { isExpiredFree } = useEffectiveAccess();
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
 
   const handleMenuPress = useCallback(() => {
     if (!menuBtnRef.current) {
@@ -460,22 +464,34 @@ export default function EventDetailScreen() {
   const navPickerLocationUrl =
     (event as { locationUrl?: string } | null | undefined)?.locationUrl ?? null;
 
+  const handleGatedAction = useCallback(
+    (action: () => void): void => {
+      if (isExpiredFree && !event?.communityId) {
+        setUpgradeModalVisible(true);
+        return;
+      }
+      action();
+    },
+    [isExpiredFree, event?.communityId]
+  );
+
   const overflowItems = useMemo<OverflowItem[]>(() => {
     const items: OverflowItem[] = [
       {
         label: 'עריכת אירוע',
         iconName: 'create-outline',
-        onPress: () => {
-          router.push({
-            pathname: '/(authenticated)/event-edit/[id]',
-            params: {
-              id: eventId as string,
-              ...(event?.communityId
-                ? { returnCommunityId: event.communityId as string }
-                : {}),
-            },
-          });
-        },
+        onPress: () =>
+          handleGatedAction(() => {
+            router.push({
+              pathname: '/(authenticated)/event-edit/[id]',
+              params: {
+                id: eventId as string,
+                ...(event?.communityId
+                  ? { returnCommunityId: event.communityId as string }
+                  : {}),
+              },
+            });
+          }),
       },
       {
         label: 'שיתוף אירוע',
@@ -488,11 +504,18 @@ export default function EventDetailScreen() {
         label: 'בטל אירוע',
         iconName: 'close-circle-outline',
         danger: true,
-        onPress: () => setShowCancelDialog(true),
+        onPress: () => handleGatedAction(() => setShowCancelDialog(true)),
       });
     }
     return items;
-  }, [handleShare, event?.communityId, event?.status, eventId, router]);
+  }, [
+    handleGatedAction,
+    handleShare,
+    event?.communityId,
+    event?.status,
+    eventId,
+    router,
+  ]);
 
   // ── Invalid route param (e.g. mock item ids like "1", "2")
   if (!eventId) {
@@ -1075,14 +1098,16 @@ export default function EventDetailScreen() {
                 </View>
                 <TouchableOpacity
                   style={styles.taskVisibilityToggleTouch}
-                  onPress={() => {
-                    updateEventTaskVisibility({
-                      eventId,
-                      tasksVisibleToParticipants: !participantsCanSeeTasks,
-                    }).catch(() =>
-                      Alert.alert('שגיאה', 'לא ניתן לעדכן נראות משימות')
-                    );
-                  }}
+                  onPress={() =>
+                    handleGatedAction(() => {
+                      updateEventTaskVisibility({
+                        eventId,
+                        tasksVisibleToParticipants: !participantsCanSeeTasks,
+                      }).catch(() =>
+                        Alert.alert('שגיאה', 'לא ניתן לעדכן נראות משימות')
+                      );
+                    })
+                  }
                   accessible
                   accessibilityRole="switch"
                   accessibilityState={{ checked: participantsCanSeeTasks }}
@@ -1140,10 +1165,12 @@ export default function EventDetailScreen() {
                       {canManageTasks && (
                         <View style={styles.taskActions}>
                           <TouchableOpacity
-                            onPress={() => {
-                              setAssigneeSheetTaskId(task._id);
-                              setManualAssigneeName('');
-                            }}
+                            onPress={() =>
+                              handleGatedAction(() => {
+                                setAssigneeSheetTaskId(task._id);
+                                setManualAssigneeName('');
+                              })
+                            }
                             style={styles.taskActionBtn}
                             accessible
                             accessibilityRole="button"
@@ -1160,24 +1187,30 @@ export default function EventDetailScreen() {
                             />
                           </TouchableOpacity>
                           <TouchableOpacity
-                            onPress={() => {
-                              Alert.alert('מחק משימה', 'האם למחוק את המשימה?', [
-                                { text: 'ביטול', style: 'cancel' },
-                                {
-                                  text: 'מחק',
-                                  style: 'destructive',
-                                  onPress: () =>
-                                    removeEventTask({
-                                      id: task._id,
-                                    }).catch(() =>
-                                      Alert.alert(
-                                        'שגיאה',
-                                        'לא ניתן למחוק משימה'
-                                      )
-                                    ),
-                                },
-                              ]);
-                            }}
+                            onPress={() =>
+                              handleGatedAction(() => {
+                                Alert.alert(
+                                  'מחק משימה',
+                                  'האם למחוק את המשימה?',
+                                  [
+                                    { text: 'ביטול', style: 'cancel' },
+                                    {
+                                      text: 'מחק',
+                                      style: 'destructive',
+                                      onPress: () =>
+                                        removeEventTask({
+                                          id: task._id,
+                                        }).catch(() =>
+                                          Alert.alert(
+                                            'שגיאה',
+                                            'לא ניתן למחוק משימה'
+                                          )
+                                        ),
+                                    },
+                                  ]
+                                );
+                              })
+                            }
                             style={styles.taskActionBtn}
                             accessible
                             accessibilityRole="button"
@@ -1218,13 +1251,15 @@ export default function EventDetailScreen() {
                                     right: 8,
                                   }}
                                   onPress={() =>
-                                    unclaimEventTask({ id: task._id }).catch(
-                                      () =>
-                                        Alert.alert(
-                                          'שגיאה',
-                                          'לא ניתן להסיר הקצאה כרגע'
-                                        )
-                                    )
+                                    handleGatedAction(() => {
+                                      unclaimEventTask({ id: task._id }).catch(
+                                        () =>
+                                          Alert.alert(
+                                            'שגיאה',
+                                            'לא ניתן להסיר הקצאה כרגע'
+                                          )
+                                      );
+                                    })
                                   }
                                   style={styles.taskUnassignBtn}
                                   accessible
@@ -1247,12 +1282,14 @@ export default function EventDetailScreen() {
                               }}
                               style={styles.taskClaimBtn}
                               onPress={() =>
-                                claimEventTask({ id: task._id }).catch(() =>
-                                  Alert.alert(
-                                    'שגיאה',
-                                    'לא ניתן להשתבץ למשימה כרגע'
-                                  )
-                                )
+                                handleGatedAction(() => {
+                                  claimEventTask({ id: task._id }).catch(() =>
+                                    Alert.alert(
+                                      'שגיאה',
+                                      'לא ניתן להשתבץ למשימה כרגע'
+                                    )
+                                  );
+                                })
                               }
                               accessible
                               accessibilityRole="button"
@@ -1491,6 +1528,11 @@ export default function EventDetailScreen() {
         longitude={parseGeoUri(navPickerLocationUrl)?.lng}
         onClose={() => setNavPickerLocation(null)}
         visible={navPickerLocation !== null}
+      />
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason="general"
+        onClose={() => setUpgradeModalVisible(false)}
       />
     </SafeAreaView>
   );

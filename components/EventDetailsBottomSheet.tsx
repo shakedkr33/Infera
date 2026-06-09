@@ -31,8 +31,10 @@ import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
+import { UpgradeModal } from '@/components/UpgradeModal';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
@@ -217,6 +219,8 @@ export function EventDetailsBottomSheet({
   ] = useState<Id<'events'> | null>(null);
   const [participantRsvpDetailsOpen, setParticipantRsvpDetailsOpen] =
     useState(false);
+  const { isExpiredFree } = useEffectiveAccess();
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
   const isClosingRef = useRef(false);
   const [isClosingState, setIsClosingState] = useState(false);
@@ -517,6 +521,17 @@ export function EventDetailsBottomSheet({
             isSavedToMyCalendar: event.isSavedToMyCalendar === true,
           }
         : null;
+
+  const isCommunityEvent = Boolean(displayEvent?.communityId);
+  const shouldGatePersonalFamilyActions = isExpiredFree && !isCommunityEvent;
+
+  const handleGatedAction = (action: () => void): void => {
+    if (shouldGatePersonalFamilyActions) {
+      setUpgradeModalVisible(true);
+      return;
+    }
+    action();
+  };
 
   const handleEdit = (): void => {
     if (!displayEvent) return;
@@ -1001,7 +1016,7 @@ export function EventDetailsBottomSheet({
                     disabled={!canCancel}
                     icon="event-busy"
                     label="ביטול"
-                    onPress={handleCancel}
+                    onPress={() => handleGatedAction(handleCancel)}
                   />
                   <QuickAction
                     color="#2563eb"
@@ -1015,7 +1030,7 @@ export function EventDetailsBottomSheet({
                     disabled={!canEdit}
                     icon="edit"
                     label="עריכה"
-                    onPress={handleEdit}
+                    onPress={() => handleGatedAction(handleEdit)}
                   />
                 </View>
 
@@ -1024,7 +1039,7 @@ export function EventDetailsBottomSheet({
                     accessible={true}
                     accessibilityLabel="הסר אירוע מהקהילה"
                     accessibilityRole="button"
-                    onPress={handleDelete}
+                    onPress={() => handleGatedAction(handleDelete)}
                     style={styles.deleteEventBtn}
                   >
                     <MaterialIcons
@@ -1640,6 +1655,11 @@ export function EventDetailsBottomSheet({
         onConfirm={handleConfirmCalendarRemoval}
         title={CALENDAR_REMOVE_CONFIRM_TITLE}
         visible={calendarRemoveConfirmationEventId !== null}
+      />
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason="general"
+        onClose={() => setUpgradeModalVisible(false)}
       />
     </Modal>
   );

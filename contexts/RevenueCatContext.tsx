@@ -7,7 +7,7 @@
 // - Production builds עם מפתחות iOS/Android
 // - RevenueCat Paywall (native UI)
 // - Customer Center (ניהול מנויים)
-// - Entitlement checking עבור "InYomi Pro"
+// - Two-tier entitlement model: "personal" and "family"
 
 import Constants from 'expo-constants';
 import {
@@ -23,6 +23,9 @@ import { Alert, Platform } from 'react-native';
 import { MOCK_PAYMENTS, PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import {
   ENTITLEMENT_ID,
+  FAMILY_ENTITLEMENT_ID,
+  PERSONAL_ENTITLEMENT_ID,
+  type SubscriptionTier,
   getCurrentPlatformRevenueCatApiKey,
   isRevenueCatConfigured,
 } from '@/utils/revenueCatConfig';
@@ -59,6 +62,11 @@ type RevenueCatContextType = {
   isPremium: boolean;
   isConfigured: boolean;
   isExpoGo: boolean;
+
+  // Two-tier subscription state
+  subscriptionTier: SubscriptionTier;
+  isPersonal: boolean;
+  isFamily: boolean;
 
   // חבילות זמינות
   packages: PackageInfo[];
@@ -129,12 +137,32 @@ function isRunningInExpoGo(): boolean {
 }
 
 /**
- * בדיקה האם ל-entitlement "InYomi Pro" יש גישה פעילה
+ * Derives the subscription tier from RevenueCat customerInfo entitlements.
+ * Priority: family wins if both personal and family are active.
+ */
+function getSubscriptionTierFromCustomerInfo(customerInfo: {
+  entitlements: { active: Record<string, unknown> };
+}): SubscriptionTier {
+  if (customerInfo.entitlements.active[FAMILY_ENTITLEMENT_ID] !== undefined) {
+    return 'family';
+  }
+  if (customerInfo.entitlements.active[PERSONAL_ENTITLEMENT_ID] !== undefined) {
+    return 'personal';
+  }
+  return null;
+}
+
+/**
+ * Legacy backward-compatible check. Returns true if ANY paid entitlement
+ * is active (personal, family, or legacy "InYomi Pro").
  */
 function checkHasPremium(customerInfo: {
   entitlements: { active: Record<string, unknown> };
 }): boolean {
-  return customerInfo.entitlements.active[ENTITLEMENT_ID] !== undefined;
+  return (
+    getSubscriptionTierFromCustomerInfo(customerInfo) !== null ||
+    customerInfo.entitlements.active[ENTITLEMENT_ID] !== undefined
+  );
 }
 
 /**
@@ -174,6 +202,8 @@ export function RevenueCatProvider({
 }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isPremium, setIsPremium] = useState(false);
+  const [subscriptionTier, setSubscriptionTier] =
+    useState<SubscriptionTier>(null);
   const [packages, setPackages] = useState<PackageInfo[]>(PREVIEW_PACKAGES);
   const [isInitialized, setIsInitialized] = useState(false);
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
@@ -197,6 +227,9 @@ export function RevenueCatProvider({
     }) => {
       const hasPremium = checkHasPremium(customerInfo);
       setIsPremium(hasPremium);
+
+      const tier = getSubscriptionTierFromCustomerInfo(customerInfo);
+      setSubscriptionTier(tier);
 
       try {
         const Purchases = (await import('react-native-purchases')).default;
@@ -223,9 +256,12 @@ export function RevenueCatProvider({
 
   useEffect(() => {
     async function initialize() {
-      // אם מערכת התשלומים כבויה - המשתמש הוא פרימיום אוטומטית
+      // Legacy dev mode — isPremium is true for all users, but no real
+      // subscription tier is set. useEffectiveAccess falls back to
+      // DEV_ACCESS_OVERRIDE or trial_active default.
       if (!PAYMENT_SYSTEM_ENABLED) {
         setIsPremium(true);
+        setSubscriptionTier(null);
         setIsLoading(false);
         setIsInitialized(true);
         return;
@@ -612,6 +648,10 @@ export function RevenueCatProvider({
   // רינדור
   // ============================================================================
 
+  const isPersonal =
+    subscriptionTier === 'personal' || subscriptionTier === 'family';
+  const isFamily = subscriptionTier === 'family';
+
   return (
     <RevenueCatContext.Provider
       value={{
@@ -619,6 +659,9 @@ export function RevenueCatProvider({
         isPremium,
         isConfigured,
         isExpoGo,
+        subscriptionTier,
+        isPersonal,
+        isFamily,
         packages,
         customerData,
         purchasePackage,
