@@ -447,7 +447,7 @@ export default function AuthenticatedLayout() {
     }
 
     if (needsPaywallRedirect) {
-      router.replace('/(auth)/paywall');
+      router.replace('/(authenticated)/subscription');
     }
   }, [
     isAuthenticated,

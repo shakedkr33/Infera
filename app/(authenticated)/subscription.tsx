@@ -2,6 +2,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   Modal,
@@ -17,6 +19,9 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+
+import { useRevenueCat } from '@/contexts/RevenueCatContext';
+import { PACKAGE_IDS } from '@/utils/revenueCatConfig';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -82,14 +87,35 @@ const TOOLTIPS: Record<string, string> = {
     'אפשר להוסיף עד 5 חיות מחמד לפרופיל המשפחתי — בנוסף ל־6 בני המשפחה, בלי לתפוס מקום במכסה.',
 };
 
+// ─── Package Mapping ────────────────────────────────────────────────────────────
+
+const PACKAGE_MAP: Record<PlanType, Record<BillingCycle, string>> = {
+  personal: {
+    monthly: PACKAGE_IDS.personalMonthly,
+    annual: PACKAGE_IDS.personalAnnual,
+  },
+  family: {
+    monthly: PACKAGE_IDS.familyMonthly,
+    annual: PACKAGE_IDS.familyAnnual,
+  },
+};
+
+function getSelectedPackageId(plan: PlanType, cycle: BillingCycle): string {
+  return PACKAGE_MAP[plan][cycle];
+}
+
 // ─── Screen ────────────────────────────────────────────────────────────────────
 
 export default function SubscriptionScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { packages, purchasePackage, restorePurchases, isConfigured } =
+    useRevenueCat();
 
   const [selectedPlan, setSelectedPlan] = useState<PlanType>('family');
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('annual');
+  const [isPurchasing, setIsPurchasing] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
   const [launchGiftVisible, setLaunchGiftVisible] = useState(false);
   const [launchGiftActivated, setLaunchGiftActivated] = useState(false);
   const [couponExpanded, setCouponExpanded] = useState(false);
@@ -130,15 +156,46 @@ export default function SubscriptionScreen() {
     setLaunchGiftVisible(false);
   };
 
-  const handleCheckout = () => {
-    console.log('TODO: Start checkout in Phase 3B', {
-      selectedPlan,
-      billingCycle,
-      launchGiftActivated,
-    });
+  const handleCheckout = async (): Promise<void> => {
+    if (!isConfigured) {
+      Alert.alert('תשלומים', 'התשלומים אינם זמינים כרגע. נסי שוב מאוחר יותר.');
+      return;
+    }
+
+    const packageId = getSelectedPackageId(selectedPlan, billingCycle);
+
+    const packageExists = packages.some((p) => p.identifier === packageId);
+    if (!packageExists) {
+      Alert.alert('תשלומים', 'המסלול שבחרת לא זמין כרגע. נסי שוב מאוחר יותר.');
+      return;
+    }
+
+    setIsPurchasing(true);
+    try {
+      const success = await purchasePackage(packageId);
+      if (success) {
+        Alert.alert('הצלחה', 'הרכישה הושלמה בהצלחה! 🎉', [
+          { text: 'אישור', onPress: () => router.back() },
+        ]);
+      }
+    } finally {
+      setIsPurchasing(false);
+    }
   };
 
-  const handleContinueFree = () => {
+  const handleRestore = async (): Promise<void> => {
+    setIsRestoring(true);
+    try {
+      const success = await restorePurchases();
+      if (success) {
+        router.back();
+      }
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
+  const handleContinueFree = (): void => {
     router.back();
   };
 
@@ -415,24 +472,46 @@ export default function SubscriptionScreen() {
 
         {/* CTA */}
         <Pressable
-          style={s.primaryCta}
+          style={[s.primaryCta, isPurchasing && s.primaryCtaDisabled]}
           onPress={handleCheckout}
+          disabled={isPurchasing}
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel={ctaText}
         >
-          <Text style={s.primaryCtaText}>{ctaText}</Text>
+          {isPurchasing ? (
+            <ActivityIndicator color="#ffffff" />
+          ) : (
+            <Text style={s.primaryCtaText}>{ctaText}</Text>
+          )}
         </Pressable>
 
         {/* Secondary CTA */}
         <Pressable
           style={s.secondaryCta}
           onPress={handleContinueFree}
+          disabled={isPurchasing}
           accessible={true}
           accessibilityRole="button"
           accessibilityLabel="להמשיך עם הקהילות בחינם"
         >
           <Text style={s.secondaryCtaText}>להמשיך עם הקהילות בחינם</Text>
+        </Pressable>
+
+        {/* Restore purchases */}
+        <Pressable
+          style={s.secondaryCta}
+          onPress={handleRestore}
+          disabled={isRestoring || isPurchasing}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="שחזור רכישות"
+        >
+          {isRestoring ? (
+            <ActivityIndicator size="small" color={TEXT_MUTED} />
+          ) : (
+            <Text style={s.secondaryCtaText}>שחזור רכישות</Text>
+          )}
         </Pressable>
 
         {/* Free-tier explanation */}
@@ -907,6 +986,9 @@ const s = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
+  },
+  primaryCtaDisabled: {
+    opacity: 0.6,
   },
   primaryCtaText: {
     fontSize: 16,

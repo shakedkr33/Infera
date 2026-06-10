@@ -38,7 +38,6 @@ export default function SettingsScreen() {
     isPremium,
     isConfigured,
     isExpoGo,
-    presentPaywall,
     presentCustomerCenter,
     customerData,
   } = useRevenueCat();
@@ -215,7 +214,9 @@ export default function SettingsScreen() {
         <View className="mx-4 mb-4 gap-3">
           {!isPremium && (
             <TouchableOpacity
-              onPress={() => presentPaywall()}
+              onPress={() =>
+                router.push('/(authenticated)/subscription' as never)
+              }
               className={`${tw.flexRow} items-center gap-3 p-4 rounded-xl bg-[#4fc3f7]/10 border border-[#4fc3f7]/30`}
             >
               <ChevronLeft size={20} color="#4fc3f7" />

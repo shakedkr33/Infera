@@ -24,10 +24,10 @@ import { MOCK_PAYMENTS, PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import {
   ENTITLEMENT_ID,
   FAMILY_ENTITLEMENT_ID,
-  PERSONAL_ENTITLEMENT_ID,
-  type SubscriptionTier,
   getCurrentPlatformRevenueCatApiKey,
   isRevenueCatConfigured,
+  PERSONAL_ENTITLEMENT_ID,
+  type SubscriptionTier,
 } from '@/utils/revenueCatConfig';
 
 // ============================================================================
@@ -398,8 +398,8 @@ export function RevenueCatProvider({
 
         const { customerInfo } =
           await Purchases.purchasePackage(packageToPurchase);
+        await updateCustomerData(customerInfo as never);
         const hasPremium = checkHasPremium(customerInfo);
-        setIsPremium(hasPremium);
 
         return hasPremium;
       } catch (error: unknown) {
@@ -427,7 +427,7 @@ export function RevenueCatProvider({
         return false;
       }
     },
-    [isExpoGo, isConfigured]
+    [isExpoGo, isConfigured, updateCustomerData]
   );
 
   // ============================================================================
@@ -457,8 +457,8 @@ export function RevenueCatProvider({
     try {
       const Purchases = (await import('react-native-purchases')).default;
       const customerInfo = await Purchases.restorePurchases();
+      await updateCustomerData(customerInfo as never);
       const hasPremium = checkHasPremium(customerInfo);
-      setIsPremium(hasPremium);
 
       if (hasPremium) {
         Alert.alert('הצלחה', 'הרכישות שוחזרו בהצלחה! 🎉');
@@ -471,7 +471,7 @@ export function RevenueCatProvider({
       Alert.alert('שגיאה', 'שחזור הרכישות נכשל. אנא נסה שוב.');
       return false;
     }
-  }, [isExpoGo, isConfigured]);
+  }, [isExpoGo, isConfigured, updateCustomerData]);
 
   // ============================================================================
   // רענון מידע רוכש
