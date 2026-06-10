@@ -25,7 +25,6 @@ import {
 } from 'react-native';
 import { InYomiSplashScreen } from '@/components/InYomiSplashScreen';
 import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
-import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import { ActionSheetContext } from '@/contexts/ActionSheetContext';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
@@ -207,7 +206,7 @@ function ActionButton({
 
 export default function AuthenticatedLayout() {
   const { isAuthenticated, isLoading } = useConvexAuth();
-  const { isPremium, isLoading: isRevenueCatLoading } = useRevenueCat();
+  const { isLoading: isRevenueCatLoading } = useRevenueCat();
   // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition
   // hasLocalOnboardingData lets a just-registered user through while Convex
   // propagates the finishOnboarding mutation result (avoids redirect loop).
@@ -406,8 +405,6 @@ export default function AuthenticatedLayout() {
         !familyBootstrapStatus.hasConfiguredFamily &&
         !familyBootstrapStatus.joinedExistingSpace &&
         familyBootstrapStatus.familySetupSkippedAt === null));
-  const needsPaywallRedirect =
-    isAuthenticated && PAYMENT_SYSTEM_ENABLED && !isPremium;
   // FIXED: family profile persistence — for returning users, hold the spinner until hydrateFromServer
   // has actually run (onboardingCompleted flips true). Without this gate, tabs render with empty
   // OnboardingContext before the hydration effect fires, causing a flash of personal-only state in
@@ -445,15 +442,10 @@ export default function AuthenticatedLayout() {
       router.replace('/(authenticated)/family-bootstrap');
       return;
     }
-
-    if (needsPaywallRedirect) {
-      router.replace('/(authenticated)/subscription');
-    }
   }, [
     isAuthenticated,
     isReadyToRoute,
     needsOnboardingRedirect,
-    needsPaywallRedirect,
     needsProfileSetupRedirect,
     router,
   ]);
@@ -462,8 +454,7 @@ export default function AuthenticatedLayout() {
     !isReadyToRoute ||
     !isAuthenticated ||
     needsOnboardingRedirect ||
-    needsProfileSetupRedirect ||
-    needsPaywallRedirect
+    needsProfileSetupRedirect
   ) {
     return <InYomiSplashScreen />;
   }
