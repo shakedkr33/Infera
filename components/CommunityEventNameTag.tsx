@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import { Text, View } from 'react-native';
+import { rtl } from '@/lib/rtl';
 
 const TAG_BG = '#E8F5FD';
 const TAG_TEXT = '#36a9e2';
@@ -40,7 +41,7 @@ export function CommunityEventNameTag({
             color: TAG_TEXT,
             fontSize: 11,
             fontWeight: '600',
-            textAlign: 'right',
+            textAlign: rtl.textAlign,
           }}
         >
           {trimmed}
