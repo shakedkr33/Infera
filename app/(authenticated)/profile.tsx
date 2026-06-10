@@ -24,6 +24,7 @@ import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
+import { rtl } from '@/lib/rtl';
 
 // ============================================================================
 // מסך פרופיל
@@ -539,12 +540,12 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   profileSubtitle: {
     fontSize: 13,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   premiumLabel: {
@@ -555,7 +556,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#36a9e2',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 4,
   },
 
@@ -566,7 +567,7 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     paddingHorizontal: 20,
     marginBottom: 8,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   // ── Settings rows ──────────────────────────────────────────────────────────
@@ -593,7 +594,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   rowLabelDanger: {
     color: '#ef4444',
@@ -601,7 +602,7 @@ const styles = StyleSheet.create({
   rowNote: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
 
@@ -631,7 +632,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: '#eab308',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   debugBody: {
     padding: 16,
@@ -645,7 +646,7 @@ const styles = StyleSheet.create({
   debugSectionLabel: {
     fontSize: 13,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 8,
   },
   debugRows: {
@@ -679,7 +680,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   // ── Dev banner ─────────────────────────────────────────────────────────────
