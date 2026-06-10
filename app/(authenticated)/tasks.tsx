@@ -29,6 +29,7 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { InlineSubtasksEditor } from '@/lib/components/task/InlineSubtasksEditor';
+import { rtl } from '@/lib/rtl';
 import { getTaskCategoryLabel } from '@/lib/types/task';
 
 const PRIMARY_BLUE = '#36A9E2';
@@ -1955,7 +1956,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     color: TEXT_DARK,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
 
@@ -1993,7 +1994,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: TEXT_MUTED,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   filterChipTextActive: {
@@ -2019,7 +2020,7 @@ const styles = StyleSheet.create({
     color: TEXT_DARK,
     marginBottom: 10,
     alignSelf: 'stretch',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   sectionTitleNoMargin: {
@@ -2028,14 +2029,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: TEXT_DARK,
     alignSelf: 'stretch',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   sectionHelper: {
     color: TEXT_MUTED,
     fontSize: 13,
     alignSelf: 'stretch',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: -4,
     marginBottom: 10,
     writingDirection: 'rtl',
@@ -2074,7 +2075,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     alignSelf: 'stretch',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 8,
     writingDirection: 'rtl',
   },
@@ -2136,7 +2137,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: TEXT_DARK,
     marginBottom: 5,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
     lineHeight: 22,
   },
@@ -2159,7 +2160,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 13,
     color: TEXT_MUTED,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
     lineHeight: 18,
   },
@@ -2244,7 +2245,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: TEXT_MUTED,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   categoryTagText: {
     color: PRIMARY_BLUE,
@@ -2276,7 +2277,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 13,
     color: TEXT_MUTED,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   expandButton: {
@@ -2332,7 +2333,7 @@ const styles = StyleSheet.create({
     color: TEXT_DARK,
     fontSize: 13,
     lineHeight: 18,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   subtaskTextCompleted: {
@@ -2377,7 +2378,7 @@ const styles = StyleSheet.create({
     color: TEXT_DARK,
     fontSize: 16,
     fontWeight: '800',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   emptyHelper: {
@@ -2385,7 +2386,7 @@ const styles = StyleSheet.create({
     color: TEXT_MUTED,
     fontSize: 13,
     lineHeight: 20,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   bottomSpacer: {
