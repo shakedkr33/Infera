@@ -14,9 +14,5 @@ export async function loadPersistedBirthdays(): Promise<Birthday[] | null> {
 }
 
 export async function persistBirthdays(birthdays: Birthday[]): Promise<void> {
-  try {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(birthdays));
-  } catch {
-    // silently ignore — data stays in memory for the current session
-  }
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(birthdays));
 }

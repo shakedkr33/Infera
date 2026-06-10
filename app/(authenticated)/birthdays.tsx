@@ -17,6 +17,8 @@ import {
   AddPersonBottomSheet,
   type SelectedContactData,
 } from '@/components/onboarding/AddPersonBottomSheet';
+import { UpgradeModal } from '@/components/UpgradeModal';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
@@ -26,8 +28,10 @@ const PRIMARY = '#36a9e2';
 export default function BirthdaysScreen(): React.JSX.Element {
   const { openBirthdayCard, openBirthdayEdit, deleteBirthday, birthdays } =
     useBirthdaySheets();
+  const { isExpiredFree } = useEffectiveAccess();
   const [search, setSearch] = useState('');
   const [showAddSheet, setShowAddSheet] = useState(false);
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
 
   const handleSwipeDelete = (birthday: Birthday): void => {
     Alert.alert('מחיקה', 'האם למחוק את יום ההולדת?', [
@@ -111,7 +115,13 @@ export default function BirthdaysScreen(): React.JSX.Element {
         <MainScreenHeader
           title="ימי הולדת 🎂"
           showAdd={true}
-          onAdd={() => setShowAddSheet(true)}
+          onAdd={() => {
+            if (isExpiredFree) {
+              setUpgradeModalVisible(true);
+              return;
+            }
+            setShowAddSheet(true);
+          }}
           returnTo="/(authenticated)/birthdays"
         />
       </View>
@@ -145,6 +155,12 @@ export default function BirthdaysScreen(): React.JSX.Element {
         onClose={() => setShowAddSheet(false)}
         onContactSelected={handleContactSelected}
         onManual={() => openBirthdayEdit(undefined)}
+      />
+
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason="personal"
+        onClose={() => setUpgradeModalVisible(false)}
       />
     </SafeAreaView>
   );
