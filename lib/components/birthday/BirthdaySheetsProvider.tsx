@@ -5,6 +5,8 @@ import {
   useEffect,
   useState,
 } from 'react';
+import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import {
   loadPersistedBirthdays,
   persistBirthdays,
@@ -92,12 +94,16 @@ interface ProviderProps {
 export function BirthdaySheetsProvider({
   children,
 }: ProviderProps): React.JSX.Element {
+  const { isExpiredFree } = useEffectiveAccess();
+
   const [birthdays, setBirthdays] = useState<Birthday[]>([]);
   const [selectedBirthday, setSelectedBirthday] = useState<Birthday | null>(
     null
   );
   const [cardSheetVisible, setCardSheetVisible] = useState(false);
   const [editSheetVisible, setEditSheetVisible] = useState(false);
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
+  const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>('personal');
 
   // Load persisted birthdays on mount; seed once on first launch.
   useEffect(() => {
@@ -123,11 +129,21 @@ export function BirthdaySheetsProvider({
   };
 
   const openBirthdayEdit = (birthday?: Birthday): void => {
+    if (isExpiredFree) {
+      setUpgradeReason('personal');
+      setUpgradeModalVisible(true);
+      return;
+    }
     setSelectedBirthday(birthday ?? null);
     setEditSheetVisible(true);
   };
 
   const openBirthdayCreate = (): void => {
+    if (isExpiredFree) {
+      setUpgradeReason('personal');
+      setUpgradeModalVisible(true);
+      return;
+    }
     setSelectedBirthday(null);
     setEditSheetVisible(true);
   };
@@ -139,6 +155,12 @@ export function BirthdaySheetsProvider({
   };
 
   const handleEdit = (): void => {
+    if (isExpiredFree) {
+      setCardSheetVisible(false);
+      setUpgradeReason('personal');
+      setUpgradeModalVisible(true);
+      return;
+    }
     setCardSheetVisible(false);
     setTimeout(() => setEditSheetVisible(true), 300);
   };
@@ -214,6 +236,11 @@ export function BirthdaySheetsProvider({
         onClose={closeAll}
         onSave={handleSave}
         onDelete={selectedBirthday?.id ? handleDelete : undefined}
+      />
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason={upgradeReason}
+        onClose={() => setUpgradeModalVisible(false)}
       />
     </BirthdaySheetsContext.Provider>
   );
