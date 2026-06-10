@@ -236,7 +236,7 @@ function HomeSubtaskSection({
           style={{
             fontSize: 12,
             color: '#64748b',
-            textAlign: 'right',
+            textAlign: getTextAlign(),
             flex: 1,
           }}
         >
@@ -291,7 +291,7 @@ function HomeSubtaskSection({
                     ? 'line-through'
                     : 'none',
                   flex: 1,
-                  textAlign: 'right',
+                  textAlign: getTextAlign(),
                 }}
                 numberOfLines={2}
               >
@@ -1988,7 +1988,7 @@ export default function HomeScreen() {
                       color: '#36a9e2',
                       fontSize: 22,
                       fontWeight: '700',
-                      textAlign: 'right',
+                      textAlign: getTextAlign(),
                       marginBottom: 8,
                     }}
                   >
@@ -2231,7 +2231,11 @@ export default function HomeScreen() {
                 }}
               >
                 <Text
-                  style={{ fontSize: 13, color: '#94a3b8', textAlign: 'right' }}
+                  style={{
+                    fontSize: 13,
+                    color: '#94a3b8',
+                    textAlign: getTextAlign(),
+                  }}
                 >
                   אין ימי הולדת ב-30 הימים הקרובים
                 </Text>
@@ -3280,7 +3284,7 @@ export default function HomeScreen() {
                           fontSize: 11,
                           color: '#94a3b8',
                           marginRight: 8,
-                          textAlign: 'right',
+                          textAlign: getTextAlign(),
                         }}
                       >
                         {formatOverdueDate(task)}
@@ -3434,7 +3438,7 @@ export default function HomeScreen() {
                     fontSize: 18,
                     fontWeight: '700',
                     color: '#111517',
-                    textAlign: 'right',
+                    textAlign: getTextAlign(),
                     marginBottom: 16,
                   }}
                 >
