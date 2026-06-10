@@ -6,10 +6,11 @@
 // permission flags. All subscription/trial gating in the UI should read from
 // this hook — never check plan strings or RevenueCat state directly in screens.
 //
-// PHASE 2A — Mock/Dev mode only:
-//   Access is derived from DEV_ACCESS_OVERRIDE when __DEV__ and the override is
-//   set. Otherwise defaults to "trial_active" (all features open), matching the
-//   current production behavior where PAYMENT_SYSTEM_ENABLED = false.
+// PHASE 3B-2 — RevenueCat tier wired up (payments still disabled):
+//   Access precedence order (highest to lowest priority):
+//     1. DEV_ACCESS_OVERRIDE — only in __DEV__, always wins.
+//     2. RevenueCat subscriptionTier — only when PAYMENT_SYSTEM_ENABLED=true.
+//     3. Fallback: "trial_active" — when PAYMENT_SYSTEM_ENABLED=false (current).
 //
 // FUTURE — Phase 2B and beyond:
 //   TODO: Replace the default fallback with real derivation from Convex:
@@ -18,8 +19,9 @@
 //   TODO: daysRemaining must be derived from trialEndsAt, NEVER stored as a
 //         mutable counter field. Compute it as:
 //         Math.ceil((trialEndsAt - Date.now()) / 86_400_000)
-//   TODO: Cross-check with RevenueCat entitlement state once RevenueCat is
-//         connected and PAYMENT_SYSTEM_ENABLED is true.
+//   TODO: When PAYMENT_SYSTEM_ENABLED becomes true, also cross-check Convex
+//         trial fields for users whose trial is still active but have no
+//         RevenueCat entitlement yet (free trial period).
 //   TODO: Add server-side enforcement in Convex mutations. UI gating alone is
 //         NOT sufficient for production — a motivated user could bypass client
 //         checks. Personal/family mutations must verify access server-side.
@@ -27,14 +29,48 @@
 //
 // ============================================================================
 
+import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import {
   DEV_ACCESS_OVERRIDE,
   type EffectiveAccess,
 } from '@/config/devAccessConfig';
+import { useRevenueCat } from '@/contexts/RevenueCatContext';
+import type { SubscriptionTier } from '@/utils/revenueCatConfig';
 
 // Declare the React Native global so TypeScript is satisfied without importing
 // the full RN package just for this constant.
 declare const __DEV__: boolean;
+
+// ============================================================================
+// RevenueCat tier normalizer — testable without React
+// ============================================================================
+
+/**
+ * Maps a RevenueCat SubscriptionTier to the app's EffectiveAccess model.
+ *
+ * Called only when PAYMENT_SYSTEM_ENABLED is true so that RevenueCat is
+ * the authoritative source of paid access.
+ *
+ * - 'family'   → 'family'             (personal + family access)
+ * - 'personal' → 'personal'           (personal access only)
+ * - null       → 'trial_expired_free' (no active entitlement, read-only)
+ *
+ * "free" is not a separate tier in EffectiveAccess — the absence of a
+ * RevenueCat entitlement maps to 'trial_expired_free' (locked paid features).
+ */
+export function normalizeSubscriptionTier(
+  tier: SubscriptionTier
+): EffectiveAccess {
+  switch (tier) {
+    case 'family':
+      return 'family';
+    case 'personal':
+      return 'personal';
+    default:
+      // null / undefined / unknown value → no subscription, free mode
+      return 'trial_expired_free';
+  }
+}
 
 // ============================================================================
 // Pure permission helper — testable without React
@@ -124,42 +160,61 @@ export interface UseEffectiveAccessResult extends AccessPermissions {
 /**
  * Returns the current effective access level and all derived permission flags.
  *
- * Phase 2A: reads from DEV_ACCESS_OVERRIDE when in __DEV__, otherwise
- * defaults to "trial_active" (full access, matching the current production
- * behavior of PAYMENT_SYSTEM_ENABLED = false).
+ * Phase 3B-2: RevenueCat subscriptionTier is now read and wired into the
+ * precedence chain, but only takes effect when PAYMENT_SYSTEM_ENABLED=true.
+ * While PAYMENT_SYSTEM_ENABLED remains false the behavior is identical to
+ * the previous phase (full trial_active access for all users).
+ *
+ * Access precedence (highest → lowest priority):
+ *   1. DEV_ACCESS_OVERRIDE   — __DEV__ only, always wins regardless of flags.
+ *   2. RevenueCat tier       — only when PAYMENT_SYSTEM_ENABLED=true.
+ *   3. 'trial_active'        — safe fallback when PAYMENT_SYSTEM_ENABLED=false.
  *
  * @example
  * const { canCreatePersonalContent, canEditFamilyContent } = useEffectiveAccess();
  * if (!canCreatePersonalContent) showUpgradeModal();
  */
 export function useEffectiveAccess(): UseEffectiveAccessResult {
-  // ── Phase 2A: derive access ─────────────────────────────────────────────
-  //
-  // Priority order (each phase extends this block):
-  //   1. DEV_ACCESS_OVERRIDE (dev/QA builds only)           ← Phase 2A
-  //   2. Convex user.subscriptionTier + trialEndsAt         ← TODO Phase 2B
-  //   3. RevenueCat entitlement cross-check                 ← TODO Phase 2C
-  //   4. Fallback: "trial_active" (safe default)
-  //
-  let effectiveAccess: EffectiveAccess = 'trial_active';
+  // Read RevenueCat tier. RevenueCatProvider wraps the root layout so this
+  // is always safe to call. When PAYMENT_SYSTEM_ENABLED=false the context
+  // returns subscriptionTier=null (no-op in the logic below).
+  const { subscriptionTier } = useRevenueCat();
+
+  // ── Derive effectiveAccess using priority order ──────────────────────────
+
+  let effectiveAccess: EffectiveAccess;
 
   if (__DEV__ && DEV_ACCESS_OVERRIDE !== null) {
+    // ── Priority 1: Developer / QA override ─────────────────────────────
+    // Only active in __DEV__ builds. Never runs in production.
+    // Overrides RevenueCat AND the payment flag — always wins in dev.
     effectiveAccess = DEV_ACCESS_OVERRIDE;
+  } else if (PAYMENT_SYSTEM_ENABLED) {
+    // ── Priority 2: RevenueCat subscription tier ─────────────────────────
+    // PAYMENT_SYSTEM_ENABLED=true means RevenueCat is the source of truth.
+    // normalizeSubscriptionTier maps the RC tier to EffectiveAccess:
+    //   'family'   → 'family'
+    //   'personal' → 'personal'
+    //   null       → 'trial_expired_free'
+    effectiveAccess = normalizeSubscriptionTier(subscriptionTier);
+  } else {
+    // ── Priority 3: Fallback — payments disabled ─────────────────────────
+    // PAYMENT_SYSTEM_ENABLED=false (current state). Grant full trial access
+    // so no existing user is accidentally locked out.
+    //
+    // TODO (Phase 2B): Replace with Convex trial derivation:
+    //   const user = useQuery(api.users.getCurrentUser);
+    //   if (user?.trialEndsAt && Date.now() > user.trialEndsAt) {
+    //     effectiveAccess = 'trial_expired_free';
+    //   } else if (user?.subscriptionTier) {
+    //     effectiveAccess = user.subscriptionTier;
+    //   } else {
+    //     effectiveAccess = 'trial_active';
+    //   }
+    //   daysRemaining = Math.ceil((trialEndsAt - Date.now()) / 86_400_000)
+    //   Never store daysRemaining as a field — always derive from trialEndsAt.
+    effectiveAccess = 'trial_active';
   }
-
-  // TODO (Phase 2B): Read Convex user trial/subscription fields here.
-  //   const user = useQuery(api.users.getCurrentUser);
-  //   if (user?.trialEndsAt && Date.now() > user.trialEndsAt && !user.subscriptionTier) {
-  //     effectiveAccess = 'trial_expired_free';
-  //   } else if (user?.subscriptionTier) {
-  //     effectiveAccess = user.subscriptionTier; // 'personal' | 'family'
-  //   }
-  //   Remember: daysRemaining = Math.ceil((trialEndsAt - Date.now()) / 86_400_000)
-  //   Never store daysRemaining as a field — always derive it from trialEndsAt.
-
-  // TODO (Phase 2C): Cross-check with RevenueCat entitlements when
-  //   PAYMENT_SYSTEM_ENABLED is true. RevenueCat is the source of truth for
-  //   paid plan status. Convex trial fields are the source of truth for trial.
 
   // ── Derive booleans ─────────────────────────────────────────────────────
 
