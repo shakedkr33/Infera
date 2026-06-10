@@ -4,12 +4,13 @@
 // ניהול מפתחות RevenueCat API לפי פלטפורמה וסביבה
 //
 // API Key Prefixes (per RevenueCat docs):
-// - Test Store: test_... (for development testing only)
-// - iOS Production: appl_...
-// - Android Production: goog_...
+// - Test Store: test_... (development __DEV__ builds only)
+// - iOS Production: appl_... (TestFlight + App Store)
+// - Android Production: goog_... (internal testing + Play Store)
 //
-// CRITICAL: Test Store key must ONLY be used in development builds.
-// The SDK will crash/alert in production builds if configured with a Test Store key.
+// CRITICAL: Test Store key must ONLY be used in __DEV__ builds.
+// Using a test_ key in a release/TestFlight build causes a
+// RevenueCat APIKeyValidationResult crash on launch.
 
 import { Platform } from 'react-native';
 
@@ -65,22 +66,32 @@ export const PRODUCT_IDS = {
 // ============================================================================
 
 /**
- * קבלת מפתח RevenueCat API המתאים לפי פלטפורמה וסביבה
- * סדר עדיפויות:
- * 1. עדיפות עליונה: מפתח Test Store (לבדיקות פיתוח)
- * 2. Production - לפי פלטפורמה
- * 3. מחזיר null אם לא מוגדר מפתח (מאפשר פיתוח ללא מפתחות)
+ * Returns the appropriate RevenueCat API key for the given platform and build type.
+ *
+ * Priority order:
+ *   1. __DEV__ only — Test Store key (test_...) when EXPO_PUBLIC_REVENUECAT_TEST_STORE_API_KEY
+ *      is set. Never used in release/TestFlight/Play Store builds (__DEV__ is false there).
+ *   2. iOS release/TestFlight — EXPO_PUBLIC_REVENUECAT_IOS_API_KEY (appl_...)
+ *   3. Android release/internal testing — EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY (goog_...)
+ *   4. Returns null if no key is configured (allows builds without payment keys).
  */
+
+// Declare the React Native global so TypeScript resolves it without importing RN here.
+declare const __DEV__: boolean;
+
 export function getRevenueCatApiKey(
   platform: RevenueCatPlatform
 ): string | null {
-  // 1. עדיפות עליונה: מפתח Test Store (לבדיקות פיתוח)
-  const testStoreKey = process.env.EXPO_PUBLIC_REVENUECAT_TEST_STORE_API_KEY;
-  if (testStoreKey) {
-    return testStoreKey;
+  // 1. Test Store key — __DEV__ builds only (Expo Go, local dev, development EAS builds).
+  //    NEVER used in TestFlight or production — would crash with APIKeyValidationResult.
+  if (__DEV__) {
+    const testStoreKey = process.env.EXPO_PUBLIC_REVENUECAT_TEST_STORE_API_KEY;
+    if (testStoreKey) {
+      return testStoreKey;
+    }
   }
 
-  // 2. Production - לפי פלטפורמה
+  // 2. Platform-specific production/release key.
   if (platform === 'ios') {
     return process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || null;
   }
