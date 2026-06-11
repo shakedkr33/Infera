@@ -3975,7 +3975,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     alignItems: 'center',
   },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#6b7280' },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#6b7280', textAlign: 'right' },
   seeAll: { fontSize: 12, fontWeight: '700', color: '#36a9e2' },
   birthdayCard: {
     backgroundColor: '#fff',
@@ -4053,7 +4053,7 @@ const styles = StyleSheet.create({
   },
 
   // ── Timeline ────────────────────────────────────────────────────────────────
-  timelineTitle: { fontSize: 18, fontWeight: '700', color: '#111517' },
+  timelineTitle: { fontSize: 18, fontWeight: '700', color: '#111517', textAlign: 'right' },
   timeColumn: { width: 48, alignItems: 'center', paddingTop: 14 },
   timeText: { fontSize: 13, fontWeight: '700', color: '#94a3b8' },
   timelineCard: {

@@ -994,6 +994,7 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#ffffff',
+    textAlign: 'right',
   },
   secondaryCta: {
     paddingVertical: 12,
@@ -1004,11 +1005,12 @@ const s = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: TEXT_MUTED,
+    textAlign: 'right',
   },
   freeCtaHint: {
     fontSize: 13,
     color: TEXT_MUTED,
-    textAlign: 'center',
+    textAlign: 'right',
     writingDirection: 'rtl',
     lineHeight: 20,
     marginBottom: 24,

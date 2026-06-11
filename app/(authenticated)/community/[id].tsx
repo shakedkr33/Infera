@@ -3733,7 +3733,7 @@ const styles = StyleSheet.create({
 
   // ── Reminder rows (כדאי לזכור section in הכל tab)
   reminderRow: {
-    flexDirection: 'row',
+    flexDirection: 'row-reverse',
     alignItems: 'center',
     backgroundColor: '#fff',
     borderRadius: 16,
