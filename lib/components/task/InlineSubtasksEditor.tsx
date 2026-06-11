@@ -7,7 +7,7 @@
  */
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -69,7 +69,7 @@ function InlineAttachmentPreview({
   mimeType?: string;
   displayName?: string;
   originalName?: string;
-  onPress?: () => void;
+  onPress?: (uri: string) => void;
 }) {
   const storageIdTyped = storageId as Id<'_storage'> | undefined;
   const storageUrl = useQuery(
@@ -79,6 +79,14 @@ function InlineAttachmentPreview({
   const uri = localUri ?? storageUrl ?? undefined;
   const isImage = (mimeType ?? '').startsWith('image/');
 
+  // Pre-warm RN's image cache as soon as the URI is known so the preview
+  // opens instantly instead of downloading the image again.
+  useEffect(() => {
+    if (isImage && uri) {
+      void Image.prefetch(uri);
+    }
+  }, [isImage, uri]);
+
   if (!storageId && !localUri) return null;
 
   if (isImage && uri) {
@@ -86,7 +94,7 @@ function InlineAttachmentPreview({
       <Pressable
         onPress={(e) => {
           e.stopPropagation();
-          onPress?.();
+          onPress?.(uri);
         }}
         style={ils.thumbBtn}
         accessible={true}
@@ -102,7 +110,7 @@ function InlineAttachmentPreview({
     <Pressable
       onPress={(e) => {
         e.stopPropagation();
-        onPress?.();
+        if (uri) onPress?.(uri);
       }}
       style={ils.fileChip}
       accessible={true}
@@ -333,15 +341,20 @@ export function InlineSubtasksEditor({
           </Text>
 
           {/* Attachment indicator */}
-          {storageId ? (
+          {(storageId ?? subtask.attachment?.localUri) ? (
             <InlineAttachmentPreview
               storageId={storageId}
+              localUri={subtask.attachment?.localUri}
               mimeType={mimeType}
               displayName={displayName}
               originalName={originalName}
-              onPress={() => {
-                if (mimeType?.startsWith('image/') && onOpenImagePreview) {
-                  onOpenImagePreview('');
+              onPress={(resolvedUri) => {
+                if (
+                  mimeType?.startsWith('image/') &&
+                  onOpenImagePreview &&
+                  resolvedUri
+                ) {
+                  onOpenImagePreview(resolvedUri);
                 }
               }}
             />

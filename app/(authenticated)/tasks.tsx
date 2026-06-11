@@ -1,8 +1,9 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Image,
@@ -552,6 +553,14 @@ export default function TasksScreen() {
     new Set()
   );
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const [previewImageError, setPreviewImageError] = useState(false);
+  const [previewImageLoading, setPreviewImageLoading] = useState(false);
+
+  const openImagePreview = useCallback((uri: string) => {
+    setPreviewImageError(false);
+    setPreviewImageLoading(true);
+    setPreviewImageUri(uri);
+  }, []);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const { isExpiredFree } = useEffectiveAccess();
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
@@ -1216,7 +1225,7 @@ export default function TasksScreen() {
                         onToggleCompletion={toggleTaskCompletion}
                         onToggleExpansion={toggleTaskExpansion}
                         onToggleSubtask={toggleSubtask}
-                        onOpenImagePreview={setPreviewImageUri}
+                        onOpenImagePreview={openImagePreview}
                         onPressTask={handleTaskPress}
                         onSoftDelete={handleSoftDelete}
                         onOpenEvent={handleOpenTaskEvent}
@@ -1285,7 +1294,7 @@ export default function TasksScreen() {
                           onToggleSubtask={(subtaskId) =>
                             toggleSubtask(task, subtaskId)
                           }
-                          onOpenImagePreview={setPreviewImageUri}
+                          onOpenImagePreview={openImagePreview}
                           onPress={() => handleTaskPress(task)}
                         />
                       </Swipeable>
@@ -1330,7 +1339,7 @@ export default function TasksScreen() {
                       onToggleSubtask={(subtaskId) =>
                         toggleSubtask(task, subtaskId)
                       }
-                      onOpenImagePreview={setPreviewImageUri}
+                      onOpenImagePreview={openImagePreview}
                       onPress={() => handleTaskPress(task)}
                     />
                   ))}
@@ -1374,32 +1383,86 @@ export default function TasksScreen() {
         visible={previewImageUri !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => setPreviewImageUri(null)}
+        onRequestClose={() => {
+          setPreviewImageUri(null);
+          setPreviewImageError(false);
+          setPreviewImageLoading(false);
+        }}
       >
         <View style={styles.previewOverlay}>
           <Pressable
             style={StyleSheet.absoluteFill}
-            onPress={() => setPreviewImageUri(null)}
+            onPress={() => {
+              setPreviewImageUri(null);
+              setPreviewImageError(false);
+              setPreviewImageLoading(false);
+            }}
             accessible={false}
           />
           {previewImageUri ? (
             <View style={styles.previewCard}>
               <Pressable
                 style={styles.previewCloseButton}
-                onPress={() => setPreviewImageUri(null)}
+                onPress={() => {
+                  setPreviewImageUri(null);
+                  setPreviewImageError(false);
+                  setPreviewImageLoading(false);
+                }}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="סגירה"
               >
                 <MaterialIcons name="close" size={24} color="#ffffff" />
               </Pressable>
-              <Image
-                source={{ uri: previewImageUri }}
-                style={styles.previewImage}
-                resizeMode="contain"
-                accessible={true}
-                accessibilityLabel="תצוגה מקדימה של תמונה"
-              />
+              {previewImageError ? (
+                <View style={styles.previewErrorContainer}>
+                  <MaterialIcons
+                    name="broken-image"
+                    size={48}
+                    color="#94a3b8"
+                  />
+                  <Text style={styles.previewErrorText}>
+                    לא הצלחנו להציג את התמונה
+                  </Text>
+                  <Pressable
+                    style={styles.previewErrorClose}
+                    onPress={() => {
+                      setPreviewImageUri(null);
+                      setPreviewImageError(false);
+                      setPreviewImageLoading(false);
+                    }}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel="סגור"
+                  >
+                    <Text style={styles.previewErrorCloseText}>סגור</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <>
+                  <Image
+                    source={{ uri: previewImageUri }}
+                    style={styles.previewImage}
+                    resizeMode="contain"
+                    accessible={true}
+                    accessibilityLabel="תצוגה מקדימה של תמונה"
+                    onLoadStart={() => setPreviewImageLoading(true)}
+                    onLoadEnd={() => setPreviewImageLoading(false)}
+                    onError={() => {
+                      setPreviewImageLoading(false);
+                      setPreviewImageError(true);
+                    }}
+                  />
+                  {previewImageLoading ? (
+                    <View style={styles.previewLoadingOverlay}>
+                      <ActivityIndicator size="large" color="#ffffff" />
+                      <Text style={styles.previewLoadingText}>
+                        טוענים את התמונה...
+                      </Text>
+                    </View>
+                  ) : null}
+                </>
+              )}
             </View>
           ) : null}
         </View>
@@ -2405,6 +2468,41 @@ const styles = StyleSheet.create({
   previewImage: {
     width: '100%',
     height: '100%',
+  },
+  previewLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  previewLoadingText: {
+    color: '#ffffff',
+    fontSize: 15,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  previewErrorContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  previewErrorText: {
+    color: '#94a3b8',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  previewErrorClose: {
+    marginTop: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  previewErrorCloseText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
   },
 
   /* Swipe actions */
