@@ -158,7 +158,7 @@ export default function SubscriptionScreen() {
 
   const handleCheckout = async (): Promise<void> => {
     if (!isConfigured) {
-      Alert.alert('תשלומים', 'התשלומים אינם זמינים כרגע. נסי שוב מאוחר יותר.');
+      Alert.alert('תשלומים', 'התשלומים אינם זמינים כרגע. אפשר לנסות שוב מאוחר יותר.');
       return;
     }
 
@@ -166,7 +166,7 @@ export default function SubscriptionScreen() {
 
     const packageExists = packages.some((p) => p.identifier === packageId);
     if (!packageExists) {
-      Alert.alert('תשלומים', 'המסלול שבחרת לא זמין כרגע. נסי שוב מאוחר יותר.');
+      Alert.alert('תשלומים', 'המסלול שבחרת לא זמין כרגע. אפשר לנסות שוב מאוחר יותר.');
       return;
     }
 
