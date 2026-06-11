@@ -959,11 +959,6 @@ export default function TasksScreen() {
   ]);
 
   const toggleTaskCompletion = async (task: DisplayTask): Promise<void> => {
-    // Community event tasks are always free — only gate personal/family tasks.
-    if (isExpiredFree && !task.communityId && task.kind !== 'eventTask') {
-      setUpgradeModalVisible(true);
-      return;
-    }
     try {
       if (task.kind === 'eventTask') {
         await toggleEventTaskCompletedMutation({
@@ -994,10 +989,6 @@ export default function TasksScreen() {
     subtaskId: string
   ): Promise<void> => {
     if (task.kind !== 'task') return;
-    if (isExpiredFree && !task.communityId) {
-      setUpgradeModalVisible(true);
-      return;
-    }
     try {
       await toggleSubtaskMutation({
         id: task.id as Id<'tasks'>,
@@ -1054,12 +1045,6 @@ export default function TasksScreen() {
 
   const handleSoftDelete = (task: DisplayTask): void => {
     if (!currentUserId) return;
-    // handleSoftDelete is only called for isPersonallyDeletableDisplayTask,
-    // which excludes community tasks — so any expiredFree check here is safe.
-    if (isExpiredFree) {
-      setUpgradeModalVisible(true);
-      return;
-    }
     const shared = isSharedTask(task, currentUserId);
     const title = shared ? 'למחוק את המשימה המשותפת?' : 'למחוק את המשימה?';
     const message = shared

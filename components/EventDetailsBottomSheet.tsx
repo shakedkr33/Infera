@@ -1016,7 +1016,7 @@ export function EventDetailsBottomSheet({
                     disabled={!canCancel}
                     icon="event-busy"
                     label="ביטול"
-                    onPress={() => handleGatedAction(handleCancel)}
+                    onPress={handleCancel}
                   />
                   <QuickAction
                     color="#2563eb"

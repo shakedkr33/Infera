@@ -42,4 +42,4 @@ export type EffectiveAccess =
 
 // Set to one of the EffectiveAccess values above to override.
 // Leave as null to use the default derivation logic in useEffectiveAccess.
-export const DEV_ACCESS_OVERRIDE: EffectiveAccess | null = 'trial_expired_free';
+export const DEV_ACCESS_OVERRIDE: EffectiveAccess | null = null;

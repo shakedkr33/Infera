@@ -505,12 +505,12 @@ export default function SubscriptionScreen() {
           disabled={isRestoring || isPurchasing}
           accessible={true}
           accessibilityRole="button"
-          accessibilityLabel="שחזור רכישות"
+          accessibilityLabel="כבר רכשת בעבר? שחזר/י את הרכישה כאן"
         >
           {isRestoring ? (
             <ActivityIndicator size="small" color={TEXT_MUTED} />
           ) : (
-            <Text style={s.secondaryCtaText}>שחזור רכישות</Text>
+            <Text style={s.secondaryCtaText}>כבר רכשת בעבר? שחזר/י את הרכישה כאן</Text>
           )}
         </Pressable>
 

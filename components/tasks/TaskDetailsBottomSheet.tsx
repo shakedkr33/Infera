@@ -615,7 +615,7 @@ export function TaskDetailsBottomSheet({
                 <View style={s.actionBlock}>
                   {task.completed ? (
                     <Pressable
-                      onPress={() => handleGatedAction(handleToggle)}
+                      onPress={handleToggle}
                       disabled={isToggling}
                       accessible
                       accessibilityRole="button"
@@ -636,7 +636,7 @@ export function TaskDetailsBottomSheet({
                     <>
                       {/* Primary: סמן כבוצע */}
                       <Pressable
-                        onPress={() => handleGatedAction(handleToggle)}
+                        onPress={handleToggle}
                         disabled={isToggling || isPostponing}
                         accessible
                         accessibilityRole="button"
@@ -686,7 +686,7 @@ export function TaskDetailsBottomSheet({
 
                           {isDeletable ? (
                             <Pressable
-                              onPress={() => handleGatedAction(handleDelete)}
+                              onPress={handleDelete}
                               disabled={
                                 isToggling || isPostponing || isDeleting
                               }

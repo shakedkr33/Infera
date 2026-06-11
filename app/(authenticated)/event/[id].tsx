@@ -504,7 +504,7 @@ export default function EventDetailScreen() {
         label: 'בטל אירוע',
         iconName: 'close-circle-outline',
         danger: true,
-        onPress: () => handleGatedAction(() => setShowCancelDialog(true)),
+        onPress: () => setShowCancelDialog(true),
       });
     }
     return items;
