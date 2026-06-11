@@ -1208,7 +1208,7 @@ export default function CalendarScreen(): React.JSX.Element {
   const spaceId = useQuery(api.users.getMySpace);
 
   const [viewMode, setViewMode] = useState<'timeline' | 'monthly'>('timeline');
-  const [slideAnim] = useState(new Animated.Value(0));
+  const [slideAnim] = useState(new Animated.Value(1));
   const [segmentContainerWidth, setSegmentContainerWidth] = useState(0);
   const SEGMENT_PAD = 4;
   const pillWidth =
@@ -4220,7 +4220,7 @@ function TimelineView({
               style={styles.dayGroup}
             >
               {/* Day Header */}
-              <View style={styles.dayHeader}>
+              <View style={[styles.dayHeader, { flexDirection: rtl.flexDirection }]}>
                 <View
                   style={[
                     styles.dayNumberCircle,
@@ -4504,7 +4504,7 @@ function TimelineView({
             {isGapOpen &&
               missingDays.map((day) => (
                 <View key={day.dateStr} style={styles.dayGroup}>
-                  <View style={styles.dayHeader}>
+                  <View style={[styles.dayHeader, { flexDirection: rtl.flexDirection }]}>
                     <View style={styles.dayNumberCircle}>
                       <Text style={styles.dayNumberText}>{day.dayNumber}</Text>
                     </View>
@@ -4787,8 +4787,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   gapRow: {
-    alignItems: 'flex-start',
-    paddingLeft: 6,
+    alignItems: 'flex-end',
+    paddingRight: 6,
     marginTop: -16,
     marginBottom: 8,
   },
@@ -4827,7 +4827,7 @@ const styles = StyleSheet.create({
   },
   eventRowInner: {
     flex: 1,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'flex-start',
     gap: 10,
   },
@@ -4915,7 +4915,7 @@ const styles = StyleSheet.create({
     paddingRight: 16,
   },
   eventCardHeader: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
     flexWrap: 'wrap',
@@ -4954,7 +4954,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   taskSubtasksRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
     marginTop: 4,
@@ -4976,7 +4976,7 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
   },
   locationRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
     marginTop: 2,
