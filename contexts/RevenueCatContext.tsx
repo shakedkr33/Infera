@@ -55,6 +55,17 @@ export type CustomerData = {
   managementURL: string | null;
 };
 
+// ============================================================================
+// DEBUG ONLY — remove after TestFlight investigation
+// ============================================================================
+export type RevenueCatDebugInfo = {
+  initError: string | null;
+  offeringsCurrentId: string | null;
+  offeringsPackagesCount: number | null;
+  usingPreviewPackages: boolean;
+  apiKeyPrefix: string | null; // first 12 chars + *** mask
+};
+
 // מבנה הקונטקסט
 type RevenueCatContextType = {
   // מצב
@@ -85,6 +96,9 @@ type RevenueCatContextType = {
 
   // RevenueCat UI - Customer Center
   presentCustomerCenter: () => Promise<void>;
+
+  // DEBUG ONLY — remove after TestFlight investigation
+  _debug: RevenueCatDebugInfo;
 };
 
 // ============================================================================
@@ -208,6 +222,15 @@ export function RevenueCatProvider({
   const [isInitialized, setIsInitialized] = useState(false);
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
 
+  // DEBUG ONLY — remove after TestFlight investigation
+  const [_debugInfo, _setDebugInfo] = useState<RevenueCatDebugInfo>({
+    initError: null,
+    offeringsCurrentId: null,
+    offeringsPackagesCount: null,
+    usingPreviewPackages: true,
+    apiKeyPrefix: null,
+  });
+
   const isExpoGo = isRunningInExpoGo();
   const isConfigured = isRevenueCatConfigured();
   const listenerRef = useRef<(() => void) | null>(null);
@@ -290,6 +313,13 @@ export function RevenueCatProvider({
           throw new Error('אין מפתח API לפלטפורמה הנוכחית');
         }
 
+        // DEBUG ONLY — capture masked API key prefix
+        const maskedKey =
+          apiKey.length > 12
+            ? `${apiKey.substring(0, 12)}***`
+            : `${apiKey.substring(0, 4)}***`;
+        _setDebugInfo((prev) => ({ ...prev, apiKeyPrefix: maskedKey }));
+
         // ייבוא דינמי למניעת קריסות ב-Expo Go
         const Purchases = (await import('react-native-purchases')).default;
 
@@ -305,6 +335,15 @@ export function RevenueCatProvider({
 
         // טעינת ההצעות (Offerings)
         const offerings = await Purchases.getOfferings();
+
+        // DEBUG ONLY — capture offerings metadata before checking packages
+        _setDebugInfo((prev) => ({
+          ...prev,
+          offeringsCurrentId: offerings.current?.identifier ?? null,
+          offeringsPackagesCount:
+            offerings.current?.availablePackages?.length ?? 0,
+        }));
+
         if (offerings.current?.availablePackages) {
           const loadedPackages: PackageInfo[] =
             offerings.current.availablePackages.map((pkg) => ({
@@ -317,6 +356,8 @@ export function RevenueCatProvider({
               packageType: mapPackageType(pkg.packageType),
             }));
           setPackages(loadedPackages);
+          // DEBUG ONLY — real packages loaded, not preview
+          _setDebugInfo((prev) => ({ ...prev, usingPreviewPackages: false }));
         }
 
         // בדיקת סטטוס פרימיום ועדכון נתוני לקוח
@@ -333,7 +374,17 @@ export function RevenueCatProvider({
         };
 
         setIsInitialized(true);
-      } catch (_error) {
+      } catch (error) {
+        // DEBUG ONLY — log error instead of silently swallowing it
+        console.error('[RevenueCat] init/getOfferings error:', error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        _setDebugInfo((prev) => ({
+          ...prev,
+          initError: errorMessage,
+          usingPreviewPackages: true,
+        }));
+
         // במקרה של שגיאה - עובדים במצב תצוגה מקדימה
         setPackages(PREVIEW_PACKAGES);
         setIsInitialized(true);
@@ -670,6 +721,8 @@ export function RevenueCatProvider({
         presentPaywall,
         presentPaywallIfNeeded,
         presentCustomerCenter,
+        // DEBUG ONLY — remove after TestFlight investigation
+        _debug: _debugInfo,
       }}
     >
       {children}

@@ -21,7 +21,10 @@ import {
 } from 'react-native-safe-area-context';
 
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
-import { PACKAGE_IDS } from '@/utils/revenueCatConfig';
+import {
+  getCurrentPlatformRevenueCatApiKey,
+  PACKAGE_IDS,
+} from '@/utils/revenueCatConfig';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -109,8 +112,23 @@ function getSelectedPackageId(plan: PlanType, cycle: BillingCycle): string {
 export default function SubscriptionScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { packages, purchasePackage, restorePurchases, isConfigured } =
-    useRevenueCat();
+  const {
+    packages,
+    purchasePackage,
+    restorePurchases,
+    isConfigured,
+    // DEBUG ONLY — remove after TestFlight investigation
+    _debug,
+  } = useRevenueCat();
+
+  // DEBUG ONLY — masked API key prefix resolved at render time
+  const _debugApiKeyPrefix = (() => {
+    const key = getCurrentPlatformRevenueCatApiKey();
+    if (!key) return null;
+    return key.length > 12
+      ? `${key.substring(0, 12)}***`
+      : `${key.substring(0, 4)}***`;
+  })();
 
   const [selectedPlan, setSelectedPlan] = useState<PlanType>('family');
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('annual');
@@ -158,7 +176,10 @@ export default function SubscriptionScreen() {
 
   const handleCheckout = async (): Promise<void> => {
     if (!isConfigured) {
-      Alert.alert('תשלומים', 'התשלומים אינם זמינים כרגע. אפשר לנסות שוב מאוחר יותר.');
+      Alert.alert(
+        'תשלומים',
+        'התשלומים אינם זמינים כרגע. אפשר לנסות שוב מאוחר יותר.'
+      );
       return;
     }
 
@@ -166,7 +187,10 @@ export default function SubscriptionScreen() {
 
     const packageExists = packages.some((p) => p.identifier === packageId);
     if (!packageExists) {
-      Alert.alert('תשלומים', 'המסלול שבחרת לא זמין כרגע. אפשר לנסות שוב מאוחר יותר.');
+      Alert.alert(
+        'תשלומים',
+        'המסלול שבחרת לא זמין כרגע. אפשר לנסות שוב מאוחר יותר.'
+      );
       return;
     }
 
@@ -470,6 +494,24 @@ export default function SubscriptionScreen() {
           </View>
         )}
 
+        {/* ============================================================
+            DEBUG ONLY — remove this entire block after TestFlight investigation.
+            Shows RevenueCat state before purchase to diagnose config issues.
+            ============================================================ */}
+        <RcDebugBox
+          isConfigured={isConfigured}
+          selectedPlan={selectedPlan}
+          billingCycle={billingCycle}
+          selectedPackageId={getSelectedPackageId(selectedPlan, billingCycle)}
+          packageIdentifiers={packages.map((p) => p.identifier)}
+          usingPreviewPackages={_debug.usingPreviewPackages}
+          apiKeyPrefix={_debugApiKeyPrefix ?? _debug.apiKeyPrefix}
+          offeringsCurrentId={_debug.offeringsCurrentId}
+          offeringsPackagesCount={_debug.offeringsPackagesCount}
+          initError={_debug.initError}
+        />
+        {/* END DEBUG ONLY */}
+
         {/* CTA */}
         <Pressable
           style={[s.primaryCta, isPurchasing && s.primaryCtaDisabled]}
@@ -510,7 +552,9 @@ export default function SubscriptionScreen() {
           {isRestoring ? (
             <ActivityIndicator size="small" color={TEXT_MUTED} />
           ) : (
-            <Text style={s.secondaryCtaText}>כבר רכשת בעבר? שחזר/י את הרכישה כאן</Text>
+            <Text style={s.secondaryCtaText}>
+              כבר רכשת בעבר? שחזר/י את הרכישה כאן
+            </Text>
           )}
         </Pressable>
 
@@ -639,6 +683,139 @@ function LaunchGiftSheet({
     </Modal>
   );
 }
+
+// ─── DEBUG ONLY — remove after TestFlight investigation ──────────────────────
+
+function RcDebugBox({
+  isConfigured,
+  selectedPlan,
+  billingCycle,
+  selectedPackageId,
+  packageIdentifiers,
+  usingPreviewPackages,
+  apiKeyPrefix,
+  offeringsCurrentId,
+  offeringsPackagesCount,
+  initError,
+}: {
+  isConfigured: boolean;
+  selectedPlan: string;
+  billingCycle: string;
+  selectedPackageId: string;
+  packageIdentifiers: string[];
+  usingPreviewPackages: boolean;
+  apiKeyPrefix: string | null;
+  offeringsCurrentId: string | null;
+  offeringsPackagesCount: number | null;
+  initError: string | null;
+}) {
+  return (
+    <View style={dbg.box}>
+      <Text style={dbg.header}>
+        🐛 RC DEBUG (temp — remove after TestFlight)
+      </Text>
+      <RcDebugRow label="isConfigured" value={String(isConfigured)} />
+      <RcDebugRow label="selectedPlan" value={selectedPlan} />
+      <RcDebugRow label="billingCycle" value={billingCycle} />
+      <RcDebugRow label="selectedPackageId" value={selectedPackageId} />
+      <RcDebugRow
+        label="packages (identifiers)"
+        value={
+          packageIdentifiers.length > 0
+            ? packageIdentifiers.join(', ')
+            : '(none)'
+        }
+      />
+      <RcDebugRow
+        label="usingPreviewPackages"
+        value={String(usingPreviewPackages)}
+        highlight={usingPreviewPackages}
+      />
+      <RcDebugRow
+        label="apiKey prefix"
+        value={apiKeyPrefix ?? '(null — not configured)'}
+        highlight={apiKeyPrefix === null}
+      />
+      <RcDebugRow
+        label="offerings.current.id"
+        value={offeringsCurrentId ?? '(null)'}
+        highlight={offeringsCurrentId === null}
+      />
+      <RcDebugRow
+        label="offerings.pkgs count"
+        value={
+          offeringsPackagesCount === null
+            ? '(null)'
+            : String(offeringsPackagesCount)
+        }
+        highlight={
+          offeringsPackagesCount === null || offeringsPackagesCount === 0
+        }
+      />
+      <RcDebugRow
+        label="initError"
+        value={initError ?? '(none)'}
+        highlight={initError !== null}
+      />
+    </View>
+  );
+}
+
+function RcDebugRow({
+  label,
+  value,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
+  return (
+    <View style={dbg.row}>
+      <Text style={dbg.label}>{label}:</Text>
+      <Text style={[dbg.value, highlight && dbg.valueHighlight]}>{value}</Text>
+    </View>
+  );
+}
+
+const dbg = StyleSheet.create({
+  box: {
+    borderWidth: 1.5,
+    borderColor: '#e53e3e',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 16,
+    backgroundColor: '#fff5f5',
+  },
+  header: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#e53e3e',
+    marginBottom: 6,
+  },
+  row: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 3,
+    gap: 4,
+  },
+  label: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#744210',
+    minWidth: 130,
+  },
+  value: {
+    fontSize: 10,
+    color: '#2d3748',
+    flex: 1,
+    flexWrap: 'wrap',
+  },
+  valueHighlight: {
+    color: '#e53e3e',
+    fontWeight: '700',
+  },
+});
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
 
