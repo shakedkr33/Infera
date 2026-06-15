@@ -2782,18 +2782,20 @@ export default function CommunityDetailScreen() {
 
         {/* ימין: › + שם + "+" */}
         <View style={styles.headerRight}>
-          <View ref={addBtnRef}>
-            <TouchableOpacity
-              onPress={handleAddPress}
-              activeOpacity={0.75}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="הוסף אירוע או תזכורת"
-              style={styles.communityHeaderAddButton}
-            >
-              <Plus size={18} color="#36a9e2" strokeWidth={2.4} />
-            </TouchableOpacity>
-          </View>
+          {(community.myRole === 'owner' || community.myRole === 'admin') && (
+            <View ref={addBtnRef}>
+              <TouchableOpacity
+                onPress={handleAddPress}
+                activeOpacity={0.75}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="הוסף אירוע או תזכורת"
+                style={styles.communityHeaderAddButton}
+              >
+                <Plus size={18} color="#36a9e2" strokeWidth={2.4} />
+              </TouchableOpacity>
+            </View>
+          )}
           <View style={styles.headerTextBlock}>
             <Text style={styles.headerTitle} numberOfLines={2}>
               {community.name}
