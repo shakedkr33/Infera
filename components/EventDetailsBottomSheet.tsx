@@ -581,10 +581,22 @@ export function EventDetailsBottomSheet({
   const handleCancel = (): void => {
     if (!convexEventId || !currentUserId) return;
     const isCommunity = Boolean(displayEvent?.communityId);
+    const cancelSharedUserIds =
+      (eventDoc as { sharedWithUserIds?: string[] } | null | undefined)
+        ?.sharedWithUserIds ?? [];
+    const cancelSharedMemberIds =
+      (eventDoc as { sharedWithFamilyMemberIds?: string[] } | null | undefined)
+        ?.sharedWithFamilyMemberIds ?? [];
+    const personalEventHasInvitees =
+      !isCommunity &&
+      (cancelSharedUserIds.length > 0 || cancelSharedMemberIds.length > 0);
+    const title = isCommunity ? 'ביטול אירוע' : 'לבטל את האירוע?';
     const message = isCommunity
       ? 'האירוע יוצג בקהילה כמבוטל למשך 24 שעות, כדי שחברי הקהילה יראו את העדכון.'
-      : 'האם לבטל את האירוע?';
-    Alert.alert('ביטול אירוע', message, [
+      : personalEventHasInvitees
+        ? 'האירוע יבוטל עבור כל המוזמנים.'
+        : 'האם לבטל את האירוע?';
+    Alert.alert(title, message, [
       { text: 'חזרה', style: 'cancel' },
       {
         text: 'בטל אירוע',
@@ -603,13 +615,35 @@ export function EventDetailsBottomSheet({
 
   const handleDelete = (): void => {
     if (!convexEventId) return;
+    const isCommunity = Boolean(displayEvent?.communityId);
+    const title = isCommunity ? 'הסרת אירוע' : 'מחיקת אירוע';
+    const message = isCommunity
+      ? 'האם למחוק את האירוע לגמרי מהקהילה? פעולה זו תסיר אותו מהתצוגה לכל חברי הקהילה.'
+      : 'למחוק את האירוע לגמרי? פעולה זו לא ניתנת לשחזור.';
+    const confirmLabel = isCommunity ? 'הסר לגמרי' : 'מחק לגמרי';
+    Alert.alert(title, message, [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: confirmLabel,
+        style: 'destructive',
+        onPress: () => {
+          deleteEventMutation({ eventId: convexEventId })
+            .then(() => onClose())
+            .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
+        },
+      },
+    ]);
+  };
+
+  const handleDeletePersonalEvent = (): void => {
+    if (!convexEventId) return;
     Alert.alert(
-      'הסרת אירוע',
-      'האם למחוק את האירוע לגמרי מהקהילה? פעולה זו תסיר אותו מהתצוגה לכל חברי הקהילה.',
+      'למחוק את האירוע?',
+      'האירוע יימחק מהיומן שלך. פעולה זו לא ניתנת לשחזור.',
       [
         { text: 'ביטול', style: 'cancel' },
         {
-          text: 'הסר לגמרי',
+          text: 'מחק אירוע',
           style: 'destructive',
           onPress: () => {
             deleteEventMutation({ eventId: convexEventId })
@@ -819,6 +853,21 @@ export function EventDetailsBottomSheet({
       (sharedWithUserIds.includes(currentUserId) ||
         (viewerSelfEntityId != null &&
           eventSharedWithFamilyMemberIds.includes(viewerSelfEntityId)))
+  );
+
+  const isPersonalEvent = !displayEvent?.communityId;
+
+  const hasPersonalInvitees = Boolean(
+    isPersonalEvent &&
+      (sharedWithUserIds.length > 0 || eventSharedWithFamilyMemberIds.length > 0)
+  );
+
+  const canDeletePersonalDirect = Boolean(
+    convexEventId &&
+      isPersonalEvent &&
+      isEventCreator &&
+      !hasPersonalInvitees &&
+      displayEvent?.status !== 'cancelled'
   );
 
   const myRsvpRow = rsvpRows.find((r) => r.userId === currentUserId);
@@ -1034,13 +1083,23 @@ export function EventDetailsBottomSheet({
                 ) : null}
 
                 <View style={styles.quickActionsLtrRow}>
-                  <QuickAction
-                    color="#dc2626"
-                    disabled={!canCancel}
-                    icon="event-busy"
-                    label="ביטול"
-                    onPress={handleCancel}
-                  />
+                  {canDeletePersonalDirect ? (
+                    <QuickAction
+                      color="#dc2626"
+                      disabled={false}
+                      icon="delete-outline"
+                      label="מחק"
+                      onPress={handleDeletePersonalEvent}
+                    />
+                  ) : (
+                    <QuickAction
+                      color="#dc2626"
+                      disabled={!canCancel}
+                      icon="event-busy"
+                      label="ביטול"
+                      onPress={handleCancel}
+                    />
+                  )}
                   <QuickAction
                     color="#2563eb"
                     disabled={false}
@@ -1060,7 +1119,11 @@ export function EventDetailsBottomSheet({
                 {canDelete ? (
                   <Pressable
                     accessible={true}
-                    accessibilityLabel="הסר אירוע מהקהילה"
+                    accessibilityLabel={
+                      displayEvent.communityId
+                        ? 'הסר אירוע מהקהילה'
+                        : 'מחק אירוע לגמרי'
+                    }
                     accessibilityRole="button"
                     onPress={() => handleGatedAction(handleDelete)}
                     style={styles.deleteEventBtn}
@@ -1071,7 +1134,9 @@ export function EventDetailsBottomSheet({
                       size={18}
                     />
                     <Text style={styles.deleteEventBtnText}>
-                      הסר אירוע מהקהילה
+                      {displayEvent.communityId
+                        ? 'הסר אירוע מהקהילה'
+                        : 'מחק לגמרי'}
                     </Text>
                   </Pressable>
                 ) : null}
