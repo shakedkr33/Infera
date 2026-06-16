@@ -47,6 +47,13 @@ export const upsertRsvp = mutation({
       if (!isActiveCommunityMember(membership)) {
         throw new Error('אין הרשאה לעדכן אישור הגעה');
       }
+    } else if (event.createdBy !== userId) {
+      const isInvited = (event.sharedWithUserIds ?? []).some(
+        (id) => id === userId
+      );
+      if (!isInvited) {
+        throw new Error('אין הרשאה לעדכן אישור הגעה');
+      }
     }
 
     if (status === 'no') {
@@ -241,6 +248,8 @@ export const listByEvent = query({
       return [];
     }
 
+    const isCreator = event.createdBy === userId;
+
     if (event.communityId) {
       const membership = await getCommunityMembership(
         ctx,
@@ -250,8 +259,13 @@ export const listByEvent = query({
       if (!isActiveCommunityMember(membership)) {
         return [];
       }
-    } else if (event.createdBy !== userId) {
-      return [];
+    } else if (!isCreator) {
+      const isInvited = (event.sharedWithUserIds ?? []).some(
+        (id) => id === userId
+      );
+      if (!isInvited) {
+        return [];
+      }
     }
 
     const rows = await ctx.db
@@ -259,8 +273,14 @@ export const listByEvent = query({
       .withIndex('by_event_user', (q) => q.eq('eventId', eventId))
       .collect();
 
+    // Invitees (non-creator) on personal events see only their own RSVP row.
+    const visibleRows =
+      !event.communityId && !isCreator
+        ? rows.filter((r) => r.userId === userId)
+        : rows;
+
     const enriched = await Promise.all(
-      rows.map(async (r) => {
+      visibleRows.map(async (r) => {
         const u = await ctx.db.get(r.userId);
         const displayName =
           (u?.fullName && u.fullName.trim()) ||
@@ -271,5 +291,75 @@ export const listByEvent = query({
     );
 
     return enriched;
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// שליפת מוזמנים לאירוע אישי עם סטטוס RSVP (ליוצר בלבד)
+// ─────────────────────────────────────────────────────────────
+export const getInviteesWithRsvp = query({
+  args: { eventId: v.id('events') },
+  returns: v.array(
+    v.object({
+      userId: v.id('users'),
+      fullName: v.string(),
+      profileColor: v.union(v.string(), v.null()),
+      status: v.union(
+        v.literal('yes'),
+        v.literal('maybe'),
+        v.literal('none'),
+        v.literal('no')
+      ),
+    })
+  ),
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const event = await ctx.db.get(eventId);
+    if (!event) return [];
+
+    if (event.createdBy !== userId) {
+      throw new Error('רק יוצר האירוע יכול לצפות ברשימת המוזמנים');
+    }
+
+    const inviteeIds = (event.sharedWithUserIds ?? []) as Id<'users'>[];
+    if (inviteeIds.length === 0) return [];
+
+    const statusOrder: Record<string, number> = {
+      yes: 0,
+      maybe: 1,
+      none: 2,
+      no: 3,
+    };
+
+    const results = await Promise.all(
+      inviteeIds.map(async (inviteeUserId) => {
+        const user = await ctx.db.get(inviteeUserId);
+        const rsvpRow = await ctx.db
+          .query('eventRsvps')
+          .withIndex('by_event_user', (q) =>
+            q.eq('eventId', eventId).eq('userId', inviteeUserId)
+          )
+          .unique();
+
+        const fullName =
+          (user?.fullName && user.fullName.trim()) ||
+          (user?.phone && user.phone.trim()) ||
+          'משתמש';
+
+        const profileColor =
+          (user as { profileColor?: string } | null)?.profileColor ?? null;
+
+        const status: 'yes' | 'maybe' | 'none' | 'no' =
+          (rsvpRow?.status as 'yes' | 'maybe' | 'none' | 'no') ?? 'none';
+
+        return { userId: inviteeUserId, fullName, profileColor, status };
+      })
+    );
+
+    return results.sort(
+      (a, b) => (statusOrder[a.status] ?? 2) - (statusOrder[b.status] ?? 2)
+    );
   },
 });
