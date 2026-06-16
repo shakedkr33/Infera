@@ -127,6 +127,8 @@ export interface EventData {
   // FIXED: added family sharing fields to EventData
   allFamily?: boolean;
   sharedWithFamilyMemberIds?: string[];
+  /** Real Convex user IDs of invited family members — used for RSVP permission checks. */
+  sharedWithUserIds?: string[];
   // FIXED: file attachments (max 2, frontend draft — localUri stripped before saving)
   attachments?: EventAttachmentDraft[];
   importantItems?: ImportantItem[];

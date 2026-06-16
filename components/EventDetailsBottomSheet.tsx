@@ -221,6 +221,7 @@ export function EventDetailsBottomSheet({
     useState(false);
   const { isExpiredFree } = useEffectiveAccess();
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
+  const [personalNoConfirmOpen, setPersonalNoConfirmOpen] = useState(false);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
   const isClosingRef = useRef(false);
   const [isClosingState, setIsClosingState] = useState(false);
@@ -799,6 +800,27 @@ export function EventDetailsBottomSheet({
     isEventCreator ||
     (Boolean(displayEvent?.communityId) && isCommunityOwnerOrAdmin);
 
+  const sharedWithUserIds =
+    (eventDoc as { sharedWithUserIds?: string[] } | null | undefined)
+      ?.sharedWithUserIds ?? [];
+
+  // Fallback for events created before sharedWithUserIds was introduced:
+  // use the viewer's family-space entity ID vs sharedWithFamilyMemberIds.
+  const viewerSelfEntityId =
+    familyContactsForDetails?.selfEntityId as string | undefined;
+  const eventSharedWithFamilyMemberIds =
+    (eventDoc as { sharedWithFamilyMemberIds?: string[] } | null | undefined)
+      ?.sharedWithFamilyMemberIds ?? [];
+
+  const isPersonalInvitee = Boolean(
+    !displayEvent?.communityId &&
+      !isEventCreator &&
+      currentUserId &&
+      (sharedWithUserIds.includes(currentUserId) ||
+        (viewerSelfEntityId != null &&
+          eventSharedWithFamilyMemberIds.includes(viewerSelfEntityId)))
+  );
+
   const myRsvpRow = rsvpRows.find((r) => r.userId === currentUserId);
   const rawRsvp = myRsvpRow?.status;
   const currentRsvpStatus: 'yes' | 'no' | 'maybe' | 'none' =
@@ -857,7 +879,8 @@ export function EventDetailsBottomSheet({
     convexEventId &&
       (showMemberRsvpButtons ||
         hasCommunityResponseSummary ||
-        hasManualParticipantNames)
+        hasManualParticipantNames ||
+        isPersonalInvitee)
   );
 
   /**
@@ -1140,12 +1163,109 @@ export function EventDetailsBottomSheet({
                     </>
                   ) : null}
 
+                  {isPersonalInvitee ? (
+                    <>
+                      <Text style={styles.rsvpMemberTitle}>
+                        {currentRsvpStatus === 'none'
+                          ? 'האם תשתתף/י?'
+                          : currentRsvpStatus === 'no'
+                            ? 'סימנת שלא תגיע/י'
+                            : 'שינוי תשובה'}
+                      </Text>
+                      <View style={styles.rsvpMemberButtonRow}>
+                        {MEMBER_RSVP_OPTIONS.map((opt) => {
+                          const isActive = currentRsvpStatus === opt.status;
+                          const rsvpDisabled =
+                            displayEvent.status === 'cancelled' ||
+                            pendingRsvpStatus !== null;
+                          return (
+                            <TouchableOpacity
+                              key={opt.status}
+                              activeOpacity={0.82}
+                              accessibilityHint={
+                                rsvpDisabled
+                                  ? undefined
+                                  : 'מגדיר את תגובת ההגעה שלך לאירוע'
+                              }
+                              accessibilityLabel={opt.label}
+                              accessibilityRole="button"
+                              accessibilityState={{
+                                disabled: rsvpDisabled,
+                                selected: isActive,
+                              }}
+                              accessible={true}
+                              disabled={rsvpDisabled}
+                              hitSlop={{
+                                top: 8,
+                                bottom: 8,
+                                left: 6,
+                                right: 6,
+                              }}
+                              onPress={() => {
+                                if (opt.status === 'no') {
+                                  setPersonalNoConfirmOpen(true);
+                                } else {
+                                  handleRsvp(opt.status);
+                                }
+                              }}
+                              style={[
+                                styles.rsvpSegment,
+                                {
+                                  backgroundColor: isActive
+                                    ? opt.selectedBg
+                                    : '#f8fafc',
+                                  borderColor: isActive
+                                    ? opt.selectedBorder
+                                    : '#64748b',
+                                  opacity: rsvpDisabled ? 0.5 : 1,
+                                },
+                                isActive && styles.rsvpSegmentSelected,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.rsvpSegmentText,
+                                  isActive && {
+                                    color: opt.selectedText,
+                                    fontWeight: '800',
+                                  },
+                                ]}
+                              >
+                                {opt.label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                      {currentRsvpStatus === 'no' ? (
+                        <Text style={styles.rsvpMemberHint}>
+                          אפשר לשנות תשובה אם משהו השתנה.
+                        </Text>
+                      ) : rsvpHelperText ? (
+                        <Text style={styles.rsvpMemberHelper}>
+                          {rsvpHelperText}
+                        </Text>
+                      ) : currentRsvpStatus === 'none' &&
+                        displayEvent.status !== 'cancelled' ? (
+                        <Text style={styles.rsvpMemberHint}>
+                          בחר/י את תגובתך
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : null}
+
                   {showMemberRsvpButtons &&
                   (hasCommunityResponseSummary || hasManualParticipantNames) ? (
                     <View style={styles.rsvpUnifiedDivider} />
                   ) : null}
 
-                  {hasCommunityResponseSummary ? (
+                  {isPersonalInvitee &&
+                  (creatorDisplayName !== undefined ||
+                    hasManualParticipantNames) ? (
+                    <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {hasCommunityResponseSummary && !isPersonalInvitee ? (
                     <Pressable
                       accessibilityHint="פותח רשימת משתתפים לפי סוג תגובה"
                       accessibilityLabel={`תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}. צפייה`}
@@ -1176,7 +1296,9 @@ export function EventDetailsBottomSheet({
                     </Pressable>
                   ) : null}
 
-                  {hasCommunityResponseSummary && hasManualParticipantNames ? (
+                  {hasCommunityResponseSummary &&
+                  !isPersonalInvitee &&
+                  hasManualParticipantNames ? (
                     <View style={styles.rsvpUnifiedDivider} />
                   ) : null}
 
@@ -1655,6 +1777,18 @@ export function EventDetailsBottomSheet({
         onConfirm={handleConfirmCalendarRemoval}
         title={CALENDAR_REMOVE_CONFIRM_TITLE}
         visible={calendarRemoveConfirmationEventId !== null}
+      />
+      <AppConfirmationDialog
+        cancelLabel="לא עכשיו"
+        confirmLabel="כן, לא אגיע"
+        message="האירוע יישאר זמין ואפשר לשנות תשובה מאוחר יותר."
+        onCancel={() => setPersonalNoConfirmOpen(false)}
+        onConfirm={() => {
+          setPersonalNoConfirmOpen(false);
+          handleRsvp('no');
+        }}
+        title="לסמן שלא תגיע/י לאירוע?"
+        visible={personalNoConfirmOpen}
       />
       <UpgradeModal
         visible={upgradeModalVisible}

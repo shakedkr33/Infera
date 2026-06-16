@@ -389,6 +389,10 @@ export default function NewEventScreen(): React.JSX.Element {
           data.sharedWithFamilyMemberIds.length > 0
             ? data.sharedWithFamilyMemberIds
             : undefined,
+        sharedWithUserIds:
+          data.sharedWithUserIds && data.sharedWithUserIds.length > 0
+            ? (data.sharedWithUserIds as Id<'users'>[])
+            : undefined,
         attachments:
           resolvedAttachments.length > 0 ? resolvedAttachments : undefined,
         reminders: data.remindersEnabled

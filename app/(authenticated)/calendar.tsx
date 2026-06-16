@@ -146,6 +146,8 @@ interface CalendarEvent {
   eventVisualKind?: 'community' | 'shared' | 'personal';
   /** True when the current viewer created this event; false for Type B (shared-with-viewer) events */
   isViewerCreator?: boolean;
+  /** True when this is a personal invite the current user has not yet answered */
+  pendingPersonalInvite?: boolean;
   /** Resolved family-member profiles for compact card circles (personal events only) */
   profileCircles?: ProfileCircle[];
   profileCirclesExtraCount?: number;
@@ -276,6 +278,8 @@ type TimelineEventRow = MockTimelineEvent & {
   profileCirclesExtraCount?: number;
   /** Semantic context: 'sharedWith' for personal items, 'alsoAddedToCalendar' for community events */
   profileCirclesContext?: 'sharedWith' | 'alsoAddedToCalendar';
+  /** True when this is a personal invite the current user has not yet answered */
+  pendingPersonalInvite?: boolean;
 };
 
 /** Lightweight task item for monthly selected-day panels (DayEventsList / CalendarDayEventsSheet) */
@@ -1393,6 +1397,13 @@ export default function CalendarScreen(): React.JSX.Element {
   const familyContacts = useQuery(api.members.listMyFamilyContacts);
   const currentUser = useQuery(api.users.getCurrentUser);
 
+  // My RSVPs — one query for all events, used to detect pending personal invites
+  const myRsvps = useQuery(api.eventRsvps.listByUser) ?? [];
+  const myRsvpByEventId = useMemo(
+    () => new Map(myRsvps.map((r) => [String(r.eventId), r.status])),
+    [myRsvps]
+  );
+
   const memberMaps = useMemo(() => {
     const byUserId = new Map<string, { initials: string; color: string }>();
     const byMemberId = new Map<string, { initials: string; color: string }>();
@@ -1597,6 +1608,15 @@ export default function CalendarScreen(): React.JSX.Element {
           ? ('community' as const)
           : ('personal' as const),
         isViewerCreator,
+        pendingPersonalInvite:
+          !isSavedCommunityInSpace &&
+          isViewerCreator === false &&
+          (() => {
+            const s = myRsvpByEventId.get(String(ev._id));
+            return !s || s === 'none';
+          })()
+            ? true
+            : undefined,
         profileCircles: gridPc.length > 0 ? gridPc : undefined,
         profileCirclesExtraCount: gridPcExtra > 0 ? gridPcExtra : undefined,
         profileCirclesContext: gridPcContext,
@@ -2364,6 +2384,7 @@ export default function CalendarScreen(): React.JSX.Element {
         let pc1: ProfileCircle[] = [];
         let pc1Extra = 0;
         let pc1Context: 'sharedWith' | 'alsoAddedToCalendar' = 'sharedWith';
+        let pendingPersonalInvite1: boolean | undefined;
         if (isSavedCommunityInSpace) {
           pc1 = familyAllSaved[event._id as string] ?? [];
           pc1Context = 'alsoAddedToCalendar';
@@ -2384,6 +2405,10 @@ export default function CalendarScreen(): React.JSX.Element {
           const calCurrentUserId = currentUser?._id as string | undefined;
           const isCreator =
             !!calCurrentUserId && evS.createdBy === calCurrentUserId;
+          if (!isCreator) {
+            const myStatus = myRsvpByEventId.get(String(event._id));
+            if (!myStatus || myStatus === 'none') pendingPersonalInvite1 = true;
+          }
           const totalParticipants = evS.participants?.length ?? 0;
 
           if (isCreator) {
@@ -2459,6 +2484,7 @@ export default function CalendarScreen(): React.JSX.Element {
           profileCircles: pc1.length > 0 ? pc1 : undefined,
           profileCirclesExtraCount: pc1Extra > 0 ? pc1Extra : undefined,
           profileCirclesContext: pc1Context,
+          pendingPersonalInvite: pendingPersonalInvite1,
         });
       }
 
@@ -3958,7 +3984,10 @@ function DayEventsList({
         return (
           <Pressable
             key={event.listKey ?? event.id}
-            style={dStyles.card}
+            style={[
+              dStyles.card,
+              event.pendingPersonalInvite && dStyles.pendingPersonalInviteCard,
+            ]}
             onPress={() => onEventPress(event)}
             accessible={true}
             accessibilityRole="button"
@@ -3985,6 +4014,13 @@ function DayEventsList({
                     </View>
                   ) : null}
                   <Text style={dStyles.eventTitle}>{event.title}</Text>
+                  {event.pendingPersonalInvite ? (
+                    <View style={dStyles.pendingRsvpBadge}>
+                      <Text style={dStyles.pendingRsvpBadgeText}>
+                        ממתין לאישור
+                      </Text>
+                    </View>
+                  ) : null}
                   {event.location != null && event.location !== '' && (
                     <View style={dStyles.locationRow}>
                       <View style={dStyles.locationDot} />
@@ -4044,6 +4080,13 @@ function DayEventsList({
                     </View>
                   ) : null}
                   <Text style={dStyles.eventTitle}>{event.title}</Text>
+                  {event.pendingPersonalInvite ? (
+                    <View style={dStyles.pendingRsvpBadge}>
+                      <Text style={dStyles.pendingRsvpBadgeText}>
+                        ממתין לאישור
+                      </Text>
+                    </View>
+                  ) : null}
                   {event.location != null && event.location !== '' && (
                     <View style={dStyles.locationRow}>
                       <View style={dStyles.locationDot} />
@@ -4320,6 +4363,9 @@ function TimelineView({
                                 event.myAssignedTasks &&
                                   event.myAssignedTasks.length > 0 &&
                                   styles.eventCardWithTasks,
+                                !event.cancelled &&
+                                  event.pendingPersonalInvite &&
+                                  styles.pendingPersonalInviteCard,
                               ]}
                               onPress={() => onEventPress(event)}
                               accessible={true}
@@ -4394,6 +4440,14 @@ function TimelineView({
                                 >
                                   {event.title}
                                 </Text>
+                                {!event.cancelled &&
+                                event.pendingPersonalInvite ? (
+                                  <View style={styles.pendingRsvpBadge}>
+                                    <Text style={styles.pendingRsvpBadgeText}>
+                                      ממתין לאישור
+                                    </Text>
+                                  </View>
+                                ) : null}
 
                                 {/* Location + nav button */}
                                 {event.location ? (
@@ -4902,6 +4956,27 @@ const styles = StyleSheet.create({
   eventCardCancelled: {
     opacity: 0.6,
   },
+
+  /* Pending personal RSVP — timeline */
+  pendingPersonalInviteCard: {
+    opacity: 0.75,
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+  },
+  pendingRsvpBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    marginTop: 4,
+    alignSelf: 'flex-end',
+  },
+  pendingRsvpBadgeText: {
+    fontSize: 11,
+    fontWeight: '500' as const,
+    color: '#64748b',
+  },
+
   eventAccentBar: {
     position: 'absolute',
     right: 0,
@@ -5594,6 +5669,25 @@ const dStyles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#dc2626',
+  },
+
+  /* Pending personal RSVP — month day panel */
+  pendingPersonalInviteCard: {
+    opacity: 0.75,
+    borderColor: '#e2e8f0',
+  },
+  pendingRsvpBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    marginTop: 4,
+    alignSelf: 'flex-end',
+  },
+  pendingRsvpBadgeText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#64748b',
   },
   taskTitleRow: {
     flexDirection: 'row-reverse',
