@@ -1,9 +1,69 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { ConvexError, v } from 'convex/values';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { isActiveCommunityMember } from './communityMemberUtils';
+import { resolveKind, resolveMySpaceId } from './members';
+
+type PersonalEventDoc = Pick<
+  Doc<'events'>,
+  'createdBy' | 'sharedWithUserIds' | 'sharedWithFamilyMemberIds'
+>;
+
+/** Mirrors listMyFamilyContacts selfEntityId — viewer's own entity row in their resolved space. */
+async function getViewerSelfFamilyMemberId(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<'users'>
+): Promise<Id<'members'> | null> {
+  const spaceId = await resolveMySpaceId(ctx, userId);
+  if (!spaceId) return null;
+
+  const indexedEntities = await ctx.db
+    .query('members')
+    .withIndex('by_kind', (q) =>
+      q.eq('spaceId', spaceId).eq('kind', 'entity')
+    )
+    .collect();
+
+  const allRows = await ctx.db
+    .query('members')
+    .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
+    .collect();
+
+  const unstampedEntities = allRows.filter(
+    (r) => r.kind === undefined && resolveKind(r) === 'entity'
+  );
+
+  const seen = new Set(indexedEntities.map((r) => r._id));
+  const entities = [
+    ...indexedEntities,
+    ...unstampedEntities.filter((r) => !seen.has(r._id)),
+  ];
+
+  const selfEntityRow = entities.find(
+    (r) => r.matchedUserId === userId || r.userId === userId
+  );
+
+  return selfEntityRow?._id ?? null;
+}
+
+function canAccessPersonalEventRsvp(
+  event: PersonalEventDoc,
+  userId: Id<'users'>,
+  viewerSelfEntityId: Id<'members'> | null
+): boolean {
+  if (event.createdBy === userId) return true;
+
+  const sharedWithUserIds = event.sharedWithUserIds ?? [];
+  if (sharedWithUserIds.some((id) => id === userId)) return true;
+
+  const sharedWithFamilyMemberIds = event.sharedWithFamilyMemberIds ?? [];
+  return (
+    viewerSelfEntityId !== null &&
+    sharedWithFamilyMemberIds.includes(viewerSelfEntityId)
+  );
+}
 
 async function getCommunityMembership(
   ctx: MutationCtx | QueryCtx,
@@ -47,11 +107,9 @@ export const upsertRsvp = mutation({
       if (!isActiveCommunityMember(membership)) {
         throw new Error('אין הרשאה לעדכן אישור הגעה');
       }
-    } else if (event.createdBy !== userId) {
-      const isInvited = (event.sharedWithUserIds ?? []).some(
-        (id) => id === userId
-      );
-      if (!isInvited) {
+    } else {
+      const viewerSelfEntityId = await getViewerSelfFamilyMemberId(ctx, userId);
+      if (!canAccessPersonalEventRsvp(event, userId, viewerSelfEntityId)) {
         throw new Error('אין הרשאה לעדכן אישור הגעה');
       }
     }
@@ -112,6 +170,11 @@ export const setRsvpNoAndUnclaimMyEventTasks = mutation({
         userId
       );
       if (!isActiveCommunityMember(membership)) {
+        throw new Error('אין הרשאה לעדכן אישור הגעה');
+      }
+    } else {
+      const viewerSelfEntityId = await getViewerSelfFamilyMemberId(ctx, userId);
+      if (!canAccessPersonalEventRsvp(event, userId, viewerSelfEntityId)) {
         throw new Error('אין הרשאה לעדכן אישור הגעה');
       }
     }
@@ -260,10 +323,8 @@ export const listByEvent = query({
         return [];
       }
     } else if (!isCreator) {
-      const isInvited = (event.sharedWithUserIds ?? []).some(
-        (id) => id === userId
-      );
-      if (!isInvited) {
+      const viewerSelfEntityId = await getViewerSelfFamilyMemberId(ctx, userId);
+      if (!canAccessPersonalEventRsvp(event, userId, viewerSelfEntityId)) {
         return [];
       }
     }
