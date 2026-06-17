@@ -100,7 +100,12 @@ export default function VerifyScreen() {
       setError(null);
 
       try {
-        await signIn('phone', { phone, code: digits });
+        const isAppleReviewLogin =
+          phone === '+972510000000' && digits === '123456';
+        await signIn(isAppleReviewLogin ? 'apple-review' : 'phone', {
+          phone,
+          code: digits,
+        });
         // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition
         // finishOnboarding is called in (authenticated)/_layout.tsx once the Convex session is confirmed.
         router.replace('/(authenticated)/family-bootstrap');

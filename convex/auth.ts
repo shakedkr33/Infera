@@ -1,3 +1,4 @@
+import { ConvexCredentials } from '@convex-dev/auth/providers/ConvexCredentials';
 import { Phone } from '@convex-dev/auth/providers/Phone';
 import { convexAuth } from '@convex-dev/auth/server';
 import { internal } from './_generated/api';
@@ -23,11 +24,29 @@ function getTwilioEnv() {
   };
 }
 
+function getAppleReviewEnv() {
+  const phone = process.env.APP_REVIEW_PHONE;
+  const otp = process.env.APP_REVIEW_OTP;
+
+  if (!phone || !otp) {
+    return null;
+  }
+
+  return { phone, otp };
+}
+
 function basicAuth(username: string, password: string) {
   return `Basic ${btoa(`${username}:${password}`)}`;
 }
 
 async function sendOtpWithTwilio(phone: string, code: string) {
+  const reviewEnv = getAppleReviewEnv();
+
+  if (reviewEnv && phone === reviewEnv.phone) {
+    console.log('[Auth] Apple Review demo phone detected. Skipping Twilio SMS.');
+    return;
+  }
+
   const { apiKeySid, apiKeySecret, verifyServiceSid } = getTwilioEnv();
 
   const body = new URLSearchParams({
@@ -57,6 +76,32 @@ async function sendOtpWithTwilio(phone: string, code: string) {
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
+    ConvexCredentials({
+      id: 'apple-review',
+      authorize: async (credentials, ctx) => {
+        const reviewEnv = getAppleReviewEnv();
+
+        if (!reviewEnv) {
+          return null;
+        }
+
+        const phone =
+          typeof credentials.phone === 'string' ? credentials.phone : null;
+        const code =
+          typeof credentials.code === 'string' ? credentials.code : null;
+
+        if (phone !== reviewEnv.phone || code !== reviewEnv.otp) {
+          return null;
+        }
+
+        const userId = await ctx.runMutation(
+          internal.appleReviewAuth.getOrCreateAppleReviewUser,
+          { phone }
+        );
+
+        return { userId };
+      },
+    }),
     {
       ...Phone({
         sendVerificationRequest: async ({ identifier: phone, token: code }) => {
