@@ -194,11 +194,6 @@ export default function VerifyScreen() {
             <Text style={styles.subtitle}>
               שלחנו קוד בן 6 ספרות ל-{maskedPhone || 'הטלפון שלך'}
             </Text>
-            {__DEV__ && (
-              <Text style={styles.devHint}>
-                DEV: קוד מופיע ב-Convex Dashboard logs
-              </Text>
-            )}
           </View>
 
           {/* קוד OTP — hidden input + boxes ויזואליים */}
