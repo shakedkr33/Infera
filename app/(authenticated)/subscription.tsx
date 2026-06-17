@@ -21,6 +21,7 @@ import {
 } from 'react-native-safe-area-context';
 
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import {
   getCurrentPlatformRevenueCatApiKey,
   PACKAGE_IDS,
@@ -120,6 +121,14 @@ export default function SubscriptionScreen() {
     // DEBUG ONLY — remove after TestFlight investigation
     _debug,
   } = useRevenueCat();
+
+  const {
+    isTrialActive,
+    isExpiredFree,
+    isPersonal: isPaidPersonal,
+    isFamily: isPaidFamily,
+    trialDaysRemaining,
+  } = useEffectiveAccess();
 
   // DEBUG ONLY — masked API key prefix resolved at render time
   const _debugApiKeyPrefix = (() => {
@@ -272,6 +281,15 @@ export default function SubscriptionScreen() {
         <Text style={s.subtitle}>
           InYomi עוזרת לנהל את הבית, המשימות והקהילות — בלי עומס מיותר.
         </Text>
+
+        {/* Current access status — calm informational pill */}
+        <TrialStatusPill
+          isTrialActive={isTrialActive}
+          isExpiredFree={isExpiredFree}
+          isPaidPersonal={isPaidPersonal}
+          isPaidFamily={isPaidFamily}
+          trialDaysRemaining={trialDaysRemaining}
+        />
 
         {/* Free community message */}
         <View style={s.freeMessageContainer}>
@@ -681,6 +699,57 @@ function LaunchGiftSheet({
         </Animated.View>
       </View>
     </Modal>
+  );
+}
+
+// ─── TrialStatusPill ────────────────────────────────────────────────────────────
+
+function TrialStatusPill({
+  isTrialActive,
+  isExpiredFree,
+  isPaidPersonal,
+  isPaidFamily,
+  trialDaysRemaining,
+}: {
+  isTrialActive: boolean;
+  isExpiredFree: boolean;
+  isPaidPersonal: boolean;
+  isPaidFamily: boolean;
+  trialDaysRemaining: number | null;
+}) {
+  let title: string;
+  let subtitle: string | null = null;
+  let note: string | null = null;
+
+  if (isPaidFamily) {
+    title = 'מנוי Family פעיל';
+  } else if (isPaidPersonal) {
+    title = 'מנוי Plus פעיל';
+  } else if (isTrialActive) {
+    title = 'גישה מלאה פעילה';
+    if (trialDaysRemaining != null) {
+      subtitle =
+        trialDaysRemaining === 1
+          ? 'נותר לך יום אחד לגישה מלאה'
+          : `נותרו לך ${trialDaysRemaining} ימים לגישה מלאה`;
+      note = 'אחרי זה אפשר להמשיך עם קהילות בחינם.';
+    }
+  } else if (isExpiredFree) {
+    title = 'מסלול חינמי';
+    subtitle = 'קהילות נשארות פתוחות בחינם — תמיד.';
+  } else {
+    // loading / unknown — render nothing until state is resolved
+    return null;
+  }
+
+  return (
+    <View style={s.trialStatusPill}>
+      <Text style={s.trialStatusTitle}>{title}</Text>
+      {subtitle != null && (
+        <Text style={s.trialStatusSubtitle}>{subtitle}</Text>
+      )}
+      {note != null && <Text style={s.trialStatusNote}>{note}</Text>}
+    </View>
   );
 }
 
@@ -1214,6 +1283,37 @@ const s = StyleSheet.create({
     textAlign: 'right',
     writingDirection: 'rtl',
     lineHeight: 20,
+  },
+
+  // Trial status pill
+  trialStatusPill: {
+    backgroundColor: PRIMARY_LIGHT,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  trialStatusTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: PRIMARY,
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  trialStatusSubtitle: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: TEXT_DARK,
+    textAlign: 'right',
+    writingDirection: 'rtl',
+    marginTop: 3,
+  },
+  trialStatusNote: {
+    fontSize: 12,
+    color: TEXT_MUTED,
+    textAlign: 'right',
+    writingDirection: 'rtl',
+    marginTop: 2,
   },
 
   // Launch gift sheet

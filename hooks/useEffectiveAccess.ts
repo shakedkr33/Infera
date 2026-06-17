@@ -6,29 +6,27 @@
 // permission flags. All subscription/trial gating in the UI should read from
 // this hook — never check plan strings or RevenueCat state directly in screens.
 //
-// PHASE 3B-2 — RevenueCat tier wired up (payments still disabled):
-//   Access precedence order (highest to lowest priority):
-//     1. DEV_ACCESS_OVERRIDE — only in __DEV__, always wins.
-//     2. RevenueCat subscriptionTier — only when PAYMENT_SYSTEM_ENABLED=true.
-//     3. Fallback: "trial_active" — when PAYMENT_SYSTEM_ENABLED=false (current).
+// Access precedence order (highest to lowest priority):
+//   1. DEV_ACCESS_OVERRIDE — only in __DEV__, always wins.
+//   2. RevenueCat paid entitlement — only when PAYMENT_SYSTEM_ENABLED=true.
+//      'family'   → effectiveAccess = 'family'
+//      'personal' → effectiveAccess = 'personal'
+//   3. Convex createdAt-based 30-day trial (PAYMENT_SYSTEM_ENABLED=true, no RC entitlement):
+//      Within 30 days of account creation → 'trial_active'
+//      After 30 days                       → 'trial_expired_free'
+//      Still loading / missing user        → 'trial_active' (safe fallback)
+//   4. Full trial_active fallback — when PAYMENT_SYSTEM_ENABLED=false.
 //
-// FUTURE — Phase 2B and beyond:
-//   TODO: Replace the default fallback with real derivation from Convex:
-//         const user = useQuery(api.users.getCurrentUser);
-//         Derive from user.trialEndsAt and user.subscriptionTier.
-//   TODO: daysRemaining must be derived from trialEndsAt, NEVER stored as a
-//         mutable counter field. Compute it as:
-//         Math.ceil((trialEndsAt - Date.now()) / 86_400_000)
-//   TODO: When PAYMENT_SYSTEM_ENABLED becomes true, also cross-check Convex
-//         trial fields for users whose trial is still active but have no
-//         RevenueCat entitlement yet (free trial period).
-//   TODO: Add server-side enforcement in Convex mutations. UI gating alone is
-//         NOT sufficient for production — a motivated user could bypass client
-//         checks. Personal/family mutations must verify access server-side.
-//         Community mutations must remain free and must never be gated.
+// Communities are always free — never gated regardless of access level.
+//
+// TODO: Add server-side enforcement in Convex mutations. UI gating alone is
+//       NOT sufficient for production — a motivated user could bypass client
+//       checks. Personal/family mutations must verify access server-side.
+//       Community mutations must remain free and must never be gated.
 //
 // ============================================================================
 
+import { api } from '@/convex/_generated/api';
 import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import {
   DEV_ACCESS_OVERRIDE,
@@ -36,10 +34,18 @@ import {
 } from '@/config/devAccessConfig';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import type { SubscriptionTier } from '@/utils/revenueCatConfig';
+import { useQuery } from 'convex/react';
 
 // Declare the React Native global so TypeScript is satisfied without importing
 // the full RN package just for this constant.
 declare const __DEV__: boolean;
+
+// ============================================================================
+// Trial constants
+// ============================================================================
+
+const TRIAL_DAYS = 30;
+const DAY_MS = 86_400_000;
 
 // ============================================================================
 // RevenueCat tier normalizer — testable without React
@@ -48,28 +54,50 @@ declare const __DEV__: boolean;
 /**
  * Maps a RevenueCat SubscriptionTier to the app's EffectiveAccess model.
  *
- * Called only when PAYMENT_SYSTEM_ENABLED is true so that RevenueCat is
- * the authoritative source of paid access.
+ * Used only for paid entitlements ('family' / 'personal').
+ * When the tier is null (no entitlement), the caller falls back to
+ * Convex createdAt-based trial derivation instead of locking immediately.
  *
- * - 'family'   → 'family'             (personal + family access)
- * - 'personal' → 'personal'           (personal access only)
- * - null       → 'trial_expired_free' (no active entitlement, read-only)
- *
- * "free" is not a separate tier in EffectiveAccess — the absence of a
- * RevenueCat entitlement maps to 'trial_expired_free' (locked paid features).
+ * - 'family'   → 'family'   (personal + family access)
+ * - 'personal' → 'personal' (personal access only)
+ * - null       → null       (caller handles: check 30-day trial)
  */
 export function normalizeSubscriptionTier(
   tier: SubscriptionTier
-): EffectiveAccess {
+): EffectiveAccess | null {
   switch (tier) {
     case 'family':
       return 'family';
     case 'personal':
       return 'personal';
     default:
-      // null / undefined / unknown value → no subscription, free mode
-      return 'trial_expired_free';
+      return null;
   }
+}
+
+// ============================================================================
+// 30-day trial helper — testable without React
+// ============================================================================
+
+/**
+ * Derives trial access from the user's Convex account createdAt timestamp.
+ *
+ * Returns 'trial_active' as a safe fallback when createdAt is not yet
+ * available (still loading or missing user) to avoid premature lock-out.
+ *
+ * @param createdAt - Unix timestamp (ms) of account creation, or null/undefined when loading.
+ * @param now       - Current timestamp in ms; defaults to Date.now().
+ */
+export function getTrialAccessFromCreatedAt(
+  createdAt: number | null | undefined,
+  now = Date.now()
+): EffectiveAccess {
+  if (createdAt == null) {
+    // Still loading or user missing — do not lock the user prematurely.
+    return 'trial_active';
+  }
+  const trialEndsAt = createdAt + TRIAL_DAYS * DAY_MS;
+  return now <= trialEndsAt ? 'trial_active' : 'trial_expired_free';
 }
 
 // ============================================================================
@@ -151,6 +179,15 @@ export interface UseEffectiveAccessResult extends AccessPermissions {
   isExpiredFree: boolean;
   isPersonal: boolean;
   isFamily: boolean;
+  /**
+   * Days remaining in the 30-day full-access trial.
+   * - null  → paid plan, or user data still loading (avoid showing "0 days" prematurely)
+   * - >= 1  → trial is active, this many full days remain
+   * - 0     → trial has expired (free tier)
+   */
+  trialDaysRemaining: number | null;
+  /** Total trial length in days — always 30. Exposed so UIs can display context. */
+  trialTotalDays: 30;
 }
 
 // ============================================================================
@@ -160,15 +197,14 @@ export interface UseEffectiveAccessResult extends AccessPermissions {
 /**
  * Returns the current effective access level and all derived permission flags.
  *
- * Phase 3B-2: RevenueCat subscriptionTier is now read and wired into the
- * precedence chain, but only takes effect when PAYMENT_SYSTEM_ENABLED=true.
- * While PAYMENT_SYSTEM_ENABLED remains false the behavior is identical to
- * the previous phase (full trial_active access for all users).
- *
  * Access precedence (highest → lowest priority):
  *   1. DEV_ACCESS_OVERRIDE   — __DEV__ only, always wins regardless of flags.
- *   2. RevenueCat tier       — only when PAYMENT_SYSTEM_ENABLED=true.
- *   3. 'trial_active'        — safe fallback when PAYMENT_SYSTEM_ENABLED=false.
+ *   2. RevenueCat paid tier  — 'family' or 'personal' when PAYMENT_SYSTEM_ENABLED=true.
+ *   3. Convex 30-day trial   — no RC entitlement + PAYMENT_SYSTEM_ENABLED=true:
+ *        within 30 days of createdAt → 'trial_active'
+ *        after 30 days               → 'trial_expired_free'
+ *        user still loading          → 'trial_active' (safe fallback, avoids flash)
+ *   4. 'trial_active'        — safe fallback when PAYMENT_SYSTEM_ENABLED=false.
  *
  * @example
  * const { canCreatePersonalContent, canEditFamilyContent } = useEffectiveAccess();
@@ -176,9 +212,13 @@ export interface UseEffectiveAccessResult extends AccessPermissions {
  */
 export function useEffectiveAccess(): UseEffectiveAccessResult {
   // Read RevenueCat tier. RevenueCatProvider wraps the root layout so this
-  // is always safe to call. When PAYMENT_SYSTEM_ENABLED=false the context
-  // returns subscriptionTier=null (no-op in the logic below).
+  // is always safe to call. Returns null when there is no active entitlement.
   const { subscriptionTier } = useRevenueCat();
+
+  // Always call useQuery unconditionally (React hook rules).
+  // Used below only when PAYMENT_SYSTEM_ENABLED=true and there is no RC entitlement.
+  // undefined = still loading; null = authenticated but no user row; Doc = loaded.
+  const currentUser = useQuery(api.users.getCurrentUser);
 
   // ── Derive effectiveAccess using priority order ──────────────────────────
 
@@ -187,32 +227,22 @@ export function useEffectiveAccess(): UseEffectiveAccessResult {
   if (__DEV__ && DEV_ACCESS_OVERRIDE !== null) {
     // ── Priority 1: Developer / QA override ─────────────────────────────
     // Only active in __DEV__ builds. Never runs in production.
-    // Overrides RevenueCat AND the payment flag — always wins in dev.
     effectiveAccess = DEV_ACCESS_OVERRIDE;
   } else if (PAYMENT_SYSTEM_ENABLED) {
-    // ── Priority 2: RevenueCat subscription tier ─────────────────────────
-    // PAYMENT_SYSTEM_ENABLED=true means RevenueCat is the source of truth.
-    // normalizeSubscriptionTier maps the RC tier to EffectiveAccess:
-    //   'family'   → 'family'
-    //   'personal' → 'personal'
-    //   null       → 'trial_expired_free'
-    effectiveAccess = normalizeSubscriptionTier(subscriptionTier);
+    // ── Priority 2 & 3: RevenueCat entitlement, then Convex 30-day trial ──
+    const paidAccess = normalizeSubscriptionTier(subscriptionTier);
+    if (paidAccess !== null) {
+      // Paid RevenueCat entitlement wins.
+      effectiveAccess = paidAccess;
+    } else {
+      // No active RC entitlement — derive from Convex account age.
+      // currentUser === undefined means the query is still in flight;
+      // getTrialAccessFromCreatedAt returns 'trial_active' in that case
+      // so the user is never prematurely locked out during loading.
+      effectiveAccess = getTrialAccessFromCreatedAt(currentUser?.createdAt);
+    }
   } else {
-    // ── Priority 3: Fallback — payments disabled ─────────────────────────
-    // PAYMENT_SYSTEM_ENABLED=false (current state). Grant full trial access
-    // so no existing user is accidentally locked out.
-    //
-    // TODO (Phase 2B): Replace with Convex trial derivation:
-    //   const user = useQuery(api.users.getCurrentUser);
-    //   if (user?.trialEndsAt && Date.now() > user.trialEndsAt) {
-    //     effectiveAccess = 'trial_expired_free';
-    //   } else if (user?.subscriptionTier) {
-    //     effectiveAccess = user.subscriptionTier;
-    //   } else {
-    //     effectiveAccess = 'trial_active';
-    //   }
-    //   daysRemaining = Math.ceil((trialEndsAt - Date.now()) / 86_400_000)
-    //   Never store daysRemaining as a field — always derive from trialEndsAt.
+    // ── Priority 4: Fallback — payments disabled ─────────────────────────
     effectiveAccess = 'trial_active';
   }
 
@@ -223,6 +253,18 @@ export function useEffectiveAccess(): UseEffectiveAccessResult {
   const isPersonal = effectiveAccess === 'personal';
   const isFamily = effectiveAccess === 'family';
 
+  // ── Derive trial days remaining ──────────────────────────────────────────
+  // null for paid users and while currentUser is still loading.
+  // >= 1 for an active trial; 0 when expired.
+  // Never stored — always derived on each render.
+  let trialDaysRemaining: number | null = null;
+  if (!isPersonal && !isFamily && currentUser?.createdAt != null) {
+    const trialEndsAt = currentUser.createdAt + TRIAL_DAYS * DAY_MS;
+    const msRemaining = trialEndsAt - Date.now();
+    trialDaysRemaining =
+      msRemaining > 0 ? Math.max(1, Math.ceil(msRemaining / DAY_MS)) : 0;
+  }
+
   const permissions = getAccessPermissions(effectiveAccess);
 
   return {
@@ -231,6 +273,8 @@ export function useEffectiveAccess(): UseEffectiveAccessResult {
     isExpiredFree,
     isPersonal,
     isFamily,
+    trialDaysRemaining,
+    trialTotalDays: 30,
     ...permissions,
   };
 }
