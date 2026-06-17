@@ -1,3 +1,4 @@
+import { useQuery } from 'convex/react';
 import {
   createContext,
   type ReactNode,
@@ -8,6 +9,7 @@ import {
   useState,
 } from 'react';
 import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
+import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import {
   loadPersistedBirthdays,
@@ -16,6 +18,9 @@ import {
 import type { Birthday } from '@/lib/types/birthday';
 import { BirthdayCardSheet } from './BirthdayCardSheet';
 import { BirthdayEditSheet } from './BirthdayEditSheet';
+
+/** Phone number used by the Apple App Review demo account. */
+const APPLE_REVIEW_PHONE = '+972510000000';
 
 interface BirthdaySheetsContextValue {
   openBirthdayCard: (birthday: Birthday) => void;
@@ -98,8 +103,14 @@ export function BirthdaySheetsProvider({
 }: ProviderProps): React.JSX.Element {
   const { isExpiredFree } = useEffectiveAccess();
 
+  // Read current user to detect the Apple Review demo account.
+  // Returns undefined while loading, null if unauthenticated, or the user doc.
+  const currentUser = useQuery(api.users.getCurrentUser);
+
   const [birthdays, setBirthdays] = useState<Birthday[]>([]);
   const birthdaysRef = useRef<Birthday[]>([]);
+  // Ensures the load effect runs only once after the user identity is known.
+  const hasLoadedRef = useRef(false);
   const [selectedBirthday, setSelectedBirthday] = useState<Birthday | null>(
     null
   );
@@ -125,8 +136,28 @@ export function BirthdaySheetsProvider({
     []
   );
 
-  // Load persisted birthdays on mount; seed once on first launch.
+  // Load persisted birthdays once after the user identity is known.
+  // For the Apple Review demo account, skip AsyncStorage entirely and expose
+  // an empty list — no personal data leaks, no stored data is touched.
   useEffect(() => {
+    // currentUser is undefined while the Convex identity query is in-flight.
+    // Defer until identity is resolved so we can detect the demo account.
+    if (currentUser === undefined) return;
+
+    // Run only once per mount regardless of future currentUser updates
+    // (e.g. profile refreshes that produce a new object reference).
+    if (hasLoadedRef.current) return;
+    hasLoadedRef.current = true;
+
+    // Apple Review demo user: show empty birthdays without touching AsyncStorage.
+    // AsyncStorage is not read, not written, and not seeded — real data is safe.
+    if (currentUser?.phone === APPLE_REVIEW_PHONE) {
+      birthdaysRef.current = [];
+      setBirthdays([]);
+      return;
+    }
+
+    // Normal user: existing behavior unchanged.
     const load = async (): Promise<void> => {
       try {
         const saved = await loadPersistedBirthdays();
@@ -151,7 +182,7 @@ export function BirthdaySheetsProvider({
     };
 
     void load();
-  }, []);
+  }, [currentUser]);
 
   const openBirthdayCard = (birthday: Birthday): void => {
     setSelectedBirthday(birthday);
