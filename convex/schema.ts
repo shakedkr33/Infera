@@ -146,12 +146,17 @@ export default defineSchema({
     relatedType: v.optional(v.literal('birthday')),
     relatedBirthdayId: v.optional(v.string()),
     relatedBirthdayName: v.optional(v.string()),
+    // ── Soft delete ──────────────────────────────────────────────────────────
+    deletedAt: v.optional(v.number()), // ms timestamp when soft-deleted
+    deleteExpiresAt: v.optional(v.number()), // ms timestamp after which hard-delete is safe
+    deletedBy: v.optional(v.id('users')), // user who performed the soft delete
   })
     .index('by_space_and_time', ['spaceId', 'startTime'])
     .index('by_creator', ['createdBy'])
     .index('by_space', ['spaceId'])
     .index('by_community_date', ['communityId', 'startTime'])
-    .index('by_related_birthday', ['relatedBirthdayId']),
+    .index('by_related_birthday', ['relatedBirthdayId'])
+    .index('by_deleted_by', ['deletedBy', 'deletedAt']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת משימות

@@ -606,6 +606,9 @@ export const listByDateRange = query({
     const seenIds = new Set<string>();
 
     for (const ev of cat1Rows) {
+      // Skip soft-deleted events for all viewers
+      if (ev.deletedAt !== undefined) continue;
+
       const idStr = ev._id as string;
       const rsvpStatus = rsvpByEventId.get(idStr);
       let communityName: string | undefined;
@@ -690,6 +693,8 @@ export const listByDateRange = query({
       if (seenIds.has(idStr)) continue; // already included from Cat 1
       if (ev.communityId) continue; // community events use separate RSVP/save logic
       if ((ev.createdBy as string) === (userId as string)) continue; // creator always sees via Cat 1
+      // Skip soft-deleted events for all viewers
+      if (ev.deletedAt !== undefined) continue;
 
       const sharedUserIds = (ev.sharedWithUserIds ?? []) as string[];
       const sharedMemberIds = ev.sharedWithFamilyMemberIds ?? [];
@@ -1185,6 +1190,105 @@ export const remove = mutation({
     if (!existing) throw new Error('אירוע לא נמצא');
 
     await ctx.db.delete(id);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// מחיקה רכה של אירוע אישי
+// ─────────────────────────────────────────────────────────────
+export const softDeletePersonalEvent = mutation({
+  args: { eventId: v.id('events') },
+  returns: v.object({ success: v.literal(true) }),
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (event.communityId)
+      throw new Error('לא ניתן למחוק אירוע קהילתי בדרך זו');
+    if ((event.createdBy as string) !== (userId as string))
+      throw new Error('אין הרשאה למחוק אירוע זה');
+
+    // Idempotent — already soft-deleted
+    if (event.deletedAt !== undefined) return { success: true as const };
+
+    // Safety: do not allow soft-delete while event is active AND has invitees.
+    // Creator should cancel first.
+    const hasInvitees =
+      (event.sharedWithUserIds?.length ?? 0) > 0 ||
+      (event.sharedWithFamilyMemberIds?.length ?? 0) > 0;
+    if (hasInvitees && event.status !== 'cancelled') {
+      throw new Error('לא ניתן למחוק אירוע עם מוזמנים בלי לבטל אותו קודם');
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(eventId, {
+      deletedAt: now,
+      deleteExpiresAt: now + 30 * 24 * 60 * 60 * 1000,
+      deletedBy: userId,
+    });
+
+    return { success: true as const };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// שחזור אירוע אישי שנמחק רכה
+// ─────────────────────────────────────────────────────────────
+export const restorePersonalEvent = mutation({
+  args: { eventId: v.id('events') },
+  returns: v.object({ success: v.literal(true) }),
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (event.communityId)
+      throw new Error('לא ניתן לשחזר אירוע קהילתי בדרך זו');
+    if (event.deletedAt === undefined) throw new Error('האירוע לא נמחק');
+    if ((event.deletedBy as string | undefined) !== (userId as string))
+      throw new Error('אין הרשאה לשחזר אירוע זה');
+
+    await ctx.db.patch(eventId, {
+      deletedAt: undefined,
+      deleteExpiresAt: undefined,
+      deletedBy: undefined,
+    });
+
+    return { success: true as const };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// רשימת אירועים אישיים שנמחקו לאחרונה (עבור מסך "נמחקו לאחרונה")
+// ─────────────────────────────────────────────────────────────
+export const listRecentlyDeletedPersonalEvents = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const events = await ctx.db
+      .query('events')
+      .withIndex('by_deleted_by', (q) => q.eq('deletedBy', userId))
+      .filter((q) => q.neq(q.field('deletedAt'), undefined))
+      .order('desc')
+      .collect();
+
+    return events
+      .filter((ev) => !ev.communityId)
+      .map((ev) => ({
+        id: ev._id,
+        title: ev.title,
+        deletedAt: ev.deletedAt,
+        deleteExpiresAt: ev.deleteExpiresAt,
+        startTime: ev.startTime,
+        endTime: ev.endTime,
+        allDay: ev.allDay,
+        status: ev.status,
+      }));
   },
 });
 

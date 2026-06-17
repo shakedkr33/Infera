@@ -292,6 +292,9 @@ export function EventDetailsBottomSheet({
 
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const deleteEventMutation = useMutation(api.events.deleteEvent);
+  const softDeletePersonalEventMutation = useMutation(
+    api.events.softDeletePersonalEvent
+  );
   const addImportantItemsToMyTasks = useMutation(
     api.tasks.addEventImportantItemsToMyTasks
   );
@@ -621,37 +624,55 @@ export function EventDetailsBottomSheet({
   const handleDelete = (): void => {
     if (!convexEventId) return;
     const isCommunity = Boolean(displayEvent?.communityId);
-    const title = isCommunity ? 'הסרת אירוע' : 'מחיקת אירוע';
-    const message = isCommunity
-      ? 'האם למחוק את האירוע לגמרי מהקהילה? פעולה זו תסיר אותו מהתצוגה לכל חברי הקהילה.'
-      : 'למחוק את האירוע לגמרי? פעולה זו לא ניתנת לשחזור.';
-    const confirmLabel = isCommunity ? 'הסר לגמרי' : 'מחק לגמרי';
-    Alert.alert(title, message, [
-      { text: 'ביטול', style: 'cancel' },
-      {
-        text: confirmLabel,
-        style: 'destructive',
-        onPress: () => {
-          deleteEventMutation({ eventId: convexEventId })
-            .then(() => onClose())
-            .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
-        },
-      },
-    ]);
+    if (isCommunity) {
+      Alert.alert(
+        'הסרת אירוע',
+        'האם למחוק את האירוע לגמרי מהקהילה? פעולה זו תסיר אותו מהתצוגה לכל חברי הקהילה.',
+        [
+          { text: 'ביטול', style: 'cancel' },
+          {
+            text: 'הסר לגמרי',
+            style: 'destructive',
+            onPress: () => {
+              deleteEventMutation({ eventId: convexEventId })
+                .then(() => onClose())
+                .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
+            },
+          },
+        ]
+      );
+    } else {
+      Alert.alert(
+        'למחוק את האירוע?',
+        'האירוע יועבר לנמחקו לאחרונה ויישמר שם למשך 30 יום.',
+        [
+          { text: 'ביטול', style: 'cancel' },
+          {
+            text: 'מחק אירוע',
+            style: 'destructive',
+            onPress: () => {
+              softDeletePersonalEventMutation({ eventId: convexEventId })
+                .then(() => onClose())
+                .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
+            },
+          },
+        ]
+      );
+    }
   };
 
   const handleDeletePersonalEvent = (): void => {
     if (!convexEventId) return;
     Alert.alert(
       'למחוק את האירוע?',
-      'האירוע יימחק מהיומן שלך. פעולה זו לא ניתנת לשחזור.',
+      'האירוע יועבר לנמחקו לאחרונה ויישמר שם למשך 30 יום.',
       [
         { text: 'ביטול', style: 'cancel' },
         {
           text: 'מחק אירוע',
           style: 'destructive',
           onPress: () => {
-            deleteEventMutation({ eventId: convexEventId })
+            softDeletePersonalEventMutation({ eventId: convexEventId })
               .then(() => onClose())
               .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
           },
@@ -845,8 +866,9 @@ export function EventDetailsBottomSheet({
 
   // Fallback for events created before sharedWithUserIds was introduced:
   // use the viewer's family-space entity ID vs sharedWithFamilyMemberIds.
-  const viewerSelfEntityId =
-    familyContactsForDetails?.selfEntityId as string | undefined;
+  const viewerSelfEntityId = familyContactsForDetails?.selfEntityId as
+    | string
+    | undefined;
   const eventSharedWithFamilyMemberIds =
     (eventDoc as { sharedWithFamilyMemberIds?: string[] } | null | undefined)
       ?.sharedWithFamilyMemberIds ?? [];
@@ -864,7 +886,8 @@ export function EventDetailsBottomSheet({
 
   const hasPersonalInvitees = Boolean(
     isPersonalEvent &&
-      (sharedWithUserIds.length > 0 || eventSharedWithFamilyMemberIds.length > 0)
+      (sharedWithUserIds.length > 0 ||
+        eventSharedWithFamilyMemberIds.length > 0)
   );
 
   const canDeletePersonalDirect = Boolean(
@@ -1418,14 +1441,8 @@ export function EventDetailsBottomSheet({
                   onPress={() => setRemoveFromCalendarConfirmOpen(true)}
                   style={styles.deleteEventBtn}
                 >
-                  <MaterialIcons
-                    color="#dc2626"
-                    name="event-busy"
-                    size={18}
-                  />
-                  <Text style={styles.deleteEventBtnText}>
-                    הסר מהיומן שלי
-                  </Text>
+                  <MaterialIcons color="#dc2626" name="event-busy" size={18} />
+                  <Text style={styles.deleteEventBtnText}>הסר מהיומן שלי</Text>
                 </Pressable>
               ) : null}
 
