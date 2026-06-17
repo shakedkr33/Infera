@@ -1044,6 +1044,9 @@ export const create = mutation({
       if (!isActiveCommunityMember(membership)) {
         throw new Error('רק חברי קהילה פעילים יכולים ליצור תזכורת');
       }
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        throw new Error('רק בעלים או מנהלי קהילה יכולים ליצור תזכורת קהילתית');
+      }
     }
     validateTaskCategory(args.category);
     validateTaskSchedule({

@@ -22,7 +22,9 @@ import {
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
+import { rtl } from '@/lib/rtl';
 
 // ============================================================================
 // מסך פרופיל
@@ -32,13 +34,13 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const { signOut } = useAuthActions();
-  const { isPremium, isConfigured, isExpoGo, presentPaywall, customerData } =
-    useRevenueCat();
+  const { isPremium, isConfigured, isExpoGo, customerData } = useRevenueCat();
   const deleteMyAccount = useMutation(api.users.deleteMyAccount);
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   // Debug panel is hidden in normal UI; revealed only by long-pressing the version footer
   const [isDebugUnlocked, setIsDebugUnlocked] = useState(false);
 
+  const { effectiveAccess } = useEffectiveAccess();
   const { data: onboardingData } = useOnboarding();
   const rawFirstName = onboardingData.firstName ?? '';
   const rawLastName = onboardingData.lastName ?? '';
@@ -178,25 +180,37 @@ export default function ProfileScreen() {
             <MaterialIcons name="chevron-left" size={22} color="#9ca3af" />
             <View style={styles.profileTexts}>
               <Text style={styles.profileName}>{displayName}</Text>
-              {/* Premium status — only entry point for subscription on this screen */}
-              <TouchableOpacity
-                onPress={() => presentPaywall()}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  isPremium ? 'מנוי פרימיום פעיל' : 'שדרוג ל-InYomi Pro'
-                }
-                hitSlop={8}
+              {/* Subscription status — access-aware label */}
+              <Text
+                style={[
+                  styles.profileSubtitle,
+                  (effectiveAccess === 'personal' ||
+                    effectiveAccess === 'family') &&
+                    styles.premiumLabel,
+                ]}
               >
-                <Text
-                  style={[
-                    styles.profileSubtitle,
-                    isPremium && styles.premiumLabel,
-                  ]}
+                {effectiveAccess === 'trial_active'
+                  ? 'חודש ניסיון חינמי פעיל'
+                  : effectiveAccess === 'trial_expired_free'
+                    ? 'מסלול חינמי'
+                    : effectiveAccess === 'personal'
+                      ? 'מנוי אישי פעיל'
+                      : 'מנוי משפחתי פעיל'}
+              </Text>
+              {(effectiveAccess === 'trial_expired_free' ||
+                effectiveAccess === 'trial_active') && (
+                <TouchableOpacity
+                  onPress={() => {
+                    router.push('/(authenticated)/subscription' as never);
+                  }}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="לשדרוג למנוי"
+                  hitSlop={8}
                 >
-                  {isPremium ? 'מנוי פרימיום פעיל 👑' : 'מנוי חינמי'}
-                </Text>
-              </TouchableOpacity>
+                  <Text style={styles.upgradeCta}>לשדרוג למנוי</Text>
+                </TouchableOpacity>
+              )}
             </View>
             <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
               <Text style={styles.avatarInitial}>{avatarInitial}</Text>
@@ -298,6 +312,7 @@ export default function ProfileScreen() {
                     label="סטטוס פרימיום"
                     value={isPremium ? 'פרימיום' : 'חינמי'}
                   />
+                  <DebugRow label="effectiveAccess" value={effectiveAccess} />
                   <DebugRow label="Entitlement" value="InYomi Pro" />
                   {customerData && (
                     <DebugRow
@@ -525,17 +540,24 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   profileSubtitle: {
     fontSize: 13,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   premiumLabel: {
     color: '#36a9e2',
     fontWeight: '600',
+  },
+  upgradeCta: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#36a9e2',
+    textAlign: rtl.textAlign,
+    marginTop: 4,
   },
 
   // ── Section title ──────────────────────────────────────────────────────────
@@ -545,7 +567,7 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     paddingHorizontal: 20,
     marginBottom: 8,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   // ── Settings rows ──────────────────────────────────────────────────────────
@@ -572,7 +594,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   rowLabelDanger: {
     color: '#ef4444',
@@ -580,7 +602,7 @@ const styles = StyleSheet.create({
   rowNote: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
 
@@ -610,7 +632,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: '#eab308',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   debugBody: {
     padding: 16,
@@ -624,7 +646,7 @@ const styles = StyleSheet.create({
   debugSectionLabel: {
     fontSize: 13,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 8,
   },
   debugRows: {
@@ -658,7 +680,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   // ── Dev banner ─────────────────────────────────────────────────────────────

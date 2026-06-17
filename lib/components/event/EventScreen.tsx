@@ -217,7 +217,12 @@ export default function EventScreen({
     serverFamilyContacts?.members ?? []
   )
     .filter((m) => m._id !== serverFamilyContacts?.selfEntityId)
-    .map((m) => ({ _id: m._id, displayName: m.displayName, color: m.color }));
+    .map((m) => ({
+      _id: m._id,
+      displayName: m.displayName,
+      color: m.color,
+      matchedUserId: m.matchedUserId as string | undefined,
+    }));
   const isEditMode = Boolean(initialData);
   const [isDirty, setIsDirty] = useState(!isEditMode);
   const [titleError, setTitleError] = useState(false);
@@ -309,7 +314,8 @@ export default function EventScreen({
           router.replace('/(authenticated)');
         }
       }
-    } catch {
+    } catch (err) {
+      console.error('[EventScreen] save error:', err);
       Alert.alert('שגיאה', 'לא ניתן לשמור. נסה שוב.');
     } finally {
       isSavingRef.current = false;
@@ -716,6 +722,24 @@ export default function EventScreen({
                       sharedWithFamilyMemberIds:
                         ids.length > 0 ? ids : undefined,
                     };
+
+                    // Derive sharedWithUserIds — only real Convex user IDs from matchedUserId
+                    if (af) {
+                      const userIds = familyMembers
+                        .map((fm) => fm.matchedUserId)
+                        .filter((id): id is string => Boolean(id));
+                      patch.sharedWithUserIds =
+                        userIds.length > 0 ? userIds : undefined;
+                    } else if (ids.length > 0) {
+                      const userIds = familyMembers
+                        .filter((fm) => ids.includes(fm._id))
+                        .map((fm) => fm.matchedUserId)
+                        .filter((id): id is string => Boolean(id));
+                      patch.sharedWithUserIds =
+                        userIds.length > 0 ? userIds : undefined;
+                    } else {
+                      patch.sharedWithUserIds = undefined;
+                    }
 
                     // Keep participants that are NOT family members (external contacts/email)
                     const existingNonFamily = event.participants.filter(

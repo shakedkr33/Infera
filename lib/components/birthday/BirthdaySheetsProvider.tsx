@@ -1,10 +1,14 @@
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from 'react';
+import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import {
   loadPersistedBirthdays,
   persistBirthdays,
@@ -92,30 +96,62 @@ interface ProviderProps {
 export function BirthdaySheetsProvider({
   children,
 }: ProviderProps): React.JSX.Element {
+  const { isExpiredFree } = useEffectiveAccess();
+
   const [birthdays, setBirthdays] = useState<Birthday[]>([]);
+  const birthdaysRef = useRef<Birthday[]>([]);
   const [selectedBirthday, setSelectedBirthday] = useState<Birthday | null>(
     null
   );
   const [cardSheetVisible, setCardSheetVisible] = useState(false);
   const [editSheetVisible, setEditSheetVisible] = useState(false);
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
+  const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>('personal');
+
+  useEffect(() => {
+    birthdaysRef.current = birthdays;
+  }, [birthdays]);
+
+  const commitBirthdays = useCallback(
+    async (next: Birthday[]): Promise<void> => {
+      birthdaysRef.current = next;
+      setBirthdays(next);
+      try {
+        await persistBirthdays(next);
+      } catch (error) {
+        console.error('[Birthdays] Failed to persist birthdays', error);
+      }
+    },
+    []
+  );
 
   // Load persisted birthdays on mount; seed once on first launch.
   useEffect(() => {
-    loadPersistedBirthdays().then((saved) => {
-      if (saved !== null) {
-        setBirthdays(saved);
-      } else {
-        setBirthdays(SEED_BIRTHDAYS);
-        persistBirthdays(SEED_BIRTHDAYS);
-      }
-    });
-  }, []);
+    const load = async (): Promise<void> => {
+      try {
+        const saved = await loadPersistedBirthdays();
+        if (saved !== null) {
+          birthdaysRef.current = saved;
+          setBirthdays(saved);
+          return;
+        }
 
-  // Update state and immediately persist to AsyncStorage.
-  const updateBirthdays = (next: Birthday[]): void => {
-    setBirthdays(next);
-    persistBirthdays(next);
-  };
+        // Persist seed before exposing it in UI to avoid a write race with
+        // an early delete on first launch.
+        try {
+          await persistBirthdays(SEED_BIRTHDAYS);
+        } catch (error) {
+          console.error('[Birthdays] Failed to persist seed birthdays', error);
+        }
+        birthdaysRef.current = SEED_BIRTHDAYS;
+        setBirthdays(SEED_BIRTHDAYS);
+      } catch (error) {
+        console.error('[Birthdays] Failed to load birthdays', error);
+      }
+    };
+
+    void load();
+  }, []);
 
   const openBirthdayCard = (birthday: Birthday): void => {
     setSelectedBirthday(birthday);
@@ -123,11 +159,21 @@ export function BirthdaySheetsProvider({
   };
 
   const openBirthdayEdit = (birthday?: Birthday): void => {
+    if (isExpiredFree) {
+      setUpgradeReason('personal');
+      setUpgradeModalVisible(true);
+      return;
+    }
     setSelectedBirthday(birthday ?? null);
     setEditSheetVisible(true);
   };
 
   const openBirthdayCreate = (): void => {
+    if (isExpiredFree) {
+      setUpgradeReason('personal');
+      setUpgradeModalVisible(true);
+      return;
+    }
     setSelectedBirthday(null);
     setEditSheetVisible(true);
   };
@@ -139,43 +185,55 @@ export function BirthdaySheetsProvider({
   };
 
   const handleEdit = (): void => {
+    if (isExpiredFree) {
+      setCardSheetVisible(false);
+      setUpgradeReason('personal');
+      setUpgradeModalVisible(true);
+      return;
+    }
     setCardSheetVisible(false);
     setTimeout(() => setEditSheetVisible(true), 300);
   };
 
   const handleSave = (data: Partial<Birthday>): void => {
-    if (data.id && data.id !== '') {
-      updateBirthdays(
-        birthdays.map((b) =>
-          b.id === data.id ? { ...b, ...data, updatedAt: Date.now() } : b
-        )
-      );
-    } else {
-      updateBirthdays([
-        ...birthdays,
-        {
-          id: Date.now().toString(),
-          name: data.name ?? '',
-          day: data.day ?? 1,
-          month: data.month ?? 1,
-          year: data.year ?? null,
-          photoUri: data.photoUri ?? null,
-          contactId: data.contactId ?? null,
-          source: data.source ?? 'manual',
-          phoneNumber: data.phoneNumber ?? null,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-      ]);
-    }
-    closeAll();
+    const current = birthdaysRef.current;
+    const next =
+      data.id && data.id !== ''
+        ? current.map((b) =>
+            b.id === data.id ? { ...b, ...data, updatedAt: Date.now() } : b
+          )
+        : [
+            ...current,
+            {
+              id: Date.now().toString(),
+              name: data.name ?? '',
+              day: data.day ?? 1,
+              month: data.month ?? 1,
+              year: data.year ?? null,
+              photoUri: data.photoUri ?? null,
+              contactId: data.contactId ?? null,
+              source: data.source ?? 'manual',
+              phoneNumber: data.phoneNumber ?? null,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            },
+          ];
+
+    void (async () => {
+      await commitBirthdays(next);
+      closeAll();
+    })();
   };
 
   const deleteBirthday = (id: string): void => {
-    updateBirthdays(birthdays.filter((b) => b.id !== id));
-    if (selectedBirthday?.id === id) {
-      closeAll();
-    }
+    const next = birthdaysRef.current.filter((b) => b.id !== id);
+
+    void (async () => {
+      await commitBirthdays(next);
+      if (selectedBirthday?.id === id) {
+        closeAll();
+      }
+    })();
   };
 
   const handleDelete = (): void => {
@@ -214,6 +272,11 @@ export function BirthdaySheetsProvider({
         onClose={closeAll}
         onSave={handleSave}
         onDelete={selectedBirthday?.id ? handleDelete : undefined}
+      />
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason={upgradeReason}
+        onClose={() => setUpgradeModalVisible(false)}
       />
     </BirthdaySheetsContext.Provider>
   );

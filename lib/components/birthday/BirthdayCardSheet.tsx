@@ -5,7 +5,9 @@ import { useState } from 'react';
 import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
+import { UpgradeModal } from '@/components/UpgradeModal';
 import { api } from '@/convex/_generated/api';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import type { Birthday } from '@/lib/types/birthday';
 import {
   formatBirthdayDate,
@@ -41,7 +43,9 @@ export function BirthdayCardSheet({
   onEdit,
   onDelete,
 }: BirthdayCardSheetProps): React.JSX.Element | null {
+  const { isExpiredFree } = useEffectiveAccess();
   const [optionsVisible, setOptionsVisible] = useState(false);
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
   const [selectedRelatedEventId, setSelectedRelatedEventId] = useState<
     string | null
   >(null);
@@ -76,6 +80,10 @@ export function BirthdayCardSheet({
   };
 
   const handleCreateEvent = (): void => {
+    if (isExpiredFree) {
+      setUpgradeModalVisible(true);
+      return;
+    }
     onClose();
     router.push({
       pathname: '/(authenticated)/event/new',
@@ -89,6 +97,10 @@ export function BirthdayCardSheet({
   };
 
   const handleCreateTask = (): void => {
+    if (isExpiredFree) {
+      setUpgradeModalVisible(true);
+      return;
+    }
     setOptionsVisible(true);
   };
 
@@ -302,6 +314,13 @@ export function BirthdayCardSheet({
         birthdayName={birthday.name}
         onClose={() => setOptionsVisible(false)}
         onSelect={handleTaskOptionSelected}
+      />
+
+      {/* Upgrade prompt for gated actions (add event / add task) */}
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason="personal"
+        onClose={() => setUpgradeModalVisible(false)}
       />
 
       {/* Related event details sheet — rendered inside this Modal so it layers correctly on iOS */}

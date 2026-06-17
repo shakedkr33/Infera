@@ -155,6 +155,10 @@ type Item = {
   profileCirclesExtraCount?: number;
   /** Semantic context: 'sharedWith' for personal items, 'alsoAddedToCalendar' for community events */
   profileCirclesContext?: 'sharedWith' | 'alsoAddedToCalendar';
+  /** True for personal invited events (not creator, not community). Drives badge + muted card. */
+  pendingPersonalInvite?: boolean;
+  /** RSVP status of the current user for personal invited events (undefined = not an invite or creator) */
+  myPersonalRsvpStatus?: 'yes' | 'maybe' | 'no' | 'none';
 };
 
 type UndatedTask = {
@@ -236,7 +240,7 @@ function HomeSubtaskSection({
           style={{
             fontSize: 12,
             color: '#64748b',
-            textAlign: 'right',
+            textAlign: getTextAlign(),
             flex: 1,
           }}
         >
@@ -291,7 +295,7 @@ function HomeSubtaskSection({
                     ? 'line-through'
                     : 'none',
                   flex: 1,
-                  textAlign: 'right',
+                  textAlign: getTextAlign(),
                 }}
                 numberOfLines={2}
               >
@@ -663,6 +667,13 @@ export default function HomeScreen() {
   const personalEventData =
     useQuery(api.events.listByDateRange, { from, to }) ?? [];
 
+  // ── My RSVPs — one query for all events; used to detect personal invite status ──
+  const myRsvpsHome = useQuery(api.eventRsvps.listByUser) ?? [];
+  const myRsvpByEventIdHome = useMemo(
+    () => new Map(myRsvpsHome.map((r) => [String(r.eventId), r.status])),
+    [myRsvpsHome]
+  );
+
   /**
    * Space-scoped `listByDateRange` returns every event in the user's space,
    * including community events that are NOT on the personal/home aggregate
@@ -983,6 +994,14 @@ export default function HomeScreen() {
         let profileCirclesExtraCount = 0;
         let profileCirclesContext: 'sharedWith' | 'alsoAddedToCalendar' =
           'sharedWith';
+        // Personal invite RSVP state (non-community, non-creator invitees only)
+        let pendingPersonalInviteForItem: boolean | undefined;
+        let myPersonalRsvpStatusForItem:
+          | 'yes'
+          | 'maybe'
+          | 'no'
+          | 'none'
+          | undefined;
 
         if (!communityIdStr) {
           const evShared = ev as {
@@ -1001,6 +1020,33 @@ export default function HomeScreen() {
           const currentUserId = currentUser?._id as string | undefined;
           const isCreator =
             !!currentUserId && evShared.createdBy === currentUserId;
+
+          // Compute personal RSVP status for non-creator explicit invitees.
+          // Uses same detection as EventDetailsBottomSheet:
+          //   sharedWithUserIds includes currentUserId
+          //   OR sharedWithFamilyMemberIds includes viewerSelfEntityId
+          if (!isCreator) {
+            const homeViewerSelfEntityId =
+              familyContacts?.selfEntityId as string | undefined;
+            const isExplicitInvitee =
+              (currentUserId != null &&
+                (evShared.sharedWithUserIds ?? []).includes(currentUserId)) ||
+              (homeViewerSelfEntityId != null &&
+                (evShared.sharedWithFamilyMemberIds ?? []).includes(
+                  homeViewerSelfEntityId
+                ));
+            if (isExplicitInvitee) {
+              const myStatus = myRsvpByEventIdHome.get(String(ev._id)) as
+                | 'yes'
+                | 'maybe'
+                | 'no'
+                | 'none'
+                | undefined;
+              myPersonalRsvpStatusForItem = myStatus ?? 'none';
+              if (myPersonalRsvpStatusForItem !== 'yes')
+                pendingPersonalInviteForItem = true;
+            }
+          }
 
           // Total participant names (family + external) stored at save time.
           const totalParticipants = evShared.participants?.length ?? 0;
@@ -1095,15 +1141,27 @@ export default function HomeScreen() {
           locationUrl: (ev as { locationUrl?: string }).locationUrl,
           type: 'event' as const,
           icon: 'event',
-          iconBg: '#e8f5fd',
-          iconColor: '#36a9e2',
+          // Muted visuals for cancelled personal events — mirrors linkedEventItems pattern.
+          iconBg:
+            (ev as { status?: string }).status === 'cancelled'
+              ? '#f3f4f6'
+              : '#e8f5fd',
+          iconColor:
+            (ev as { status?: string }).status === 'cancelled'
+              ? '#9ca3af'
+              : '#36a9e2',
           assigneeColor: '#36a9e2',
           completed: false,
           allDay: ev.allDay,
           isRecurring: ev.isRecurring,
           recurringPattern: ev.recurringPattern,
           reminders: (ev as { reminders?: number[] }).reminders,
-          groupName: communityIdStr ? communityName : undefined,
+          // Show 'בוטל' badge for cancelled personal events (reuses linkedEvent pattern).
+          groupName: communityIdStr
+            ? communityName
+            : (ev as { status?: string }).status === 'cancelled'
+              ? 'בוטל'
+              : undefined,
           communityId: communityIdStr,
           isSavedToMyCalendar,
           myAssignedTasks: myTasks.length > 0 ? myTasks : undefined,
@@ -1113,6 +1171,8 @@ export default function HomeScreen() {
           profileCircles,
           profileCirclesExtraCount,
           profileCirclesContext,
+          pendingPersonalInvite: pendingPersonalInviteForItem,
+          myPersonalRsvpStatus: myPersonalRsvpStatusForItem,
         };
       }),
     [
@@ -1123,6 +1183,8 @@ export default function HomeScreen() {
       familyProfilesByMemberId,
       familyAlsoAdded,
       currentUser,
+      myRsvpByEventIdHome,
+      familyContacts?.selfEntityId,
     ]
   );
 
@@ -1988,7 +2050,7 @@ export default function HomeScreen() {
                       color: '#36a9e2',
                       fontSize: 22,
                       fontWeight: '700',
-                      textAlign: 'right',
+                      textAlign: getTextAlign(),
                       marginBottom: 8,
                     }}
                   >
@@ -2231,7 +2293,11 @@ export default function HomeScreen() {
                 }}
               >
                 <Text
-                  style={{ fontSize: 13, color: '#94a3b8', textAlign: 'right' }}
+                  style={{
+                    fontSize: 13,
+                    color: '#94a3b8',
+                    textAlign: getTextAlign(),
+                  }}
                 >
                   אין ימי הולדת ב-30 הימים הקרובים
                 </Text>
@@ -2506,12 +2572,86 @@ export default function HomeScreen() {
                                 />
                               ) : null}
                             </View>
+                            {/* Personal invite RSVP status badge */}
+                            {item.pendingPersonalInvite ? (
+                              item.groupName === 'בוטל' ? (
+                                <View
+                                  style={[
+                                    stylesRtl.pendingBadge,
+                                    {
+                                      backgroundColor: '#f3f4f6',
+                                      marginTop: 4,
+                                    },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      stylesRtl.pendingBadgeText,
+                                      { color: '#6b7280' },
+                                    ]}
+                                  >
+                                    בוטל
+                                  </Text>
+                                </View>
+                              ) : item.myPersonalRsvpStatus === 'no' ? (
+                                <View
+                                  style={[
+                                    stylesRtl.pendingBadge,
+                                    {
+                                      backgroundColor: '#f3f4f6',
+                                      marginTop: 4,
+                                    },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      stylesRtl.pendingBadgeText,
+                                      { color: '#6b7280' },
+                                    ]}
+                                  >
+                                    לא מגיע/ה
+                                  </Text>
+                                </View>
+                              ) : item.myPersonalRsvpStatus === 'maybe' ? (
+                                <View
+                                  style={[
+                                    stylesRtl.pendingBadge,
+                                    {
+                                      backgroundColor: '#fef9c3',
+                                      marginTop: 4,
+                                    },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      stylesRtl.pendingBadgeText,
+                                      { color: '#854d0e' },
+                                    ]}
+                                  >
+                                    אולי
+                                  </Text>
+                                </View>
+                              ) : (
+                                <View
+                                  style={[
+                                    stylesRtl.pendingBadge,
+                                    { marginTop: 4 },
+                                  ]}
+                                >
+                                  <Text style={stylesRtl.pendingBadgeText}>
+                                    ממתין לאישור
+                                  </Text>
+                                </View>
+                              )
+                            ) : null}
                             {item.location ? (
                               <Text style={stylesRtl.itemLocation}>
                                 {item.location}
                               </Text>
                             ) : null}
-                            {item.groupName && !item.communityId ? (
+                            {item.groupName &&
+                            !item.communityId &&
+                            !item.pendingPersonalInvite ? (
                               <View style={stylesRtl.groupRow}>
                                 <MaterialIcons
                                   name="group"
@@ -2872,9 +3012,12 @@ export default function HomeScreen() {
 
                                   {/* Metadata row: location/group on right, badge on left */}
                                   {(item.location ||
-                                    (item.groupName && !item.communityId) ||
+                                    (item.groupName &&
+                                      !item.communityId &&
+                                      !item.pendingPersonalInvite) ||
                                     item.personalTaskSummary ||
-                                    item.pending) && (
+                                    item.pending ||
+                                    item.pendingPersonalInvite) && (
                                     <View
                                       style={{
                                         flexDirection: 'row-reverse',
@@ -2890,7 +3033,9 @@ export default function HomeScreen() {
                                             {item.location}
                                           </Text>
                                         ) : null}
-                                        {item.groupName && !item.communityId ? (
+                                        {item.groupName &&
+                                        !item.communityId &&
+                                        !item.pendingPersonalInvite ? (
                                           <View style={stylesRtl.groupRow}>
                                             <MaterialIcons
                                               name="group"
@@ -2913,6 +3058,79 @@ export default function HomeScreen() {
                                         ) : null}
                                       </View>
 
+                                      {/* Left: personal invite RSVP badge (display-only) */}
+                                      {item.pendingPersonalInvite && (
+                                        <View
+                                          style={{
+                                            marginLeft: 8,
+                                            flexShrink: 0,
+                                          }}
+                                        >
+                                          {item.groupName === 'בוטל' ? (
+                                            <View
+                                              style={[
+                                                stylesRtl.pendingBadge,
+                                                { backgroundColor: '#f3f4f6' },
+                                              ]}
+                                            >
+                                              <Text
+                                                style={[
+                                                  stylesRtl.pendingBadgeText,
+                                                  { color: '#6b7280' },
+                                                ]}
+                                              >
+                                                בוטל
+                                              </Text>
+                                            </View>
+                                          ) : item.myPersonalRsvpStatus ===
+                                            'no' ? (
+                                            <View
+                                              style={[
+                                                stylesRtl.pendingBadge,
+                                                { backgroundColor: '#f3f4f6' },
+                                              ]}
+                                            >
+                                              <Text
+                                                style={[
+                                                  stylesRtl.pendingBadgeText,
+                                                  { color: '#6b7280' },
+                                                ]}
+                                              >
+                                                לא מגיע/ה
+                                              </Text>
+                                            </View>
+                                          ) : item.myPersonalRsvpStatus ===
+                                            'maybe' ? (
+                                            <View
+                                              style={[
+                                                stylesRtl.pendingBadge,
+                                                { backgroundColor: '#fef9c3' },
+                                              ]}
+                                            >
+                                              <Text
+                                                style={[
+                                                  stylesRtl.pendingBadgeText,
+                                                  { color: '#854d0e' },
+                                                ]}
+                                              >
+                                                אולי
+                                              </Text>
+                                            </View>
+                                          ) : (
+                                            <View
+                                              style={stylesRtl.pendingBadge}
+                                            >
+                                              <Text
+                                                style={
+                                                  stylesRtl.pendingBadgeText
+                                                }
+                                              >
+                                                ממתין לאישור
+                                              </Text>
+                                            </View>
+                                          )}
+                                        </View>
+                                      )}
                                       {/* Left: pending badge — tapping opens RSVP chips */}
                                       {item.pending && (
                                         <Pressable
@@ -3280,7 +3498,7 @@ export default function HomeScreen() {
                           fontSize: 11,
                           color: '#94a3b8',
                           marginRight: 8,
-                          textAlign: 'right',
+                          textAlign: getTextAlign(),
                         }}
                       >
                         {formatOverdueDate(task)}
@@ -3434,7 +3652,7 @@ export default function HomeScreen() {
                     fontSize: 18,
                     fontWeight: '700',
                     color: '#111517',
-                    textAlign: 'right',
+                    textAlign: getTextAlign(),
                     marginBottom: 16,
                   }}
                 >
@@ -3971,7 +4189,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     alignItems: 'center',
   },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#6b7280' },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6b7280',
+    textAlign: 'right',
+  },
   seeAll: { fontSize: 12, fontWeight: '700', color: '#36a9e2' },
   birthdayCard: {
     backgroundColor: '#fff',
@@ -4049,7 +4272,12 @@ const styles = StyleSheet.create({
   },
 
   // ── Timeline ────────────────────────────────────────────────────────────────
-  timelineTitle: { fontSize: 18, fontWeight: '700', color: '#111517' },
+  timelineTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111517',
+    textAlign: 'right',
+  },
   timeColumn: { width: 48, alignItems: 'center', paddingTop: 14 },
   timeText: { fontSize: 13, fontWeight: '700', color: '#94a3b8' },
   timelineCard: {

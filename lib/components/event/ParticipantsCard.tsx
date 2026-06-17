@@ -32,6 +32,8 @@ export interface FamilyMemberChip {
   _id: string;
   displayName?: string;
   color?: string;
+  /** Convex user ID when this contact has matched/joined the app. Used for RSVP permissions. */
+  matchedUserId?: string;
 }
 
 const PRIMARY = '#36a9e2';

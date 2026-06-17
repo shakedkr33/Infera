@@ -31,8 +31,10 @@ import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
+import { UpgradeModal } from '@/components/UpgradeModal';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
@@ -217,6 +219,11 @@ export function EventDetailsBottomSheet({
   ] = useState<Id<'events'> | null>(null);
   const [participantRsvpDetailsOpen, setParticipantRsvpDetailsOpen] =
     useState(false);
+  const { isExpiredFree } = useEffectiveAccess();
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
+  const [personalNoConfirmOpen, setPersonalNoConfirmOpen] = useState(false);
+  const [removeFromCalendarConfirmOpen, setRemoveFromCalendarConfirmOpen] =
+    useState(false);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
   const isClosingRef = useRef(false);
   const [isClosingState, setIsClosingState] = useState(false);
@@ -285,6 +292,9 @@ export function EventDetailsBottomSheet({
 
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const deleteEventMutation = useMutation(api.events.deleteEvent);
+  const softDeletePersonalEventMutation = useMutation(
+    api.events.softDeletePersonalEvent
+  );
   const addImportantItemsToMyTasks = useMutation(
     api.tasks.addEventImportantItemsToMyTasks
   );
@@ -294,6 +304,9 @@ export function EventDetailsBottomSheet({
   const upsertRsvpMutation = useMutation(api.eventRsvps.upsertRsvp);
   const setRsvpNoAndUnclaimMyEventTasks = useMutation(
     api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
+  );
+  const removePersonalEventFromMyCalendar = useMutation(
+    api.personalEventCalendar.removePersonalEventFromMyCalendar
   );
   const addCommunityEventToMyCalendar = useMutation(
     api.communityEventCalendar.addCommunityEventToMyCalendar
@@ -518,6 +531,17 @@ export function EventDetailsBottomSheet({
           }
         : null;
 
+  const isCommunityEvent = Boolean(displayEvent?.communityId);
+  const shouldGatePersonalFamilyActions = isExpiredFree && !isCommunityEvent;
+
+  const handleGatedAction = (action: () => void): void => {
+    if (shouldGatePersonalFamilyActions) {
+      setUpgradeModalVisible(true);
+      return;
+    }
+    action();
+  };
+
   const handleEdit = (): void => {
     if (!displayEvent) return;
     onClose();
@@ -565,10 +589,22 @@ export function EventDetailsBottomSheet({
   const handleCancel = (): void => {
     if (!convexEventId || !currentUserId) return;
     const isCommunity = Boolean(displayEvent?.communityId);
+    const cancelSharedUserIds =
+      (eventDoc as { sharedWithUserIds?: string[] } | null | undefined)
+        ?.sharedWithUserIds ?? [];
+    const cancelSharedMemberIds =
+      (eventDoc as { sharedWithFamilyMemberIds?: string[] } | null | undefined)
+        ?.sharedWithFamilyMemberIds ?? [];
+    const personalEventHasInvitees =
+      !isCommunity &&
+      (cancelSharedUserIds.length > 0 || cancelSharedMemberIds.length > 0);
+    const title = isCommunity ? 'ביטול אירוע' : 'לבטל את האירוע?';
     const message = isCommunity
       ? 'האירוע יוצג בקהילה כמבוטל למשך 24 שעות, כדי שחברי הקהילה יראו את העדכון.'
-      : 'האם לבטל את האירוע?';
-    Alert.alert('ביטול אירוע', message, [
+      : personalEventHasInvitees
+        ? 'האירוע יבוטל עבור כל המוזמנים.'
+        : 'האם לבטל את האירוע?';
+    Alert.alert(title, message, [
       { text: 'חזרה', style: 'cancel' },
       {
         text: 'בטל אירוע',
@@ -587,16 +623,56 @@ export function EventDetailsBottomSheet({
 
   const handleDelete = (): void => {
     if (!convexEventId) return;
+    const isCommunity = Boolean(displayEvent?.communityId);
+    if (isCommunity) {
+      Alert.alert(
+        'הסרת אירוע',
+        'האם למחוק את האירוע לגמרי מהקהילה? פעולה זו תסיר אותו מהתצוגה לכל חברי הקהילה.',
+        [
+          { text: 'ביטול', style: 'cancel' },
+          {
+            text: 'הסר לגמרי',
+            style: 'destructive',
+            onPress: () => {
+              deleteEventMutation({ eventId: convexEventId })
+                .then(() => onClose())
+                .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
+            },
+          },
+        ]
+      );
+    } else {
+      Alert.alert(
+        'למחוק את האירוע?',
+        'האירוע יועבר לנמחקו לאחרונה ויישמר שם למשך 30 יום.',
+        [
+          { text: 'ביטול', style: 'cancel' },
+          {
+            text: 'מחק אירוע',
+            style: 'destructive',
+            onPress: () => {
+              softDeletePersonalEventMutation({ eventId: convexEventId })
+                .then(() => onClose())
+                .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
+            },
+          },
+        ]
+      );
+    }
+  };
+
+  const handleDeletePersonalEvent = (): void => {
+    if (!convexEventId) return;
     Alert.alert(
-      'הסרת אירוע',
-      'האם למחוק את האירוע לגמרי מהקהילה? פעולה זו תסיר אותו מהתצוגה לכל חברי הקהילה.',
+      'למחוק את האירוע?',
+      'האירוע יועבר לנמחקו לאחרונה ויישמר שם למשך 30 יום.',
       [
         { text: 'ביטול', style: 'cancel' },
         {
-          text: 'הסר לגמרי',
+          text: 'מחק אירוע',
           style: 'destructive',
           onPress: () => {
-            deleteEventMutation({ eventId: convexEventId })
+            softDeletePersonalEventMutation({ eventId: convexEventId })
               .then(() => onClose())
               .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
           },
@@ -784,6 +860,44 @@ export function EventDetailsBottomSheet({
     isEventCreator ||
     (Boolean(displayEvent?.communityId) && isCommunityOwnerOrAdmin);
 
+  const sharedWithUserIds =
+    (eventDoc as { sharedWithUserIds?: string[] } | null | undefined)
+      ?.sharedWithUserIds ?? [];
+
+  // Fallback for events created before sharedWithUserIds was introduced:
+  // use the viewer's family-space entity ID vs sharedWithFamilyMemberIds.
+  const viewerSelfEntityId = familyContactsForDetails?.selfEntityId as
+    | string
+    | undefined;
+  const eventSharedWithFamilyMemberIds =
+    (eventDoc as { sharedWithFamilyMemberIds?: string[] } | null | undefined)
+      ?.sharedWithFamilyMemberIds ?? [];
+
+  const isPersonalInvitee = Boolean(
+    !displayEvent?.communityId &&
+      !isEventCreator &&
+      currentUserId &&
+      (sharedWithUserIds.includes(currentUserId) ||
+        (viewerSelfEntityId != null &&
+          eventSharedWithFamilyMemberIds.includes(viewerSelfEntityId)))
+  );
+
+  const isPersonalEvent = !displayEvent?.communityId;
+
+  const hasPersonalInvitees = Boolean(
+    isPersonalEvent &&
+      (sharedWithUserIds.length > 0 ||
+        eventSharedWithFamilyMemberIds.length > 0)
+  );
+
+  const canDeletePersonalDirect = Boolean(
+    convexEventId &&
+      isPersonalEvent &&
+      isEventCreator &&
+      !hasPersonalInvitees &&
+      displayEvent?.status !== 'cancelled'
+  );
+
   const myRsvpRow = rsvpRows.find((r) => r.userId === currentUserId);
   const rawRsvp = myRsvpRow?.status;
   const currentRsvpStatus: 'yes' | 'no' | 'maybe' | 'none' =
@@ -842,7 +956,8 @@ export function EventDetailsBottomSheet({
     convexEventId &&
       (showMemberRsvpButtons ||
         hasCommunityResponseSummary ||
-        hasManualParticipantNames)
+        hasManualParticipantNames ||
+        isPersonalInvitee)
   );
 
   /**
@@ -996,13 +1111,23 @@ export function EventDetailsBottomSheet({
                 ) : null}
 
                 <View style={styles.quickActionsLtrRow}>
-                  <QuickAction
-                    color="#dc2626"
-                    disabled={!canCancel}
-                    icon="event-busy"
-                    label="ביטול"
-                    onPress={handleCancel}
-                  />
+                  {canDeletePersonalDirect ? (
+                    <QuickAction
+                      color="#dc2626"
+                      disabled={false}
+                      icon="delete-outline"
+                      label="מחק"
+                      onPress={handleDeletePersonalEvent}
+                    />
+                  ) : (
+                    <QuickAction
+                      color="#dc2626"
+                      disabled={!canCancel}
+                      icon="event-busy"
+                      label="ביטול"
+                      onPress={handleCancel}
+                    />
+                  )}
                   <QuickAction
                     color="#2563eb"
                     disabled={false}
@@ -1015,16 +1140,20 @@ export function EventDetailsBottomSheet({
                     disabled={!canEdit}
                     icon="edit"
                     label="עריכה"
-                    onPress={handleEdit}
+                    onPress={() => handleGatedAction(handleEdit)}
                   />
                 </View>
 
                 {canDelete ? (
                   <Pressable
                     accessible={true}
-                    accessibilityLabel="הסר אירוע מהקהילה"
+                    accessibilityLabel={
+                      displayEvent.communityId
+                        ? 'הסר אירוע מהקהילה'
+                        : 'מחק אירוע לגמרי'
+                    }
                     accessibilityRole="button"
-                    onPress={handleDelete}
+                    onPress={() => handleGatedAction(handleDelete)}
                     style={styles.deleteEventBtn}
                   >
                     <MaterialIcons
@@ -1033,7 +1162,9 @@ export function EventDetailsBottomSheet({
                       size={18}
                     />
                     <Text style={styles.deleteEventBtnText}>
-                      הסר אירוע מהקהילה
+                      {displayEvent.communityId
+                        ? 'הסר אירוע מהקהילה'
+                        : 'מחק לגמרי'}
                     </Text>
                   </Pressable>
                 ) : null}
@@ -1125,12 +1256,109 @@ export function EventDetailsBottomSheet({
                     </>
                   ) : null}
 
+                  {isPersonalInvitee ? (
+                    <>
+                      <Text style={styles.rsvpMemberTitle}>
+                        {currentRsvpStatus === 'none'
+                          ? 'האם תשתתף/י?'
+                          : currentRsvpStatus === 'no'
+                            ? 'סימנת שלא תגיע/י'
+                            : 'שינוי תשובה'}
+                      </Text>
+                      <View style={styles.rsvpMemberButtonRow}>
+                        {MEMBER_RSVP_OPTIONS.map((opt) => {
+                          const isActive = currentRsvpStatus === opt.status;
+                          const rsvpDisabled =
+                            displayEvent.status === 'cancelled' ||
+                            pendingRsvpStatus !== null;
+                          return (
+                            <TouchableOpacity
+                              key={opt.status}
+                              activeOpacity={0.82}
+                              accessibilityHint={
+                                rsvpDisabled
+                                  ? undefined
+                                  : 'מגדיר את תגובת ההגעה שלך לאירוע'
+                              }
+                              accessibilityLabel={opt.label}
+                              accessibilityRole="button"
+                              accessibilityState={{
+                                disabled: rsvpDisabled,
+                                selected: isActive,
+                              }}
+                              accessible={true}
+                              disabled={rsvpDisabled}
+                              hitSlop={{
+                                top: 8,
+                                bottom: 8,
+                                left: 6,
+                                right: 6,
+                              }}
+                              onPress={() => {
+                                if (opt.status === 'no') {
+                                  setPersonalNoConfirmOpen(true);
+                                } else {
+                                  handleRsvp(opt.status);
+                                }
+                              }}
+                              style={[
+                                styles.rsvpSegment,
+                                {
+                                  backgroundColor: isActive
+                                    ? opt.selectedBg
+                                    : '#f8fafc',
+                                  borderColor: isActive
+                                    ? opt.selectedBorder
+                                    : '#64748b',
+                                  opacity: rsvpDisabled ? 0.5 : 1,
+                                },
+                                isActive && styles.rsvpSegmentSelected,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.rsvpSegmentText,
+                                  isActive && {
+                                    color: opt.selectedText,
+                                    fontWeight: '800',
+                                  },
+                                ]}
+                              >
+                                {opt.label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                      {currentRsvpStatus === 'no' ? (
+                        <Text style={styles.rsvpMemberHint}>
+                          אפשר לשנות תשובה אם משהו השתנה.
+                        </Text>
+                      ) : rsvpHelperText ? (
+                        <Text style={styles.rsvpMemberHelper}>
+                          {rsvpHelperText}
+                        </Text>
+                      ) : currentRsvpStatus === 'none' &&
+                        displayEvent.status !== 'cancelled' ? (
+                        <Text style={styles.rsvpMemberHint}>
+                          בחר/י את תגובתך
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : null}
+
                   {showMemberRsvpButtons &&
                   (hasCommunityResponseSummary || hasManualParticipantNames) ? (
                     <View style={styles.rsvpUnifiedDivider} />
                   ) : null}
 
-                  {hasCommunityResponseSummary ? (
+                  {isPersonalInvitee &&
+                  (creatorDisplayName !== undefined ||
+                    hasManualParticipantNames) ? (
+                    <View style={styles.rsvpUnifiedDivider} />
+                  ) : null}
+
+                  {hasCommunityResponseSummary && !isPersonalInvitee ? (
                     <Pressable
                       accessibilityHint="פותח רשימת משתתפים לפי סוג תגובה"
                       accessibilityLabel={`תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}. צפייה`}
@@ -1161,7 +1389,9 @@ export function EventDetailsBottomSheet({
                     </Pressable>
                   ) : null}
 
-                  {hasCommunityResponseSummary && hasManualParticipantNames ? (
+                  {hasCommunityResponseSummary &&
+                  !isPersonalInvitee &&
+                  hasManualParticipantNames ? (
                     <View style={styles.rsvpUnifiedDivider} />
                   ) : null}
 
@@ -1196,6 +1426,24 @@ export function EventDetailsBottomSheet({
                     </View>
                   ) : null}
                 </View>
+              ) : null}
+
+              {/* "הסר מהיומן שלי" — invitees only, after RSVP 'no' or when event is cancelled */}
+              {isPersonalInvitee &&
+              convexEventId &&
+              (displayEvent.status === 'cancelled' ||
+                currentRsvpStatus === 'no') ? (
+                <Pressable
+                  accessible={true}
+                  accessibilityLabel="הסר מהיומן שלי"
+                  accessibilityHint="מסיר את האירוע מהיומן שלך בלבד"
+                  accessibilityRole="button"
+                  onPress={() => setRemoveFromCalendarConfirmOpen(true)}
+                  style={styles.deleteEventBtn}
+                >
+                  <MaterialIcons color="#dc2626" name="event-busy" size={18} />
+                  <Text style={styles.deleteEventBtnText}>הסר מהיומן שלי</Text>
+                </Pressable>
               ) : null}
 
               <View style={styles.sectionCard}>
@@ -1640,6 +1888,43 @@ export function EventDetailsBottomSheet({
         onConfirm={handleConfirmCalendarRemoval}
         title={CALENDAR_REMOVE_CONFIRM_TITLE}
         visible={calendarRemoveConfirmationEventId !== null}
+      />
+      <AppConfirmationDialog
+        cancelLabel="לא עכשיו"
+        confirmLabel="כן, לא אגיע"
+        message="האירוע יישאר זמין ואפשר לשנות תשובה מאוחר יותר."
+        onCancel={() => setPersonalNoConfirmOpen(false)}
+        onConfirm={() => {
+          setPersonalNoConfirmOpen(false);
+          handleRsvp('no');
+        }}
+        title="לסמן שלא תגיע/י לאירוע?"
+        visible={personalNoConfirmOpen}
+      />
+      <AppConfirmationDialog
+        cancelLabel="ביטול"
+        confirmDestructive
+        confirmLabel="הסר מהיומן שלי"
+        message="האירוע יוסר מהיומן שלך בלבד. הוא לא יימחק אצל היוצר או אצל מוזמנים אחרים."
+        onCancel={() => setRemoveFromCalendarConfirmOpen(false)}
+        onConfirm={() => {
+          setRemoveFromCalendarConfirmOpen(false);
+          if (!convexEventId) return;
+          removePersonalEventFromMyCalendar({ eventId: convexEventId })
+            .then(() => {
+              onClose();
+            })
+            .catch(() => {
+              Alert.alert('שגיאה', 'לא ניתן להסיר את האירוע מהיומן');
+            });
+        }}
+        title="להסיר מהיומן שלך?"
+        visible={removeFromCalendarConfirmOpen}
+      />
+      <UpgradeModal
+        visible={upgradeModalVisible}
+        reason="general"
+        onClose={() => setUpgradeModalVisible(false)}
       />
     </Modal>
   );

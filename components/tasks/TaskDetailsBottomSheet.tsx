@@ -19,8 +19,10 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { UpgradeModal } from '@/components/UpgradeModal';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { TASK_CATEGORY_LABELS } from '@/lib/types/task';
 
@@ -368,6 +370,8 @@ export function TaskDetailsBottomSheet({
   const [isPostponing, setIsPostponing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
+  const { isExpiredFree } = useEffectiveAccess();
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
 
   // Personal reminder for the current user.
   // Creators: reminder lives directly on the task doc (task.reminders / task.reminderType).
@@ -461,6 +465,17 @@ export function TaskDetailsBottomSheet({
   }, [taskId, router, onClose]);
 
   if (!visible) return null;
+
+  const isCommunityTask = Boolean(task?.communityId);
+  const shouldGatePersonalFamilyActions = isExpiredFree && !isCommunityTask;
+
+  const handleGatedAction = (action: () => void): void => {
+    if (shouldGatePersonalFamilyActions) {
+      setUpgradeModalVisible(true);
+      return;
+    }
+    action();
+  };
 
   const isEditable =
     task &&
@@ -557,7 +572,7 @@ export function TaskDetailsBottomSheet({
 
                   {isEditable ? (
                     <Pressable
-                      onPress={handleEdit}
+                      onPress={() => handleGatedAction(handleEdit)}
                       accessible
                       accessibilityRole="button"
                       accessibilityLabel="עריכת משימה"
@@ -644,7 +659,7 @@ export function TaskDetailsBottomSheet({
                         <View style={s.secondaryActionsRow}>
                           {showPostpone ? (
                             <Pressable
-                              onPress={handlePostpone}
+                              onPress={() => handleGatedAction(handlePostpone)}
                               disabled={isPostponing || isToggling}
                               accessible
                               accessibilityRole="button"
@@ -896,6 +911,11 @@ export function TaskDetailsBottomSheet({
             </View>
           </Modal>
         ) : null}
+        <UpgradeModal
+          visible={upgradeModalVisible}
+          reason="general"
+          onClose={() => setUpgradeModalVisible(false)}
+        />
       </View>
     </Modal>
   );

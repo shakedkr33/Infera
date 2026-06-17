@@ -22,6 +22,7 @@
     },
     "production": {
       "autoIncrement": true,
+      "environment": "production",
       "env": {
         "EXPO_PUBLIC_CONVEX_URL": "https://sincere-panther-608.convex.cloud"
       }

@@ -24,6 +24,7 @@ import type * as http from "../http.js";
 import type * as linkedEvents from "../linkedEvents.js";
 import type * as members from "../members.js";
 import type * as onboarding from "../onboarding.js";
+import type * as personalEventCalendar from "../personalEventCalendar.js";
 import type * as profileCircles from "../profileCircles.js";
 import type * as shareLinks from "../shareLinks.js";
 import type * as tasks from "../tasks.js";
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   linkedEvents: typeof linkedEvents;
   members: typeof members;
   onboarding: typeof onboarding;
+  personalEventCalendar: typeof personalEventCalendar;
   profileCircles: typeof profileCircles;
   shareLinks: typeof shareLinks;
   tasks: typeof tasks;

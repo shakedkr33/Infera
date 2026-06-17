@@ -14,7 +14,31 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 
 // ============================================================================
-// מסך "נמחקו לאחרונה"
+// Types
+// ============================================================================
+
+type TaskDeletedItem = {
+  id: Id<'tasks'>;
+  type: 'task';
+  title: string;
+  deletedAt: number | undefined;
+  deleteExpiresAt: number | undefined;
+};
+
+type EventDeletedItem = {
+  id: Id<'events'>;
+  type: 'event';
+  title: string;
+  deletedAt: number | undefined;
+  deleteExpiresAt: number | undefined;
+};
+
+type DeletedItem =
+  | { kind: 'task'; item: TaskDeletedItem }
+  | { kind: 'event'; item: EventDeletedItem };
+
+// ============================================================================
+// Helpers
 // ============================================================================
 
 function formatDeletedDate(deletedAt: number | undefined): string {
@@ -32,21 +56,68 @@ function daysLeft(deleteExpiresAt: number | undefined): number | null {
   return Math.ceil(diff / (24 * 60 * 60 * 1000));
 }
 
+// ============================================================================
+// Screen
+// ============================================================================
+
 export default function RecentlyDeletedScreen() {
   const router = useRouter();
-  const deletedItems = useQuery(api.tasks.listRecentlyDeleted);
-  const restoreTaskMutation = useMutation(api.tasks.restoreTask);
 
-  const handleRestore = async (id: Id<'tasks'>, title: string) => {
+  const deletedTasks = useQuery(api.tasks.listRecentlyDeleted);
+  const deletedEvents = useQuery(api.events.listRecentlyDeletedPersonalEvents);
+
+  const restoreTaskMutation = useMutation(api.tasks.restoreTask);
+  const restoreEventMutation = useMutation(api.events.restorePersonalEvent);
+
+  // Combine tasks and events into a single sorted list
+  const combinedItems: DeletedItem[] = [
+    ...(deletedTasks ?? []).map(
+      (t): DeletedItem => ({
+        kind: 'task',
+        item: {
+          id: t.id as Id<'tasks'>,
+          type: 'task',
+          title: t.title,
+          deletedAt: t.deletedAt ?? undefined,
+          deleteExpiresAt: t.deleteExpiresAt ?? undefined,
+        },
+      })
+    ),
+    ...(deletedEvents ?? []).map(
+      (e): DeletedItem => ({
+        kind: 'event',
+        item: {
+          id: e.id as Id<'events'>,
+          type: 'event',
+          title: e.title,
+          deletedAt: e.deletedAt ?? undefined,
+          deleteExpiresAt: e.deleteExpiresAt ?? undefined,
+        },
+      })
+    ),
+  ].sort((a, b) => {
+    const aAt = a.item.deletedAt ?? 0;
+    const bAt = b.item.deletedAt ?? 0;
+    return bAt - aAt; // descending
+  });
+
+  const isEmpty = combinedItems.length === 0;
+
+  const handleRestoreTask = async (id: Id<'tasks'>, title: string) => {
     try {
       await restoreTaskMutation({ id });
-    } catch (error) {
-      console.error('restoreTask error:', error);
+    } catch {
       Alert.alert('שגיאה', `לא הצלחנו לשחזר את "${title}". נסה שוב.`);
     }
   };
 
-  const isEmpty = (deletedItems ?? []).length === 0;
+  const handleRestoreEvent = async (id: Id<'events'>, title: string) => {
+    try {
+      await restoreEventMutation({ eventId: id });
+    } catch {
+      Alert.alert('שגיאה', `לא הצלחנו לשחזר את "${title}". נסה שוב.`);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -87,17 +158,21 @@ export default function RecentlyDeletedScreen() {
         ) : (
           /* Deleted items list */
           <View style={styles.listContainer}>
-            {(deletedItems ?? []).map((item) => {
-              const days = daysLeft(item.deleteExpiresAt ?? undefined);
-              const deletedDate = formatDeletedDate(
-                item.deletedAt ?? undefined
-              );
+            {combinedItems.map((entry) => {
+              const { item, kind } = entry;
+              const days = daysLeft(item.deleteExpiresAt);
+              const deletedDate = formatDeletedDate(item.deletedAt);
+              const typeLabel = kind === 'task' ? 'משימה' : 'אירוע';
+
               return (
-                <View key={String(item.id)} style={styles.itemCard}>
+                <View
+                  key={`${kind}-${String(item.id)}`}
+                  style={styles.itemCard}
+                >
                   <View style={styles.itemContent}>
                     <View style={styles.itemTypeRow}>
                       <View style={styles.typeChip}>
-                        <Text style={styles.typeChipText}>משימה</Text>
+                        <Text style={styles.typeChipText}>{typeLabel}</Text>
                       </View>
                       {deletedDate ? (
                         <Text style={styles.deletedDateText}>
@@ -116,9 +191,19 @@ export default function RecentlyDeletedScreen() {
                   </View>
                   <Pressable
                     style={styles.restoreButton}
-                    onPress={() =>
-                      handleRestore(item.id as Id<'tasks'>, item.title)
-                    }
+                    onPress={() => {
+                      if (kind === 'task') {
+                        void handleRestoreTask(
+                          item.id as Id<'tasks'>,
+                          item.title
+                        );
+                      } else {
+                        void handleRestoreEvent(
+                          item.id as Id<'events'>,
+                          item.title
+                        );
+                      }
+                    }}
                     accessible={true}
                     accessibilityRole="button"
                     accessibilityLabel={`שחזור: ${item.title}`}

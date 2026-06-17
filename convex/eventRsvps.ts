@@ -1,9 +1,69 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { ConvexError, v } from 'convex/values';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { isActiveCommunityMember } from './communityMemberUtils';
+import { resolveKind, resolveMySpaceId } from './members';
+
+type PersonalEventDoc = Pick<
+  Doc<'events'>,
+  'createdBy' | 'sharedWithUserIds' | 'sharedWithFamilyMemberIds'
+>;
+
+/** Mirrors listMyFamilyContacts selfEntityId — viewer's own entity row in their resolved space. */
+async function getViewerSelfFamilyMemberId(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<'users'>
+): Promise<Id<'members'> | null> {
+  const spaceId = await resolveMySpaceId(ctx, userId);
+  if (!spaceId) return null;
+
+  const indexedEntities = await ctx.db
+    .query('members')
+    .withIndex('by_kind', (q) =>
+      q.eq('spaceId', spaceId).eq('kind', 'entity')
+    )
+    .collect();
+
+  const allRows = await ctx.db
+    .query('members')
+    .withIndex('by_space', (q) => q.eq('spaceId', spaceId))
+    .collect();
+
+  const unstampedEntities = allRows.filter(
+    (r) => r.kind === undefined && resolveKind(r) === 'entity'
+  );
+
+  const seen = new Set(indexedEntities.map((r) => r._id));
+  const entities = [
+    ...indexedEntities,
+    ...unstampedEntities.filter((r) => !seen.has(r._id)),
+  ];
+
+  const selfEntityRow = entities.find(
+    (r) => r.matchedUserId === userId || r.userId === userId
+  );
+
+  return selfEntityRow?._id ?? null;
+}
+
+function canAccessPersonalEventRsvp(
+  event: PersonalEventDoc,
+  userId: Id<'users'>,
+  viewerSelfEntityId: Id<'members'> | null
+): boolean {
+  if (event.createdBy === userId) return true;
+
+  const sharedWithUserIds = event.sharedWithUserIds ?? [];
+  if (sharedWithUserIds.some((id) => id === userId)) return true;
+
+  const sharedWithFamilyMemberIds = event.sharedWithFamilyMemberIds ?? [];
+  return (
+    viewerSelfEntityId !== null &&
+    sharedWithFamilyMemberIds.includes(viewerSelfEntityId)
+  );
+}
 
 async function getCommunityMembership(
   ctx: MutationCtx | QueryCtx,
@@ -45,6 +105,11 @@ export const upsertRsvp = mutation({
         userId
       );
       if (!isActiveCommunityMember(membership)) {
+        throw new Error('אין הרשאה לעדכן אישור הגעה');
+      }
+    } else {
+      const viewerSelfEntityId = await getViewerSelfFamilyMemberId(ctx, userId);
+      if (!canAccessPersonalEventRsvp(event, userId, viewerSelfEntityId)) {
         throw new Error('אין הרשאה לעדכן אישור הגעה');
       }
     }
@@ -105,6 +170,11 @@ export const setRsvpNoAndUnclaimMyEventTasks = mutation({
         userId
       );
       if (!isActiveCommunityMember(membership)) {
+        throw new Error('אין הרשאה לעדכן אישור הגעה');
+      }
+    } else {
+      const viewerSelfEntityId = await getViewerSelfFamilyMemberId(ctx, userId);
+      if (!canAccessPersonalEventRsvp(event, userId, viewerSelfEntityId)) {
         throw new Error('אין הרשאה לעדכן אישור הגעה');
       }
     }
@@ -241,6 +311,8 @@ export const listByEvent = query({
       return [];
     }
 
+    const isCreator = event.createdBy === userId;
+
     if (event.communityId) {
       const membership = await getCommunityMembership(
         ctx,
@@ -250,8 +322,11 @@ export const listByEvent = query({
       if (!isActiveCommunityMember(membership)) {
         return [];
       }
-    } else if (event.createdBy !== userId) {
-      return [];
+    } else if (!isCreator) {
+      const viewerSelfEntityId = await getViewerSelfFamilyMemberId(ctx, userId);
+      if (!canAccessPersonalEventRsvp(event, userId, viewerSelfEntityId)) {
+        return [];
+      }
     }
 
     const rows = await ctx.db
@@ -259,8 +334,14 @@ export const listByEvent = query({
       .withIndex('by_event_user', (q) => q.eq('eventId', eventId))
       .collect();
 
+    // Invitees (non-creator) on personal events see only their own RSVP row.
+    const visibleRows =
+      !event.communityId && !isCreator
+        ? rows.filter((r) => r.userId === userId)
+        : rows;
+
     const enriched = await Promise.all(
-      rows.map(async (r) => {
+      visibleRows.map(async (r) => {
         const u = await ctx.db.get(r.userId);
         const displayName =
           (u?.fullName && u.fullName.trim()) ||
@@ -271,5 +352,75 @@ export const listByEvent = query({
     );
 
     return enriched;
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// שליפת מוזמנים לאירוע אישי עם סטטוס RSVP (ליוצר בלבד)
+// ─────────────────────────────────────────────────────────────
+export const getInviteesWithRsvp = query({
+  args: { eventId: v.id('events') },
+  returns: v.array(
+    v.object({
+      userId: v.id('users'),
+      fullName: v.string(),
+      profileColor: v.union(v.string(), v.null()),
+      status: v.union(
+        v.literal('yes'),
+        v.literal('maybe'),
+        v.literal('none'),
+        v.literal('no')
+      ),
+    })
+  ),
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const event = await ctx.db.get(eventId);
+    if (!event) return [];
+
+    if (event.createdBy !== userId) {
+      throw new Error('רק יוצר האירוע יכול לצפות ברשימת המוזמנים');
+    }
+
+    const inviteeIds = (event.sharedWithUserIds ?? []) as Id<'users'>[];
+    if (inviteeIds.length === 0) return [];
+
+    const statusOrder: Record<string, number> = {
+      yes: 0,
+      maybe: 1,
+      none: 2,
+      no: 3,
+    };
+
+    const results = await Promise.all(
+      inviteeIds.map(async (inviteeUserId) => {
+        const user = await ctx.db.get(inviteeUserId);
+        const rsvpRow = await ctx.db
+          .query('eventRsvps')
+          .withIndex('by_event_user', (q) =>
+            q.eq('eventId', eventId).eq('userId', inviteeUserId)
+          )
+          .unique();
+
+        const fullName =
+          (user?.fullName && user.fullName.trim()) ||
+          (user?.phone && user.phone.trim()) ||
+          'משתמש';
+
+        const profileColor =
+          (user as { profileColor?: string } | null)?.profileColor ?? null;
+
+        const status: 'yes' | 'maybe' | 'none' | 'no' =
+          (rsvpRow?.status as 'yes' | 'maybe' | 'none' | 'no') ?? 'none';
+
+        return { userId: inviteeUserId, fullName, profileColor, status };
+      })
+    );
+
+    return results.sort(
+      (a, b) => (statusOrder[a.status] ?? 2) - (statusOrder[b.status] ?? 2)
+    );
   },
 });

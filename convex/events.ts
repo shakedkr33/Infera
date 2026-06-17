@@ -542,14 +542,28 @@ export const listByDateRange = query({
       myMemberRows.map((r) => r._id as string)
     );
 
+    // Load personal event opt-outs for the current viewer.
+    // These are rows in personalEventCalendarOptOuts where userId === current user.
+    // Updated listing behavior (Phase B): cancelled personal events with invitees
+    // are included until each invitee opts out — see loop below.
+    const personalOptOutRows = await ctx.db
+      .query('personalEventCalendarOptOuts')
+      .withIndex('by_user_event', (q) => q.eq('userId', userId))
+      .collect();
+    const personalOptOutIds = new Set(
+      personalOptOutRows.map((r) => r.eventId as string)
+    );
+
     // ── Category 1: events in the viewer's resolved space ──────────────────────
+    // NOTE: the cancelled filter is intentionally removed from the DB query so that
+    // cancelled personal events with invitees can remain visible until each invitee
+    // opts out. Community cancelled events are skipped in the processing loop below.
     const cat1Rows = spaceId
       ? await ctx.db
           .query('events')
           .withIndex('by_space_and_time', (q) =>
             q.eq('spaceId', spaceId).gte('startTime', from).lte('startTime', to)
           )
-          .filter((q) => q.neq(q.field('status'), 'cancelled'))
           .order('asc')
           .collect()
       : [];
@@ -592,13 +606,17 @@ export const listByDateRange = query({
     const seenIds = new Set<string>();
 
     for (const ev of cat1Rows) {
+      // Skip soft-deleted events for all viewers
+      if (ev.deletedAt !== undefined) continue;
+
       const idStr = ev._id as string;
       const rsvpStatus = rsvpByEventId.get(idStr);
       let communityName: string | undefined;
       let isSavedToMyCalendar = false;
 
       if (ev.communityId) {
-        // Community events: keep existing RSVP/save logic — no change here.
+        // Community events: keep existing behavior — cancelled events are never shown.
+        if (ev.status === 'cancelled') continue;
         communityName = communityNameById.get(ev.communityId as string);
         isSavedToMyCalendar = computeIsSavedToMyCalendar({
           requiresRsvp: ev.requiresRsvp,
@@ -629,6 +647,22 @@ export const listByDateRange = query({
         if (!isCreator && !isAllFamily && !isInUserIds && !isInMemberIds) {
           continue;
         }
+
+        // Opt-out: hide this personal event for the current user regardless of
+        // event status (active or cancelled). Creators cannot insert opt-out rows
+        // so this check only matters for non-creators.
+        if (!isCreator && personalOptOutIds.has(idStr)) continue;
+
+        // Cancelled personal events: only include when the event has invitees.
+        // Without invitees, a cancelled personal event is invisible (existing behavior).
+        // With invitees, it stays visible until each viewer personally opts out
+        // (opt-out already handled above).
+        if (ev.status === 'cancelled') {
+          const hasInvitees =
+            (ev.sharedWithUserIds?.length ?? 0) > 0 ||
+            (ev.sharedWithFamilyMemberIds?.length ?? 0) > 0;
+          if (!hasInvitees) continue;
+        }
       }
 
       seenIds.add(idStr);
@@ -642,11 +676,12 @@ export const listByDateRange = query({
     // TODO: Add a dedicated index on sharedWithUserIds / sharedWithFamilyMemberIds
     //       when event volume warrants it. For MVP, the full scan is acceptable
     //       because personal sharing is rare relative to total event volume.
+    // Cat2 includes cancelled personal events with invitees so cross-space
+    // recipients still see them as "בוטל" until they opt out.
     const cat2Candidates = await ctx.db
       .query('events')
       .filter((q) =>
         q.and(
-          q.neq(q.field('status'), 'cancelled'),
           q.gte(q.field('startTime'), from),
           q.lte(q.field('startTime'), to)
         )
@@ -658,6 +693,8 @@ export const listByDateRange = query({
       if (seenIds.has(idStr)) continue; // already included from Cat 1
       if (ev.communityId) continue; // community events use separate RSVP/save logic
       if ((ev.createdBy as string) === (userId as string)) continue; // creator always sees via Cat 1
+      // Skip soft-deleted events for all viewers
+      if (ev.deletedAt !== undefined) continue;
 
       const sharedUserIds = (ev.sharedWithUserIds ?? []) as string[];
       const sharedMemberIds = ev.sharedWithFamilyMemberIds ?? [];
@@ -667,6 +704,17 @@ export const listByDateRange = query({
         sharedMemberIds.some((mid) => myMemberIdsAllSpaces.has(mid));
 
       if (!isSharedWithViewer) continue;
+
+      // Opt-out: the viewer is always a non-creator in Cat2 (creators are skipped
+      // above). Hide the event if the viewer has opted out, regardless of status.
+      if (personalOptOutIds.has(idStr)) continue;
+
+      // Cancelled: only include if has invitees (opt-out already handled above).
+      if (ev.status === 'cancelled') {
+        const hasInvitees =
+          sharedUserIds.length > 0 || sharedMemberIds.length > 0;
+        if (!hasInvitees) continue;
+      }
 
       seenIds.add(idStr);
       result.push({
@@ -1142,6 +1190,105 @@ export const remove = mutation({
     if (!existing) throw new Error('אירוע לא נמצא');
 
     await ctx.db.delete(id);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// מחיקה רכה של אירוע אישי
+// ─────────────────────────────────────────────────────────────
+export const softDeletePersonalEvent = mutation({
+  args: { eventId: v.id('events') },
+  returns: v.object({ success: v.literal(true) }),
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (event.communityId)
+      throw new Error('לא ניתן למחוק אירוע קהילתי בדרך זו');
+    if ((event.createdBy as string) !== (userId as string))
+      throw new Error('אין הרשאה למחוק אירוע זה');
+
+    // Idempotent — already soft-deleted
+    if (event.deletedAt !== undefined) return { success: true as const };
+
+    // Safety: do not allow soft-delete while event is active AND has invitees.
+    // Creator should cancel first.
+    const hasInvitees =
+      (event.sharedWithUserIds?.length ?? 0) > 0 ||
+      (event.sharedWithFamilyMemberIds?.length ?? 0) > 0;
+    if (hasInvitees && event.status !== 'cancelled') {
+      throw new Error('לא ניתן למחוק אירוע עם מוזמנים בלי לבטל אותו קודם');
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(eventId, {
+      deletedAt: now,
+      deleteExpiresAt: now + 30 * 24 * 60 * 60 * 1000,
+      deletedBy: userId,
+    });
+
+    return { success: true as const };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// שחזור אירוע אישי שנמחק רכה
+// ─────────────────────────────────────────────────────────────
+export const restorePersonalEvent = mutation({
+  args: { eventId: v.id('events') },
+  returns: v.object({ success: v.literal(true) }),
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר');
+
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (event.communityId)
+      throw new Error('לא ניתן לשחזר אירוע קהילתי בדרך זו');
+    if (event.deletedAt === undefined) throw new Error('האירוע לא נמחק');
+    if ((event.deletedBy as string | undefined) !== (userId as string))
+      throw new Error('אין הרשאה לשחזר אירוע זה');
+
+    await ctx.db.patch(eventId, {
+      deletedAt: undefined,
+      deleteExpiresAt: undefined,
+      deletedBy: undefined,
+    });
+
+    return { success: true as const };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// רשימת אירועים אישיים שנמחקו לאחרונה (עבור מסך "נמחקו לאחרונה")
+// ─────────────────────────────────────────────────────────────
+export const listRecentlyDeletedPersonalEvents = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const events = await ctx.db
+      .query('events')
+      .withIndex('by_deleted_by', (q) => q.eq('deletedBy', userId))
+      .filter((q) => q.neq(q.field('deletedAt'), undefined))
+      .order('desc')
+      .collect();
+
+    return events
+      .filter((ev) => !ev.communityId)
+      .map((ev) => ({
+        id: ev._id,
+        title: ev.title,
+        deletedAt: ev.deletedAt,
+        deleteExpiresAt: ev.deleteExpiresAt,
+        startTime: ev.startTime,
+        endTime: ev.endTime,
+        allDay: ev.allDay,
+        status: ev.status,
+      }));
   },
 });
 

@@ -337,10 +337,14 @@ export const updateMyProfile = mutation({
       // listMyFamilyContacts reads from, causing entity rows to land in the wrong space.
       const spaceId = await resolveMySpaceId(ctx, userId);
       console.log(
-        '[PROFILE SYNC] ownerUserId:', userId,
-        '| resolvedSpaceId:', spaceId,
-        '| contacts count:', resolvedContacts.length,
-        '| contacts:', JSON.stringify(
+        '[PROFILE SYNC] ownerUserId:',
+        userId,
+        '| resolvedSpaceId:',
+        spaceId,
+        '| contacts count:',
+        resolvedContacts.length,
+        '| contacts:',
+        JSON.stringify(
           resolvedContacts.map((c) => ({
             name: (c as Record<string, unknown>).name,
             type: (c as Record<string, unknown>).type,
@@ -359,7 +363,12 @@ export const updateMyProfile = mutation({
           '[PROFILE SYNC] existingMembers in space before sync:',
           existingMembers
             .filter((m) => m.kind === 'entity' || m.displayName)
-            .map((m) => ({ id: m._id, displayName: m.displayName, kind: m.kind, memberType: m.memberType }))
+            .map((m) => ({
+              id: m._id,
+              displayName: m.displayName,
+              kind: m.kind,
+              memberType: m.memberType,
+            }))
         );
 
         // FIXED: kind: 'entity' stamped on all family member inserts and updates
@@ -373,8 +382,10 @@ export const updateMyProfile = mutation({
           console.log(
             '[PROFILE SYNC] processing contact:',
             contact.name,
-            '| type:', (contact as Record<string, unknown>).type,
-            '| isManual:', isManual
+            '| type:',
+            (contact as Record<string, unknown>).type,
+            '| isManual:',
+            isManual
           );
 
           const memberType =
@@ -390,7 +401,8 @@ export const updateMyProfile = mutation({
             console.log(
               '[PROFILE SYNC] manual member existing row:',
               existing?._id ?? 'none',
-              '| displayName match target:', contact.name
+              '| displayName match target:',
+              contact.name
             );
             if (existing) {
               await ctx.db.patch(existing._id, {
@@ -403,9 +415,12 @@ export const updateMyProfile = mutation({
               console.log(
                 '[PROFILE SYNC] PATCHED entity row:',
                 existing._id,
-                '| name:', contact.name,
-                '| memberType:', memberType,
-                '| spaceId:', spaceId
+                '| name:',
+                contact.name,
+                '| memberType:',
+                memberType,
+                '| spaceId:',
+                spaceId
               );
             } else {
               const newId = await ctx.db.insert('members', {
@@ -423,11 +438,15 @@ export const updateMyProfile = mutation({
                 '[PROFILE SYNC] INSERTED new entity row:',
                 newId,
                 '| table: members',
-                '| name:', contact.name,
-                '| memberType:', memberType,
+                '| name:',
+                contact.name,
+                '| memberType:',
+                memberType,
                 '| role: member | kind: entity | isManual: true',
-                '| ownerUserId:', userId,
-                '| spaceId:', spaceId,
+                '| ownerUserId:',
+                userId,
+                '| spaceId:',
+                spaceId,
                 '| inviteStatus: none'
               );
             }
@@ -475,10 +494,14 @@ export const updateMyProfile = mutation({
             console.log(
               '[PROFILE SYNC] PATCHED phone-contact row:',
               existing._id,
-              '| name:', contact.name,
-              '| memberType:', memberType,
-              '| phone:', normalizedPhone,
-              '| spaceId:', spaceId
+              '| name:',
+              contact.name,
+              '| memberType:',
+              memberType,
+              '| phone:',
+              normalizedPhone,
+              '| spaceId:',
+              spaceId
             );
           } else {
             const newId = await ctx.db.insert('members', {
@@ -499,12 +522,18 @@ export const updateMyProfile = mutation({
               '[PROFILE SYNC] INSERTED phone-contact row:',
               newId,
               '| table: members',
-              '| name:', contact.name,
-              '| memberType:', memberType,
-              '| phone:', normalizedPhone,
-              '| ownerUserId:', userId,
-              '| spaceId:', spaceId,
-              '| matchedUserId:', matchedId ?? 'none'
+              '| name:',
+              contact.name,
+              '| memberType:',
+              memberType,
+              '| phone:',
+              normalizedPhone,
+              '| ownerUserId:',
+              userId,
+              '| spaceId:',
+              spaceId,
+              '| matchedUserId:',
+              matchedId ?? 'none'
             );
           }
         }
@@ -521,17 +550,22 @@ export const updateMyProfile = mutation({
             console.log(
               '[PROFILE SYNC] ORPHAN DELETE:',
               m._id,
-              '| displayName:', m.displayName,
-              '| memberType:', m.memberType,
-              '| kind:', m.kind
+              '| displayName:',
+              m.displayName,
+              '| memberType:',
+              m.memberType,
+              '| kind:',
+              m.kind
             );
             await ctx.db.delete(m._id);
           }
         }
 
         console.log(
-          '[PROFILE SYNC] sync complete | spaceId:', spaceId,
-          '| touchedIds:', [...touchedEntityIds]
+          '[PROFILE SYNC] sync complete | spaceId:',
+          spaceId,
+          '| touchedIds:',
+          [...touchedEntityIds]
         );
       }
     }

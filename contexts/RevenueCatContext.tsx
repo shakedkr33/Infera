@@ -7,7 +7,7 @@
 // - Production builds עם מפתחות iOS/Android
 // - RevenueCat Paywall (native UI)
 // - Customer Center (ניהול מנויים)
-// - Entitlement checking עבור "InYomi Pro"
+// - Two-tier entitlement model: "personal" and "family"
 
 import Constants from 'expo-constants';
 import {
@@ -23,8 +23,11 @@ import { Alert, Platform } from 'react-native';
 import { MOCK_PAYMENTS, PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import {
   ENTITLEMENT_ID,
+  FAMILY_ENTITLEMENT_ID,
   getCurrentPlatformRevenueCatApiKey,
   isRevenueCatConfigured,
+  PERSONAL_ENTITLEMENT_ID,
+  type SubscriptionTier,
 } from '@/utils/revenueCatConfig';
 
 // ============================================================================
@@ -52,6 +55,17 @@ export type CustomerData = {
   managementURL: string | null;
 };
 
+// ============================================================================
+// DEBUG ONLY — remove after TestFlight investigation
+// ============================================================================
+export type RevenueCatDebugInfo = {
+  initError: string | null;
+  offeringsCurrentId: string | null;
+  offeringsPackagesCount: number | null;
+  usingPreviewPackages: boolean;
+  apiKeyPrefix: string | null; // first 12 chars + *** mask
+};
+
 // מבנה הקונטקסט
 type RevenueCatContextType = {
   // מצב
@@ -59,6 +73,11 @@ type RevenueCatContextType = {
   isPremium: boolean;
   isConfigured: boolean;
   isExpoGo: boolean;
+
+  // Two-tier subscription state
+  subscriptionTier: SubscriptionTier;
+  isPersonal: boolean;
+  isFamily: boolean;
 
   // חבילות זמינות
   packages: PackageInfo[];
@@ -77,6 +96,9 @@ type RevenueCatContextType = {
 
   // RevenueCat UI - Customer Center
   presentCustomerCenter: () => Promise<void>;
+
+  // DEBUG ONLY — remove after TestFlight investigation
+  _debug: RevenueCatDebugInfo;
 };
 
 // ============================================================================
@@ -129,12 +151,32 @@ function isRunningInExpoGo(): boolean {
 }
 
 /**
- * בדיקה האם ל-entitlement "InYomi Pro" יש גישה פעילה
+ * Derives the subscription tier from RevenueCat customerInfo entitlements.
+ * Priority: family wins if both personal and family are active.
+ */
+function getSubscriptionTierFromCustomerInfo(customerInfo: {
+  entitlements: { active: Record<string, unknown> };
+}): SubscriptionTier {
+  if (customerInfo.entitlements.active[FAMILY_ENTITLEMENT_ID] !== undefined) {
+    return 'family';
+  }
+  if (customerInfo.entitlements.active[PERSONAL_ENTITLEMENT_ID] !== undefined) {
+    return 'personal';
+  }
+  return null;
+}
+
+/**
+ * Legacy backward-compatible check. Returns true if ANY paid entitlement
+ * is active (personal, family, or legacy "InYomi Pro").
  */
 function checkHasPremium(customerInfo: {
   entitlements: { active: Record<string, unknown> };
 }): boolean {
-  return customerInfo.entitlements.active[ENTITLEMENT_ID] !== undefined;
+  return (
+    getSubscriptionTierFromCustomerInfo(customerInfo) !== null ||
+    customerInfo.entitlements.active[ENTITLEMENT_ID] !== undefined
+  );
 }
 
 /**
@@ -174,9 +216,20 @@ export function RevenueCatProvider({
 }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isPremium, setIsPremium] = useState(false);
+  const [subscriptionTier, setSubscriptionTier] =
+    useState<SubscriptionTier>(null);
   const [packages, setPackages] = useState<PackageInfo[]>(PREVIEW_PACKAGES);
   const [isInitialized, setIsInitialized] = useState(false);
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
+
+  // DEBUG ONLY — remove after TestFlight investigation
+  const [_debugInfo, _setDebugInfo] = useState<RevenueCatDebugInfo>({
+    initError: null,
+    offeringsCurrentId: null,
+    offeringsPackagesCount: null,
+    usingPreviewPackages: true,
+    apiKeyPrefix: null,
+  });
 
   const isExpoGo = isRunningInExpoGo();
   const isConfigured = isRevenueCatConfigured();
@@ -197,6 +250,9 @@ export function RevenueCatProvider({
     }) => {
       const hasPremium = checkHasPremium(customerInfo);
       setIsPremium(hasPremium);
+
+      const tier = getSubscriptionTierFromCustomerInfo(customerInfo);
+      setSubscriptionTier(tier);
 
       try {
         const Purchases = (await import('react-native-purchases')).default;
@@ -223,9 +279,12 @@ export function RevenueCatProvider({
 
   useEffect(() => {
     async function initialize() {
-      // אם מערכת התשלומים כבויה - המשתמש הוא פרימיום אוטומטית
+      // Legacy dev mode — isPremium is true for all users, but no real
+      // subscription tier is set. useEffectiveAccess falls back to
+      // DEV_ACCESS_OVERRIDE or trial_active default.
       if (!PAYMENT_SYSTEM_ENABLED) {
         setIsPremium(true);
+        setSubscriptionTier(null);
         setIsLoading(false);
         setIsInitialized(true);
         return;
@@ -254,6 +313,13 @@ export function RevenueCatProvider({
           throw new Error('אין מפתח API לפלטפורמה הנוכחית');
         }
 
+        // DEBUG ONLY — capture masked API key prefix
+        const maskedKey =
+          apiKey.length > 12
+            ? `${apiKey.substring(0, 12)}***`
+            : `${apiKey.substring(0, 4)}***`;
+        _setDebugInfo((prev) => ({ ...prev, apiKeyPrefix: maskedKey }));
+
         // ייבוא דינמי למניעת קריסות ב-Expo Go
         const Purchases = (await import('react-native-purchases')).default;
 
@@ -269,6 +335,15 @@ export function RevenueCatProvider({
 
         // טעינת ההצעות (Offerings)
         const offerings = await Purchases.getOfferings();
+
+        // DEBUG ONLY — capture offerings metadata before checking packages
+        _setDebugInfo((prev) => ({
+          ...prev,
+          offeringsCurrentId: offerings.current?.identifier ?? null,
+          offeringsPackagesCount:
+            offerings.current?.availablePackages?.length ?? 0,
+        }));
+
         if (offerings.current?.availablePackages) {
           const loadedPackages: PackageInfo[] =
             offerings.current.availablePackages.map((pkg) => ({
@@ -281,6 +356,8 @@ export function RevenueCatProvider({
               packageType: mapPackageType(pkg.packageType),
             }));
           setPackages(loadedPackages);
+          // DEBUG ONLY — real packages loaded, not preview
+          _setDebugInfo((prev) => ({ ...prev, usingPreviewPackages: false }));
         }
 
         // בדיקת סטטוס פרימיום ועדכון נתוני לקוח
@@ -297,7 +374,17 @@ export function RevenueCatProvider({
         };
 
         setIsInitialized(true);
-      } catch (_error) {
+      } catch (error) {
+        // DEBUG ONLY — log error instead of silently swallowing it
+        console.error('[RevenueCat] init/getOfferings error:', error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        _setDebugInfo((prev) => ({
+          ...prev,
+          initError: errorMessage,
+          usingPreviewPackages: true,
+        }));
+
         // במקרה של שגיאה - עובדים במצב תצוגה מקדימה
         setPackages(PREVIEW_PACKAGES);
         setIsInitialized(true);
@@ -362,8 +449,8 @@ export function RevenueCatProvider({
 
         const { customerInfo } =
           await Purchases.purchasePackage(packageToPurchase);
+        await updateCustomerData(customerInfo as never);
         const hasPremium = checkHasPremium(customerInfo);
-        setIsPremium(hasPremium);
 
         return hasPremium;
       } catch (error: unknown) {
@@ -391,7 +478,7 @@ export function RevenueCatProvider({
         return false;
       }
     },
-    [isExpoGo, isConfigured]
+    [isExpoGo, isConfigured, updateCustomerData]
   );
 
   // ============================================================================
@@ -421,8 +508,8 @@ export function RevenueCatProvider({
     try {
       const Purchases = (await import('react-native-purchases')).default;
       const customerInfo = await Purchases.restorePurchases();
+      await updateCustomerData(customerInfo as never);
       const hasPremium = checkHasPremium(customerInfo);
-      setIsPremium(hasPremium);
 
       if (hasPremium) {
         Alert.alert('הצלחה', 'הרכישות שוחזרו בהצלחה! 🎉');
@@ -435,7 +522,7 @@ export function RevenueCatProvider({
       Alert.alert('שגיאה', 'שחזור הרכישות נכשל. אנא נסה שוב.');
       return false;
     }
-  }, [isExpoGo, isConfigured]);
+  }, [isExpoGo, isConfigured, updateCustomerData]);
 
   // ============================================================================
   // רענון מידע רוכש
@@ -612,6 +699,10 @@ export function RevenueCatProvider({
   // רינדור
   // ============================================================================
 
+  const isPersonal =
+    subscriptionTier === 'personal' || subscriptionTier === 'family';
+  const isFamily = subscriptionTier === 'family';
+
   return (
     <RevenueCatContext.Provider
       value={{
@@ -619,6 +710,9 @@ export function RevenueCatProvider({
         isPremium,
         isConfigured,
         isExpoGo,
+        subscriptionTier,
+        isPersonal,
+        isFamily,
         packages,
         customerData,
         purchasePackage,
@@ -627,6 +721,8 @@ export function RevenueCatProvider({
         presentPaywall,
         presentPaywallIfNeeded,
         presentCustomerCenter,
+        // DEBUG ONLY — remove after TestFlight investigation
+        _debug: _debugInfo,
       }}
     >
       {children}

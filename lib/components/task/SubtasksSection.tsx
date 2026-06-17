@@ -488,7 +488,11 @@ export function SubtasksSection({
           data={subtasks}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          onDragEnd={canEditSubtasks ? ({ data }) => onSubtasksChange(data) : () => undefined}
+          onDragEnd={
+            canEditSubtasks
+              ? ({ data }) => onSubtasksChange(data)
+              : () => undefined
+          }
           scrollEnabled={false}
           activationDistance={canEditSubtasks ? 8 : 9999}
           disableScrollViewPanResponder={true}

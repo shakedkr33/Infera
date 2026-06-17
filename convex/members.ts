@@ -66,9 +66,7 @@ export async function resolveMySpaceId(
   // to a different (empty) space: we only pick an access row whose spaceId matches at least
   // one entity row for this user, confirming the admin wrote real data there.
   const entitySpaceIds = new Set(
-    rows
-      .filter((r) => resolveKind(r) === 'entity')
-      .map((r) => r.spaceId)
+    rows.filter((r) => resolveKind(r) === 'entity').map((r) => r.spaceId)
   );
   const memberAccessInEntitySpace = rows.find(
     (r) =>
@@ -217,8 +215,10 @@ export const listMyFamilyContacts = query({
     const spaceId = await resolveMySpaceId(ctx, userId);
 
     console.log(
-      '[LIST CONTACTS] userId:', userId,
-      '| resolvedSpaceId:', spaceId ?? 'null — no space found'
+      '[LIST CONTACTS] userId:',
+      userId,
+      '| resolvedSpaceId:',
+      spaceId ?? 'null — no space found'
     );
 
     if (!spaceId) return { selfEntityId: null, members: [] };
@@ -255,17 +255,6 @@ export const listMyFamilyContacts = query({
 
     const unstampedEntities = allRows.filter(
       (r) => r.kind === undefined && resolveKind(r) === 'entity'
-    );
-
-    console.log(
-      '[LIST CONTACTS] indexedEntities (kind=entity):', indexedEntities.length,
-      '| unstampedEntities:', unstampedEntities.length,
-      '| rows:', indexedEntities.map((r) => ({
-        id: r._id,
-        displayName: r.displayName,
-        memberType: r.memberType,
-        kind: r.kind,
-      }))
     );
 
     // Merge, deduplicate by _id
@@ -362,16 +351,6 @@ export const listMyFamilyContacts = query({
       ...enrichedEntities,
     ];
 
-    console.log(
-      '[LIST CONTACTS] returning members to client:',
-      finalMembers.map((m) => ({
-        id: m._id,
-        displayName: m.displayName,
-        memberType: m.memberType,
-        hasPhone: !!m.selectedPhoneNumber,
-      }))
-    );
-
     return {
       selfEntityId: selfEntityRow?._id ?? null,
       selfEntity: selfEntityRow
@@ -444,6 +423,24 @@ export const getMySpaceRole = query({
       spaceId: spaceRow.spaceId,
       role: spaceRow.role,
     };
+  },
+});
+
+// ── getMyResolvedSpaceId ──────────────────────────────────────────────────────
+// Returns the same spaceId that listByDateRange (and all calendar queries) use —
+// the result of resolveMySpaceId's 4-priority algorithm.
+//
+// This replaces api.users.getMySpace (which used a naive .first() and returned
+// whichever members row happened to come first — wrong for users with multiple rows).
+// Using this query for personal event creation ensures the event lands in the
+// same space that the calendar and home queries read from.
+export const getMyResolvedSpaceId = query({
+  args: {},
+  returns: v.union(v.id('spaces'), v.null()),
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    return await resolveMySpaceId(ctx, userId);
   },
 });
 
@@ -794,7 +791,10 @@ export const fixMemberAccessSpace = internalMutation({
     );
 
     if (!accessRow) {
-      console.log('[FIX SPACE] No access row found in fromSpaceId for user', userId);
+      console.log(
+        '[FIX SPACE] No access row found in fromSpaceId for user',
+        userId
+      );
       return { fixed: false };
     }
 
@@ -808,13 +808,24 @@ export const fixMemberAccessSpace = internalMutation({
     if (existingInTarget) {
       // Already has access to toSpaceId — delete the stale fromSpaceId access row.
       await ctx.db.delete(accessRow._id);
-      console.log('[FIX SPACE] Deleted stale access row', accessRow._id, 'user already in toSpaceId');
+      console.log(
+        '[FIX SPACE] Deleted stale access row',
+        accessRow._id,
+        'user already in toSpaceId'
+      );
       return { fixed: true, action: 'deleted_stale' };
     }
 
     // Move: patch the access row's spaceId to the correct family space.
     await ctx.db.patch(accessRow._id, { spaceId: toSpaceId });
-    console.log('[FIX SPACE] Moved access row', accessRow._id, 'from', fromSpaceId, '→', toSpaceId);
+    console.log(
+      '[FIX SPACE] Moved access row',
+      accessRow._id,
+      'from',
+      fromSpaceId,
+      '→',
+      toSpaceId
+    );
     return { fixed: true, action: 'patched' };
   },
 });

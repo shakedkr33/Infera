@@ -24,11 +24,12 @@ import {
   View,
 } from 'react-native';
 import { InYomiSplashScreen } from '@/components/InYomiSplashScreen';
-import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
+import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
 import { ActionSheetContext } from '@/contexts/ActionSheetContext';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
+import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getHasSeenOnboarding } from '@/lib/onboardingState';
 import { PENDING_COMMUNITY_EVENT_ID_KEY } from '@/lib/pendingEventLink';
 
@@ -95,11 +96,29 @@ function PlusCenterButton() {
 function ActionSheetModal({
   isVisible,
   onClose,
+  isExpiredFree,
+  onGatedPress,
 }: {
   isVisible: boolean;
   onClose: () => void;
+  isExpiredFree: boolean;
+  onGatedPress: (reason: UpgradeReason) => void;
 }) {
   const router = useRouter();
+
+  // Gate personal/family create actions when trial has expired.
+  // Community actions are not in this sheet, so no community check is needed here.
+  function handleGatedCreateAction(
+    action: () => void,
+    reason: UpgradeReason = 'general'
+  ) {
+    if (isExpiredFree) {
+      onGatedPress(reason);
+      return;
+    }
+    action();
+  }
+
   return (
     <Modal
       animationType="slide"
@@ -130,26 +149,32 @@ function ActionSheetModal({
             <ActionButton
               icon="calendar-today"
               label="אירוע"
-              onPress={() => {
-                onClose();
-                router.push('/(authenticated)/event/new');
-              }}
+              onPress={() =>
+                handleGatedCreateAction(() => {
+                  onClose();
+                  router.push('/(authenticated)/event/new');
+                }, 'personal')
+              }
             />
             <ActionButton
               icon="check"
               label="משימה"
-              onPress={() => {
-                onClose();
-                router.push('/(authenticated)/task/new');
-              }}
+              onPress={() =>
+                handleGatedCreateAction(() => {
+                  onClose();
+                  router.push('/(authenticated)/task/new');
+                }, 'personal')
+              }
             />
             <ActionButton
               icon="cake"
               label="יום הולדת"
-              onPress={() => {
-                onClose();
-                router.push('/birthdays');
-              }}
+              onPress={() =>
+                handleGatedCreateAction(() => {
+                  onClose();
+                  router.push('/birthdays');
+                }, 'personal')
+              }
             />
           </View>
         </View>
@@ -181,7 +206,7 @@ function ActionButton({
 
 export default function AuthenticatedLayout() {
   const { isAuthenticated, isLoading } = useConvexAuth();
-  const { isPremium, isLoading: isRevenueCatLoading } = useRevenueCat();
+  const { isLoading: isRevenueCatLoading } = useRevenueCat();
   // FIXED: deferred saveAll() to authenticated layout to avoid auth race condition
   // hasLocalOnboardingData lets a just-registered user through while Convex
   // propagates the finishOnboarding mutation result (avoids redirect loop).
@@ -201,10 +226,14 @@ export default function AuthenticatedLayout() {
   // Ref guard prevents a second mutation call if a render occurs while the first is in-flight.
   const savingRef = useRef(false);
 
+  const { isExpiredFree } = useEffectiveAccess();
+
   const navigationState = useRootNavigationState();
   const router = useRouter();
   const segments = useSegments();
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
+  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
+  const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>('general');
 
   useEffect(() => {
     getHasSeenOnboarding()
@@ -376,8 +405,6 @@ export default function AuthenticatedLayout() {
         !familyBootstrapStatus.hasConfiguredFamily &&
         !familyBootstrapStatus.joinedExistingSpace &&
         familyBootstrapStatus.familySetupSkippedAt === null));
-  const needsPaywallRedirect =
-    isAuthenticated && PAYMENT_SYSTEM_ENABLED && !isPremium;
   // FIXED: family profile persistence — for returning users, hold the spinner until hydrateFromServer
   // has actually run (onboardingCompleted flips true). Without this gate, tabs render with empty
   // OnboardingContext before the hydration effect fires, causing a flash of personal-only state in
@@ -415,15 +442,10 @@ export default function AuthenticatedLayout() {
       router.replace('/(authenticated)/family-bootstrap');
       return;
     }
-
-    if (needsPaywallRedirect) {
-      router.replace('/(auth)/paywall');
-    }
   }, [
     isAuthenticated,
     isReadyToRoute,
     needsOnboardingRedirect,
-    needsPaywallRedirect,
     needsProfileSetupRedirect,
     router,
   ]);
@@ -432,8 +454,7 @@ export default function AuthenticatedLayout() {
     !isReadyToRoute ||
     !isAuthenticated ||
     needsOnboardingRedirect ||
-    needsProfileSetupRedirect ||
-    needsPaywallRedirect
+    needsProfileSetupRedirect
   ) {
     return <InYomiSplashScreen />;
   }
@@ -542,6 +563,8 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="community-reminder/new" options={{ href: null }} />
           {/* FIXED: linked-event detail screen — hidden from tab bar */}
           <Tabs.Screen name="linked-event/[id]" options={{ href: null }} />
+          {/* Subscription sales screen — accessible via CTAs, not a tab */}
+          <Tabs.Screen name="subscription" options={{ href: null }} />
           {/* Recently Deleted — accessible from Profile/Settings only, not a tab */}
           <Tabs.Screen name="recently-deleted" options={{ href: null }} />
         </Tabs>
@@ -549,6 +572,18 @@ export default function AuthenticatedLayout() {
         <ActionSheetModal
           isVisible={isActionSheetVisible}
           onClose={() => setIsActionSheetVisible(false)}
+          isExpiredFree={isExpiredFree}
+          onGatedPress={(reason) => {
+            setIsActionSheetVisible(false);
+            setUpgradeReason(reason);
+            setUpgradeModalVisible(true);
+          }}
+        />
+
+        <UpgradeModal
+          visible={upgradeModalVisible}
+          reason={upgradeReason}
+          onClose={() => setUpgradeModalVisible(false)}
         />
       </View>
     </ActionSheetContext.Provider>
