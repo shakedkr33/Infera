@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as appleReviewAuth from "../appleReviewAuth.js";
 import type * as auth from "../auth.js";
 import type * as birthdays from "../birthdays.js";
 import type * as communities from "../communities.js";
@@ -37,6 +38,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  appleReviewAuth: typeof appleReviewAuth;
   auth: typeof auth;
   birthdays: typeof birthdays;
   communities: typeof communities;

@@ -36,10 +36,20 @@ export default function PhoneInputScreen() {
       return;
     }
 
+    const isAppleReviewPhone = normalized === '+972510000000';
+
     setIsLoading(true);
     setError(null);
 
     try {
+      if (isAppleReviewPhone) {
+        router.push({
+          pathname: '/(auth)/verify',
+          params: { phone: normalized },
+        });
+        return;
+      }
+
       await signIn('phone', { phone: normalized });
       router.push({
         pathname: '/(auth)/verify',
