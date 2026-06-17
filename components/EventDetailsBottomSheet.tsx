@@ -222,6 +222,8 @@ export function EventDetailsBottomSheet({
   const { isExpiredFree } = useEffectiveAccess();
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
   const [personalNoConfirmOpen, setPersonalNoConfirmOpen] = useState(false);
+  const [removeFromCalendarConfirmOpen, setRemoveFromCalendarConfirmOpen] =
+    useState(false);
   const sheetTranslateY = useRef(new Animated.Value(0)).current;
   const isClosingRef = useRef(false);
   const [isClosingState, setIsClosingState] = useState(false);
@@ -299,6 +301,9 @@ export function EventDetailsBottomSheet({
   const upsertRsvpMutation = useMutation(api.eventRsvps.upsertRsvp);
   const setRsvpNoAndUnclaimMyEventTasks = useMutation(
     api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
+  );
+  const removePersonalEventFromMyCalendar = useMutation(
+    api.personalEventCalendar.removePersonalEventFromMyCalendar
   );
   const addCommunityEventToMyCalendar = useMutation(
     api.communityEventCalendar.addCommunityEventToMyCalendar
@@ -1400,6 +1405,30 @@ export function EventDetailsBottomSheet({
                 </View>
               ) : null}
 
+              {/* "הסר מהיומן שלי" — invitees only, after RSVP 'no' or when event is cancelled */}
+              {isPersonalInvitee &&
+              convexEventId &&
+              (displayEvent.status === 'cancelled' ||
+                currentRsvpStatus === 'no') ? (
+                <Pressable
+                  accessible={true}
+                  accessibilityLabel="הסר מהיומן שלי"
+                  accessibilityHint="מסיר את האירוע מהיומן שלך בלבד"
+                  accessibilityRole="button"
+                  onPress={() => setRemoveFromCalendarConfirmOpen(true)}
+                  style={styles.deleteEventBtn}
+                >
+                  <MaterialIcons
+                    color="#dc2626"
+                    name="event-busy"
+                    size={18}
+                  />
+                  <Text style={styles.deleteEventBtnText}>
+                    הסר מהיומן שלי
+                  </Text>
+                </Pressable>
+              ) : null}
+
               <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>תזמון</Text>
                 <View style={styles.scheduleRow}>
@@ -1854,6 +1883,26 @@ export function EventDetailsBottomSheet({
         }}
         title="לסמן שלא תגיע/י לאירוע?"
         visible={personalNoConfirmOpen}
+      />
+      <AppConfirmationDialog
+        cancelLabel="ביטול"
+        confirmDestructive
+        confirmLabel="הסר מהיומן שלי"
+        message="האירוע יוסר מהיומן שלך בלבד. הוא לא יימחק אצל היוצר או אצל מוזמנים אחרים."
+        onCancel={() => setRemoveFromCalendarConfirmOpen(false)}
+        onConfirm={() => {
+          setRemoveFromCalendarConfirmOpen(false);
+          if (!convexEventId) return;
+          removePersonalEventFromMyCalendar({ eventId: convexEventId })
+            .then(() => {
+              onClose();
+            })
+            .catch(() => {
+              Alert.alert('שגיאה', 'לא ניתן להסיר את האירוע מהיומן');
+            });
+        }}
+        title="להסיר מהיומן שלך?"
+        visible={removeFromCalendarConfirmOpen}
       />
       <UpgradeModal
         visible={upgradeModalVisible}

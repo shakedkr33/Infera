@@ -397,6 +397,19 @@ export default defineSchema({
     .index('by_user_event', ['userId', 'eventId']),
 
   // ═══════════════════════════════════════════════════════
+  // הסרת אירוע אישי מהיומן — למוזמנים בלבד (opt-out per invitee)
+  // ═══════════════════════════════════════════════════════
+  personalEventCalendarOptOuts: defineTable({
+    eventId: v.id('events'),
+    userId: v.id('users'),
+    createdAt: v.number(),
+    /** 'declined' — invitee RSVP'd no; 'cancelled' — creator cancelled the event */
+    reason: v.union(v.literal('declined'), v.literal('cancelled')),
+  })
+    .index('by_user_event', ['userId', 'eventId'])
+    .index('by_event_user', ['eventId', 'userId']),
+
+  // ═══════════════════════════════════════════════════════
   // טבלת מצב רוח יומי
   // ═══════════════════════════════════════════════════════
   dailyMoods: defineTable({

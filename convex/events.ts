@@ -542,14 +542,28 @@ export const listByDateRange = query({
       myMemberRows.map((r) => r._id as string)
     );
 
+    // Load personal event opt-outs for the current viewer.
+    // These are rows in personalEventCalendarOptOuts where userId === current user.
+    // Updated listing behavior (Phase B): cancelled personal events with invitees
+    // are included until each invitee opts out — see loop below.
+    const personalOptOutRows = await ctx.db
+      .query('personalEventCalendarOptOuts')
+      .withIndex('by_user_event', (q) => q.eq('userId', userId))
+      .collect();
+    const personalOptOutIds = new Set(
+      personalOptOutRows.map((r) => r.eventId as string)
+    );
+
     // ── Category 1: events in the viewer's resolved space ──────────────────────
+    // NOTE: the cancelled filter is intentionally removed from the DB query so that
+    // cancelled personal events with invitees can remain visible until each invitee
+    // opts out. Community cancelled events are skipped in the processing loop below.
     const cat1Rows = spaceId
       ? await ctx.db
           .query('events')
           .withIndex('by_space_and_time', (q) =>
             q.eq('spaceId', spaceId).gte('startTime', from).lte('startTime', to)
           )
-          .filter((q) => q.neq(q.field('status'), 'cancelled'))
           .order('asc')
           .collect()
       : [];
@@ -598,7 +612,8 @@ export const listByDateRange = query({
       let isSavedToMyCalendar = false;
 
       if (ev.communityId) {
-        // Community events: keep existing RSVP/save logic — no change here.
+        // Community events: keep existing behavior — cancelled events are never shown.
+        if (ev.status === 'cancelled') continue;
         communityName = communityNameById.get(ev.communityId as string);
         isSavedToMyCalendar = computeIsSavedToMyCalendar({
           requiresRsvp: ev.requiresRsvp,
@@ -629,6 +644,22 @@ export const listByDateRange = query({
         if (!isCreator && !isAllFamily && !isInUserIds && !isInMemberIds) {
           continue;
         }
+
+        // Opt-out: hide this personal event for the current user regardless of
+        // event status (active or cancelled). Creators cannot insert opt-out rows
+        // so this check only matters for non-creators.
+        if (!isCreator && personalOptOutIds.has(idStr)) continue;
+
+        // Cancelled personal events: only include when the event has invitees.
+        // Without invitees, a cancelled personal event is invisible (existing behavior).
+        // With invitees, it stays visible until each viewer personally opts out
+        // (opt-out already handled above).
+        if (ev.status === 'cancelled') {
+          const hasInvitees =
+            (ev.sharedWithUserIds?.length ?? 0) > 0 ||
+            (ev.sharedWithFamilyMemberIds?.length ?? 0) > 0;
+          if (!hasInvitees) continue;
+        }
       }
 
       seenIds.add(idStr);
@@ -642,11 +673,12 @@ export const listByDateRange = query({
     // TODO: Add a dedicated index on sharedWithUserIds / sharedWithFamilyMemberIds
     //       when event volume warrants it. For MVP, the full scan is acceptable
     //       because personal sharing is rare relative to total event volume.
+    // Cat2 includes cancelled personal events with invitees so cross-space
+    // recipients still see them as "בוטל" until they opt out.
     const cat2Candidates = await ctx.db
       .query('events')
       .filter((q) =>
         q.and(
-          q.neq(q.field('status'), 'cancelled'),
           q.gte(q.field('startTime'), from),
           q.lte(q.field('startTime'), to)
         )
@@ -667,6 +699,17 @@ export const listByDateRange = query({
         sharedMemberIds.some((mid) => myMemberIdsAllSpaces.has(mid));
 
       if (!isSharedWithViewer) continue;
+
+      // Opt-out: the viewer is always a non-creator in Cat2 (creators are skipped
+      // above). Hide the event if the viewer has opted out, regardless of status.
+      if (personalOptOutIds.has(idStr)) continue;
+
+      // Cancelled: only include if has invitees (opt-out already handled above).
+      if (ev.status === 'cancelled') {
+        const hasInvitees =
+          sharedUserIds.length > 0 || sharedMemberIds.length > 0;
+        if (!hasInvitees) continue;
+      }
 
       seenIds.add(idStr);
       result.push({
