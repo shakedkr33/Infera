@@ -1030,8 +1030,9 @@ export default function HomeScreen() {
           //   sharedWithUserIds includes currentUserId
           //   OR sharedWithFamilyMemberIds includes viewerSelfEntityId
           if (!isCreator) {
-            const homeViewerSelfEntityId =
-              familyContacts?.selfEntityId as string | undefined;
+            const homeViewerSelfEntityId = familyContacts?.selfEntityId as
+              | string
+              | undefined;
             const isExplicitInvitee =
               (currentUserId != null &&
                 (evShared.sharedWithUserIds ?? []).includes(currentUserId)) ||

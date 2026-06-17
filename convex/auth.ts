@@ -43,7 +43,9 @@ async function sendOtpWithTwilio(phone: string, code: string) {
   const reviewEnv = getAppleReviewEnv();
 
   if (reviewEnv && phone === reviewEnv.phone) {
-    console.log('[Auth] Apple Review demo phone detected. Skipping Twilio SMS.');
+    console.log(
+      '[Auth] Apple Review demo phone detected. Skipping Twilio SMS.'
+    );
     return;
   }
 

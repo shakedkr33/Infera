@@ -42,6 +42,7 @@ import {
 } from '@/lib/openCommunityCalendarUi';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 import { parseGeoUri } from '@/lib/utils/geoUri';
+import { getHebrewDateInfo } from '@/lib/utils/hebrewDate';
 
 /**
  * Inside a Modal, RTL alignment must be handled manually per environment.
@@ -1065,6 +1066,15 @@ export function EventDetailsBottomSheet({
                     {displayEvent.dateTimeParts ? (
                       <Text style={styles.timeText}>
                         {displayEvent.dateTimeParts.timeLine}
+                      </Text>
+                    ) : null}
+                    {displayEvent.startTime &&
+                    getHebrewDateInfo(displayEvent.startTime).fullHebrewDate ? (
+                      <Text style={styles.hebrewDateLine}>
+                        {
+                          getHebrewDateInfo(displayEvent.startTime)
+                            .fullHebrewDate
+                        }
                       </Text>
                     ) : null}
                   </View>
@@ -2213,6 +2223,15 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     writingDirection: HEB_WRITING_DIRECTION,
     alignSelf: 'stretch',
+  },
+  hebrewDateLine: {
+    fontSize: 12,
+    color: '#94a3b8',
+    textAlign: HEB_TEXT_ALIGN,
+    fontWeight: '400',
+    writingDirection: HEB_WRITING_DIRECTION,
+    alignSelf: 'stretch',
+    marginTop: 2,
   },
   infoText: {
     fontSize: 15,

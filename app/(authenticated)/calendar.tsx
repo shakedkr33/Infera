@@ -18,12 +18,12 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  type StyleProp,
   StyleSheet,
   Text,
+  type TextStyle,
   useWindowDimensions,
   View,
-  type StyleProp,
-  type TextStyle,
   type ViewStyle,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -56,6 +56,10 @@ import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvi
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { APP_IS_RTL, rtl } from '@/lib/rtl';
 import { parseGeoUri } from '@/lib/utils/geoUri';
+import {
+  getHebrewDateInfo,
+  getHebrewMonthRangeForGregorianMonth,
+} from '@/lib/utils/hebrewDate';
 
 /**
  * Android: root View uses `direction: 'rtl'` (`app/_layout.tsx`). Yoga lays out `flexDirection: 'row'`
@@ -527,9 +531,10 @@ function getPersonalRsvpVisualState(input: {
   return { kind: 'pending', label: 'ממתין לאישור' };
 }
 
-function getPersonalRsvpBadgeColors(
-  kind: PersonalRsvpVisualState['kind']
-): { backgroundColor: string; textColor: string } {
+function getPersonalRsvpBadgeColors(kind: PersonalRsvpVisualState['kind']): {
+  backgroundColor: string;
+  textColor: string;
+} {
   if (kind === 'maybe') {
     return { backgroundColor: '#fef9c3', textColor: '#854d0e' };
   }
@@ -556,7 +561,9 @@ function PersonalRsvpBadge({
   const colors = getPersonalRsvpBadgeColors(visual.kind);
   return (
     <View style={[badgeStyle, { backgroundColor: colors.backgroundColor }]}>
-      <Text style={[textStyle, { color: colors.textColor }]}>{visual.label}</Text>
+      <Text style={[textStyle, { color: colors.textColor }]}>
+        {visual.label}
+      </Text>
     </View>
   );
 }
@@ -681,6 +688,7 @@ function generateCalendarGrid(
 
 interface CalendarMonthNavBarProps {
   headerMonthLabel: string;
+  hebrewMonthRange: string;
   onPrevMonth: () => void;
   onNextMonth: () => void;
   onTitlePress: () => void;
@@ -688,6 +696,7 @@ interface CalendarMonthNavBarProps {
 
 function CalendarMonthNavBar({
   headerMonthLabel,
+  hebrewMonthRange,
   onPrevMonth,
   onNextMonth,
   onTitlePress,
@@ -716,6 +725,9 @@ function CalendarMonthNavBar({
         style={styles.monthTitleButton}
       >
         <Text style={styles.monthYear}>{headerMonthLabel}</Text>
+        {hebrewMonthRange ? (
+          <Text style={styles.monthYearHebrew}>{hebrewMonthRange}</Text>
+        ) : null}
       </Pressable>
       <Pressable
         onPress={ANDROID_MATCH_IOS_LAYOUT ? onNextMonth : onPrevMonth}
@@ -1690,8 +1702,9 @@ export default function CalendarScreen(): React.JSX.Element {
         pendingPersonalInvite: (() => {
           if (isSavedCommunityInSpace || isViewerCreator !== false)
             return undefined;
-          const gridViewerSelfEntityId =
-            familyContacts?.selfEntityId as string | undefined;
+          const gridViewerSelfEntityId = familyContacts?.selfEntityId as
+            | string
+            | undefined;
           const isExplicitInvitee =
             (calGridUserId != null &&
               (evS.sharedWithUserIds ?? []).includes(calGridUserId)) ||
@@ -1711,8 +1724,9 @@ export default function CalendarScreen(): React.JSX.Element {
         myPersonalRsvpStatus: (() => {
           if (isSavedCommunityInSpace || isViewerCreator !== false)
             return undefined;
-          const gridViewerSelfEntityId =
-            familyContacts?.selfEntityId as string | undefined;
+          const gridViewerSelfEntityId = familyContacts?.selfEntityId as
+            | string
+            | undefined;
           const isExplicitInvitee =
             (calGridUserId != null &&
               (evS.sharedWithUserIds ?? []).includes(calGridUserId)) ||
@@ -2260,6 +2274,12 @@ export default function CalendarScreen(): React.JSX.Element {
       ? `${HEBREW_MONTHS[displayMonth]} ${displayYear}`
       : `${HEBREW_MONTHS[today.getMonth()]} ${today.getFullYear()}`;
 
+  const hebrewMonthRange = useMemo(() => {
+    const y = viewMode === 'monthly' ? displayYear : today.getFullYear();
+    const m = viewMode === 'monthly' ? displayMonth : today.getMonth();
+    return getHebrewMonthRangeForGregorianMonth(y, m);
+  }, [viewMode, displayYear, displayMonth, today]);
+
   const goToPrevMonth = useCallback((): void => {
     setDaySheetDay(null);
     setEventEditMenu(null);
@@ -2524,8 +2544,9 @@ export default function CalendarScreen(): React.JSX.Element {
             // Use same invitee detection as EventDetailsBottomSheet:
             //   sharedWithUserIds includes currentUserId
             //   OR sharedWithFamilyMemberIds includes viewerSelfEntityId
-            const tlViewerSelfEntityId =
-              familyContacts?.selfEntityId as string | undefined;
+            const tlViewerSelfEntityId = familyContacts?.selfEntityId as
+              | string
+              | undefined;
             const isExplicitInvitee1 =
               (calCurrentUserId != null &&
                 (evS.sharedWithUserIds ?? []).includes(calCurrentUserId)) ||
@@ -2542,7 +2563,8 @@ export default function CalendarScreen(): React.JSX.Element {
                 | undefined;
               myPersonalRsvpStatus1 = myStatus ?? 'none';
               // pendingPersonalInvite drives card muting + badge for all non-yes statuses
-              if (myPersonalRsvpStatus1 !== 'yes') pendingPersonalInvite1 = true;
+              if (myPersonalRsvpStatus1 !== 'yes')
+                pendingPersonalInvite1 = true;
             }
           }
           const totalParticipants = evS.participants?.length ?? 0;
@@ -3042,6 +3064,7 @@ export default function CalendarScreen(): React.JSX.Element {
             <View style={styles.monthHeaderWrap}>
               <CalendarMonthNavBar
                 headerMonthLabel={headerMonth}
+                hebrewMonthRange={hebrewMonthRange}
                 onNextMonth={goToNextMonth}
                 onPrevMonth={goToPrevMonth}
                 onTitlePress={() => setIsMonthPickerVisible(true)}
@@ -3974,6 +3997,11 @@ function DayEventsList({
     return `${weekday}, ${dayData.day} ב${monthName}`;
   }, [dayData.day, dayData.isToday, year, month]);
 
+  const hebrewDayLabel = useMemo(
+    () => getHebrewDateInfo(new Date(year, month, dayData.day)).fullHebrewDate,
+    [year, month, dayData.day]
+  );
+
   const hasContent =
     dayData.events.length > 0 || dayData.birthday != null || tasks.length > 0;
 
@@ -4008,14 +4036,19 @@ function DayEventsList({
             >
               <MaterialIcons name="close" size={20} color="#647b87" />
             </Pressable>
-            <Text
-              style={[
-                dStyles.headerTitle,
-                { textAlign: rtl.textAlign ?? 'right' },
-              ]}
-            >
-              {dayLabel}
-            </Text>
+            <View style={dStyles.headerTitleBlock}>
+              <Text
+                style={[
+                  dStyles.headerTitle,
+                  { textAlign: rtl.textAlign ?? 'right' },
+                ]}
+              >
+                {dayLabel}
+              </Text>
+              {hebrewDayLabel ? (
+                <Text style={dStyles.headerHebrewDate}>{hebrewDayLabel}</Text>
+              ) : null}
+            </View>
             <Pressable
               style={dStyles.addBtn}
               onPress={() => {
@@ -4067,14 +4100,19 @@ function DayEventsList({
             >
               <Text style={dStyles.addBtnText}>+ הוסף אירוע</Text>
             </Pressable>
-            <Text
-              style={[
-                dStyles.headerTitle,
-                { textAlign: rtl.textAlign ?? 'right' },
-              ]}
-            >
-              {dayLabel}
-            </Text>
+            <View style={dStyles.headerTitleBlock}>
+              <Text
+                style={[
+                  dStyles.headerTitle,
+                  { textAlign: rtl.textAlign ?? 'right' },
+                ]}
+              >
+                {dayLabel}
+              </Text>
+              {hebrewDayLabel ? (
+                <Text style={dStyles.headerHebrewDate}>{hebrewDayLabel}</Text>
+              ) : null}
+            </View>
             <Pressable
               onPress={onClose}
               hitSlop={12}
@@ -4422,14 +4460,21 @@ function TimelineView({
                     {dayGroup.dayNumber}
                   </Text>
                 </View>
-                <Text
-                  style={[
-                    styles.dayLabel,
-                    dayGroup.isToday && styles.dayLabelToday,
-                  ]}
-                >
-                  {dayGroup.dayLabel}
-                </Text>
+                <View style={styles.dayLabelBlock}>
+                  <Text
+                    style={[
+                      styles.dayLabel,
+                      dayGroup.isToday && styles.dayLabelToday,
+                    ]}
+                  >
+                    {dayGroup.dayLabel}
+                  </Text>
+                  {getHebrewDateInfo(dateStr).fullHebrewDate ? (
+                    <Text style={styles.dayHebrewLabel}>
+                      {getHebrewDateInfo(dateStr).fullHebrewDate}
+                    </Text>
+                  ) : null}
+                </View>
                 <View style={styles.dayDivider} />
                 <Pressable
                   onPress={() => onAddPress(dateStr)}
@@ -4459,213 +4504,221 @@ function TimelineView({
                     });
                     const eventTitle = getCalendarEventTitle(event);
                     return (
-                    <View key={event.id} style={styles.eventRow}>
-                      {/* Color Dot */}
-                      <View
-                        style={[
-                          styles.eventDot,
-                          { borderColor: event.categoryColor },
-                          event.cancelled && styles.eventDotCancelled,
-                        ]}
-                      />
+                      <View key={event.id} style={styles.eventRow}>
+                        {/* Color Dot */}
+                        <View
+                          style={[
+                            styles.eventDot,
+                            { borderColor: event.categoryColor },
+                            event.cancelled && styles.eventDotCancelled,
+                          ]}
+                        />
 
-                      {/* Time column + Card (RTL: time on visual right) */}
-                      <View style={styles.eventRowInner}>
-                        {/* Time column — outside the card */}
-                        <View style={styles.eventTimeColumn}>
-                          {event.time ? (
-                            <>
-                              <Text style={styles.eventTimeText}>
-                                {event.endTime ? `${event.time}-` : event.time}
-                              </Text>
-                              {event.endTime ? (
-                                <Text style={styles.eventEndTimeText}>
-                                  {event.endTime}
+                        {/* Time column + Card (RTL: time on visual right) */}
+                        <View style={styles.eventRowInner}>
+                          {/* Time column — outside the card */}
+                          <View style={styles.eventTimeColumn}>
+                            {event.time ? (
+                              <>
+                                <Text style={styles.eventTimeText}>
+                                  {event.endTime
+                                    ? `${event.time}-`
+                                    : event.time}
                                 </Text>
-                              ) : null}
-                            </>
-                          ) : null}
-                        </View>
+                                {event.endTime ? (
+                                  <Text style={styles.eventEndTimeText}>
+                                    {event.endTime}
+                                  </Text>
+                                ) : null}
+                              </>
+                            ) : null}
+                          </View>
 
-                        {/* Event / Task Card */}
-                        <View style={styles.timelineEventCardColumn}>
-                          {event.isPersonalTask ? (
-                            /* ── Personal task card — unified CalendarTaskCard ── */
-                            <CalendarTaskCard
-                              task={{
-                                id: event.id,
-                                title: event.title,
-                                time: event.time,
-                                isOverdue: event.isOverdue ?? false,
-                                assigneeInitials: event.assigneeInitials,
-                                assigneeColor: event.assigneeColor,
-                                assigneeDisplays: event.assigneeDisplays,
-                                subtasks: event.subtasks,
-                              }}
-                              onOpenTaskSheet={onOpenTaskSheet}
-                            />
-                          ) : (
-                            /* ── Regular event card ── */
-                            <Pressable
-                              key={`${event.id}-${rsvpVisual.kind}`}
-                              style={[
-                                styles.eventCard,
-                                event.cancelled && styles.eventCardCancelled,
-                                event.myAssignedTasks &&
-                                  event.myAssignedTasks.length > 0 &&
-                                  styles.eventCardWithTasks,
-                                !event.cancelled &&
-                                  rsvpVisual.kind !== 'normal' &&
-                                  styles.pendingPersonalInviteCard,
-                              ]}
-                              onPress={() => onEventPress(event)}
-                              accessible={true}
-                              accessibilityRole="button"
-                              accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
-                            >
-                              {/* Color accent bar */}
-                              <View
-                                style={[
-                                  styles.eventAccentBar,
-                                  {
-                                    backgroundColor: event.cancelled
-                                      ? '#9ca3af'
-                                      : event.categoryColor,
-                                  },
-                                ]}
+                          {/* Event / Task Card */}
+                          <View style={styles.timelineEventCardColumn}>
+                            {event.isPersonalTask ? (
+                              /* ── Personal task card — unified CalendarTaskCard ── */
+                              <CalendarTaskCard
+                                task={{
+                                  id: event.id,
+                                  title: event.title,
+                                  time: event.time,
+                                  isOverdue: event.isOverdue ?? false,
+                                  assigneeInitials: event.assigneeInitials,
+                                  assigneeColor: event.assigneeColor,
+                                  assigneeDisplays: event.assigneeDisplays,
+                                  subtasks: event.subtasks,
+                                }}
+                                onOpenTaskSheet={onOpenTaskSheet}
                               />
+                            ) : (
+                              /* ── Regular event card ── */
+                              <Pressable
+                                key={`${event.id}-${rsvpVisual.kind}`}
+                                style={[
+                                  styles.eventCard,
+                                  event.cancelled && styles.eventCardCancelled,
+                                  event.myAssignedTasks &&
+                                    event.myAssignedTasks.length > 0 &&
+                                    styles.eventCardWithTasks,
+                                  !event.cancelled &&
+                                    rsvpVisual.kind !== 'normal' &&
+                                    styles.pendingPersonalInviteCard,
+                                ]}
+                                onPress={() => onEventPress(event)}
+                                accessible={true}
+                                accessibilityRole="button"
+                                accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
+                              >
+                                {/* Color accent bar */}
+                                <View
+                                  style={[
+                                    styles.eventAccentBar,
+                                    {
+                                      backgroundColor: event.cancelled
+                                        ? '#9ca3af'
+                                        : event.categoryColor,
+                                    },
+                                  ]}
+                                />
 
-                              {/* Card inner content */}
-                              <View style={styles.eventCardContent}>
-                                {/* Header: category tag + community name tag + profile circles */}
-                                <View style={styles.eventCardHeader}>
-                                  <View
-                                    style={[
-                                      styles.categoryTag,
-                                      {
-                                        backgroundColor: `${event.categoryColor}20`,
-                                      },
-                                    ]}
-                                  >
-                                    <Text
+                                {/* Card inner content */}
+                                <View style={styles.eventCardContent}>
+                                  {/* Header: category tag + community name tag + profile circles */}
+                                  <View style={styles.eventCardHeader}>
+                                    <View
                                       style={[
-                                        styles.categoryTagText,
+                                        styles.categoryTag,
                                         {
-                                          color: event.cancelled
-                                            ? '#9ca3af'
-                                            : event.categoryColor,
+                                          backgroundColor: `${event.categoryColor}20`,
                                         },
                                       ]}
                                     >
-                                      {event.category}
-                                    </Text>
-                                  </View>
-                                  {event.communityName ? (
-                                    <CommunityEventNameTag
-                                      name={event.communityName}
-                                    />
-                                  ) : null}
-                                  {(event.profileCircles?.length ?? 0) > 0 ||
-                                  (event.profileCirclesExtraCount ?? 0) > 0 ? (
-                                    <ProfileCircles
-                                      profiles={event.profileCircles ?? []}
-                                      extraCount={
-                                        event.profileCirclesExtraCount ?? 0
-                                      }
-                                      context={
-                                        event.profileCirclesContext ??
-                                        'sharedWith'
-                                      }
-                                      size={22}
-                                    />
-                                  ) : null}
-                                </View>
-
-                                {/* Event Title */}
-                                <Text
-                                  style={[
-                                    styles.eventTitle,
-                                    event.cancelled &&
-                                      styles.eventTitleCancelled,
-                                  ]}
-                                >
-                                  {eventTitle}
-                                </Text>
-                                <PersonalRsvpBadge
-                                  badgeStyle={styles.pendingRsvpBadge}
-                                  textStyle={styles.pendingRsvpBadgeText}
-                                  visual={rsvpVisual}
-                                />
-
-                                {/* Location + nav button */}
-                                {event.location ? (
-                                  <>
-                                    <View style={styles.locationRow}>
-                                      <MaterialIcons
-                                        name="location-on"
-                                        size={13}
-                                        color="#94a3b8"
-                                      />
                                       <Text
-                                        style={styles.locationText}
-                                        numberOfLines={1}
+                                        style={[
+                                          styles.categoryTagText,
+                                          {
+                                            color: event.cancelled
+                                              ? '#9ca3af'
+                                              : event.categoryColor,
+                                          },
+                                        ]}
                                       >
-                                        {event.location}
+                                        {event.category}
                                       </Text>
                                     </View>
-                                    <Pressable
-                                      style={styles.eventNavBtn}
-                                      onPress={(e) => {
-                                        e.stopPropagation?.();
-                                        onNavigate(
-                                          event.location as string,
-                                          event.locationUrl
-                                        );
-                                      }}
-                                      accessible={true}
-                                      accessibilityRole="button"
-                                      accessibilityLabel="נווט"
-                                    >
-                                      <MaterialIcons
-                                        name="near-me"
-                                        size={13}
-                                        color="#8d6e63"
+                                    {event.communityName ? (
+                                      <CommunityEventNameTag
+                                        name={event.communityName}
                                       />
-                                      <Text style={styles.eventNavBtnText}>
-                                        נווט
-                                      </Text>
-                                    </Pressable>
-                                  </>
-                                ) : null}
+                                    ) : null}
+                                    {(event.profileCircles?.length ?? 0) > 0 ||
+                                    (event.profileCirclesExtraCount ?? 0) >
+                                      0 ? (
+                                      <ProfileCircles
+                                        profiles={event.profileCircles ?? []}
+                                        extraCount={
+                                          event.profileCirclesExtraCount ?? 0
+                                        }
+                                        context={
+                                          event.profileCirclesContext ??
+                                          'sharedWith'
+                                        }
+                                        size={22}
+                                      />
+                                    ) : null}
+                                  </View>
+
+                                  {/* Event Title */}
+                                  <Text
+                                    style={[
+                                      styles.eventTitle,
+                                      event.cancelled &&
+                                        styles.eventTitleCancelled,
+                                    ]}
+                                  >
+                                    {eventTitle}
+                                  </Text>
+                                  <PersonalRsvpBadge
+                                    badgeStyle={styles.pendingRsvpBadge}
+                                    textStyle={styles.pendingRsvpBadgeText}
+                                    visual={rsvpVisual}
+                                  />
+
+                                  {/* Location + nav button */}
+                                  {event.location ? (
+                                    <>
+                                      <View style={styles.locationRow}>
+                                        <MaterialIcons
+                                          name="location-on"
+                                          size={13}
+                                          color="#94a3b8"
+                                        />
+                                        <Text
+                                          style={styles.locationText}
+                                          numberOfLines={1}
+                                        >
+                                          {event.location}
+                                        </Text>
+                                      </View>
+                                      <Pressable
+                                        style={styles.eventNavBtn}
+                                        onPress={(e) => {
+                                          e.stopPropagation?.();
+                                          onNavigate(
+                                            event.location as string,
+                                            event.locationUrl
+                                          );
+                                        }}
+                                        accessible={true}
+                                        accessibilityRole="button"
+                                        accessibilityLabel="נווט"
+                                      >
+                                        <MaterialIcons
+                                          name="near-me"
+                                          size={13}
+                                          color="#8d6e63"
+                                        />
+                                        <Text style={styles.eventNavBtnText}>
+                                          נווט
+                                        </Text>
+                                      </Pressable>
+                                    </>
+                                  ) : null}
+                                </View>
+                              </Pressable>
+                            )}
+                            {!event.isPersonalTask &&
+                            event.myAssignedTasks &&
+                            event.myAssignedTasks.length > 0 ? (
+                              <View
+                                style={styles.calendarTaskExpansionContainer}
+                              >
+                                <InlineEventTasksSection
+                                  tasks={event.myAssignedTasks}
+                                />
                               </View>
-                            </Pressable>
-                          )}
-                          {!event.isPersonalTask &&
-                          event.myAssignedTasks &&
-                          event.myAssignedTasks.length > 0 ? (
-                            <View style={styles.calendarTaskExpansionContainer}>
-                              <InlineEventTasksSection
-                                tasks={event.myAssignedTasks}
-                              />
-                            </View>
-                          ) : null}
-                          {!event.isPersonalTask &&
-                          event.importantItems &&
-                          event.importantItems.length > 0 ? (
-                            <View style={styles.calendarTaskExpansionContainer}>
-                              <InlineImportantItemsSection
-                                eventId={String(event.id)}
-                                items={event.importantItems}
-                                checks={
-                                  myImportantItemChecks[String(event.id)] ?? {}
-                                }
-                              />
-                            </View>
-                          ) : null}
+                            ) : null}
+                            {!event.isPersonalTask &&
+                            event.importantItems &&
+                            event.importantItems.length > 0 ? (
+                              <View
+                                style={styles.calendarTaskExpansionContainer}
+                              >
+                                <InlineImportantItemsSection
+                                  eventId={String(event.id)}
+                                  items={event.importantItems}
+                                  checks={
+                                    myImportantItemChecks[String(event.id)] ??
+                                    {}
+                                  }
+                                />
+                              </View>
+                            ) : null}
+                          </View>
                         </View>
                       </View>
-                    </View>
-                  );
+                    );
                   })}
                 </View>
               </View>
@@ -4838,6 +4891,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 4,
   },
+  monthYearHebrew: {
+    fontSize: 11,
+    fontWeight: '400',
+    color: '#8fa3b0',
+    textAlign: 'center',
+    marginTop: 1,
+  },
   monthTitleButton: {
     flex: 1,
     alignItems: 'center',
@@ -4966,6 +5026,9 @@ const styles = StyleSheet.create({
   dayNumberTextToday: {
     color: PRIMARY_BLUE,
   },
+  dayLabelBlock: {
+    flexDirection: 'column',
+  },
   dayLabel: {
     fontSize: 20,
     fontWeight: '700',
@@ -4973,6 +5036,13 @@ const styles = StyleSheet.create({
   },
   dayLabelToday: {
     color: '#111517',
+  },
+  dayHebrewLabel: {
+    fontSize: 11,
+    fontWeight: '400',
+    color: '#a8bbc6',
+    marginTop: 1,
+    textAlign: 'right',
   },
   dayDivider: {
     flex: 1,
@@ -5652,12 +5722,21 @@ const dStyles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
+  headerTitleBlock: {
+    flex: 1,
+    marginHorizontal: 12,
+  },
   headerTitle: {
     fontSize: 17,
     fontWeight: '700',
     color: '#111517',
-    flex: 1,
-    marginHorizontal: 12,
+  },
+  headerHebrewDate: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#8fa3b0',
+    marginTop: 1,
+    textAlign: 'right',
   },
   addBtn: {
     backgroundColor: `${PRIMARY_BLUE}15`,

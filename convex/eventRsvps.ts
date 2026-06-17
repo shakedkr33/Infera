@@ -21,9 +21,7 @@ async function getViewerSelfFamilyMemberId(
 
   const indexedEntities = await ctx.db
     .query('members')
-    .withIndex('by_kind', (q) =>
-      q.eq('spaceId', spaceId).eq('kind', 'entity')
-    )
+    .withIndex('by_kind', (q) => q.eq('spaceId', spaceId).eq('kind', 'entity'))
     .collect();
 
   const allRows = await ctx.db

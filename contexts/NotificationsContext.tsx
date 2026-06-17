@@ -1,3 +1,4 @@
+import { useQuery } from 'convex/react';
 import {
   createContext,
   useCallback,
@@ -6,7 +7,6 @@ import {
   useMemo,
   useState,
 } from 'react';
-import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import type { Notification } from '@/lib/notificationsStorage';
 import {

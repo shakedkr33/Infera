@@ -9,6 +9,10 @@ import {
   Text,
   View,
 } from 'react-native';
+import {
+  getHebrewDateInfo,
+  getHebrewMonthRangeForGregorianMonth,
+} from '@/lib/utils/hebrewDate';
 
 // ─── Custom RTL Calendar Grid ─────────────────────────────────────────────────
 
@@ -44,6 +48,7 @@ function CalendarGrid({
 }: CalendarGridProps) {
   const [viewYear, setViewYear] = useState(value.getFullYear());
   const [viewMonth, setViewMonth] = useState(value.getMonth());
+  const [calMode, setCalMode] = useState<'greg' | 'heb'>('greg');
 
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
   const startDayOfWeek = new Date(viewYear, viewMonth, 1).getDay(); // 0=Sun
@@ -69,15 +74,66 @@ function CalendarGrid({
     } else setViewMonth((m) => m + 1);
   };
 
+  const hebMonthHeader = getHebrewMonthRangeForGregorianMonth(
+    viewYear,
+    viewMonth
+  );
+
   return (
     <View style={cal.wrapper}>
+      {/* Gregorian / Hebrew toggle */}
+      <View style={cal.modeToggleRow}>
+        <Pressable
+          onPress={() => setCalMode('greg')}
+          style={[
+            cal.modeToggleBtn,
+            calMode === 'greg' && cal.modeToggleBtnActive,
+          ]}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="לועזי"
+          accessibilityState={{ selected: calMode === 'greg' }}
+        >
+          <Text
+            style={[
+              cal.modeToggleText,
+              calMode === 'greg' && cal.modeToggleTextActive,
+            ]}
+          >
+            לועזי
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setCalMode('heb')}
+          style={[
+            cal.modeToggleBtn,
+            calMode === 'heb' && cal.modeToggleBtnActive,
+          ]}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="עברי"
+          accessibilityState={{ selected: calMode === 'heb' }}
+        >
+          <Text
+            style={[
+              cal.modeToggleText,
+              calMode === 'heb' && cal.modeToggleTextActive,
+            ]}
+          >
+            עברי
+          </Text>
+        </Pressable>
+      </View>
+
       {/* Header */}
       <View style={cal.header}>
         <Pressable onPress={goToNext} hitSlop={8}>
           <MaterialIcons name="chevron-left" size={24} color={accentColor} />
         </Pressable>
         <Text style={cal.headerTitle}>
-          {MONTH_NAMES_HE[viewMonth]} {viewYear}
+          {calMode === 'heb' && hebMonthHeader
+            ? hebMonthHeader
+            : `${MONTH_NAMES_HE[viewMonth]} ${viewYear}`}
         </Text>
         <Pressable onPress={goToPrev} hitSlop={8}>
           <MaterialIcons name="chevron-right" size={24} color={accentColor} />
@@ -104,6 +160,11 @@ function CalendarGrid({
               viewYear === value.getFullYear();
             const isDisabled =
               !!minimumDate && new Date(viewYear, viewMonth, day) < minimumDate;
+            const hebDay =
+              calMode === 'heb'
+                ? getHebrewDateInfo(new Date(viewYear, viewMonth, day))
+                    .hebrewDay || String(day)
+                : null;
             return (
               <Pressable
                 key={di}
@@ -131,9 +192,10 @@ function CalendarGrid({
                       cal.dayText,
                       isDisabled && cal.dayTextDisabled,
                       isSelected && cal.dayTextSelected,
+                      calMode === 'heb' && cal.dayTextHeb,
                     ]}
                   >
-                    {day}
+                    {hebDay ?? day}
                   </Text>
                 </View>
               </Pressable>
@@ -147,6 +209,32 @@ function CalendarGrid({
 
 const cal = StyleSheet.create({
   wrapper: { paddingHorizontal: 4, paddingBottom: 8 },
+  modeToggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  modeToggleBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    backgroundColor: '#f1f5f9',
+  },
+  modeToggleBtnActive: {
+    backgroundColor: '#e8f5fd',
+    borderColor: '#36a9e2',
+  },
+  modeToggleText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  modeToggleTextActive: {
+    color: '#36a9e2',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -169,6 +257,7 @@ const cal = StyleSheet.create({
   dayText: { fontSize: 14, color: '#111827' },
   dayTextDisabled: { color: '#d1d5db' },
   dayTextSelected: { color: '#fff', fontWeight: '700' },
+  dayTextHeb: { fontSize: 11 },
 });
 
 const PRIMARY = '#36a9e2';
@@ -327,8 +416,6 @@ export function DateTimeCard({
     onChange({ endTime: dateToTimeStr(selected) });
   };
 
-  const isSameDay = startDate === endDate;
-
   // ── Shared "start date" row chips (reused in allDay and timed modes) ──────
   const StartDateChips = (
     <View style={s.chipsGroup}>
@@ -380,10 +467,17 @@ export function DateTimeCard({
 
       {/* ── All-day mode: show start date only ───────────────────────────────── */}
       {isAllDay ? (
-        <View style={[s.dateRow, { marginBottom: 0 }]}>
-          {StartDateChips}
-          <Text style={s.rowLabel}>תאריך</Text>
-        </View>
+        <>
+          <View style={[s.dateRow, { marginBottom: 0 }]}>
+            {StartDateChips}
+            <Text style={s.rowLabel}>תאריך</Text>
+          </View>
+          {getHebrewDateInfo(startDate).fullHebrewDate ? (
+            <Text style={s.hebrewDateHint}>
+              {getHebrewDateInfo(startDate).fullHebrewDate}
+            </Text>
+          ) : null}
+        </>
       ) : (
         <>
           {/* ── Timed mode: start row ── */}
@@ -434,6 +528,11 @@ export function DateTimeCard({
             </View>
             <Text style={s.rowLabel}>התחלה</Text>
           </View>
+          {getHebrewDateInfo(startDate).fullHebrewDate ? (
+            <Text style={s.hebrewDateHint}>
+              {getHebrewDateInfo(startDate).fullHebrewDate}
+            </Text>
+          ) : null}
 
           {/* ── Timed mode: end row ── */}
           <View style={[s.dateRow, { marginBottom: 0 }]}>
@@ -461,7 +560,6 @@ export function DateTimeCard({
                 style={[
                   s.calIconBtn,
                   openPicker === 'endDateGrid' && s.chipActive,
-                  !isSameDay && s.calIconBtnNextDay,
                   isInvalidRange && s.chipInvalid,
                 ]}
                 onPress={() => togglePicker('endDateGrid')}
@@ -472,9 +570,7 @@ export function DateTimeCard({
                 <MaterialIcons
                   name="calendar-today"
                   size={14}
-                  color={
-                    isInvalidRange ? '#ef4444' : isSameDay ? PRIMARY : '#ea580c'
-                  }
+                  color={isInvalidRange ? '#ef4444' : PRIMARY}
                 />
               </Pressable>
 
@@ -482,7 +578,6 @@ export function DateTimeCard({
                 style={[
                   s.dateTextChip,
                   openPicker === 'endDate' && s.dateChipOpen,
-                  !isSameDay && s.dateChipNextDay,
                   isInvalidRange && s.chipInvalid,
                 ]}
                 onPress={() => togglePicker('endDate')}
@@ -491,11 +586,7 @@ export function DateTimeCard({
                 accessibilityLabel={`תאריך סיום: ${toNumericDate(endDate)}`}
               >
                 <Text
-                  style={[
-                    s.dateChipText,
-                    !isSameDay && s.dateChipTextNextDay,
-                    isInvalidRange && s.chipTextInvalid,
-                  ]}
+                  style={[s.dateChipText, isInvalidRange && s.chipTextInvalid]}
                 >
                   {toNumericDate(endDate)}
                 </Text>
@@ -503,6 +594,12 @@ export function DateTimeCard({
             </View>
             <Text style={s.rowLabel}>סיום</Text>
           </View>
+
+          {getHebrewDateInfo(endDate).fullHebrewDate ? (
+            <Text style={s.hebrewDateHint}>
+              {getHebrewDateInfo(endDate).fullHebrewDate}
+            </Text>
+          ) : null}
 
           {isInvalidRange && (
             <Text style={s.invalidHint}>
@@ -797,6 +894,13 @@ const s = StyleSheet.create({
   },
   dateChipTextNextDay: {
     color: '#ea580c',
+  },
+  hebrewDateHint: {
+    fontSize: 11,
+    color: '#94a3b8',
+    textAlign: 'right',
+    marginTop: 4,
+    marginBottom: 4,
   },
   invalidHint: {
     fontSize: 11,

@@ -7,15 +7,18 @@
 // this hook — never check plan strings or RevenueCat state directly in screens.
 //
 // Access precedence order (highest to lowest priority):
-//   1. DEV_ACCESS_OVERRIDE — only in __DEV__, always wins.
-//   2. RevenueCat paid entitlement — only when PAYMENT_SYSTEM_ENABLED=true.
+//   1. QA_FULL_ACCESS_PHONES override — server-verified, per-user, dev+prod.
+//      Only applies to phones explicitly listed in the Convex env var.
+//      ⚠️  Remove QA_FULL_ACCESS_PHONES from Convex env before production release.
+//   2. DEV_ACCESS_OVERRIDE — only in __DEV__, applies to all users in dev.
+//   3. RevenueCat paid entitlement — only when PAYMENT_SYSTEM_ENABLED=true.
 //      'family'   → effectiveAccess = 'family'
 //      'personal' → effectiveAccess = 'personal'
-//   3. Convex createdAt-based 30-day trial (PAYMENT_SYSTEM_ENABLED=true, no RC entitlement):
+//   4. Convex createdAt-based 30-day trial (PAYMENT_SYSTEM_ENABLED=true, no RC entitlement):
 //      Within 30 days of account creation → 'trial_active'
 //      After 30 days                       → 'trial_expired_free'
 //      Still loading / missing user        → 'trial_active' (safe fallback)
-//   4. Full trial_active fallback — when PAYMENT_SYSTEM_ENABLED=false.
+//   5. Full trial_active fallback — when PAYMENT_SYSTEM_ENABLED=false.
 //
 // Communities are always free — never gated regardless of access level.
 //
@@ -26,15 +29,15 @@
 //
 // ============================================================================
 
-import { api } from '@/convex/_generated/api';
+import { useQuery } from 'convex/react';
 import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import {
   DEV_ACCESS_OVERRIDE,
   type EffectiveAccess,
 } from '@/config/devAccessConfig';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
+import { api } from '@/convex/_generated/api';
 import type { SubscriptionTier } from '@/utils/revenueCatConfig';
-import { useQuery } from 'convex/react';
 
 // Declare the React Native global so TypeScript is satisfied without importing
 // the full RN package just for this constant.
@@ -188,6 +191,12 @@ export interface UseEffectiveAccessResult extends AccessPermissions {
   trialDaysRemaining: number | null;
   /** Total trial length in days — always 30. Exposed so UIs can display context. */
   trialTotalDays: 30;
+  /**
+   * True only when the QA full-access override is active for this specific user.
+   * Set via the QA_FULL_ACCESS_PHONES Convex environment variable.
+   * Never true for normal users. Remove the env var before production release.
+   */
+  isQaOverride: boolean;
 }
 
 // ============================================================================
@@ -198,13 +207,14 @@ export interface UseEffectiveAccessResult extends AccessPermissions {
  * Returns the current effective access level and all derived permission flags.
  *
  * Access precedence (highest → lowest priority):
- *   1. DEV_ACCESS_OVERRIDE   — __DEV__ only, always wins regardless of flags.
- *   2. RevenueCat paid tier  — 'family' or 'personal' when PAYMENT_SYSTEM_ENABLED=true.
- *   3. Convex 30-day trial   — no RC entitlement + PAYMENT_SYSTEM_ENABLED=true:
+ *   1. QA_FULL_ACCESS_PHONES — server-verified per-user override (dev + prod).
+ *   2. DEV_ACCESS_OVERRIDE   — __DEV__ only, all users in dev builds.
+ *   3. RevenueCat paid tier  — 'family' or 'personal' when PAYMENT_SYSTEM_ENABLED=true.
+ *   4. Convex 30-day trial   — no RC entitlement + PAYMENT_SYSTEM_ENABLED=true:
  *        within 30 days of createdAt → 'trial_active'
  *        after 30 days               → 'trial_expired_free'
  *        user still loading          → 'trial_active' (safe fallback, avoids flash)
- *   4. 'trial_active'        — safe fallback when PAYMENT_SYSTEM_ENABLED=false.
+ *   5. 'trial_active'        — safe fallback when PAYMENT_SYSTEM_ENABLED=false.
  *
  * @example
  * const { canCreatePersonalContent, canEditFamilyContent } = useEffectiveAccess();
@@ -220,16 +230,31 @@ export function useEffectiveAccess(): UseEffectiveAccessResult {
   // undefined = still loading; null = authenticated but no user row; Doc = loaded.
   const currentUser = useQuery(api.users.getCurrentUser);
 
+  // ── QA full-access override — server-verified, per-user ─────────────────
+  // Returns true only when the current user's phone is listed in the
+  // QA_FULL_ACCESS_PHONES Convex environment variable.
+  // undefined while the query is in flight; treat as false (no premature grant).
+  // Has NO effect when the env var is absent or the user is not listed.
+  // ⚠️  Remove QA_FULL_ACCESS_PHONES from Convex env before production release.
+  const isQaUser = useQuery(api.users.getIsQaUser);
+
   // ── Derive effectiveAccess using priority order ──────────────────────────
 
   let effectiveAccess: EffectiveAccess;
+  let isQaOverride = false;
 
-  if (__DEV__ && DEV_ACCESS_OVERRIDE !== null) {
-    // ── Priority 1: Developer / QA override ─────────────────────────────
+  if (isQaUser === true) {
+    // ── Priority 1: QA per-user full-access override (server-verified) ──────
+    // Active in dev AND production builds, but only for explicitly listed phones.
+    // Treats the QA user as 'trial_active' (full personal + family access).
+    effectiveAccess = 'trial_active';
+    isQaOverride = true;
+  } else if (__DEV__ && DEV_ACCESS_OVERRIDE !== null) {
+    // ── Priority 2: Dev build override (all users in dev) ───────────────────
     // Only active in __DEV__ builds. Never runs in production.
     effectiveAccess = DEV_ACCESS_OVERRIDE;
   } else if (PAYMENT_SYSTEM_ENABLED) {
-    // ── Priority 2 & 3: RevenueCat entitlement, then Convex 30-day trial ──
+    // ── Priority 3 & 4: RevenueCat entitlement, then Convex 30-day trial ──
     const paidAccess = normalizeSubscriptionTier(subscriptionTier);
     if (paidAccess !== null) {
       // Paid RevenueCat entitlement wins.
@@ -275,6 +300,7 @@ export function useEffectiveAccess(): UseEffectiveAccessResult {
     isFamily,
     trialDaysRemaining,
     trialTotalDays: 30,
+    isQaOverride,
     ...permissions,
   };
 }

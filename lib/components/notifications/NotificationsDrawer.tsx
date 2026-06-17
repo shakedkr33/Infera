@@ -165,8 +165,7 @@ export function NotificationsDrawer({
     })
     .onEnd((e) => {
       const threshold = DRAWER_WIDTH * 0.3;
-      const shouldClose =
-        e.translationX < -threshold || e.velocityX < -700;
+      const shouldClose = e.translationX < -threshold || e.velocityX < -700;
 
       if (shouldClose) {
         // Run closeDrawer on JS thread so it can call withSpring + runOnJS
@@ -244,7 +243,9 @@ export function NotificationsDrawer({
        */}
       <View style={StyleSheet.absoluteFill}>
         {/* Full-screen semi-transparent backdrop */}
-        <Animated.View style={[StyleSheet.absoluteFill, s.backdrop, backdropStyle]}>
+        <Animated.View
+          style={[StyleSheet.absoluteFill, s.backdrop, backdropStyle]}
+        >
           <Pressable
             style={StyleSheet.absoluteFill}
             onPress={closeDrawer}

@@ -25,6 +25,7 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { TASK_CATEGORY_LABELS } from '@/lib/types/task';
+import { getHebrewDateInfo } from '@/lib/utils/hebrewDate';
 
 // ─── RTL helpers (same pattern as EventDetailsBottomSheet) ────────────────────
 
@@ -733,6 +734,20 @@ export function TaskDetailsBottomSheet({
                         >
                           {formatDate(dueTs, task.hasTime)}
                         </Text>
+                        {(() => {
+                          const hebrewDate =
+                            getHebrewDateInfo(dueTs).fullHebrewDate;
+                          return hebrewDate ? (
+                            <Text
+                              style={[
+                                s.hebrewDateHint,
+                                { textAlign: HEB_TEXT_ALIGN },
+                              ]}
+                            >
+                              {hebrewDate}
+                            </Text>
+                          ) : null;
+                        })()}
                       </DetailRow>
                     ) : null}
 
@@ -1009,6 +1024,7 @@ const s = StyleSheet.create({
     borderBottomColor: '#f0f4f8',
   },
   detailText: { fontSize: 14, color: '#475569' },
+  hebrewDateHint: { fontSize: 11, color: '#94a3b8', marginTop: 2 },
   inlineRow: {
     alignItems: 'center',
     gap: 8,

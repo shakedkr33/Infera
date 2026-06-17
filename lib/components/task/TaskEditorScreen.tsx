@@ -36,6 +36,7 @@ import type {
   TaskReminderUnit,
 } from '@/lib/types/task';
 import { TASK_CATEGORIES } from '@/lib/types/task';
+import { getHebrewDateInfo } from '@/lib/utils/hebrewDate';
 import { SubtasksSection } from './SubtasksSection';
 
 const PRIMARY = '#36a9e2';
@@ -1512,22 +1513,30 @@ export default function TaskEditorScreen({
               ))}
             </View>
             {draft.dateOption === 'other' ? (
-              <Pressable
-                style={styles.selectionRow}
-                onPress={() => setDatePickerOpen(true)}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="בחירת תאריך"
-              >
-                <MaterialIcons
-                  name="calendar-today"
-                  size={18}
-                  color={PRIMARY}
-                />
-                <Text style={styles.selectionText}>
-                  {formatDate(selectedDate)}
-                </Text>
-              </Pressable>
+              <>
+                <Pressable
+                  style={styles.selectionRow}
+                  onPress={() => setDatePickerOpen(true)}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="בחירת תאריך"
+                >
+                  <MaterialIcons
+                    name="calendar-today"
+                    size={18}
+                    color={PRIMARY}
+                  />
+                  <Text style={styles.selectionText}>
+                    {formatDate(selectedDate)}
+                  </Text>
+                </Pressable>
+                {draft.selectedDate &&
+                getHebrewDateInfo(draft.selectedDate).fullHebrewDate ? (
+                  <Text style={styles.hebrewDateHint}>
+                    {getHebrewDateInfo(draft.selectedDate).fullHebrewDate}
+                  </Text>
+                ) : null}
+              </>
             ) : null}
             {showTimeToggle ? (
               <View style={styles.toggleRow}>
@@ -2312,6 +2321,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     textAlign: 'right',
+  },
+  hebrewDateHint: {
+    fontSize: 11,
+    color: '#94a3b8',
+    textAlign: 'right',
+    marginTop: 3,
+    paddingHorizontal: 4,
   },
   toggleRow: {
     marginTop: 12,

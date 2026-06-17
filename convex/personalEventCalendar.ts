@@ -20,9 +20,7 @@ async function getViewerSelfFamilyMemberId(
 
   const indexedEntities = await ctx.db
     .query('members')
-    .withIndex('by_kind', (q) =>
-      q.eq('spaceId', spaceId).eq('kind', 'entity')
-    )
+    .withIndex('by_kind', (q) => q.eq('spaceId', spaceId).eq('kind', 'entity'))
     .collect();
 
   const allRows = await ctx.db
@@ -104,9 +102,7 @@ export const removePersonalEventFromMyCalendar = mutation({
         .unique();
 
       if (rsvpRow?.status !== 'no') {
-        throw new Error(
-          'ניתן להסיר אירוע פעיל מהיומן רק לאחר סימון "לא אגיע"'
-        );
+        throw new Error('ניתן להסיר אירוע פעיל מהיומן רק לאחר סימון "לא אגיע"');
       }
     }
 

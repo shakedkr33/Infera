@@ -637,6 +637,52 @@ export const markFamilySetupSkipped = mutation({
   },
 });
 
+// ── QA / Developer Full-Access Override ──────────────────────────────────────
+//
+// Returns true ONLY when the current user's phone (E.164) is listed in the
+// QA_FULL_ACCESS_PHONES Convex environment variable (comma-separated phones).
+//
+// Example value:  +972501234567,+972509876543
+//
+// HOW TO CONFIGURE:
+//   Convex Dashboard → Settings → Environment Variables → QA_FULL_ACCESS_PHONES
+//
+// HOW TO REMOVE (before production release):
+//   Delete the QA_FULL_ACCESS_PHONES env var from the Convex dashboard.
+//   No code changes are required — the query returns false when the var is absent.
+//
+// SAFETY GUARANTEES:
+//   • Returns false when QA_FULL_ACCESS_PHONES is unset or empty.
+//   • Returns false for every user whose phone is NOT explicitly listed.
+//   • Never mutates user data or trial timestamps.
+//   • Has no effect on RevenueCat, OTP, Apple Review demo, or normal trial logic.
+//
+// ⚠️  REMOVE QA_FULL_ACCESS_PHONES FROM CONVEX ENV BEFORE PRODUCTION RELEASE.
+// ─────────────────────────────────────────────────────────────────────────────
+export const getIsQaUser = query({
+  args: {},
+  returns: v.boolean(),
+  handler: async (ctx): Promise<boolean> => {
+    const qaPhones = process.env.QA_FULL_ACCESS_PHONES;
+
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return false;
+
+    const user = await ctx.db.get(userId);
+
+    if (!qaPhones) return false;
+    if (!user?.phone) return false;
+
+    const allowlist = qaPhones
+      .split(',')
+      .map((p: string) => p.trim())
+      .filter(Boolean);
+    const isMatch = allowlist.includes(user.phone);
+
+    return isMatch;
+  },
+});
+
 // סטטוס המשתמש הנוכחי: האם יש פרופיל, האם האונבורדינג הושלם
 // משמש לניתוב פוסט-אימות — מחזיר null כשלא מחובר (caller משתמש ב-'skip')
 export const getCurrentUserStatus = query({

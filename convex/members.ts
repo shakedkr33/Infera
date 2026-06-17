@@ -214,29 +214,7 @@ export const listMyFamilyContacts = query({
     // always resolve the same spaceId for the same user.
     const spaceId = await resolveMySpaceId(ctx, userId);
 
-    console.log(
-      '[LIST CONTACTS] userId:',
-      userId,
-      '| resolvedSpaceId:',
-      spaceId ?? 'null — no space found'
-    );
-
     if (!spaceId) return { selfEntityId: null, members: [] };
-
-    // Inspect the caller's access/entity rows so we can diagnose wrong-space issues.
-    const callerRows = await ctx.db
-      .query('members')
-      .withIndex('by_user', (q) => q.eq('userId', userId))
-      .collect();
-    console.log(
-      '[LIST CONTACTS] caller membership rows:',
-      callerRows.map((r) => ({
-        id: r._id,
-        spaceId: r.spaceId,
-        role: r.role,
-        kind: r.kind ?? resolveKind(r),
-      }))
-    );
 
     // Primary path: use by_kind index for rows that have kind stamped
     const indexedEntities = await ctx.db
