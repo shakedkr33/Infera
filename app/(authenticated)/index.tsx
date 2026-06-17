@@ -454,7 +454,11 @@ function resolveAllNonSelfAssignees(
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { openBirthdayCard, birthdays: contextBirthdays } = useBirthdaySheets();
+  const {
+    openBirthdayCard,
+    openBirthdayCreate,
+    birthdays: contextBirthdays,
+  } = useBirthdaySheets();
 
   // ── Convex: spaceId ────────────────────────────────────────────────────────
   // TODO: כאשר defaultSpaceId ייאכלס ב-onboarding, לעבור לשליפה ישירה מ-user.defaultSpaceId
@@ -2266,9 +2270,7 @@ export default function HomeScreen() {
                   עוד לא הוספת ימי הולדת.
                 </Text>
                 <Pressable
-                  onPress={() => {
-                    /* TODO: פתח flow הוספת יום הולדת */
-                  }}
+                  onPress={openBirthdayCreate}
                   accessible={true}
                   accessibilityRole="button"
                   accessibilityLabel="הוספת יום הולדת ראשון"
