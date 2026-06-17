@@ -314,7 +314,8 @@ export default function EventScreen({
           router.replace('/(authenticated)');
         }
       }
-    } catch {
+    } catch (err) {
+      console.error('[EventScreen] save error:', err);
       Alert.alert('שגיאה', 'לא ניתן לשמור. נסה שוב.');
     } finally {
       isSavingRef.current = false;

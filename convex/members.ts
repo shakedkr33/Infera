@@ -426,6 +426,24 @@ export const getMySpaceRole = query({
   },
 });
 
+// ── getMyResolvedSpaceId ──────────────────────────────────────────────────────
+// Returns the same spaceId that listByDateRange (and all calendar queries) use —
+// the result of resolveMySpaceId's 4-priority algorithm.
+//
+// This replaces api.users.getMySpace (which used a naive .first() and returned
+// whichever members row happened to come first — wrong for users with multiple rows).
+// Using this query for personal event creation ensures the event lands in the
+// same space that the calendar and home queries read from.
+export const getMyResolvedSpaceId = query({
+  args: {},
+  returns: v.union(v.id('spaces'), v.null()),
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    return await resolveMySpaceId(ctx, userId);
+  },
+});
+
 // ── requireSpaceAdmin ─────────────────────────────────────────────────────────
 // FIXED: permission guard helper for admin-only mutations
 // Throws PERMISSION_DENIED if the caller is not an admin-kind access row for the space.

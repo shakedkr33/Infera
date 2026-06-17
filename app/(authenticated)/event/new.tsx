@@ -258,7 +258,11 @@ export default function NewEventScreen(): React.JSX.Element {
   const createEventTasks = useMutation(api.eventTasks.createBatch);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
   const toggleEventTaskCompleted = useMutation(api.eventTasks.toggleCompleted);
-  const spaceId = useQuery(api.users.getMySpace);
+  // Use resolveMySpaceId-backed query so the event lands in the same space
+  // that listByDateRange (calendar/home) reads from.
+  // api.users.getMySpace used .first() which returned the wrong row for users
+  // with multiple membership rows (e.g. own admin space + family member-access row).
+  const spaceId = useQuery(api.members.getMyResolvedSpaceId);
 
   // Resolve initial date: prefer legacy numeric selectedDate, then YYYY-MM-DD date param.
   // Build local midnight timestamp to avoid UTC-offset day shift.
