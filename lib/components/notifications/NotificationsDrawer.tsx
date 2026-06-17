@@ -1,6 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BackHandler,
   Dimensions,
@@ -31,7 +31,10 @@ import type {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const DRAWER_WIDTH = Math.round(SCREEN_WIDTH * 0.75);
+const DRAWER_WIDTH = Math.round(SCREEN_WIDTH * 0.7);
+// Drawer always slides in from the left regardless of RTL locale
+const CLOSED_X = -DRAWER_WIDTH;
+const OPEN_X = 0;
 const SPRING = { damping: 26, stiffness: 130 } as const;
 const PRIMARY = '#36a9e2';
 
@@ -92,7 +95,7 @@ function getRelativeTime(dateStr: string): string {
 interface NotificationsDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  /** 'rtl' | 'ltr' – slides from left in RTL, from right in LTR */
+  /** Kept for API compatibility. Drawer always slides from the left. */
   direction?: 'rtl' | 'ltr';
 }
 
@@ -101,66 +104,75 @@ interface NotificationsDrawerProps {
 export function NotificationsDrawer({
   isOpen,
   onClose,
-  direction = 'rtl',
 }: NotificationsDrawerProps): React.JSX.Element | null {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { notifications, archiveAll } = useNotifications();
   const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
 
-  const isRTL = direction === 'rtl';
-
   const [modalVisible, setModalVisible] = useState(false);
-  const translateX = useSharedValue(isRTL ? -DRAWER_WIDTH : DRAWER_WIDTH);
+  const translateX = useSharedValue(CLOSED_X);
 
-  // Animate open / close
+  // Combine both updates into one call so React 18 batches them together,
+  // preventing an intermediate render where isOpen=true but modalVisible=false
+  // that would otherwise re-trigger the opening animation.
+  const handleCloseComplete = useCallback((): void => {
+    setModalVisible(false);
+    onClose();
+  }, [onClose]);
+
+  // Animate drawer off-screen then finalize close state atomically.
+  const closeDrawer = useCallback((): void => {
+    translateX.value = withSpring(CLOSED_X, SPRING, () => {
+      runOnJS(handleCloseComplete)();
+    });
+  }, [translateX, handleCloseComplete]);
+
+  // Respond to parent-driven open / close transitions.
+  // The conditions are mutually exclusive (open↔close), preventing loops:
+  //   isOpen && !modalVisible  → transition to open
+  //   !isOpen && modalVisible  → parent-driven close (e.g. back navigation)
   useEffect(() => {
-    const offScreen = isRTL ? -DRAWER_WIDTH : DRAWER_WIDTH;
-    if (isOpen) {
+    if (isOpen && !modalVisible) {
+      translateX.value = CLOSED_X; // always start from off-screen
       setModalVisible(true);
-      translateX.value = withSpring(0, SPRING);
-    } else if (modalVisible) {
-      translateX.value = withSpring(offScreen, SPRING, () => {
+      translateX.value = withSpring(OPEN_X, SPRING);
+    } else if (!isOpen && modalVisible) {
+      translateX.value = withSpring(CLOSED_X, SPRING, () => {
         runOnJS(setModalVisible)(false);
       });
     }
-  }, [isOpen, modalVisible, translateX, isRTL]);
+  }, [isOpen, modalVisible, translateX]);
 
-  // Android back button
+  // Android hardware back button
   useEffect(() => {
     if (!isOpen) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      onClose();
+      closeDrawer();
       return true;
     });
     return () => sub.remove();
-  }, [isOpen, onClose]);
+  }, [isOpen, closeDrawer]);
 
-  // Swipe to close – swipe left (negative X) in RTL, right (positive X) in LTR
+  // Swipe left to close (left-side drawer)
   const panGesture = Gesture.Pan()
-    .activeOffsetX(
-      isRTL ? [Number.NEGATIVE_INFINITY, -8] : [8, Number.POSITIVE_INFINITY]
-    )
+    .activeOffsetX([Number.NEGATIVE_INFINITY, -8])
     .failOffsetY([-15, 15])
     .onUpdate((e) => {
-      if (isRTL) {
-        if (e.translationX < 0) translateX.value = e.translationX;
-      } else {
-        if (e.translationX > 0) translateX.value = e.translationX;
+      if (e.translationX < 0) {
+        translateX.value = e.translationX;
       }
     })
     .onEnd((e) => {
-      const offScreen = isRTL ? -DRAWER_WIDTH : DRAWER_WIDTH;
       const threshold = DRAWER_WIDTH * 0.3;
-      const shouldClose = isRTL
-        ? e.translationX < -threshold || e.velocityX < -700
-        : e.translationX > threshold || e.velocityX > 700;
+      const shouldClose =
+        e.translationX < -threshold || e.velocityX < -700;
 
       if (shouldClose) {
-        translateX.value = withSpring(offScreen, SPRING);
-        runOnJS(onClose)();
+        // Run closeDrawer on JS thread so it can call withSpring + runOnJS
+        runOnJS(closeDrawer)();
       } else {
-        translateX.value = withSpring(0, SPRING);
+        translateX.value = withSpring(OPEN_X, SPRING);
       }
     });
 
@@ -168,14 +180,12 @@ export function NotificationsDrawer({
     transform: [{ translateX: translateX.value }],
   }));
 
-  const backdropStyle = useAnimatedStyle(() => {
-    const offScreen = isRTL ? -DRAWER_WIDTH : DRAWER_WIDTH;
-    return {
-      opacity: interpolate(translateX.value, [0, offScreen], [1, 0]),
-    };
-  });
+  // Backdrop fades from fully opaque (open) to invisible (closed)
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateX.value, [OPEN_X, CLOSED_X], [1, 0]),
+  }));
 
-  // Group notifications
+  // Group notifications by recency
   const grouped = useMemo(() => {
     const groups: Record<TimeGroup, Notification[]> = {
       today: [],
@@ -190,7 +200,6 @@ export function NotificationsDrawer({
 
   const hasNotifications = notifications.length > 0;
 
-  // Navigation handler
   const handleTap = (n: Notification): void => {
     onClose();
     setTimeout(() => {
@@ -224,29 +233,33 @@ export function NotificationsDrawer({
       visible={modalVisible}
       transparent
       animationType="none"
-      onRequestClose={onClose}
+      onRequestClose={closeDrawer}
       statusBarTranslucent={Platform.OS === 'android'}
     >
-      <View
-        style={[s.modalRoot, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}
-      >
-        {/* Backdrop */}
-        <Animated.View style={[s.backdrop, backdropStyle]}>
+      {/*
+       * Layout: backdrop covers the full screen behind everything.
+       * Drawer panel is absolute on the left, rendered on top of the backdrop.
+       * Tapping any area outside the drawer hits the backdrop Pressable and
+       * fully closes in one tap via closeDrawer.
+       */}
+      <View style={StyleSheet.absoluteFill}>
+        {/* Full-screen semi-transparent backdrop */}
+        <Animated.View style={[StyleSheet.absoluteFill, s.backdrop, backdropStyle]}>
           <Pressable
-            style={{ flex: 1 }}
-            onPress={onClose}
+            style={StyleSheet.absoluteFill}
+            onPress={closeDrawer}
             accessible={true}
             accessibilityLabel="סגור התראות"
           />
         </Animated.View>
 
-        {/* Drawer panel */}
+        {/* Drawer panel – absolute left, slides in from off-screen left */}
         <GestureDetector gesture={panGesture}>
           <Animated.View
             style={[
               s.drawerPanel,
               { paddingBottom: insets.bottom },
-              isRTL ? s.shadowRight : s.shadowLeft,
+              s.shadowRight,
               drawerStyle,
             ]}
           >
@@ -356,27 +369,21 @@ function NotificationCard({
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  modalRoot: {
-    flex: 1,
-  },
   backdrop: {
-    flex: 1,
-    backgroundColor: '#000',
+    // Soft dark overlay — much softer than the previous solid #000
+    backgroundColor: 'rgba(15, 23, 42, 0.28)',
   },
   drawerPanel: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
     width: DRAWER_WIDTH,
     backgroundColor: '#fff',
   },
   shadowRight: {
     shadowColor: '#000',
     shadowOffset: { width: 4, height: 0 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 16,
-  },
-  shadowLeft: {
-    shadowColor: '#000',
-    shadowOffset: { width: -4, height: 0 },
     shadowOpacity: 0.12,
     shadowRadius: 16,
     elevation: 16,
