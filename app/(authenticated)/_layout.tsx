@@ -543,7 +543,6 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="profile" options={{ href: null }} />
 
           {/* ── Hidden screens ── */}
-          <Tabs.Screen name="settings" options={{ href: null }} />
           <Tabs.Screen name="birthdays" options={{ href: null }} />
           <Tabs.Screen name="event/new" options={{ href: null }} />
           <Tabs.Screen name="event/[id]" options={{ href: null }} />
