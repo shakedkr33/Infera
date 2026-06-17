@@ -40,7 +40,14 @@ export default function ProfileScreen() {
   // Debug panel is hidden in normal UI; revealed only by long-pressing the version footer
   const [isDebugUnlocked, setIsDebugUnlocked] = useState(false);
 
-  const { effectiveAccess } = useEffectiveAccess();
+  const {
+    effectiveAccess,
+    isTrialActive,
+    isExpiredFree,
+    isPersonal,
+    isFamily,
+    trialDaysRemaining,
+  } = useEffectiveAccess();
   const { data: onboardingData } = useOnboarding();
   const rawFirstName = onboardingData.firstName ?? '';
   const rawLastName = onboardingData.lastName ?? '';
@@ -184,21 +191,35 @@ export default function ProfileScreen() {
               <Text
                 style={[
                   styles.profileSubtitle,
-                  (effectiveAccess === 'personal' ||
-                    effectiveAccess === 'family') &&
-                    styles.premiumLabel,
+                  (isPersonal || isFamily) && styles.premiumLabel,
                 ]}
               >
-                {effectiveAccess === 'trial_active'
-                  ? 'חודש ניסיון חינמי פעיל'
-                  : effectiveAccess === 'trial_expired_free'
+                {isTrialActive
+                  ? 'גישה מלאה פעילה'
+                  : isExpiredFree
                     ? 'מסלול חינמי'
-                    : effectiveAccess === 'personal'
-                      ? 'מנוי אישי פעיל'
-                      : 'מנוי משפחתי פעיל'}
+                    : isPersonal
+                      ? 'מנוי Plus פעיל'
+                      : 'מנוי Family פעיל'}
               </Text>
-              {(effectiveAccess === 'trial_expired_free' ||
-                effectiveAccess === 'trial_active') && (
+              {isTrialActive && trialDaysRemaining !== null && (
+                <Text style={styles.profileSubtitle}>
+                  {trialDaysRemaining === 1
+                    ? 'נותר לך יום אחד לגישה מלאה'
+                    : `נותרו לך ${trialDaysRemaining} ימים לגישה מלאה`}
+                </Text>
+              )}
+              {isExpiredFree && (
+                <Text style={styles.profileSubtitle}>
+                  {'קהילות נשארות פתוחות בחינם — תמיד.'}
+                </Text>
+              )}
+              {isTrialActive && trialDaysRemaining !== null && (
+                <Text style={styles.profileNote}>
+                  {'אחרי זה אפשר להמשיך עם קהילות בחינם.'}
+                </Text>
+              )}
+              {(isExpiredFree || isTrialActive) && (
                 <TouchableOpacity
                   onPress={() => {
                     router.push('/(authenticated)/subscription' as never);
@@ -551,6 +572,12 @@ const styles = StyleSheet.create({
   premiumLabel: {
     color: '#36a9e2',
     fontWeight: '600',
+  },
+  profileNote: {
+    fontSize: 11,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
+    marginTop: 2,
   },
   upgradeCta: {
     fontSize: 13,
