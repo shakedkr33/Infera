@@ -55,6 +55,12 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { APP_IS_RTL, rtl } from '@/lib/rtl';
+import {
+  type CalendarLayerFilters,
+  DEFAULT_CALENDAR_LAYER_FILTERS,
+  loadCalendarLayerFilters,
+  saveCalendarLayerFilters,
+} from '@/lib/storage/calendarLayerFilterPreferences';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 import {
   getHebrewDateInfo,
@@ -694,6 +700,8 @@ interface CalendarMonthNavBarProps {
   onPrevMonth: () => void;
   onNextMonth: () => void;
   onTitlePress: () => void;
+  showFilterIcon: boolean;
+  onFilterPress: () => void;
 }
 
 function CalendarMonthNavBar({
@@ -702,52 +710,304 @@ function CalendarMonthNavBar({
   onPrevMonth,
   onNextMonth,
   onTitlePress,
+  showFilterIcon,
+  onFilterPress,
 }: CalendarMonthNavBarProps): React.JSX.Element {
   return (
     <View style={styles.monthNavRow}>
-      <Pressable
-        onPress={ANDROID_MATCH_IOS_LAYOUT ? onPrevMonth : onNextMonth}
-        hitSlop={12}
-        accessible={true}
-        accessibilityRole="button"
-        accessibilityLabel={ANDROID_MATCH_IOS_LAYOUT ? 'חודש קודם' : 'חודש הבא'}
-        style={styles.monthChevronButton}
-      >
-        <MaterialIcons
-          name={ANDROID_MATCH_IOS_LAYOUT ? 'chevron-right' : 'chevron-left'}
-          size={24}
-          color="#647b87"
-        />
-      </Pressable>
-      <Pressable
-        onPress={onTitlePress}
-        accessible={true}
-        accessibilityRole="button"
-        accessibilityLabel={`בחר חודש ושנה, ${headerMonthLabel}`}
-        style={styles.monthTitleButton}
-      >
-        <Text style={styles.monthYear}>{headerMonthLabel}</Text>
-        {hebrewMonthRange ? (
-          <Text style={styles.monthYearHebrew}>{hebrewMonthRange}</Text>
-        ) : null}
-      </Pressable>
-      <Pressable
-        onPress={ANDROID_MATCH_IOS_LAYOUT ? onNextMonth : onPrevMonth}
-        hitSlop={12}
-        accessible={true}
-        accessibilityRole="button"
-        accessibilityLabel={ANDROID_MATCH_IOS_LAYOUT ? 'חודש הבא' : 'חודש קודם'}
-        style={styles.monthChevronButton}
-      >
-        <MaterialIcons
-          name={ANDROID_MATCH_IOS_LAYOUT ? 'chevron-left' : 'chevron-right'}
-          size={24}
-          color="#647b87"
-        />
-      </Pressable>
+      {/* Navigation cluster — arrows visually close to the month title */}
+      <View style={styles.monthNavCluster}>
+        <Pressable
+          onPress={ANDROID_MATCH_IOS_LAYOUT ? onPrevMonth : onNextMonth}
+          hitSlop={10}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel={
+            ANDROID_MATCH_IOS_LAYOUT ? 'חודש קודם' : 'חודש הבא'
+          }
+          style={styles.monthChevronButton}
+        >
+          <MaterialIcons
+            name={ANDROID_MATCH_IOS_LAYOUT ? 'chevron-right' : 'chevron-left'}
+            size={22}
+            color="#647b87"
+          />
+        </Pressable>
+        <Pressable
+          onPress={onTitlePress}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel={`בחר חודש ושנה, ${headerMonthLabel}`}
+          style={styles.monthTitleButton}
+        >
+          <Text style={styles.monthYear}>{headerMonthLabel}</Text>
+          {hebrewMonthRange ? (
+            <Text style={styles.monthYearHebrew}>{hebrewMonthRange}</Text>
+          ) : null}
+        </Pressable>
+        <Pressable
+          onPress={ANDROID_MATCH_IOS_LAYOUT ? onNextMonth : onPrevMonth}
+          hitSlop={10}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel={
+            ANDROID_MATCH_IOS_LAYOUT ? 'חודש הבא' : 'חודש קודם'
+          }
+          style={styles.monthChevronButton}
+        >
+          <MaterialIcons
+            name={ANDROID_MATCH_IOS_LAYOUT ? 'chevron-left' : 'chevron-right'}
+            size={22}
+            color="#647b87"
+          />
+        </Pressable>
+      </View>
+
+      {/* Filter icon — always on physical right (position: absolute, right) */}
+      {showFilterIcon ? (
+        <Pressable
+          onPress={onFilterPress}
+          hitSlop={8}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="סינון היומן"
+          style={styles.monthNavFilterBtn}
+        >
+          <MaterialIcons name="tune" size={22} color="#647b87" />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CalendarFilterPanel — compact bottom-sheet filter panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface FilterRowDef {
+  key: keyof CalendarLayerFilters;
+  label: string;
+}
+
+interface CalendarFilterPanelProps {
+  visible: boolean;
+  onClose: () => void;
+  filters: CalendarLayerFilters;
+  onToggle: (key: keyof CalendarLayerFilters) => void;
+  rows: FilterRowDef[];
+}
+
+function CalendarFilterPanel({
+  visible,
+  onClose,
+  filters,
+  onToggle,
+  rows,
+}: CalendarFilterPanelProps): React.JSX.Element | null {
+  const translateY = useRef(new Animated.Value(400)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.spring(translateY, {
+        toValue: 0,
+        useNativeDriver: true,
+        damping: 26,
+        stiffness: 130,
+      }).start();
+    } else {
+      Animated.timing(translateY, {
+        toValue: 400,
+        duration: 220,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [visible, translateY]);
+
+  if (!visible) return null;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="none"
+      onRequestClose={onClose}
+    >
+      <View style={filterPanelStyles.overlay}>
+        {/* Backdrop */}
+        <Pressable style={filterPanelStyles.backdrop} onPress={onClose} />
+
+        {/* Sheet */}
+        <Animated.View
+          style={[filterPanelStyles.sheet, { transform: [{ translateY }] }]}
+          accessibilityViewIsModal
+        >
+          {/* Handle */}
+          <View style={filterPanelStyles.handleRow}>
+            <View style={filterPanelStyles.handle} />
+          </View>
+
+          {/* Title + close */}
+          <View style={filterPanelStyles.titleRow}>
+            <Text style={filterPanelStyles.title}>הצגה ביומן</Text>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="סגור"
+              style={filterPanelStyles.closeBtn}
+            >
+              <MaterialIcons name="close" size={20} color="#647b87" />
+            </Pressable>
+          </View>
+
+          {/* Filter rows */}
+          {rows.map(({ key, label }) => {
+            const isOn = filters[key];
+            return (
+              <Pressable
+                key={key}
+                onPress={() => onToggle(key)}
+                accessible={true}
+                accessibilityRole="switch"
+                accessibilityLabel={label}
+                accessibilityState={{ checked: isOn }}
+                style={filterPanelStyles.filterRow}
+              >
+                {/* Label on right (RTL start) */}
+                <Text style={filterPanelStyles.filterLabel}>{label}</Text>
+                {/* Toggle indicator on left */}
+                <View
+                  style={[
+                    filterPanelStyles.toggle,
+                    isOn
+                      ? filterPanelStyles.toggleOn
+                      : filterPanelStyles.toggleOff,
+                  ]}
+                >
+                  <View
+                    style={[
+                      filterPanelStyles.toggleThumb,
+                      isOn
+                        ? filterPanelStyles.toggleThumbOn
+                        : filterPanelStyles.toggleThumbOff,
+                    ]}
+                  />
+                </View>
+              </Pressable>
+            );
+          })}
+
+          <View style={filterPanelStyles.bottomPad} />
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+const filterPanelStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'transparent',
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
+  },
+  sheet: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 8,
+    direction: 'rtl',
+  },
+  handleRow: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  handle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#d1d5db',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+    marginBottom: 4,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111517',
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f0f0f0',
+    minHeight: 52,
+  },
+  filterLabel: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#1a2b38',
+    flex: 1,
+  },
+  toggle: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  toggleOn: {
+    backgroundColor: '#36a9e2',
+  },
+  toggleOff: {
+    backgroundColor: '#d1d5db',
+  },
+  toggleThumb: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  toggleThumbOn: {
+    alignSelf: 'flex-end',
+  },
+  toggleThumbOff: {
+    alignSelf: 'flex-start',
+  },
+  bottomPad: {
+    height: 24,
+  },
+});
 
 const sheetStyles = StyleSheet.create({
   modalRoot: {
@@ -1321,21 +1581,34 @@ export default function CalendarScreen(): React.JSX.Element {
   const { isExpiredFree } = useEffectiveAccess();
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
 
-  // ── Layer filter chips state (Phase 2A) ─────────────────────────────────────
-  // All four layers are ON by default. State is local to this screen.
-  const [layerFilters, setLayerFilters] = useState({
-    showCommunity: true,
-    showTasks: true,
-    showHolidays: true,
-    showShabbatTimes: true,
-  });
+  // ── Layer filter state ──────────────────────────────────────────────────────
+  // Persisted to AsyncStorage via calendarLayerFilterPreferences.
+  // Defaults match DEFAULT_CALENDAR_LAYER_FILTERS; replaced on hydration.
+  const [layerFilters, setLayerFilters] = useState<CalendarLayerFilters>(
+    () => ({ ...DEFAULT_CALENDAR_LAYER_FILTERS })
+  );
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
 
   const toggleLayerFilter = useCallback(
-    (key: keyof typeof layerFilters): void => {
-      setLayerFilters((prev) => ({ ...prev, [key]: !prev[key] }));
+    (key: keyof CalendarLayerFilters): void => {
+      setLayerFilters((prev) => {
+        const next = { ...prev, [key]: !prev[key] };
+        // Persist immediately; fire-and-forget
+        saveCalendarLayerFilters(next);
+        return next;
+      });
     },
     []
   );
+
+  // Hydrate persisted filter preferences once on mount.
+  // Uses functional updater so it never overwrites a preference the user
+  // changed during the async gap.
+  useEffect(() => {
+    loadCalendarLayerFilters().then((stored) => {
+      setLayerFilters(stored);
+    });
+  }, []);
 
   function handleGatedCreateAction(action: () => void): void {
     if (isExpiredFree) {
@@ -1618,6 +1891,53 @@ export default function CalendarScreen(): React.JSX.Element {
     displayYear,
     displayMonth,
   ]);
+
+  // ── Chip conditional visibility (Phase 2A) ──────────────────────────────────
+  // Derived from already-loaded calendar data — no additional backend queries.
+
+  /** True when community-sourced content exists in the currently loaded ranges. */
+  const hasCommunityContent = useMemo(
+    () =>
+      aggregateCommunityEvents.length > 0 ||
+      timelineCommunityEvents.length > 0 ||
+      calendarPersonalTasks.some((t) => Boolean(t.communityId)),
+    [aggregateCommunityEvents, timelineCommunityEvents, calendarPersonalTasks]
+  );
+
+  /** True when there is at least one active task with a due date on the calendar. */
+  const hasDateBasedTasks = useMemo(
+    () => calendarPersonalTasks.length > 0,
+    [calendarPersonalTasks]
+  );
+
+  /**
+   * Currently available filter rows for the filter panel.
+   *
+   * חגים ומועדים — hidden until a holiday settings flow is implemented.
+   * זמני שבת וחג  — hidden until Shabbat time + city selection is implemented.
+   * The filter state keys for those layers remain intact for future use.
+   *
+   * If this list is empty the filter icon is hidden entirely.
+   */
+  const visibleFilterRows = useMemo(
+    () =>
+      (
+        [
+          hasCommunityContent
+            ? ({ key: 'showCommunity', label: 'קהילות' } as const)
+            : null,
+          hasDateBasedTasks
+            ? ({ key: 'showTasks', label: 'משימות' } as const)
+            : null,
+          // { key: 'showHolidays', label: 'חגים ומועדים' }  — future: enable via holiday settings
+          // { key: 'showShabbatTimes', label: 'זמני שבת וחג' } — future: enable via Shabbat city selection
+        ] as ({ key: keyof CalendarLayerFilters; label: string } | null)[]
+      ).filter(
+        (row): row is { key: keyof CalendarLayerFilters; label: string } =>
+          row !== null
+      ),
+    [hasCommunityContent, hasDateBasedTasks]
+  );
 
   // FIXED: linked (shared) events for the displayed month — shown as dots alongside personal events
   const linkedEvents =
@@ -2708,7 +3028,9 @@ export default function CalendarScreen(): React.JSX.Element {
           profileCircles: pc1.length > 0 ? pc1 : undefined,
           profileCirclesExtraCount: pc1Extra > 0 ? pc1Extra : undefined,
           profileCirclesContext: pc1Context,
-          communityId: event.communityId ? String(event.communityId) : undefined,
+          communityId: event.communityId
+            ? String(event.communityId)
+            : undefined,
           pendingPersonalInvite: pendingPersonalInvite1,
           myPersonalRsvpStatus: myPersonalRsvpStatus1,
         });
@@ -2771,7 +3093,9 @@ export default function CalendarScreen(): React.JSX.Element {
           importantItems: rawImportantItems2?.length
             ? rawImportantItems2
             : undefined,
-          communityId: event.communityId ? String(event.communityId) : undefined,
+          communityId: event.communityId
+            ? String(event.communityId)
+            : undefined,
           profileCircles: pc2.length > 0 ? pc2 : undefined,
           profileCirclesContext: 'alsoAddedToCalendar',
         });
@@ -3166,62 +3490,30 @@ export default function CalendarScreen(): React.JSX.Element {
                 onNextMonth={goToNextMonth}
                 onPrevMonth={goToPrevMonth}
                 onTitlePress={() => setIsMonthPickerVisible(true)}
+                showFilterIcon={!communityId && visibleFilterRows.length > 0}
+                onFilterPress={() => setIsFilterPanelOpen(true)}
               />
             </View>
           ) : null}
-        </View>
 
-        {/* Layer filter chips (Phase 2A) — hidden when community-filter banner is active */}
-        {!communityId ? (
-          <View style={styles.layerChipsBar}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.layerChipsScroll}
-              contentContainerStyle={styles.layerChipsContent}
-            >
-              {(
-                [
-                  { key: 'showCommunity', label: 'קהילות' },
-                  { key: 'showTasks', label: 'משימות' },
-                  { key: 'showHolidays', label: 'חגים ומועדים' },
-                  { key: 'showShabbatTimes', label: 'זמני שבת וחג' },
-                ] as {
-                  key: keyof typeof layerFilters;
-                  label: string;
-                }[]
-              ).map(({ key, label }) => {
-                const isOn = layerFilters[key];
-                return (
-                  <Pressable
-                    key={key}
-                    onPress={() => toggleLayerFilter(key)}
-                    style={[
-                      styles.layerChip,
-                      isOn ? styles.layerChipActive : styles.layerChipInactive,
-                    ]}
-                    accessible
-                    accessibilityRole="button"
-                    accessibilityLabel={label}
-                    accessibilityState={{ selected: isOn }}
-                    hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                  >
-                    <Text
-                      style={[
-                        styles.layerChipText,
-                        isOn
-                          ? styles.layerChipTextActive
-                          : styles.layerChipTextInactive,
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-        ) : null}
+          {/* Timeline view: show filter icon in a row below the segmented control */}
+          {viewMode === 'timeline' &&
+          !communityId &&
+          visibleFilterRows.length > 0 ? (
+            <View style={styles.timelineFilterRow}>
+              <Pressable
+                onPress={() => setIsFilterPanelOpen(true)}
+                hitSlop={8}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="סינון היומן"
+                style={styles.timelineFilterBtn}
+              >
+                <MaterialIcons name="tune" size={20} color="#647b87" />
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
 
         {/* Content */}
         {viewMode === 'timeline' ? (
@@ -3447,6 +3739,13 @@ export default function CalendarScreen(): React.JSX.Element {
           visible={eventEditMenu != null}
           x={eventEditMenu?.x ?? 0}
           y={eventEditMenu?.y ?? 0}
+        />
+        <CalendarFilterPanel
+          visible={isFilterPanelOpen}
+          onClose={() => setIsFilterPanelOpen(false)}
+          filters={layerFilters}
+          onToggle={toggleLayerFilter}
+          rows={visibleFilterRows}
         />
         <UpgradeModal
           visible={upgradeModalVisible}
@@ -5021,17 +5320,48 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   monthNavRow: {
+    width: '100%',
+    minHeight: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  monthNavCluster: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-    minHeight: 38,
-    width: '100%',
+    gap: 2,
+    // Horizontal padding prevents the cluster from reaching the filter icon area
+    paddingHorizontal: 50,
   },
-  monthChevronButton: {
+  monthNavFilterBtn: {
+    position: 'absolute',
+    right: 4,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  timelineFilterRow: {
+    // In RTL, flex-start = physical right — filter icon stays on the right side
+    alignItems: 'flex-start',
+    paddingHorizontal: 12,
+    paddingBottom: 4,
+    paddingTop: 2,
+  },
+  timelineFilterBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  monthChevronButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#f8fafc',
@@ -5142,55 +5472,6 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     overflow: 'hidden',
-  },
-
-  /* Layer filter chips (Phase 2A) */
-  layerChipsBar: {
-    height: 56,
-    flexGrow: 0,
-    flexShrink: 0,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  layerChipsScroll: {
-    width: '100%',
-    flexGrow: 0,
-    flexShrink: 0,
-  },
-  layerChipsContent: {
-    flexDirection: 'row',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    alignItems: 'center',
-    gap: 8,
-  },
-  layerChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    alignSelf: 'center',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  layerChipActive: {
-    backgroundColor: '#e8f4fd',
-    borderColor: PRIMARY_BLUE,
-  },
-  layerChipInactive: {
-    backgroundColor: '#f3f4f6',
-    borderColor: '#d1d5db',
-  },
-  layerChipText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  layerChipTextActive: {
-    color: PRIMARY_BLUE,
-  },
-  layerChipTextInactive: {
-    color: '#9ca3af',
   },
 
   /* Timeline */
