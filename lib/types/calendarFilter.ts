@@ -71,7 +71,7 @@ export const defaultCalendarFilterPreferences: CalendarFilterPreferences = {
   showTasks: true,
   showReminders: true,
   showHolidays: true,
-  showShabbatTimes: false,
+  showShabbatTimes: true,
 
   showPersonal: true,
   showFamily: true,

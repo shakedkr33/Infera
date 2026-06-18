@@ -264,6 +264,8 @@ const MOCK_TIMELINE_DATA = [
 type MockTimelineEvent = (typeof MOCK_TIMELINE_DATA)[number]['events'][number];
 type TimelineEventRow = MockTimelineEvent & {
   sourceType?: 'event' | 'linked';
+  /** Stable source identifier — set for community events and community tasks. */
+  communityId?: string;
   communityName?: string;
   endTime?: string;
   locationUrl?: string;
@@ -1319,6 +1321,22 @@ export default function CalendarScreen(): React.JSX.Element {
   const { isExpiredFree } = useEffectiveAccess();
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
 
+  // ── Layer filter chips state (Phase 2A) ─────────────────────────────────────
+  // All four layers are ON by default. State is local to this screen.
+  const [layerFilters, setLayerFilters] = useState({
+    showCommunity: true,
+    showTasks: true,
+    showHolidays: true,
+    showShabbatTimes: true,
+  });
+
+  const toggleLayerFilter = useCallback(
+    (key: keyof typeof layerFilters): void => {
+      setLayerFilters((prev) => ({ ...prev, [key]: !prev[key] }));
+    },
+    []
+  );
+
   function handleGatedCreateAction(action: () => void): void {
     if (isExpiredFree) {
       setUpgradeModalVisible(true);
@@ -1576,6 +1594,31 @@ export default function CalendarScreen(): React.JSX.Element {
     return map;
   }, [calendarPersonalTasks, displayYear, displayMonth]);
 
+  /** Task-dot count per day — respects both משימות and קהילות chips */
+  const filteredCalendarTasksByDay = useMemo(() => {
+    if (!layerFilters.showTasks) return {};
+    // All tasks visible: return pre-computed map
+    if (layerFilters.showCommunity) return calendarTasksByDay;
+    // Community tasks hidden: recount from source, skipping communityId tasks
+    const map: Record<number, number> = {};
+    for (const t of calendarPersonalTasks) {
+      if (t.dueDate == null || t.communityId) continue;
+      const d = new Date(t.dueDate);
+      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth)
+        continue;
+      const day = d.getDate();
+      map[day] = (map[day] ?? 0) + 1;
+    }
+    return map;
+  }, [
+    layerFilters.showTasks,
+    layerFilters.showCommunity,
+    calendarTasksByDay,
+    calendarPersonalTasks,
+    displayYear,
+    displayMonth,
+  ]);
+
   // FIXED: linked (shared) events for the displayed month — shown as dots alongside personal events
   const linkedEvents =
     useQuery(
@@ -1823,6 +1866,19 @@ export default function CalendarScreen(): React.JSX.Element {
     familyContacts?.selfEntityId,
   ]);
 
+  // === Filtered grid (Phase 2A layer chips) ===
+  // Structural shape is identical to `grid` — only events within each day are filtered.
+  // Community events are identified by `communityId` being set (non-nullish).
+  const filteredGrid = useMemo(() => {
+    if (layerFilters.showCommunity) return grid;
+    return grid.map((week) =>
+      week.map((day) => ({
+        ...day,
+        events: day.events.filter((ev) => !ev.communityId),
+      }))
+    );
+  }, [grid, layerFilters.showCommunity]);
+
   // === Dynamic panel heights ===
   const compactPanelHeight =
     PANEL_FIXED_HEIGHT +
@@ -1925,23 +1981,23 @@ export default function CalendarScreen(): React.JSX.Element {
 
   const visibleDayData = useMemo((): CalendarDay | null => {
     if (visibleDay == null) return null;
-    for (const week of grid) {
+    for (const week of filteredGrid) {
       for (const d of week) {
         if (d.day === visibleDay && d.isCurrentMonth) return d;
       }
     }
     return null;
-  }, [grid, visibleDay]);
+  }, [filteredGrid, visibleDay]);
 
   const sheetDayData = useMemo((): CalendarDay | null => {
     if (daySheetDay == null) return null;
-    for (const week of grid) {
+    for (const week of filteredGrid) {
       for (const d of week) {
         if (d.day === daySheetDay && d.isCurrentMonth) return d;
       }
     }
     return null;
-  }, [grid, daySheetDay]);
+  }, [filteredGrid, daySheetDay]);
 
   const daySheetLabel = useMemo((): string => {
     if (sheetDayData == null) return '';
@@ -1955,11 +2011,14 @@ export default function CalendarScreen(): React.JSX.Element {
   /** Tasks for the compact below-grid day panel */
   const visibleDayTasks = useMemo((): CalendarDayTask[] => {
     if (visibleDay == null) return [];
+    if (!layerFilters.showTasks) return [];
     const nowMs = Date.now();
     const currentUserId = currentUser?._id as string | undefined;
     return calendarPersonalTasks
       .filter((t) => {
         if (t.dueDate == null) return false;
+        // Hide community tasks when קהילות chip is OFF (stable: communityId set)
+        if (!layerFilters.showCommunity && t.communityId) return false;
         const d = new Date(t.dueDate);
         return (
           d.getFullYear() === displayYear &&
@@ -2001,16 +2060,21 @@ export default function CalendarScreen(): React.JSX.Element {
     displayMonth,
     currentUser,
     memberMaps,
+    layerFilters.showTasks,
+    layerFilters.showCommunity,
   ]);
 
   /** Tasks for the expanded day-sheet modal */
   const sheetDayTasks = useMemo((): CalendarDayTask[] => {
     if (daySheetDay == null) return [];
+    if (!layerFilters.showTasks) return [];
     const nowMs = Date.now();
     const currentUserId = currentUser?._id as string | undefined;
     return calendarPersonalTasks
       .filter((t) => {
         if (t.dueDate == null) return false;
+        // Hide community tasks when קהילות chip is OFF (stable: communityId set)
+        if (!layerFilters.showCommunity && t.communityId) return false;
         const d = new Date(t.dueDate);
         return (
           d.getFullYear() === displayYear &&
@@ -2052,6 +2116,8 @@ export default function CalendarScreen(): React.JSX.Element {
     displayMonth,
     currentUser,
     memberMaps,
+    layerFilters.showTasks,
+    layerFilters.showCommunity,
   ]);
 
   // Resets week-collapse state + guard — called from pan gesture and snap toggle.
@@ -2642,6 +2708,7 @@ export default function CalendarScreen(): React.JSX.Element {
           profileCircles: pc1.length > 0 ? pc1 : undefined,
           profileCirclesExtraCount: pc1Extra > 0 ? pc1Extra : undefined,
           profileCirclesContext: pc1Context,
+          communityId: event.communityId ? String(event.communityId) : undefined,
           pendingPersonalInvite: pendingPersonalInvite1,
           myPersonalRsvpStatus: myPersonalRsvpStatus1,
         });
@@ -2704,6 +2771,7 @@ export default function CalendarScreen(): React.JSX.Element {
           importantItems: rawImportantItems2?.length
             ? rawImportantItems2
             : undefined,
+          communityId: event.communityId ? String(event.communityId) : undefined,
           profileCircles: pc2.length > 0 ? pc2 : undefined,
           profileCirclesContext: 'alsoAddedToCalendar',
         });
@@ -2764,6 +2832,7 @@ export default function CalendarScreen(): React.JSX.Element {
           icon: 'check-box-outline-blank',
           cancelled: false,
           isPersonalTask: true,
+          communityId: t.communityId ? String(t.communityId) : undefined,
           isOverdue: calcTaskOverdue(t.dueDate, t.dueAt, t.hasTime, nowMs),
           subtasks: (t.subtasks ?? []).map((s) => ({
             id: s.id,
@@ -2901,6 +2970,35 @@ export default function CalendarScreen(): React.JSX.Element {
     myRsvpByEventId,
     familyContacts?.selfEntityId,
   ]);
+
+  // === Filtered timeline data (Phase 2A layer chips) ===
+  // Applied after `timelineData` is built; does not mutate DB data.
+  //
+  // Identity rules (stable properties only — no display text):
+  //   community item  → ev.communityId is truthy
+  //   task item       → ev.isPersonalTask === true
+  //   community task  → both are true (caught by either chip being OFF)
+  const filteredTimelineData = useMemo(() => {
+    const { showCommunity, showTasks } = layerFilters;
+    if (showCommunity && showTasks) return timelineData;
+    return (
+      timelineData
+        .map((group) => ({
+          ...group,
+          events: group.events.filter((ev) => {
+            // Community source: communityId is set for community events and for
+            // personal events saved from a community (isSavedCommunityInSpace).
+            if (!showCommunity && Boolean(ev.communityId)) return false;
+            // Task items: covers personal tasks and community tasks.
+            // Community tasks are also caught by the rule above when both chips are OFF.
+            if (!showTasks && ev.isPersonalTask) return false;
+            return true;
+          }),
+        }))
+        // Keep empty today group so the auto-scroll anchor is preserved.
+        .filter((group) => group.events.length > 0 || group.isToday)
+    );
+  }, [timelineData, layerFilters]);
 
   useEffect(() => {
     if (viewMode !== 'timeline') return;
@@ -3073,6 +3171,58 @@ export default function CalendarScreen(): React.JSX.Element {
           ) : null}
         </View>
 
+        {/* Layer filter chips (Phase 2A) — hidden when community-filter banner is active */}
+        {!communityId ? (
+          <View style={styles.layerChipsBar}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.layerChipsScroll}
+              contentContainerStyle={styles.layerChipsContent}
+            >
+              {(
+                [
+                  { key: 'showCommunity', label: 'קהילות' },
+                  { key: 'showTasks', label: 'משימות' },
+                  { key: 'showHolidays', label: 'חגים ומועדים' },
+                  { key: 'showShabbatTimes', label: 'זמני שבת וחג' },
+                ] as {
+                  key: keyof typeof layerFilters;
+                  label: string;
+                }[]
+              ).map(({ key, label }) => {
+                const isOn = layerFilters[key];
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => toggleLayerFilter(key)}
+                    style={[
+                      styles.layerChip,
+                      isOn ? styles.layerChipActive : styles.layerChipInactive,
+                    ]}
+                    accessible
+                    accessibilityRole="button"
+                    accessibilityLabel={label}
+                    accessibilityState={{ selected: isOn }}
+                    hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                  >
+                    <Text
+                      style={[
+                        styles.layerChipText,
+                        isOn
+                          ? styles.layerChipTextActive
+                          : styles.layerChipTextInactive,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        ) : null}
+
         {/* Content */}
         {viewMode === 'timeline' ? (
           <ScrollView
@@ -3081,7 +3231,7 @@ export default function CalendarScreen(): React.JSX.Element {
             showsVerticalScrollIndicator={false}
           >
             <TimelineView
-              data={timelineData}
+              data={filteredTimelineData}
               onTodayLayout={(y) => {
                 if (didAutoScrollTimelineRef.current) return;
                 didAutoScrollTimelineRef.current = true;
@@ -3139,10 +3289,10 @@ export default function CalendarScreen(): React.JSX.Element {
                         displayMonth={displayMonth}
                         displayYear={displayYear}
                         expandedWeekBaseHeight={expandedWeekBaseHeight}
-                        grid={grid}
+                        grid={filteredGrid}
                         selectedDay={selectedDay}
                         isExpanded={isExpanded}
-                        tasksByDay={calendarTasksByDay}
+                        tasksByDay={filteredCalendarTasksByDay}
                         onCreateEventForDay={handleExpandedCreateForDay}
                         onNavigateToEvent={handleExpandedEventNavigate}
                         onOpenDaySheet={openDayEventsSheet}
@@ -3160,12 +3310,14 @@ export default function CalendarScreen(): React.JSX.Element {
                       expandedWeekBaseHeight={undefined}
                       grid={
                         isWeekCollapsed && selectedWeekIndex >= 0
-                          ? ([grid[selectedWeekIndex]] as typeof grid)
-                          : grid
+                          ? ([
+                              filteredGrid[selectedWeekIndex],
+                            ] as typeof filteredGrid)
+                          : filteredGrid
                       }
                       selectedDay={selectedDay}
                       isExpanded={isExpanded}
-                      tasksByDay={calendarTasksByDay}
+                      tasksByDay={filteredCalendarTasksByDay}
                       onCreateEventForDay={handleExpandedCreateForDay}
                       onNavigateToEvent={handleExpandedEventNavigate}
                       onOpenDaySheet={openDayEventsSheet}
@@ -4990,6 +5142,55 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     overflow: 'hidden',
+  },
+
+  /* Layer filter chips (Phase 2A) */
+  layerChipsBar: {
+    height: 56,
+    flexGrow: 0,
+    flexShrink: 0,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  layerChipsScroll: {
+    width: '100%',
+    flexGrow: 0,
+    flexShrink: 0,
+  },
+  layerChipsContent: {
+    flexDirection: 'row',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    alignItems: 'center',
+    gap: 8,
+  },
+  layerChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  layerChipActive: {
+    backgroundColor: '#e8f4fd',
+    borderColor: PRIMARY_BLUE,
+  },
+  layerChipInactive: {
+    backgroundColor: '#f3f4f6',
+    borderColor: '#d1d5db',
+  },
+  layerChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  layerChipTextActive: {
+    color: PRIMARY_BLUE,
+  },
+  layerChipTextInactive: {
+    color: '#9ca3af',
   },
 
   /* Timeline */
