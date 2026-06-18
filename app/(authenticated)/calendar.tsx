@@ -1589,8 +1589,17 @@ export default function CalendarScreen(): React.JSX.Element {
   );
   const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
 
+  /**
+   * Guards against the hydration race condition:
+   * if the user toggles any filter before loadCalendarLayerFilters() resolves,
+   * this ref is set to true and the late-arriving stored value is discarded.
+   * The user's choice (already persisted by toggleLayerFilter) always wins.
+   */
+  const hasUserChangedFiltersRef = useRef(false);
+
   const toggleLayerFilter = useCallback(
     (key: keyof CalendarLayerFilters): void => {
+      hasUserChangedFiltersRef.current = true;
       setLayerFilters((prev) => {
         const next = { ...prev, [key]: !prev[key] };
         // Persist immediately; fire-and-forget
@@ -1602,11 +1611,13 @@ export default function CalendarScreen(): React.JSX.Element {
   );
 
   // Hydrate persisted filter preferences once on mount.
-  // Uses functional updater so it never overwrites a preference the user
-  // changed during the async gap.
+  // The ref guard ensures that if the user toggles a filter before the async
+  // read resolves, the late-arriving stored result does not overwrite their choice.
   useEffect(() => {
     loadCalendarLayerFilters().then((stored) => {
-      setLayerFilters(stored);
+      if (!hasUserChangedFiltersRef.current) {
+        setLayerFilters(stored);
+      }
     });
   }, []);
 
