@@ -250,11 +250,6 @@ export default function ProfileScreen() {
             label="ייבוא מיומן חיצוני"
             onPress={() => router.push('/(authenticated)/import-calendar')}
           />
-          <SettingsRow
-            iconName="event"
-            label="ייבוא חגים ישראליים"
-            onPress={() => router.push('/(authenticated)/import-holidays')}
-          />
           {/* Notifications */}
           <SettingsRow
             iconName="notifications-none"
@@ -266,6 +261,12 @@ export default function ProfileScreen() {
             iconName="delete-outline"
             label="נמחקו לאחרונה"
             onPress={() => router.push('/(authenticated)/recently-deleted')}
+          />
+          <SettingsRow
+            iconName="event"
+            label="חגים ומועדים"
+            note="בחירת חגים וימים מיוחדים להצגה ביומן"
+            onPress={() => router.push('/(authenticated)/holiday-overlay-settings')}
           />
           {/* Danger zone */}
           <SettingsRow

@@ -566,6 +566,8 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="subscription" options={{ href: null }} />
           {/* Recently Deleted — accessible from Profile/Settings only, not a tab */}
           <Tabs.Screen name="recently-deleted" options={{ href: null }} />
+          {/* Holiday overlay settings — accessible via deep-link only, not a tab */}
+          <Tabs.Screen name="holiday-overlay-settings" options={{ href: null }} />
         </Tabs>
 
         <ActionSheetModal
