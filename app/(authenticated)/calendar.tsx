@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from 'convex/react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Minus, Plus } from 'lucide-react-native';
 import {
   Fragment,
@@ -61,6 +61,12 @@ import {
   loadCalendarLayerFilters,
   saveCalendarLayerFilters,
 } from '@/lib/storage/calendarLayerFilterPreferences';
+import {
+  type HolidayOverlayPreferences,
+  loadHolidayOverlayPreferences,
+} from '@/lib/storage/holidayOverlayPreferences';
+import type { HolidayOverlayItem } from '@/lib/types/holidayOverlay';
+import { useHolidayOverlay } from '@/lib/hooks/useHolidayOverlay';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 import {
   getHebrewDateInfo,
@@ -1081,6 +1087,34 @@ const sheetStyles = StyleSheet.create({
     paddingVertical: 20,
     paddingHorizontal: 4,
   },
+  /* Holiday row in the expanded-day sheet — read-only, warm amber */
+  sheetHolidayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#fffbeb',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#fde68a',
+  },
+  sheetHolidayDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#f59e0b',
+    flexShrink: 0,
+  },
+  sheetHolidayTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#92400e',
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
   sheetRow: {
     backgroundColor: '#f9fafb',
     borderRadius: 12,
@@ -1411,6 +1445,7 @@ interface CalendarDayEventsSheetProps {
   birthday?: BirthdayInfo;
   events: CalendarEvent[];
   tasks?: CalendarDayTask[];
+  holidays?: HolidayOverlayItem[];
   onEventNavigate: (event: CalendarEvent) => void;
   onEventLongPress: (
     event: CalendarEvent,
@@ -1426,6 +1461,7 @@ function CalendarDayEventsSheet({
   birthday,
   events,
   tasks = [],
+  holidays = [],
   onEventNavigate,
   onEventLongPress,
   onOpenTaskSheet,
@@ -1471,9 +1507,22 @@ function CalendarDayEventsSheet({
             contentContainerStyle={sheetStyles.sheetScrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {events.length === 0 && tasks.length === 0 ? (
+            {events.length === 0 && tasks.length === 0 && holidays.length === 0 ? (
               <Text style={sheetStyles.sheetEmpty}>אין אירועים ביום הזה</Text>
             ) : null}
+
+            {/* Holiday rows — read-only, above events */}
+            {holidays.map((holiday) => (
+              <View
+                key={holiday.id}
+                accessible={false}
+                importantForAccessibility="no"
+                style={sheetStyles.sheetHolidayRow}
+              >
+                <View style={sheetStyles.sheetHolidayDot} />
+                <Text style={sheetStyles.sheetHolidayTitle}>{holiday.title}</Text>
+              </View>
+            ))}
 
             {events.map((ev) => {
               const kind = ev.eventVisualKind ?? 'personal';
@@ -1620,6 +1669,41 @@ export default function CalendarScreen(): React.JSX.Element {
       }
     });
   }, []);
+
+  // ── Holiday overlay preferences ────────────────────────────────────────────
+  // Loaded from AsyncStorage via loadHolidayOverlayPreferences().
+  // Never written from this screen — holiday settings screen owns that.
+  const [holidayPreferences, setHolidayPreferences] =
+    useState<HolidayOverlayPreferences>({ enabledCategories: [] });
+
+  // Load once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    loadHolidayOverlayPreferences().then((prefs) => {
+      if (!cancelled) setHolidayPreferences(prefs);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Refresh when the screen regains focus so changes made in
+  // "חגים ומועדים" settings are immediately reflected here.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      loadHolidayOverlayPreferences().then((prefs) => {
+        if (!cancelled) setHolidayPreferences(prefs);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [])
+  );
+
+  // True when the user has at least one holiday category enabled.
+  const anyHolidayCategoryEnabled =
+    holidayPreferences.enabledCategories.length > 0;
 
   function handleGatedCreateAction(action: () => void): void {
     if (isExpiredFree) {
@@ -1924,7 +2008,7 @@ export default function CalendarScreen(): React.JSX.Element {
   /**
    * Currently available filter rows for the filter panel.
    *
-   * חגים ומועדים — hidden until a holiday settings flow is implemented.
+   * חגים ומועדים — shown only when the user has at least one holiday category enabled.
    * זמני שבת וחג  — hidden until Shabbat time + city selection is implemented.
    * The filter state keys for those layers remain intact for future use.
    *
@@ -1940,14 +2024,16 @@ export default function CalendarScreen(): React.JSX.Element {
           hasDateBasedTasks
             ? ({ key: 'showTasks', label: 'משימות' } as const)
             : null,
-          // { key: 'showHolidays', label: 'חגים ומועדים' }  — future: enable via holiday settings
+          anyHolidayCategoryEnabled
+            ? ({ key: 'showHolidays', label: 'חגים ומועדים' } as const)
+            : null,
           // { key: 'showShabbatTimes', label: 'זמני שבת וחג' } — future: enable via Shabbat city selection
         ] as ({ key: keyof CalendarLayerFilters; label: string } | null)[]
       ).filter(
         (row): row is { key: keyof CalendarLayerFilters; label: string } =>
           row !== null
       ),
-    [hasCommunityContent, hasDateBasedTasks]
+    [hasCommunityContent, hasDateBasedTasks, anyHolidayCategoryEnabled]
   );
 
   // FIXED: linked (shared) events for the displayed month — shown as dots alongside personal events
@@ -2210,6 +2296,87 @@ export default function CalendarScreen(): React.JSX.Element {
     );
   }, [grid, layerFilters.showCommunity]);
 
+  // === Holiday overlay (Phase 2B Step 4A) ===
+  // Compute the inclusive date range that exactly covers the visible monthly grid,
+  // including leading days from the previous month and trailing days from the next.
+  const holidayGridRange = useMemo(() => {
+    const firstDayOffset = getFirstDayOfMonth(displayYear, displayMonth);
+    // Grid start = first cell (may be in prev month when firstDayOffset > 0).
+    // new Date(year, month, day) is local — no timezone shift.
+    const startD = new Date(displayYear, displayMonth, 1 - firstDayOffset);
+
+    // Total visible cells: 5 or 6 rows × 7 days, matching generateCalendarGrid logic.
+    const daysInMonth = getDaysInMonth(displayYear, displayMonth);
+    const rawCount = firstDayOffset + daysInMonth;
+    const totalCells = rawCount <= 35 ? 35 : 42;
+    // Trim 6th row if all its days would be from next month (mirrors generateCalendarGrid).
+    // We use grid.length if available — it already has this trimming applied.
+    const visibleCells = grid.length > 0 ? grid.length * 7 : totalCells;
+
+    const endD = new Date(
+      startD.getFullYear(),
+      startD.getMonth(),
+      startD.getDate() + visibleCells - 1,
+    );
+
+    const fmt = (d: Date): string => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    return { startDate: fmt(startD), endDate: fmt(endD) };
+  }, [displayYear, displayMonth, grid.length]);
+
+  // Call useHolidayOverlay unconditionally; pass empty categories when holidays
+  // are not enabled or are hidden via the master filter, so the hook does no work.
+  const { items: holidayItems } = useHolidayOverlay({
+    startDate: holidayGridRange.startDate,
+    endDate: holidayGridRange.endDate,
+    enabledCategories:
+      anyHolidayCategoryEnabled && layerFilters.showHolidays
+        ? holidayPreferences.enabledCategories
+        : [],
+  });
+
+  // Build a per-date map of HolidayOverlayItem[].
+  // Multi-day items appear on every local date from startDate through endDateInclusive.
+  // No timezone shifts: dates are parsed as numeric year/month/day → local Date.
+  // Duplicates by item.id on the same date are prevented.
+  const holidaysByDay = useMemo((): Record<string, HolidayOverlayItem[]> => {
+    const result: Record<string, HolidayOverlayItem[]> = {};
+
+    for (const item of holidayItems) {
+      const endStr = item.endDateInclusive ?? item.startDate;
+
+      // Parse YYYY-MM-DD as local date — never use new Date("YYYY-MM-DD") or toISOString().
+      const [sy, sm, sd] = item.startDate.split('-').map(Number);
+      const [ey, em, ed] = endStr.split('-').map(Number);
+      const startD = new Date(sy, sm - 1, sd);
+      const endD = new Date(ey, em - 1, ed);
+
+      let cur = new Date(startD);
+      while (cur <= endD) {
+        const curY = cur.getFullYear();
+        const curM = String(cur.getMonth() + 1).padStart(2, '0');
+        const curDay = String(cur.getDate()).padStart(2, '0');
+        const key = `${curY}-${curM}-${curDay}`;
+
+        if (!result[key]) result[key] = [];
+        // Prevent duplicates by stable item id.
+        if (!result[key].some((h) => h.id === item.id)) {
+          result[key].push(item);
+        }
+
+        // Advance by one local day without timezone shifts.
+        cur = new Date(curY, cur.getMonth(), cur.getDate() + 1);
+      }
+    }
+
+    return result;
+  }, [holidayItems]);
+
   // === Dynamic panel heights ===
   const compactPanelHeight =
     PANEL_FIXED_HEIGHT +
@@ -2450,6 +2617,41 @@ export default function CalendarScreen(): React.JSX.Element {
     layerFilters.showTasks,
     layerFilters.showCommunity,
   ]);
+
+  /**
+   * Raw task IDs per day-of-month for the current display month.
+   * Used by expanded DayCells to directly open a single task without going
+   * through the day-sheet when it is the only visible item on that day.
+   * Respects the same filter flags as filteredCalendarTasksByDay.
+   */
+  const filteredTaskIdsByDay = useMemo((): Record<number, string[]> => {
+    if (!layerFilters.showTasks) return {};
+    const map: Record<number, string[]> = {};
+    for (const t of calendarPersonalTasks) {
+      if (t.dueDate == null) continue;
+      if (!layerFilters.showCommunity && t.communityId) continue;
+      const d = new Date(t.dueDate);
+      if (d.getFullYear() !== displayYear || d.getMonth() !== displayMonth)
+        continue;
+      const day = d.getDate();
+      if (!map[day]) map[day] = [];
+      map[day].push(`task:${t._id}`);
+    }
+    return map;
+  }, [
+    calendarPersonalTasks,
+    displayYear,
+    displayMonth,
+    layerFilters.showTasks,
+    layerFilters.showCommunity,
+  ]);
+
+  /** Holidays for the expanded day-sheet modal — pre-computed to reuse in visible condition. */
+  const sheetDayHolidays = useMemo((): HolidayOverlayItem[] => {
+    if (daySheetDay == null) return [];
+    const key = `${displayYear}-${String(displayMonth + 1).padStart(2, '0')}-${String(daySheetDay).padStart(2, '0')}`;
+    return holidaysByDay[key] ?? [];
+  }, [daySheetDay, displayYear, displayMonth, holidaysByDay]);
 
   // Resets week-collapse state + guard — called from pan gesture and snap toggle.
   const resetWeekCollapse = useCallback((): void => {
@@ -2749,6 +2951,17 @@ export default function CalendarScreen(): React.JSX.Element {
   const closeDayEventsSheet = useCallback(() => {
     setEventEditMenu(null);
     setDaySheetDay(null);
+  }, []);
+
+  /**
+   * Opens a task's detail sheet directly from an expanded day-cell (single-task day
+   * with no other visible items).  The task ID comes prefixed with "task:" — strip it
+   * before passing to the sheet state.
+   */
+  const handleOpenTaskSheetFromCell = useCallback((id: string) => {
+    const rawId = id.replace(/^task:/, '');
+    setTaskSheetTaskId(rawId);
+    setTaskSheetVisible(true);
   }, []);
 
   const handleExpandedEventNavigate = useCallback(
@@ -3596,9 +3809,12 @@ export default function CalendarScreen(): React.JSX.Element {
                         selectedDay={selectedDay}
                         isExpanded={isExpanded}
                         tasksByDay={filteredCalendarTasksByDay}
+                        taskIdsByDay={filteredTaskIdsByDay}
+                        holidaysByDay={holidaysByDay}
                         onCreateEventForDay={handleExpandedCreateForDay}
                         onNavigateToEvent={handleExpandedEventNavigate}
                         onOpenDaySheet={openDayEventsSheet}
+                        onOpenTaskSheetFromCell={handleOpenTaskSheetFromCell}
                         onSelectDay={setSelectedDay}
                       />
                     </View>
@@ -3621,9 +3837,12 @@ export default function CalendarScreen(): React.JSX.Element {
                       selectedDay={selectedDay}
                       isExpanded={isExpanded}
                       tasksByDay={filteredCalendarTasksByDay}
+                      taskIdsByDay={filteredTaskIdsByDay}
+                      holidaysByDay={holidaysByDay}
                       onCreateEventForDay={handleExpandedCreateForDay}
                       onNavigateToEvent={handleExpandedEventNavigate}
                       onOpenDaySheet={openDayEventsSheet}
+                      onOpenTaskSheetFromCell={handleOpenTaskSheetFromCell}
                       onSelectDay={setSelectedDay}
                     />
                   </View>
@@ -3676,6 +3895,10 @@ export default function CalendarScreen(): React.JSX.Element {
                       month={displayMonth}
                       anim={listAnim}
                       tasks={visibleDayTasks}
+                      holidays={(() => {
+                        const key = `${displayYear}-${String(displayMonth + 1).padStart(2, '0')}-${String(visibleDay).padStart(2, '0')}`;
+                        return holidaysByDay[key] ?? [];
+                      })()}
                       onEventPress={handleOpenEventDetails}
                       onClose={() => setSelectedDay(null)}
                       onOpenTaskSheet={(id) => {
@@ -3724,6 +3947,7 @@ export default function CalendarScreen(): React.JSX.Element {
           dayLabel={daySheetLabel}
           events={sheetDayData?.events ?? []}
           tasks={sheetDayTasks}
+          holidays={sheetDayHolidays}
           onClose={closeDayEventsSheet}
           onEventLongPress={handleExpandedEventLongPress}
           onEventNavigate={handleExpandedEventNavigate}
@@ -3734,7 +3958,9 @@ export default function CalendarScreen(): React.JSX.Element {
           }}
           visible={
             daySheetDay !== null &&
-            (sheetDayData != null || sheetDayTasks.length > 0)
+            (sheetDayData != null ||
+              sheetDayTasks.length > 0 ||
+              sheetDayHolidays.length > 0)
           }
         />
         <MonthYearPickerModal
@@ -3778,10 +4004,19 @@ interface MonthlyGridProps {
   isExpanded: boolean;
   /** Count of personal tasks per day-of-month for lightweight indicator */
   tasksByDay: Record<number, number>;
+  /**
+   * Raw task IDs per day-of-month.  Used in expanded mode to directly open a
+   * single task when it is the only visible item on that day.
+   */
+  taskIdsByDay?: Record<number, string[]>;
+  /** Holiday overlay items keyed by YYYY-MM-DD date string */
+  holidaysByDay: Record<string, HolidayOverlayItem[]>;
   onSelectDay: (day: number | null) => void;
   onOpenDaySheet: (day: number) => void;
   onNavigateToEvent: (event: CalendarEvent) => void;
   onCreateEventForDay: (cellDate: Date) => void;
+  /** Opens a task's detail sheet directly from an expanded single-task day cell. */
+  onOpenTaskSheetFromCell?: (id: string) => void;
 }
 
 function hebrewPrefix(
@@ -3834,11 +4069,18 @@ function MonthlyGrid({
   selectedDay,
   isExpanded,
   tasksByDay,
+  taskIdsByDay,
+  holidaysByDay,
   onSelectDay,
   onOpenDaySheet,
   onNavigateToEvent,
   onCreateEventForDay,
+  onOpenTaskSheetFromCell,
 }: MonthlyGridProps): React.JSX.Element {
+  // Grid starts at (1 - firstDayOffset) of the displayed month — used to map
+  // each cell's position to its absolute YYYY-MM-DD date for holiday lookup.
+  const gridFirstDayOffset = getFirstDayOfMonth(displayYear, displayMonth);
+
   return (
     <View
       style={[
@@ -3869,7 +4111,7 @@ function MonthlyGrid({
       </View>
 
       {/* Calendar Rows */}
-      {grid.map((week) => {
+      {grid.map((week, wi) => {
         const weekKey = week
           .map((d) => `${d.isCurrentMonth ? 'c' : 'o'}${d.day}`)
           .join('-');
@@ -3886,33 +4128,61 @@ function MonthlyGrid({
               { flexDirection: rtl.flexDirection },
             ]}
           >
-            {week.map((dayData) => (
-              <DayCell
-                key={`${dayData.isCurrentMonth ? 'c' : 'o'}-${dayData.day}`}
-                dayData={dayData}
-                displayMonth={displayMonth}
-                displayYear={displayYear}
-                isSelected={
-                  selectedDay === dayData.day && dayData.isCurrentMonth
-                }
-                isExpanded={isExpanded}
-                weekHeight={weekHeight}
-                taskCount={
-                  dayData.isCurrentMonth ? (tasksByDay[dayData.day] ?? 0) : 0
-                }
-                onCompactPress={() => {
-                  if (dayData.isCurrentMonth) {
+            {week.map((dayData, di) => {
+              // Compute the absolute date of this cell to look up holidays.
+              // Offset from grid start (which may be in the previous month).
+              const cellIndex = wi * 7 + di;
+              const cellD = new Date(
+                displayYear,
+                displayMonth,
+                1 - gridFirstDayOffset + cellIndex,
+              );
+              const cellDateKey = `${cellD.getFullYear()}-${String(cellD.getMonth() + 1).padStart(2, '0')}-${String(cellD.getDate()).padStart(2, '0')}`;
+              const dayHolidays = holidaysByDay[cellDateKey] ?? [];
+
+              return (
+                <DayCell
+                  key={`${dayData.isCurrentMonth ? 'c' : 'o'}-${dayData.day}`}
+                  dayData={dayData}
+                  displayMonth={displayMonth}
+                  displayYear={displayYear}
+                  isSelected={
+                    selectedDay === dayData.day && dayData.isCurrentMonth
+                  }
+                  isExpanded={isExpanded}
+                  weekHeight={weekHeight}
+                  taskCount={
+                    dayData.isCurrentMonth ? (tasksByDay[dayData.day] ?? 0) : 0
+                  }
+                  tasksForDay={
+                    dayData.isCurrentMonth
+                      ? (taskIdsByDay?.[dayData.day] ?? [])
+                      : []
+                  }
+                  dayHolidays={dayHolidays}
+                  onCompactPress={() => {
+                    if (!dayData.isCurrentMonth) return;
+                    // In compact mode: open day-sheet when 2+ visible items,
+                    // otherwise fall back to ordinary day selection.
+                    const tCount = tasksByDay[dayData.day] ?? 0;
+                    const totalVisible =
+                      dayData.events.length + tCount + dayHolidays.length;
+                    if (totalVisible > 1) {
+                      onOpenDaySheet(dayData.day);
+                      return;
+                    }
                     onSelectDay(
                       selectedDay === dayData.day ? null : dayData.day
                     );
-                  }
-                }}
-                onCreateEventForDay={onCreateEventForDay}
-                onNavigateToEvent={onNavigateToEvent}
-                onOpenDaySheet={onOpenDaySheet}
-                onSelectDay={onSelectDay}
-              />
-            ))}
+                  }}
+                  onCreateEventForDay={onCreateEventForDay}
+                  onNavigateToEvent={onNavigateToEvent}
+                  onOpenDaySheet={onOpenDaySheet}
+                  onOpenTaskSheetFromCell={onOpenTaskSheetFromCell}
+                  onSelectDay={onSelectDay}
+                />
+              );
+            })}
           </View>
         );
       })}
@@ -3930,11 +4200,21 @@ interface DayCellProps {
   weekHeight?: number;
   /** Number of personal tasks due on this day (0 if none or out of month) */
   taskCount: number;
+  /**
+   * Raw task IDs for this day (same filter rules as taskCount).
+   * Used in expanded mode to directly navigate to a single task's details
+   * when it is the sole visible item on that day.
+   */
+  tasksForDay?: string[];
+  /** Holiday overlay items for this specific day (empty when showHolidays is off) */
+  dayHolidays: HolidayOverlayItem[];
   onCompactPress: () => void;
   onSelectDay: (day: number | null) => void;
   onOpenDaySheet: (day: number) => void;
   onNavigateToEvent: (event: CalendarEvent) => void;
   onCreateEventForDay: (cellDate: Date) => void;
+  /** Opens a task's detail sheet directly (single-task day, no other content). */
+  onOpenTaskSheetFromCell?: (id: string) => void;
 }
 
 function DayCell({
@@ -3945,16 +4225,34 @@ function DayCell({
   isExpanded,
   weekHeight,
   taskCount,
+  tasksForDay = [],
+  dayHolidays,
   onCompactPress,
   onSelectDay,
   onOpenDaySheet,
   onNavigateToEvent,
   onCreateEventForDay,
+  onOpenTaskSheetFromCell,
 }: DayCellProps): React.JSX.Element {
   const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
   const hasEventsForDay = dayData.isCurrentMonth && dayData.events.length > 0;
   const isSingleEventDay = dayData.events.length === 1;
-  const hasMultipleEvents = dayData.events.length > 1;
+
+  /**
+   * Total number of visible calendar items for this day.
+   * Holidays, events, and tasks all count.  Hidden layers already produce empty
+   * arrays / zero counts, so no extra filtering is needed here.
+   */
+  const totalVisibleItems =
+    dayData.events.length + taskCount + dayHolidays.length;
+
+  /**
+   * True when the day contains a mix of item types (or multiple items of the
+   * same type).  Tapping any item or the background while this is true must
+   * open the central day-overview sheet so the user sees everything at once.
+   */
+  const hasMixedContent = totalVisibleItems > 1;
+
   const cellDate = useMemo(
     () => new Date(displayYear, displayMonth, dayData.day, 0, 0, 0, 0),
     [displayYear, displayMonth, dayData.day]
@@ -3985,9 +4283,14 @@ function DayCell({
     onSelectDay(dayData.day);
   };
 
-  const openMultiEventDay = (): void => {
-    if (!hasMultipleEvents) return;
-    openSheetForThisDay();
+  /** Opens the day-sheet when there are 2+ visible items; selects the day otherwise. */
+  const handleDayAreaPress = (): void => {
+    if (!dayData.isCurrentMonth) return;
+    if (hasMixedContent) {
+      openSheetForThisDay();
+      return;
+    }
+    selectThisDay();
   };
 
   // ── Compact (collapsed month) ──
@@ -4055,6 +4358,20 @@ function DayCell({
             style={mStyles.taskIndicatorDot}
           />
         )}
+
+        {dayHolidays.length > 0 && (
+          <View
+            accessibilityElementsHidden={true}
+            importantForAccessibility="no"
+            pointerEvents="none"
+            style={mStyles.compactHolidayLabel}
+          >
+            <Text numberOfLines={1} style={mStyles.compactHolidayText}>
+              {hebrewPrefix(dayHolidays[0].title, 28)}
+              {dayHolidays.length > 1 ? ` +${dayHolidays.length - 1}` : ''}
+            </Text>
+          </View>
+        )}
       </Pressable>
     );
   }
@@ -4069,14 +4386,7 @@ function DayCell({
       delayLongPress={420}
       disabled={!dayData.isCurrentMonth}
       onLongPress={longPressCreate}
-      onPress={() => {
-        if (!dayData.isCurrentMonth) return;
-        if (hasMultipleEvents) {
-          openMultiEventDay();
-          return;
-        }
-        selectThisDay();
-      }}
+      onPress={handleDayAreaPress}
       style={[
         mStyles.dayCell,
         mStyles.dayCellExpanded,
@@ -4092,17 +4402,8 @@ function DayCell({
         delayLongPress={420}
         disabled={!dayData.isCurrentMonth}
         hitSlop={2}
-        onLongPress={() => {
-          longPressCreate();
-        }}
-        onPress={() => {
-          if (!dayData.isCurrentMonth) return;
-          if (hasMultipleEvents) {
-            openMultiEventDay();
-            return;
-          }
-          selectThisDay();
-        }}
+        onLongPress={longPressCreate}
+        onPress={handleDayAreaPress}
         style={mStyles.dayNumRowExpanded}
       >
         <View
@@ -4127,6 +4428,27 @@ function DayCell({
 
       {dayData.isCurrentMonth && (
         <View style={mStyles.expandedEvents}>
+          {/*
+           * Holiday rows — shown before personal events, read-only in the
+           * day-sheet.  Tapping them always opens the day-sheet so the full
+           * title is visible (even when the holiday is the sole item).
+           */}
+          {dayHolidays.map((holiday) => (
+            <Pressable
+              key={holiday.id}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={holiday.title}
+              accessibilityHint="פתח תצוגת יום"
+              onPress={openSheetForThisDay}
+              style={mStyles.expandedHolidayRow}
+            >
+              <Text numberOfLines={1} style={mStyles.expandedHolidayText}>
+                {hebrewPrefix(holiday.title, 36)}
+              </Text>
+            </Pressable>
+          ))}
+
           {dayData.birthday != null && (
             <Pressable
               accessibilityLabel={`יום הולדת ${dayData.birthday.name}`}
@@ -4164,7 +4486,7 @@ function DayCell({
                 delayLongPress={420}
                 onLongPress={longPressCreate}
                 onPress={() => {
-                  if (hasMultipleEvents) {
+                  if (hasMixedContent) {
                     openSheetForThisDay();
                     return;
                   }
@@ -4212,15 +4534,31 @@ function DayCell({
           })}
 
           {taskCount > 0 && (
-            <View
-              accessibilityElementsHidden={true}
-              importantForAccessibility="no"
+            <Pressable
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={
+                taskCount === 1 ? '✓ משימה' : `✓ ${taskCount} משימות`
+              }
+              onPress={() => {
+                if (hasMixedContent) {
+                  openSheetForThisDay();
+                  return;
+                }
+                // Single task, no other visible items — go directly to task details.
+                if (tasksForDay.length === 1 && onOpenTaskSheetFromCell) {
+                  onOpenTaskSheetFromCell(tasksForDay[0]);
+                  return;
+                }
+                // Fallback: open the day-sheet (shows CalendarTaskCard with tap-through).
+                openSheetForThisDay();
+              }}
               style={mStyles.expandedTaskRow}
             >
               <Text style={mStyles.expandedTaskText}>
                 {taskCount === 1 ? '✓ משימה' : `✓ ${taskCount} משימות`}
               </Text>
-            </View>
+            </Pressable>
           )}
 
           <Pressable
@@ -4231,13 +4569,7 @@ function DayCell({
             delayLongPress={420}
             style={mStyles.expandedDayFiller}
             onLongPress={longPressCreate}
-            onPress={() => {
-              if (hasMultipleEvents) {
-                openMultiEventDay();
-                return;
-              }
-              selectThisDay();
-            }}
+            onPress={handleDayAreaPress}
           />
         </View>
       )}
@@ -4421,6 +4753,7 @@ interface DayEventsListProps {
   month: number;
   anim: Animated.Value;
   tasks?: CalendarDayTask[];
+  holidays?: HolidayOverlayItem[];
   onEventPress: (event: CalendarEvent) => void;
   onClose: () => void;
   onOpenTaskSheet: (id: string) => void;
@@ -4432,6 +4765,7 @@ function DayEventsList({
   month,
   anim,
   tasks = [],
+  holidays = [],
   onEventPress,
   onClose,
   onOpenTaskSheet,
@@ -4465,7 +4799,7 @@ function DayEventsList({
   );
 
   const hasContent =
-    dayData.events.length > 0 || dayData.birthday != null || tasks.length > 0;
+    dayData.events.length > 0 || dayData.birthday != null || tasks.length > 0 || holidays.length > 0;
 
   return (
     <Animated.View
@@ -4588,6 +4922,19 @@ function DayEventsList({
           </>
         )}
       </View>
+
+      {/* Holiday Rows — shown before personal events; read-only, no press action */}
+      {holidays.map((holiday) => (
+        <View
+          key={holiday.id}
+          accessible={false}
+          importantForAccessibility="no"
+          style={dStyles.holidayRow}
+        >
+          <View style={dStyles.holidayDot} />
+          <Text style={dStyles.holidayTitle}>{holiday.title}</Text>
+        </View>
+      ))}
 
       {/* Birthday Card */}
       {dayData.birthday != null && (
@@ -6096,6 +6443,36 @@ const mStyles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'right',
   },
+
+  /* Holiday indicators — warm amber, non-interactive */
+  compactHolidayLabel: {
+    paddingHorizontal: 2,
+    paddingVertical: 1,
+    maxWidth: '100%',
+  },
+  compactHolidayText: {
+    fontSize: 8,
+    color: '#b45309',
+    fontWeight: '500',
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  expandedHolidayRow: {
+    borderRadius: 6,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    backgroundColor: '#fef3c7',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#fde68a',
+    alignItems: 'flex-end',
+  },
+  expandedHolidayText: {
+    fontSize: 9,
+    color: '#92400e',
+    fontWeight: '600',
+    textAlign: 'right',
+    includeFontPadding: false,
+  },
 });
 
 const pickerStyles = StyleSheet.create({
@@ -6452,5 +6829,34 @@ const dStyles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     color: '#9ca3af',
+  },
+
+  /* Holiday row — read-only, warm amber, above event cards */
+  holidayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#fffbeb',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#fde68a',
+    marginBottom: 8,
+  },
+  holidayDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#f59e0b',
+    flexShrink: 0,
+  },
+  holidayTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#92400e',
+    textAlign: 'right',
+    writingDirection: 'rtl',
   },
 });
