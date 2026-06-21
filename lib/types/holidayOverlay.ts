@@ -63,6 +63,12 @@ export interface HebcalProviderRecord {
  *   from lib/types/calendarFilter.ts.
  * - `provider` is a free-form string so future providers can be added without
  *   a type change (e.g. 'hebcal', 'custom', 'gov_il').
+ * - `productCategories` lists every InYomi product category this item belongs to.
+ *   Must be non-empty. Kept in deterministic (alphabetical) order.
+ *   Most items have exactly one category; Tish'a B'Av has two
+ *   (['fast_days', 'jewish_holidays']) because it is both a major Jewish
+ *   observance and a fast day. Consumers must not assume a single-element array.
+ *   Set at the mapping layer; never derived from raw provider fields.
  * - `providerCategory` carries the raw provider category name for traceability.
  * - `holidaySubtype` carries any provider subcategory (e.g. 'major', 'fast').
  * - `isMultiDay` is true when startDate !== endDateInclusive.
@@ -75,6 +81,7 @@ export interface HolidayOverlayItem {
   calendarItemType: 'holiday';
   calendarSource: 'system';
   provider: string;
+  productCategories: HolidayCategoryId[];
   providerCategory?: string;
   holidaySubtype?: string;
   isMultiDay?: boolean;
