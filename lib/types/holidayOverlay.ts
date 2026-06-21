@@ -24,6 +24,35 @@ export type HolidayCategoryId =
   | 'fast_days'
   | 'rosh_chodesh';
 
+// ── Provider record ───────────────────────────────────────────────────────────
+
+/**
+ * A single normalized record from the Hebcal holiday provider.
+ *
+ * This is the shape stored in the local AsyncStorage cache.
+ * Fields are derived from verified Hebcal API response fields only.
+ *
+ * Verified API fields used:
+ *   date      → YYYY-MM-DD local date string (never a timestamp)
+ *   hebrew    → plain unvocalized Hebrew title (preferred over `title` which has niqqud)
+ *   title_orig → English name; used only for stable ID derivation
+ *   category  → 'holiday' | 'roshchodesh' (verified values)
+ *   subcat    → 'major' | 'minor' | 'fast' | 'modern'; absent on roshchodesh items
+ *   yomtov    → true on 8 major Yom-Tov days; absent (not false) on all others
+ *
+ * `id` is a stable derived identifier: 'hebcal:{year}:{date}:{title_orig_slug}'
+ * No uid or id field exists in the Hebcal API response.
+ */
+export interface HebcalProviderRecord {
+  id: string;
+  date: string;       // YYYY-MM-DD, local date only
+  hebrew: string;     // plain unvocalized Hebrew title
+  titleOrig: string;  // English name — for ID derivation and traceability
+  category: string;   // verified: 'holiday' | 'roshchodesh'
+  subcat?: string;    // verified: 'major' | 'minor' | 'fast' | 'modern'
+  yomtov?: boolean;   // true on principal Yom-Tov days only
+}
+
 // ── Overlay item ───────────────────────────────────────────────────────────────
 
 /**
