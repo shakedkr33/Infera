@@ -1,5 +1,5 @@
 /**
- * Holiday overlay mapper — Phase 2B Step 2B.
+ * Holiday overlay mapper — Phase 2B Step 5.
  *
  * Pure mapping service: no React, no AsyncStorage, no fetch, no state, no UI.
  *
@@ -19,14 +19,14 @@
  *   It is included whenever any of its product categories is enabled.
  *   Its ID is stable and identical regardless of which categories the caller enables.
  *
- * Verified against live Hebcal API responses for 2025 and 2026.
+ * Verified against live Hebcal API responses for 2026 and 2027 (Israel mode, i=on).
  *
  * VERIFIED API FIELD CONSTANTS (used for predicate matching):
  *   category : 'holiday' | 'roshchodesh'
  *   subcat   : 'major' | 'minor' | 'fast' | 'modern'  (holiday only)
  *   titleOrig: English name; stable across years for known families
  *
- * VERIFIED GROUPABLE FAMILIES (2025/2026 live data):
+ * VERIFIED GROUPABLE FAMILIES (2026/2027 live data):
  *   Chanukah    – 8 candle records (title_orig "Chanukah: N Candle(s)") + closing
  *                 day ("Chanukah: 8th Day"); all subcat=major
  *   Pesach      – 7 records "Pesach I" … "Pesach VII"; all subcat=major
@@ -46,8 +46,37 @@
  *   Excluded from the subcat=fast path (it does not have subcat=fast).
  *   Built once by buildTishaBavGroups().
  *
+ * VERIFIED CURATED EREV ITEMS (Phase 2B Step 5):
+ *   All Erev records verified from live Hebcal API responses for 2026 and 2027.
+ *   Only the five items in APPROVED_EREV_TITLES are included as standalone
+ *   single-day jewish_holidays items. All other Erev records remain excluded.
+ *
+ *   Included — exact titleOrig → exact hebrew (verified):
+ *     'Erev Pesach'       → 'ערב פסח'         (2026-04-01, 2027-04-21)
+ *     'Erev Sukkot'       → 'ערב סוכות'        (2026-09-25, 2027-10-15)
+ *     'Erev Rosh Hashana' → 'ערב ראש השנה'     (2026-09-11, 2027-10-01)
+ *     'Erev Yom Kippur'   → 'ערב יום כיפור'    (2026-09-20, 2027-10-10)
+ *     'Erev Shavuot'      → 'ערב שבועות'        (2026-05-21, 2027-06-10)
+ *
+ *   Excluded Erev records and reasons:
+ *     'Erev Purim'          – Not in primary-required or recommended list; excluded per allowlist policy.
+ *     "Erev Tish'a B'Av"   – Not in recommended list; Tish'a B'Av has special dual-category handling.
+ *     'Erev Shmini Atzeret' – No such item exists in Hebcal Israel mode (verified for 2026 and 2027).
+ *                             In Israel, Shmini Atzeret and Simchat Torah share the same day; Hebcal
+ *                             emits no separate Erev record. DO NOT construct this label manually.
+ *     'Erev final Pesach'   – No distinct "final-Pesach-day eve" record exists in Hebcal (verified).
+ *                             Hebcal emits no additional Erev item after 'Erev Pesach'.
+ *
+ *   Erev items are always separate single-day items. They are never merged into
+ *   the adjacent grouped holiday range. Date proximity is intentional:
+ *     Erev Pesach       falls the day before Pesach I starts.
+ *     Erev Sukkot       falls the day before Sukkot I starts.
+ *     Erev Rosh Hashana falls the day before Rosh Hashana I starts.
+ *   This means no overlap in dates between an Erev item and the grouped range
+ *   that immediately follows it.
+ *
  * EXPLICIT EXCLUSIONS:
- *   - Erev items          (titleOrig starts with "Erev "; all subcat=major)
+ *   - Erev items NOT in APPROVED_EREV_TITLES (titleOrig starts with "Erev ")
  *   - minor observances   (subcat=minor)
  *   - unapproved modern   (subcat=modern not in APPROVED_NATIONAL_DAYS allowlist)
  *   - Rosh Chodesh Tishri (not emitted by Hebcal; Rosh Hashana replaces it)
@@ -97,6 +126,30 @@ const APPROVED_NATIONAL_DAYS = new Set<string>([
   'Yom HaZikaron',
   "Yom HaAtzma'ut",
   'Yom Yerushalayim',
+]);
+
+// ── Curated Erev allowlist ─────────────────────────────────────────────────
+//
+// Exact titleOrig values verified from live Hebcal API (Israel mode) for 2026 and 2027.
+// Only these five records are emitted as standalone single-day jewish_holidays items.
+// No other Erev records are included regardless of subcat.
+//
+// titleOrig               → hebrew (display title, exact provider value)
+// 'Erev Pesach'           → 'ערב פסח'
+// 'Erev Sukkot'           → 'ערב סוכות'
+// 'Erev Rosh Hashana'     → 'ערב ראש השנה'
+// 'Erev Yom Kippur'       → 'ערב יום כיפור'
+// 'Erev Shavuot'          → 'ערב שבועות'
+//
+// Excluded: 'Erev Purim', "Erev Tish'a B'Av", 'Erev Shmini Atzeret' (does not
+// exist in Hebcal Israel mode), and any future unknown Erev items.
+
+const APPROVED_EREV_TITLES = new Set<string>([
+  'Erev Pesach',
+  'Erev Sukkot',
+  'Erev Rosh Hashana',
+  'Erev Yom Kippur',
+  'Erev Shavuot',
 ]);
 
 // ── Provider constant ──────────────────────────────────────────────────────
@@ -440,6 +493,48 @@ function buildTishaBavGroups(records: HebcalProviderRecord[]): OverlayGroup[] {
 }
 
 /**
+ * Builds standalone single-day overlay groups for curated Erev items.
+ *
+ * Only records whose titleOrig is in APPROVED_EREV_TITLES are included.
+ * Every approved Erev record becomes exactly one standalone single-day item
+ * with productCategories: ['jewish_holidays'].
+ *
+ * These items are intentionally separate from their adjacent grouped holiday
+ * ranges. For example, Erev Pesach always falls the day before Pesach I, so
+ * there is no date overlap between the Erev item and the Pesach range.
+ *
+ * The single-day fallback loop in buildJewishHolidayGroups() already guards
+ * with !isErev(r), so approved Erev records appear exactly once — here —
+ * and never as part of the ordinary single-day path.
+ *
+ * Hebrew display title is taken directly from the provider's `hebrew` field.
+ * No Hebrew labels are constructed manually.
+ */
+function buildErevGroups(records: HebcalProviderRecord[]): OverlayGroup[] {
+  const groups: OverlayGroup[] = [];
+  for (const r of records) {
+    if (
+      r.category === 'holiday' &&
+      r.subcat === 'major' &&
+      isErev(r) &&
+      APPROVED_EREV_TITLES.has(r.titleOrig)
+    ) {
+      groups.push({
+        provider: PROVIDER,
+        productCategories: ['jewish_holidays'],
+        familySlug: toSlug(r.titleOrig), // e.g. 'erev-pesach', 'erev-sukkot'
+        hebrewTitle: r.hebrew,           // exact provider Hebrew, e.g. 'ערב פסח'
+        startDate: r.date,
+        endDate: r.date,
+        providerCategory: 'holiday',
+        holidaySubtype: 'major',
+      });
+    }
+  }
+  return groups;
+}
+
+/**
  * Builds overlay groups for the jewish_holidays product category.
  *
  * Processing order:
@@ -637,8 +732,12 @@ export function mapHolidayOverlayItems(args: MapHolidayOverlayArgs): HolidayOver
   // Build ALL canonical groups first — category filtering happens below.
   // This guarantees that dual-category items have the same stable ID
   // regardless of which categories the caller has enabled.
+  // buildErevGroups() is listed last among jewish_holidays builders to keep
+  // it distinct from the grouped ranges; ID-based deduplication below
+  // prevents any theoretical overlap.
   const allGroups: OverlayGroup[] = [
     ...buildJewishHolidayGroups(deduped),
+    ...buildErevGroups(deduped),
     ...buildTishaBavGroups(deduped),
     ...buildNationalDayGroups(deduped),
     ...buildFastDayGroups(deduped),
