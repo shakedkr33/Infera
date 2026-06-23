@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from 'convex/react';
-import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Minus, Plus } from 'lucide-react-native';
 import {
   Fragment,
@@ -54,6 +54,7 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
+import { useHolidayOverlay } from '@/lib/hooks/useHolidayOverlay';
 import { APP_IS_RTL, rtl } from '@/lib/rtl';
 import {
   type CalendarLayerFilters,
@@ -66,7 +67,6 @@ import {
   loadHolidayOverlayPreferences,
 } from '@/lib/storage/holidayOverlayPreferences';
 import type { HolidayOverlayItem } from '@/lib/types/holidayOverlay';
-import { useHolidayOverlay } from '@/lib/hooks/useHolidayOverlay';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 import {
   getHebrewDateInfo,
@@ -1507,7 +1507,9 @@ function CalendarDayEventsSheet({
             contentContainerStyle={sheetStyles.sheetScrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {events.length === 0 && tasks.length === 0 && holidays.length === 0 ? (
+            {events.length === 0 &&
+            tasks.length === 0 &&
+            holidays.length === 0 ? (
               <Text style={sheetStyles.sheetEmpty}>אין אירועים ביום הזה</Text>
             ) : null}
 
@@ -1520,7 +1522,9 @@ function CalendarDayEventsSheet({
                 style={sheetStyles.sheetHolidayRow}
               >
                 <View style={sheetStyles.sheetHolidayDot} />
-                <Text style={sheetStyles.sheetHolidayTitle}>{holiday.title}</Text>
+                <Text style={sheetStyles.sheetHolidayTitle}>
+                  {holiday.title}
+                </Text>
               </View>
             ))}
 
@@ -2316,7 +2320,7 @@ export default function CalendarScreen(): React.JSX.Element {
     const endD = new Date(
       startD.getFullYear(),
       startD.getMonth(),
-      startD.getDate() + visibleCells - 1,
+      startD.getDate() + visibleCells - 1
     );
 
     const fmt = (d: Date): string => {
@@ -2329,11 +2333,25 @@ export default function CalendarScreen(): React.JSX.Element {
     return { startDate: fmt(startD), endDate: fmt(endD) };
   }, [displayYear, displayMonth, grid.length]);
 
+  // Derive YYYY-MM-DD range from timelineRange timestamps (local time, no toISOString()).
+  const timelineHolidayRange = useMemo(() => {
+    const fromD = new Date(timelineRange.from);
+    const toD = new Date(timelineRange.to);
+    const fmtLocal = (d2: Date): string =>
+      `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, '0')}-${String(d2.getDate()).padStart(2, '0')}`;
+    return { startDate: fmtLocal(fromD), endDate: fmtLocal(toD) };
+  }, [timelineRange]);
+
+  // Single active holiday range: monthly grid in monthly mode, full timeline window
+  // in timeline mode. One hook call covers both — no duplicate provider work occurs.
+  const activeHolidayRange =
+    viewMode === 'monthly' ? holidayGridRange : timelineHolidayRange;
+
   // Call useHolidayOverlay unconditionally; pass empty categories when holidays
   // are not enabled or are hidden via the master filter, so the hook does no work.
   const { items: holidayItems } = useHolidayOverlay({
-    startDate: holidayGridRange.startDate,
-    endDate: holidayGridRange.endDate,
+    startDate: activeHolidayRange.startDate,
+    endDate: activeHolidayRange.endDate,
     enabledCategories:
       anyHolidayCategoryEnabled && layerFilters.showHolidays
         ? holidayPreferences.enabledCategories
@@ -3548,6 +3566,63 @@ export default function CalendarScreen(): React.JSX.Element {
     );
   }, [timelineData, layerFilters]);
 
+  // Extend filteredTimelineData with holiday-only day groups.
+  // Days that have holidays but no events/tasks are inserted so they appear in
+  // the timeline when showHolidays is on. When showHolidays is off, holidaysByDay
+  // is empty (hook receives [] categories), so no extra groups are added.
+  const filteredTimelineDataWithHolidays = useMemo((): TimelineDayGroup[] => {
+    if (viewMode !== 'timeline') return filteredTimelineData;
+    const holidayKeys = Object.keys(holidaysByDay);
+    if (holidayKeys.length === 0) return filteredTimelineData;
+
+    // Collect dateStr values already present in filteredTimelineData.
+    const existingDates = new Set<string>();
+    for (const group of filteredTimelineData) {
+      const sk = new Date(group.sortKey);
+      existingDates.add(
+        `${sk.getFullYear()}-${String(sk.getMonth() + 1).padStart(2, '0')}-${String(sk.getDate()).padStart(2, '0')}`
+      );
+    }
+
+    const extra: TimelineDayGroup[] = [];
+    for (const dateKey of holidayKeys) {
+      if (existingDates.has(dateKey)) continue;
+      // Parse YYYY-MM-DD as local date — never use new Date("YYYY-MM-DD").
+      const [yy, mm, dd] = dateKey.split('-').map(Number);
+      const dateObj = new Date(yy, mm - 1, dd);
+      const dateMs = dateObj.getTime();
+      // Guard: only include dates within the actual timeline query window.
+      if (dateMs < timelineRange.from || dateMs > timelineRange.to) continue;
+
+      const todayLocal = new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate()
+      );
+      const isHolidayToday =
+        dateObj.getFullYear() === todayLocal.getFullYear() &&
+        dateObj.getMonth() === todayLocal.getMonth() &&
+        dateObj.getDate() === todayLocal.getDate();
+
+      extra.push({
+        dayLabel: dateObj.toLocaleDateString('he-IL', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+        }),
+        dayNumber: String(dateObj.getDate()),
+        isToday: isHolidayToday,
+        events: [],
+        sortKey: dateObj.getTime(),
+      });
+    }
+
+    if (extra.length === 0) return filteredTimelineData;
+    return [...filteredTimelineData, ...extra].sort(
+      (a, b) => a.sortKey - b.sortKey
+    );
+  }, [filteredTimelineData, holidaysByDay, viewMode, timelineRange, today]);
+
   useEffect(() => {
     if (viewMode !== 'timeline') return;
     didAutoScrollTimelineRef.current = false;
@@ -3747,7 +3822,8 @@ export default function CalendarScreen(): React.JSX.Element {
             showsVerticalScrollIndicator={false}
           >
             <TimelineView
-              data={filteredTimelineData}
+              data={filteredTimelineDataWithHolidays}
+              holidaysByDay={holidaysByDay}
               onTodayLayout={(y) => {
                 if (didAutoScrollTimelineRef.current) return;
                 didAutoScrollTimelineRef.current = true;
@@ -4135,7 +4211,7 @@ function MonthlyGrid({
               const cellD = new Date(
                 displayYear,
                 displayMonth,
-                1 - gridFirstDayOffset + cellIndex,
+                1 - gridFirstDayOffset + cellIndex
               );
               const cellDateKey = `${cellD.getFullYear()}-${String(cellD.getMonth() + 1).padStart(2, '0')}-${String(cellD.getDate()).padStart(2, '0')}`;
               const dayHolidays = holidaysByDay[cellDateKey] ?? [];
@@ -4799,7 +4875,10 @@ function DayEventsList({
   );
 
   const hasContent =
-    dayData.events.length > 0 || dayData.birthday != null || tasks.length > 0 || holidays.length > 0;
+    dayData.events.length > 0 ||
+    dayData.birthday != null ||
+    tasks.length > 0 ||
+    holidays.length > 0;
 
   return (
     <Animated.View
@@ -5145,6 +5224,24 @@ function DayEventsList({
   );
 }
 
+// ===== Timeline Holiday Row =====
+function TimelineHolidayRow({
+  holiday,
+}: {
+  holiday: HolidayOverlayItem;
+}): React.JSX.Element {
+  return (
+    <View
+      accessible
+      accessibilityRole="text"
+      accessibilityLabel={holiday.title}
+      style={styles.timelineHolidayRow}
+    >
+      <Text style={styles.timelineHolidayTitle}>{holiday.title}</Text>
+    </View>
+  );
+}
+
 // ===== Timeline Helpers =====
 
 /** Returns all calendar days strictly between two Date values (local time). */
@@ -5189,6 +5286,7 @@ function buildMissingDays(
 // ===== Timeline View =====
 function TimelineView({
   data,
+  holidaysByDay,
   onTodayLayout,
   onEventPress,
   onNavigate,
@@ -5196,6 +5294,8 @@ function TimelineView({
   onOpenTaskSheet,
 }: {
   data: TimelineDayGroup[];
+  /** Per-date holiday items. Empty record when showHolidays is off or no categories enabled. */
+  holidaysByDay: Record<string, HolidayOverlayItem[]>;
   onTodayLayout?: (y: number) => void;
   onEventPress: (event: CalendarEvent) => void;
   onNavigate: (location: string, locationUrl?: string) => void;
@@ -5303,8 +5403,11 @@ function TimelineView({
               <View style={styles.timelineLineWrapper}>
                 <View style={styles.timelineVerticalLine} />
 
-                {/* Events */}
+                {/* Holiday overlays + Events/Tasks */}
                 <View style={styles.eventsWrapper}>
+                  {(holidaysByDay[dateStr] ?? []).map((h) => (
+                    <TimelineHolidayRow key={`holiday-${h.id}`} holiday={h} />
+                  ))}
                   {dayGroup.events.map((event: TimelineEventRow) => {
                     const rsvpVisual = getPersonalRsvpVisualState({
                       cancelled: event.cancelled,
@@ -5981,6 +6084,25 @@ const styles = StyleSheet.create({
   },
   eventDotCancelled: {
     borderColor: '#9ca3af',
+  },
+
+  /* Holiday Row */
+  timelineHolidayRow: {
+    backgroundColor: '#fffbeb',
+    borderRadius: 12,
+    borderRightWidth: 3,
+    borderRightColor: '#f59e0b',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  timelineHolidayTitle: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: '#92400e',
+    textAlign: 'right',
+    writingDirection: 'rtl',
   },
 
   /* Event Card */
