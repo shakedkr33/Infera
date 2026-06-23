@@ -150,13 +150,37 @@ export default defineSchema({
     deletedAt: v.optional(v.number()), // ms timestamp when soft-deleted
     deleteExpiresAt: v.optional(v.number()), // ms timestamp after which hard-delete is safe
     deletedBy: v.optional(v.id('users')), // user who performed the soft delete
+    // ── External calendar copy metadata (all optional — no migration required) ─
+    // Populated only when source = 'google_copy' or 'device_copy'.
+    // Absent on all existing events; absence is equivalent to source = 'manual'.
+    source: v.optional(
+      v.union(
+        v.literal('manual'),
+        v.literal('google_copy'),
+        v.literal('device_copy')
+      )
+    ),
+    // Canonical duplicate-prevention key.
+    // Google format: "google:{calendarId}:{eventId}"
+    // Device format: "device:{calendarId}:{eventId}"
+    externalId: v.optional(v.string()),
+    // Source calendar identifier (e.g. Google calendar ID or email).
+    externalCalendarId: v.optional(v.string()),
+    // Source provider event or instance identifier (e.g. Google event id).
+    externalEventId: v.optional(v.string()),
+    // iCalendar UID from the source provider — for recurring-event diagnosis.
+    externalICalUID: v.optional(v.string()),
+    // Normalized start-time key for recurring-instance / exception identification.
+    // Exact mapping from Google fields is deferred to the copy implementation.
+    externalOriginalStartKey: v.optional(v.string()),
   })
     .index('by_space_and_time', ['spaceId', 'startTime'])
     .index('by_creator', ['createdBy'])
     .index('by_space', ['spaceId'])
     .index('by_community_date', ['communityId', 'startTime'])
     .index('by_related_birthday', ['relatedBirthdayId'])
-    .index('by_deleted_by', ['deletedBy', 'deletedAt']),
+    .index('by_deleted_by', ['deletedBy', 'deletedAt'])
+    .index('by_external_id', ['externalId']),
 
   // ═══════════════════════════════════════════════════════
   // טבלת משימות
@@ -626,4 +650,48 @@ export default defineSchema({
   })
     .index('by_task_user', ['taskId', 'userId'])
     .index('by_user', ['userId']),
+
+  // ═══════════════════════════════════════════════════════
+  // לדג העתקות חיצוניות — מניעת כפילויות לצמיתות
+  // רשומה נוצרת פעם אחת בעת העתקה ונשארת גם לאחר מחיקת האירוע המקושר.
+  // שאילתת כפילות: by_owner_external_id(createdBy, externalId)
+  // ═══════════════════════════════════════════════════════
+  eventCopyRegistry: defineTable({
+    // The authenticated InYomi user who performed the copy.
+    // Deduplication is scoped per-user: the same Google event copied by
+    // two different users produces two independent registry records.
+    createdBy: v.id('users'),
+    // The user's space at copy time — stored for query convenience but not
+    // used as the dedup scope (createdBy is the canonical owner key).
+    spaceId: v.optional(v.id('spaces')),
+
+    // Copy provider — registry records are never created for manual events.
+    source: v.union(v.literal('google_copy'), v.literal('device_copy')),
+
+    // Canonical duplicate-prevention key (required).
+    // Google format: "google:{calendarId}:{eventId}"
+    // Device format: "device:{calendarId}:{eventId}"
+    // Future copy mutation queries this field via by_owner_external_id before
+    // inserting any event. If a record exists the source event is skipped,
+    // even if lastLinkedEventId is absent (i.e. the InYomi event was deleted).
+    externalId: v.string(),
+
+    // Source calendar identifier (e.g. Google calendar ID / email).
+    externalCalendarId: v.optional(v.string()),
+    // Source provider event or instance identifier.
+    externalEventId: v.optional(v.string()),
+    // iCalendar UID from source — retained for recurring-event diagnosis.
+    externalICalUID: v.optional(v.string()),
+    // Normalized start-time key for recurring-instance identification.
+    externalOriginalStartKey: v.optional(v.string()),
+
+    // Unix ms timestamp of the first successful copy.
+    firstCopiedAt: v.number(),
+    // Convex ID of the InYomi event created during the copy.
+    // Optional: the InYomi event may be soft-deleted or hard-deleted later
+    // while this registry record persists, enforcing the no-re-copy policy.
+    lastLinkedEventId: v.optional(v.id('events')),
+  })
+    // Primary dedup lookup: is this externalId already copied by this user?
+    .index('by_owner_external_id', ['createdBy', 'externalId']),
 });
