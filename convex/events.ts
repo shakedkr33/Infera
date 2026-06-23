@@ -1262,6 +1262,170 @@ export const restorePersonalEvent = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
+// העתקת אירועי Google — יצירת אירועים אישיים ורישום קבוע להגנה מכפילויות
+//
+// Product contract:
+//   • Never calls Google APIs or accepts tokens/payloads.
+//   • source = 'google_copy' is always stamped server-side.
+//   • One eventCopyRegistry record is created per successfully copied event
+//     and persists even after the linked InYomi event is later deleted.
+//   • An event whose externalId already has a registry record for this user
+//     is always skipped — regardless of whether the linked event still exists.
+//   • Batch limit: 100 candidates per call (each requires 1 read + 2 writes).
+// ─────────────────────────────────────────────────────────────
+export const copyGoogleEvents = mutation({
+  args: {
+    events: v.array(
+      v.object({
+        title: v.string(),
+        startTime: v.number(),
+        endTime: v.number(),
+        allDay: v.optional(v.boolean()),
+        externalId: v.string(),
+        externalCalendarId: v.string(),
+        externalEventId: v.string(),
+        externalICalUID: v.optional(v.string()),
+        externalOriginalStartKey: v.optional(v.string()),
+      })
+    ),
+  },
+  returns: v.object({
+    created: v.number(),
+    skippedAlreadyCopied: v.number(),
+    invalid: v.number(),
+    createdEventIds: v.array(v.id('events')),
+  }),
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    // Reject oversized batches up-front so Convex read/write limits are never
+    // approached: 100 candidates × (1 registry read + 2 inserts) = 300 ops max.
+    const MAX_BATCH = 100;
+    if (args.events.length > MAX_BATCH) {
+      throw new Error(
+        `מספר האירועים בבקשה חורג מהמקסימום המותר (${MAX_BATCH})`
+      );
+    }
+
+    // Resolve space server-side — never trusted from the client.
+    const spaceId = await getUserSpaceId(ctx, userId);
+    const now = Date.now();
+
+    let created = 0;
+    let skippedAlreadyCopied = 0;
+    let invalid = 0;
+    const createdEventIds: Id<'events'>[] = [];
+
+    // Track externalIds already processed in this batch to suppress duplicates
+    // submitted in the same request without hitting the DB a second time.
+    const seenExternalIds = new Set<string>();
+
+    for (const candidate of args.events) {
+      // ── Within-batch duplicate detection ──────────────────────────────────
+      if (seenExternalIds.has(candidate.externalId)) {
+        skippedAlreadyCopied++;
+        continue;
+      }
+      seenExternalIds.add(candidate.externalId);
+
+      // ── Validate calendar / event IDs and canonical externalId ─────────────
+      // Both component fields must be non-empty after trimming.
+      // The canonical externalId is reconstructed server-side and must match
+      // the supplied value exactly — a mismatch means the candidate is
+      // internally inconsistent and must be rejected.
+      const trimmedCalendarId = candidate.externalCalendarId.trim();
+      const trimmedEventId = candidate.externalEventId.trim();
+      if (trimmedCalendarId.length === 0 || trimmedEventId.length === 0) {
+        invalid++;
+        continue;
+      }
+      const expectedExternalId = `google:${trimmedCalendarId}:${trimmedEventId}`;
+      if (candidate.externalId !== expectedExternalId) {
+        invalid++;
+        continue;
+      }
+
+      // ── Validate title ─────────────────────────────────────────────────────
+      const trimmedTitle = candidate.title.trim();
+      if (trimmedTitle.length === 0) {
+        invalid++;
+        continue;
+      }
+
+      // ── Validate timestamps ────────────────────────────────────────────────
+      // Must be finite numbers; end must not precede start.
+      if (
+        !Number.isFinite(candidate.startTime) ||
+        !Number.isFinite(candidate.endTime) ||
+        candidate.endTime < candidate.startTime
+      ) {
+        invalid++;
+        continue;
+      }
+
+      // ── Registry dedup — authoritative because it outlives the InYomi event ─
+      const existingRegistry = await ctx.db
+        .query('eventCopyRegistry')
+        .withIndex('by_owner_external_id', (q) =>
+          q.eq('createdBy', userId).eq('externalId', candidate.externalId)
+        )
+        .unique();
+
+      if (existingRegistry !== null) {
+        skippedAlreadyCopied++;
+        continue;
+      }
+
+      // ── Create the personal InYomi event ──────────────────────────────────
+      // Mirrors the existing personal-event creation convention in `create`:
+      //   • isAiGenerated: false
+      //   • createdBy / createdAt / spaceId stamped server-side
+      //   • tasksVisibleToParticipants: false (personal default)
+      //   • No community, sharing, attachments, or reminder fields
+      const eventId = await ctx.db.insert('events', {
+        title: trimmedTitle,
+        startTime: candidate.startTime,
+        endTime: candidate.endTime,
+        allDay: candidate.allDay,
+        isAiGenerated: false,
+        createdBy: userId,
+        createdAt: now,
+        spaceId,
+        tasksVisibleToParticipants: false,
+        source: 'google_copy',
+        externalId: candidate.externalId,
+        externalCalendarId: candidate.externalCalendarId,
+        externalEventId: candidate.externalEventId,
+        externalICalUID: candidate.externalICalUID,
+        externalOriginalStartKey: candidate.externalOriginalStartKey,
+      });
+
+      // ── Create the permanent registry record ──────────────────────────────
+      // This record must never be deleted; it is the sole dedup authority
+      // and enforces the no-re-copy policy even after the event is hard-deleted.
+      await ctx.db.insert('eventCopyRegistry', {
+        createdBy: userId,
+        spaceId,
+        source: 'google_copy',
+        externalId: candidate.externalId,
+        externalCalendarId: candidate.externalCalendarId,
+        externalEventId: candidate.externalEventId,
+        externalICalUID: candidate.externalICalUID,
+        externalOriginalStartKey: candidate.externalOriginalStartKey,
+        firstCopiedAt: now,
+        lastLinkedEventId: eventId,
+      });
+
+      created++;
+      createdEventIds.push(eventId);
+    }
+
+    return { created, skippedAlreadyCopied, invalid, createdEventIds };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // רשימת אירועים אישיים שנמחקו לאחרונה (עבור מסך "נמחקו לאחרונה")
 // ─────────────────────────────────────────────────────────────
 export const listRecentlyDeletedPersonalEvents = query({
@@ -1375,3 +1539,5 @@ export const listCommunityEventsForDate = query({
     return results.flat();
   },
 });
+
+
