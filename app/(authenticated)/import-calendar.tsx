@@ -1,39 +1,139 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useGoogleCalendarAuth } from '../../lib/hooks/useGoogleCalendarAuth';
+import { useGoogleCalendarList } from '../../lib/hooks/useGoogleCalendarList';
 
 const PRIMARY = '#36a9e2';
+
+// ─── Calendar row ──────────────────────────────────────────────────────────────
+// Defined at module level to comply with the no-nested-components rule.
+
+type CalendarRowProps = {
+  title: string;
+  isPrimary: boolean;
+  isSelected: boolean;
+  onToggle: () => void;
+};
+
+function CalendarRow({ title, isPrimary, isSelected, onToggle }: CalendarRowProps): React.JSX.Element {
+  // Include the primary label in the accessibility announcement so screen
+  // readers surface it without the user having to inspect the badge visually.
+  const a11yLabel = isPrimary ? `${title} – יומן ראשי` : title;
+
+  return (
+    <Pressable
+      style={[s.calendarItem, isSelected && s.calendarItemSelected]}
+      onPress={onToggle}
+      accessible={true}
+      accessibilityRole="checkbox"
+      accessibilityLabel={a11yLabel}
+      accessibilityState={{ checked: isSelected }}
+    >
+      <View style={s.calendarItemInner}>
+        {/* row-reverse: title on right (RTL start), badge + checkbox on left (RTL end) */}
+        <Text style={s.calendarTitle} numberOfLines={2}>
+          {title}
+        </Text>
+        {isPrimary ? (
+          <View style={s.primaryBadge}>
+            <Text style={s.primaryBadgeText}>יומן ראשי</Text>
+          </View>
+        ) : null}
+        <View style={[s.calendarCheck, isSelected && s.calendarCheckActive]}>
+          {isSelected ? (
+            <MaterialIcons name="check" size={14} color="#fff" />
+          ) : null}
+        </View>
+      </View>
+    </Pressable>
+  );
+}
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ImportCalendarScreen(): React.JSX.Element {
   const router = useRouter();
-  const { status, errorMessage, startAuthorization, clearAuthorization } =
+
+  // ── OAuth hook ──────────────────────────────────────────────────────────────
+  const { status, accessToken, errorMessage, startAuthorization, clearAuthorization } =
     useGoogleCalendarAuth();
 
-  // Clear authorization state when the user navigates away from this screen.
-  // useFocusEffect cleanup fires on navigation blur, not on component unmount
-  // alone — important for Expo Router where screens may stay mounted in the stack.
-  //
-  // This does NOT fire when the iOS OAuth browser (ASWebAuthenticationSession)
-  // opens, because that is a modal overlay that does not change React Navigation
-  // screen focus. In-progress authorization is therefore never interrupted here.
+  // ── Calendar list hook ──────────────────────────────────────────────────────
+  // Receives the in-memory token; automatically fetches when the token is set
+  // and clears when the token becomes null.
+  const {
+    status: listStatus,
+    calendars,
+    reload: reloadCalendars,
+  } = useGoogleCalendarList(accessToken);
+
+  // ── Selection state ─────────────────────────────────────────────────────────
+  // Kept in local React state only. Never logged, persisted, or sent anywhere.
+  // Exists solely to support the next phase.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set<string>());
+
+  // Guards the one-time primary preselection so that user deselections or
+  // subsequent reloads do not force the primary calendar back into the set.
+  const initialPreselectionDoneRef = useRef(false);
+
+  // ── Primary preselection ────────────────────────────────────────────────────
+  // Runs once when the list first reaches 'ready'. After that, the ref flag
+  // prevents any further automatic selection — user choices are preserved.
+  useEffect(() => {
+    if (listStatus !== 'ready' || initialPreselectionDoneRef.current) return;
+    initialPreselectionDoneRef.current = true;
+    const primary = calendars.find((c) => c.isPrimary);
+    if (primary) {
+      setSelectedIds(new Set<string>([primary.id]));
+    }
+  }, [listStatus, calendars]);
+
+  // ── Toggle a calendar in/out of the selection ───────────────────────────────
+  const toggleCalendar = useCallback((id: string): void => {
+    setSelectedIds((prev) => {
+      const next = new Set<string>(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  // ── Navigation-away cleanup ─────────────────────────────────────────────────
+  // Fires on screen blur (back navigation, tab switch, etc.).
+  // clearAuthorization() sets accessToken to null, which triggers the
+  // calendar list hook to clear its own state reactively.
+  // Selection state and the preselection guard are reset here directly.
   useFocusEffect(
     useCallback(() => {
       return () => {
         clearAuthorization();
+        setSelectedIds(new Set<string>());
+        initialPreselectionDoneRef.current = false;
       };
     }, [clearAuthorization]),
   );
 
-  const isLoading = status === 'authorizing' || status === 'exchanging';
-
-  const loadingLabel =
+  const isOAuthLoading = status === 'authorizing' || status === 'exchanging';
+  const oAuthLoadingLabel =
     status === 'authorizing' ? 'פותח חלון אישור...' : 'מאמת גישה...';
+
+  // listStatus 'idle' only flickers for one render cycle before the hook
+  // effect fires and transitions to 'loading'; treat it as loading here.
+  const isCalendarLoading = listStatus === 'idle' || listStatus === 'loading';
 
   return (
     <SafeAreaView style={s.screen}>
@@ -86,39 +186,90 @@ export default function ImportCalendarScreen(): React.JSX.Element {
         </View>
       )}
 
-      {/* ─── Authorizing / exchanging: loading ──────────────────────────────── */}
-      {isLoading && (
+      {/* ─── Authorizing / exchanging: OAuth loading ─────────────────────────── */}
+      {isOAuthLoading && (
         <View style={s.centerStep}>
           <View style={s.googleIconWrap}>
             <ActivityIndicator size="large" color={PRIMARY} />
           </View>
-          <Text style={s.mainTitle}>{loadingLabel}</Text>
+          <Text style={s.mainTitle}>{oAuthLoadingLabel}</Text>
         </View>
       )}
 
-      {/* ─── Authorized: success confirmation ───────────────────────────────── */}
-      {status === 'authorized' && (
+      {/* ─── Authorized + calendar loading ───────────────────────────────────── */}
+      {status === 'authorized' && isCalendarLoading && (
         <View style={s.centerStep}>
-          <View style={s.successIconWrap}>
-            <MaterialIcons name="check-circle" size={56} color="#22c55e" />
+          <View style={s.googleIconWrap}>
+            <ActivityIndicator size="large" color={PRIMARY} />
+          </View>
+          <Text style={s.mainTitle}>טוען יומנים...</Text>
+        </View>
+      )}
+
+      {/* ─── Authorized + calendars ready: selection UI ───────────────────────── */}
+      {status === 'authorized' && listStatus === 'ready' && (
+        <ScrollView
+          style={s.listContainer}
+          contentContainerStyle={s.listContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={s.listHeading}>
+            <Text style={s.mainTitle}>בחירת יומנים</Text>
+            <Text style={s.subtitle}>בחרי את היומנים שמהם תרצי להעתיק אירועים.</Text>
+            <Text style={s.helperText}>אפשר לבחור יותר מיומן אחד.</Text>
           </View>
 
-          <Text style={s.mainTitle}>הגישה לקריאה ביומן אושרה</Text>
-          <Text style={s.subtitle}>היומן המקורי לא השתנה.</Text>
+          {calendars.map((cal) => (
+            <CalendarRow
+              key={cal.id}
+              title={cal.title}
+              isPrimary={cal.isPrimary}
+              isSelected={selectedIds.has(cal.id)}
+              onToggle={() => toggleCalendar(cal.id)}
+            />
+          ))}
+        </ScrollView>
+      )}
 
+      {/* ─── Authorized + no calendars found ─────────────────────────────────── */}
+      {status === 'authorized' && listStatus === 'empty' && (
+        <View style={s.centerStep}>
+          <View style={s.errorIconWrap}>
+            <MaterialIcons name="event-busy" size={56} color="#cbd5e1" />
+          </View>
+          <Text style={s.mainTitle}>לא נמצאו יומנים זמינים.</Text>
           <Pressable
-            style={s.secondaryBtn}
-            onPress={clearAuthorization}
+            style={s.primaryBtn}
+            onPress={reloadCalendars}
             accessible={true}
             accessibilityRole="button"
-            accessibilityLabel="חזור לתחילת התהליך"
+            accessibilityLabel="נסי שוב"
           >
-            <Text style={s.secondaryBtnText}>חזור</Text>
+            <Text style={s.primaryBtnText}>נסי שוב</Text>
           </Pressable>
         </View>
       )}
 
-      {/* ─── Denied or error: message + retry ───────────────────────────────── */}
+      {/* ─── Authorized + calendar load error ────────────────────────────────── */}
+      {status === 'authorized' && listStatus === 'error' && (
+        <View style={s.centerStep}>
+          <View style={s.errorIconWrap}>
+            <MaterialIcons name="error-outline" size={56} color="#f59e0b" />
+          </View>
+          <Text style={s.errorText}>לא ניתן לטעון את היומנים. נסי שוב.</Text>
+          <Pressable
+            style={s.primaryBtn}
+            onPress={reloadCalendars}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="נסי שוב"
+          >
+            <Text style={s.primaryBtnText}>נסי שוב</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* ─── Denied or OAuth error: message + retry ──────────────────────────── */}
       {(status === 'denied' || status === 'error') && (
         <View style={s.centerStep}>
           <View style={s.errorIconWrap}>
@@ -146,7 +297,8 @@ export default function ImportCalendarScreen(): React.JSX.Element {
 
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f6f7f8' },
-  // Header
+
+  // ─── Header ──────────────────────────────────────────────────────────
   header: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
@@ -171,7 +323,8 @@ const s = StyleSheet.create({
     color: '#0f172a',
     textAlign: 'center',
   },
-  // ─── Shared center layout ────────────────────────────────
+
+  // ─── Shared centered layout ───────────────────────────────────────────
   centerStep: {
     flex: 1,
     alignItems: 'center',
@@ -217,7 +370,8 @@ const s = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
   },
-  // ─── Primary button ──────────────────────────────────────
+
+  // ─── Primary button ───────────────────────────────────────────────────
   primaryBtn: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
@@ -249,7 +403,8 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: '#1e293b',
   },
-  // ─── Scope note ──────────────────────────────────────────
+
+  // ─── Scope note ───────────────────────────────────────────────────────
   scopeNote: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
@@ -260,26 +415,8 @@ const s = StyleSheet.create({
     fontSize: 12,
     color: '#94a3b8',
   },
-  // ─── Success state ───────────────────────────────────────
-  successIconWrap: {
-    marginBottom: 8,
-  },
-  secondaryBtn: {
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#f8fafc',
-    marginTop: 8,
-  },
-  secondaryBtnText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#64748b',
-    textAlign: 'center',
-  },
-  // ─── Error/denied state ──────────────────────────────────
+
+  // ─── Error / denied state ─────────────────────────────────────────────
   errorIconWrap: {
     marginBottom: 8,
   },
@@ -288,5 +425,87 @@ const s = StyleSheet.create({
     color: '#64748b',
     textAlign: 'center',
     lineHeight: 24,
+  },
+
+  // ─── Calendar selection list ──────────────────────────────────────────
+  listContainer: {
+    flex: 1,
+  },
+  listContent: {
+    paddingHorizontal: 20,
+    paddingTop: 28,
+    paddingBottom: 48,
+  },
+  listHeading: {
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 24,
+  },
+  helperText: {
+    fontSize: 13,
+    color: '#94a3b8',
+    textAlign: 'center',
+  },
+
+  // ─── Calendar item row ────────────────────────────────────────────────
+  calendarItem: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  calendarItemSelected: {
+    borderColor: PRIMARY,
+    backgroundColor: '#f0f9ff',
+  },
+  calendarItemInner: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 12,
+  },
+  calendarTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+
+  // ─── Checkbox indicator ───────────────────────────────────────────────
+  calendarCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    flexShrink: 0,
+  },
+  calendarCheckActive: {
+    backgroundColor: PRIMARY,
+    borderColor: PRIMARY,
+  },
+
+  // ─── Primary calendar badge ───────────────────────────────────────────
+  primaryBadge: {
+    backgroundColor: '#e0f2fe',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    flexShrink: 0,
+  },
+  primaryBadgeText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#0284c7',
   },
 });
