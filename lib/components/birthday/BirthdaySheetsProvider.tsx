@@ -14,6 +14,7 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import {
   loadPersistedBirthdays,
   persistBirthdays,
+  runBirthdayLegacySeedMigration,
 } from '@/lib/birthdayStorage';
 import type { Birthday } from '@/lib/types/birthday';
 import { BirthdayCardSheet } from './BirthdayCardSheet';
@@ -46,53 +47,8 @@ export function useBirthdaySheets(): BirthdaySheetsContextValue {
   return context;
 }
 
-// Seeded only when there is no saved data yet (first launch).
-const SEED_BIRTHDAYS: Birthday[] = [
-  {
-    id: '1',
-    name: 'דני כהן',
-    day: 15,
-    month: 2,
-    year: 1995,
-    photoUri: null,
-    contactId: null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  },
-  {
-    id: '2',
-    name: 'נועה לוי',
-    day: new Date().getDate(),
-    month: new Date().getMonth() + 1,
-    year: null,
-    photoUri: null,
-    contactId: null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  },
-  {
-    id: '3',
-    name: 'נועה',
-    day: 5,
-    month: new Date().getMonth() + 1,
-    year: 2018,
-    photoUri: null,
-    contactId: null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  },
-  {
-    id: '4',
-    name: 'סבתא רחל',
-    day: 15,
-    month: new Date().getMonth() + 1,
-    year: null,
-    photoUri: null,
-    contactId: null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  },
-];
+// SEED_BIRTHDAYS removed: first-launch empty list is now the correct behaviour.
+// Showing demo data to real users was a regression — removed 2026-06-28.
 
 interface ProviderProps {
   children: ReactNode;
@@ -130,7 +86,9 @@ export function BirthdaySheetsProvider({
       try {
         await persistBirthdays(next);
       } catch (error) {
-        console.error('[Birthdays] Failed to persist birthdays', error);
+        if (__DEV__) {
+          console.error('[Birthdays] Failed to persist birthdays', error);
+        }
       }
     },
     []
@@ -157,27 +115,40 @@ export function BirthdaySheetsProvider({
       return;
     }
 
-    // Normal user: existing behavior unchanged.
+    // Normal user: run one-time seed cleanup, then load from AsyncStorage.
     const load = async (): Promise<void> => {
       try {
+        // Remove legacy demo seeds if this is the first run after the fix.
+        // No-ops immediately on every subsequent launch (marker already set).
+        await runBirthdayLegacySeedMigration();
+
         const saved = await loadPersistedBirthdays();
         if (saved !== null) {
+          if (__DEV__) {
+            console.log(
+              `[Birthdays] source=AsyncStorage count=${saved.length}`
+            );
+          }
           birthdaysRef.current = saved;
           setBirthdays(saved);
           return;
         }
 
-        // Persist seed before exposing it in UI to avoid a write race with
-        // an early delete on first launch.
-        try {
-          await persistBirthdays(SEED_BIRTHDAYS);
-        } catch (error) {
-          console.error('[Birthdays] Failed to persist seed birthdays', error);
+        // No saved data (fresh install or different storage namespace).
+        // Show an intentional empty list — never fall back to demo data.
+        if (__DEV__) {
+          console.log('[Birthdays] source=empty (no saved data found)');
         }
-        birthdaysRef.current = SEED_BIRTHDAYS;
-        setBirthdays(SEED_BIRTHDAYS);
+        birthdaysRef.current = [];
+        setBirthdays([]);
       } catch (error) {
-        console.error('[Birthdays] Failed to load birthdays', error);
+        // Storage read failed — surface an empty list rather than demo data.
+        if (__DEV__) {
+          console.error('[Birthdays] Failed to load birthdays', error);
+          console.log('[Birthdays] source=error (storage read failed)');
+        }
+        birthdaysRef.current = [];
+        setBirthdays([]);
       }
     };
 

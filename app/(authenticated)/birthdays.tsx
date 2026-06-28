@@ -13,12 +13,6 @@ import {
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
-import {
-  AddPersonBottomSheet,
-  type SelectedContactData,
-} from '@/components/onboarding/AddPersonBottomSheet';
-import { UpgradeModal } from '@/components/UpgradeModal';
-import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
@@ -28,10 +22,7 @@ const PRIMARY = '#36a9e2';
 export default function BirthdaysScreen(): React.JSX.Element {
   const { openBirthdayCard, openBirthdayEdit, deleteBirthday, birthdays } =
     useBirthdaySheets();
-  const { isExpiredFree } = useEffectiveAccess();
   const [search, setSearch] = useState('');
-  const [showAddSheet, setShowAddSheet] = useState(false);
-  const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
 
   const handleSwipeDelete = (birthday: Birthday): void => {
     Alert.alert('מחיקה', 'האם למחוק את יום ההולדת?', [
@@ -45,23 +36,6 @@ export default function BirthdaysScreen(): React.JSX.Element {
   };
 
   const filteredBirthdays = birthdays.filter((b) => b.name.includes(search));
-
-  const handleContactSelected = (data: SelectedContactData): void => {
-    const prefill: Birthday = {
-      id: '',
-      name: data.name,
-      day: 1,
-      month: new Date().getMonth() + 1,
-      year: null,
-      photoUri: null,
-      contactId: data.contactId ?? null,
-      source: 'contact',
-      phoneNumber: data.phone ?? null,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    openBirthdayEdit(prefill);
-  };
 
   const renderItem = ({ item }: { item: Birthday }): React.JSX.Element => {
     const renderDeleteAction = () => (
@@ -116,11 +90,10 @@ export default function BirthdaysScreen(): React.JSX.Element {
           title="ימי הולדת 🎂"
           showAdd={true}
           onAdd={() => {
-            if (isExpiredFree) {
-              setUpgradeModalVisible(true);
-              return;
+            if (__DEV__) {
+              console.log('[Birthdays] + tapped → openBirthdayEdit (direct)');
             }
-            setShowAddSheet(true);
+            openBirthdayEdit(undefined);
           }}
           returnTo="/(authenticated)/birthdays"
         />
@@ -150,18 +123,9 @@ export default function BirthdaysScreen(): React.JSX.Element {
         showsVerticalScrollIndicator={false}
       />
 
-      <AddPersonBottomSheet
-        visible={showAddSheet}
-        onClose={() => setShowAddSheet(false)}
-        onContactSelected={handleContactSelected}
-        onManual={() => openBirthdayEdit(undefined)}
-      />
-
-      <UpgradeModal
-        visible={upgradeModalVisible}
-        reason="personal"
-        onClose={() => setUpgradeModalVisible(false)}
-      />
+      {/* Contact picker removed from this screen.
+          The + button opens BirthdayEditSheet directly via openBirthdayEdit.
+          AddPersonBottomSheet remains available elsewhere (onboarding, family). */}
     </SafeAreaView>
   );
 }
