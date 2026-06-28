@@ -723,21 +723,16 @@ function CalendarMonthNavBar({
     <View style={styles.monthNavRow}>
       {/* Navigation cluster — arrows visually close to the month title */}
       <View style={styles.monthNavCluster}>
+        {/* Physical RIGHT button (first child in rtl layout) → previous month */}
         <Pressable
-          onPress={ANDROID_MATCH_IOS_LAYOUT ? onPrevMonth : onNextMonth}
+          onPress={onPrevMonth}
           hitSlop={10}
           accessible={true}
           accessibilityRole="button"
-          accessibilityLabel={
-            ANDROID_MATCH_IOS_LAYOUT ? 'חודש קודם' : 'חודש הבא'
-          }
+          accessibilityLabel="חודש קודם"
           style={styles.monthChevronButton}
         >
-          <MaterialIcons
-            name={ANDROID_MATCH_IOS_LAYOUT ? 'chevron-right' : 'chevron-left'}
-            size={22}
-            color="#647b87"
-          />
+          <MaterialIcons name="chevron-right" size={22} color="#647b87" />
         </Pressable>
         <Pressable
           onPress={onTitlePress}
@@ -751,21 +746,16 @@ function CalendarMonthNavBar({
             <Text style={styles.monthYearHebrew}>{hebrewMonthRange}</Text>
           ) : null}
         </Pressable>
+        {/* Physical LEFT button (last child in rtl layout) → next month */}
         <Pressable
-          onPress={ANDROID_MATCH_IOS_LAYOUT ? onNextMonth : onPrevMonth}
+          onPress={onNextMonth}
           hitSlop={10}
           accessible={true}
           accessibilityRole="button"
-          accessibilityLabel={
-            ANDROID_MATCH_IOS_LAYOUT ? 'חודש הבא' : 'חודש קודם'
-          }
+          accessibilityLabel="חודש הבא"
           style={styles.monthChevronButton}
         >
-          <MaterialIcons
-            name={ANDROID_MATCH_IOS_LAYOUT ? 'chevron-left' : 'chevron-right'}
-            size={22}
-            color="#647b87"
-          />
+          <MaterialIcons name="chevron-left" size={22} color="#647b87" />
         </Pressable>
       </View>
 
@@ -3684,14 +3674,10 @@ export default function CalendarScreen(): React.JSX.Element {
                   styles.segmentedSlider,
                   {
                     width: pillWidth,
-                    transform: [
-                      {
-                        translateX: slideAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0, -pillWidth],
-                        }),
-                      },
-                    ],
+                    left: slideAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [pillWidth + SEGMENT_PAD, SEGMENT_PAD],
+                    }),
                   },
                 ]}
               />
@@ -5399,10 +5385,8 @@ function TimelineView({
                 </Pressable>
               </View>
 
-              {/* Vertical Timeline Line */}
+              {/* Timeline events */}
               <View style={styles.timelineLineWrapper}>
-                <View style={styles.timelineVerticalLine} />
-
                 {/* Holiday overlays + Events/Tasks */}
                 <View style={styles.eventsWrapper}>
                   {(holidaysByDay[dateStr] ?? []).map((h) => (
@@ -5417,18 +5401,9 @@ function TimelineView({
                     const eventTitle = getCalendarEventTitle(event);
                     return (
                       <View key={event.id} style={styles.eventRow}>
-                        {/* Color Dot */}
-                        <View
-                          style={[
-                            styles.eventDot,
-                            { borderColor: event.categoryColor },
-                            event.cancelled && styles.eventDotCancelled,
-                          ]}
-                        />
-
-                        {/* Time column + Card (RTL: time on visual right) */}
+                        {/* Time column + Rail/Dot + Card (RTL right→left: time | rail | card) */}
                         <View style={styles.eventRowInner}>
-                          {/* Time column — outside the card */}
+                          {/* Time column — far RIGHT (first child in rtl layout) */}
                           <View style={styles.eventTimeColumn}>
                             {event.time ? (
                               <>
@@ -5446,7 +5421,19 @@ function TimelineView({
                             ) : null}
                           </View>
 
-                          {/* Event / Task Card */}
+                          {/* Rail + Dot — MIDDLE between time and card */}
+                          <View style={styles.eventRailColumn}>
+                            <View style={styles.eventRailLine} />
+                            <View
+                              style={[
+                                styles.eventDot,
+                                { borderColor: event.categoryColor },
+                                event.cancelled && styles.eventDotCancelled,
+                              ]}
+                            />
+                          </View>
+
+                          {/* Event / Task Card — physical LEFT */}
                           <View style={styles.timelineEventCardColumn}>
                             {event.isPersonalTask ? (
                               /* ── Personal task card — unified CalendarTaskCard ── */
@@ -5788,7 +5775,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   monthNavCluster: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 2,
     // Horizontal padding prevents the cluster from reaching the filter icon area
@@ -5900,7 +5887,6 @@ const styles = StyleSheet.create({
   segmentedSlider: {
     position: 'absolute',
     top: 4,
-    right: 4,
     height: 32,
     backgroundColor: '#ffffff',
     borderRadius: 10,
@@ -6028,22 +6014,11 @@ const styles = StyleSheet.create({
   /* Timeline Line */
   timelineLineWrapper: {
     position: 'relative',
-    paddingRight: 40,
-  },
-  timelineVerticalLine: {
-    position: 'absolute',
-    right: 20,
-    top: 0,
-    bottom: 0,
-    width: 2,
-    backgroundColor: '#e5e7eb',
-    borderRadius: 1,
   },
   eventsWrapper: {
     gap: 16,
   },
   eventRow: {
-    flexDirection: 'row',
     alignItems: 'flex-start',
   },
   eventRowInner: {
@@ -6051,6 +6026,20 @@ const styles = StyleSheet.create({
     flexDirection: rtl.flexDirection,
     alignItems: 'flex-start',
     gap: 10,
+  },
+  eventRailColumn: {
+    width: 20,
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    position: 'relative',
+  },
+  eventRailLine: {
+    position: 'absolute',
+    width: 2,
+    top: 0,
+    bottom: -16,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 1,
   },
   eventTimeColumn: {
     width: 44,
@@ -6072,15 +6061,13 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   eventDot: {
-    position: 'absolute',
-    right: -31,
-    top: 24,
     width: 14,
     height: 14,
     borderRadius: 7,
     borderWidth: 3,
     backgroundColor: '#ffffff',
     zIndex: 1,
+    marginTop: 10,
   },
   eventDotCancelled: {
     borderColor: '#9ca3af',
