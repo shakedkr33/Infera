@@ -8,6 +8,8 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { SelectedContactData } from '@/components/onboarding/AddPersonBottomSheet';
+import { AddPersonBottomSheet } from '@/components/onboarding/AddPersonBottomSheet';
 import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
 import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
@@ -17,6 +19,7 @@ import {
   runBirthdayLegacySeedMigration,
 } from '@/lib/birthdayStorage';
 import type { Birthday } from '@/lib/types/birthday';
+import { BirthdayAddChoiceSheet } from './BirthdayAddChoiceSheet';
 import { BirthdayCardSheet } from './BirthdayCardSheet';
 import { BirthdayEditSheet } from './BirthdayEditSheet';
 
@@ -27,6 +30,7 @@ interface BirthdaySheetsContextValue {
   openBirthdayCard: (birthday: Birthday) => void;
   openBirthdayEdit: (birthday?: Birthday) => void;
   openBirthdayCreate: () => void;
+  openBirthdayAddChoice: () => void;
   closeAll: () => void;
   deleteBirthday: (id: string) => void;
   birthdays: Birthday[];
@@ -72,6 +76,8 @@ export function BirthdaySheetsProvider({
   );
   const [cardSheetVisible, setCardSheetVisible] = useState(false);
   const [editSheetVisible, setEditSheetVisible] = useState(false);
+  const [addChoiceVisible, setAddChoiceVisible] = useState(false);
+  const [contactPickerVisible, setContactPickerVisible] = useState(false);
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>('personal');
 
@@ -180,6 +186,15 @@ export function BirthdaySheetsProvider({
     setEditSheetVisible(true);
   };
 
+  const openBirthdayAddChoice = (): void => {
+    if (isExpiredFree) {
+      setUpgradeReason('personal');
+      setUpgradeModalVisible(true);
+      return;
+    }
+    setAddChoiceVisible(true);
+  };
+
   const closeAll = (): void => {
     setCardSheetVisible(false);
     setEditSheetVisible(false);
@@ -244,6 +259,24 @@ export function BirthdaySheetsProvider({
     }
   };
 
+  const handleContactSelected = (data: SelectedContactData): void => {
+    setContactPickerVisible(false);
+    setSelectedBirthday({
+      id: '',
+      name: data.name,
+      day: 1,
+      month: new Date().getMonth() + 1,
+      year: null,
+      photoUri: null,
+      contactId: data.contactId ?? null,
+      source: 'contact',
+      phoneNumber: data.phone ?? null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    setTimeout(() => setEditSheetVisible(true), 300);
+  };
+
   const findBirthdayByName = (name: string): Birthday | undefined =>
     birthdays.find((b) => b.name === name);
 
@@ -251,6 +284,7 @@ export function BirthdaySheetsProvider({
     openBirthdayCard,
     openBirthdayEdit,
     openBirthdayCreate,
+    openBirthdayAddChoice,
     closeAll,
     deleteBirthday,
     birthdays,
@@ -274,6 +308,34 @@ export function BirthdaySheetsProvider({
         onClose={closeAll}
         onSave={handleSave}
         onDelete={selectedBirthday?.id ? handleDelete : undefined}
+      />
+      <BirthdayAddChoiceSheet
+        visible={addChoiceVisible}
+        onClose={() => setAddChoiceVisible(false)}
+        onManual={() => {
+          setAddChoiceVisible(false);
+          setTimeout(() => {
+            setSelectedBirthday(null);
+            setEditSheetVisible(true);
+          }, 300);
+        }}
+        onFromContacts={() => {
+          setAddChoiceVisible(false);
+          setTimeout(() => setContactPickerVisible(true), 300);
+        }}
+      />
+      <AddPersonBottomSheet
+        visible={contactPickerVisible}
+        onClose={() => setContactPickerVisible(false)}
+        onContactSelected={handleContactSelected}
+        onManual={() => {
+          setContactPickerVisible(false);
+          setTimeout(() => {
+            setSelectedBirthday(null);
+            setEditSheetVisible(true);
+          }, 300);
+        }}
+        openContactsDirectly={true}
       />
       <UpgradeModal
         visible={upgradeModalVisible}

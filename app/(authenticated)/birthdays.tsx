@@ -20,7 +20,7 @@ import { getCountdownLabel } from '@/lib/utils/birthday';
 const PRIMARY = '#36a9e2';
 
 export default function BirthdaysScreen(): React.JSX.Element {
-  const { openBirthdayCard, openBirthdayEdit, deleteBirthday, birthdays } =
+  const { openBirthdayCard, openBirthdayAddChoice, deleteBirthday, birthdays } =
     useBirthdaySheets();
   const [search, setSearch] = useState('');
 
@@ -91,9 +91,9 @@ export default function BirthdaysScreen(): React.JSX.Element {
           showAdd={true}
           onAdd={() => {
             if (__DEV__) {
-              console.log('[Birthdays] + tapped → openBirthdayEdit (direct)');
+              console.log('[Birthdays] + tapped → openBirthdayAddChoice');
             }
-            openBirthdayEdit(undefined);
+            openBirthdayAddChoice();
           }}
           returnTo="/(authenticated)/birthdays"
         />
@@ -122,10 +122,6 @@ export default function BirthdaysScreen(): React.JSX.Element {
         renderItem={renderItem}
         showsVerticalScrollIndicator={false}
       />
-
-      {/* Contact picker removed from this screen.
-          The + button opens BirthdayEditSheet directly via openBirthdayEdit.
-          AddPersonBottomSheet remains available elsewhere (onboarding, family). */}
     </SafeAreaView>
   );
 }
