@@ -652,6 +652,16 @@ export default defineSchema({
     .index('by_user', ['userId']),
 
   // ═══════════════════════════════════════════════════════
+  // מצב ייבוא Google Calendar חד-פעמי
+  // ═══════════════════════════════════════════════════════
+  googleImportStatus: defineTable({
+    userId: v.id('users'),
+    provider: v.string(), // 'google'
+    completedAt: v.number(),
+    importedCount: v.number(),
+  }).index('by_user_provider', ['userId', 'provider']),
+
+  // ═══════════════════════════════════════════════════════
   // לדג העתקות חיצוניות — מניעת כפילויות לצמיתות
   // רשומה נוצרת פעם אחת בעת העתקה ונשארת גם לאחר מחיקת האירוע המקושר.
   // שאילתת כפילות: by_owner_external_id(createdBy, externalId)

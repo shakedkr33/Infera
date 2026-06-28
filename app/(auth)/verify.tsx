@@ -14,6 +14,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  classifyPhoneAuthError,
+  mapPhoneAuthError,
+} from '@/lib/services/authErrorUtils';
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -24,41 +28,6 @@ const CODE_DIGIT_POSITIONS = Array.from(
     index,
   })
 );
-
-// FIXED: handle OTP verification failure gracefully with inline Hebrew error
-// Maps @convex-dev/auth error messages to human Hebrew copy
-function mapAuthError(err: unknown): string {
-  const msg =
-    err instanceof Error
-      ? err.message.toLowerCase()
-      : String(err).toLowerCase();
-  if (
-    msg.includes('could not verify') ||
-    msg.includes('invalid') ||
-    msg.includes('incorrect') ||
-    msg.includes('wrong')
-  ) {
-    return 'הקוד שהזנת שגוי. בדקי שוב ונסי מחדש.';
-  }
-  if (msg.includes('expired')) {
-    return 'הקוד פג תוקף. לחצי על "שלח קוד חדש".';
-  }
-  if (
-    msg.includes('rate') ||
-    msg.includes('too many') ||
-    msg.includes('limit')
-  ) {
-    return 'יותר מדי ניסיונות. המתיני כמה דקות ונסי שוב.';
-  }
-  if (
-    msg.includes('network') ||
-    msg.includes('fetch') ||
-    msg.includes('connection')
-  ) {
-    return 'בעיית חיבור. בדקי את האינטרנט ונסי שוב.';
-  }
-  return 'משהו השתבש. בדקי את החיבור ונסי שוב.';
-}
 
 export default function VerifyScreen() {
   const { signIn } = useAuthActions();
@@ -110,11 +79,14 @@ export default function VerifyScreen() {
         // finishOnboarding is called in (authenticated)/_layout.tsx once the Convex session is confirmed.
         router.replace('/(authenticated)/family-bootstrap');
       } catch (err) {
-        // FIXED: downgraded to warn so Expo dev overlay does not appear on expected auth errors
-        console.warn('[Auth] OTP verify failed:', err);
-        setError(mapAuthError(err));
-        // Clear the entered code so user can try again cleanly
-        setCode('');
+        const kind = classifyPhoneAuthError(err);
+        if (__DEV__) {
+          console.log(`[Phone Auth] verification failed: ${kind}`);
+        }
+        setError(mapPhoneAuthError(err));
+        // Keep the entered digits visible so the user can inspect / correct them.
+        // Restore keyboard focus to the code input.
+        hiddenInputRef.current?.focus();
       } finally {
         setIsVerifying(false);
       }

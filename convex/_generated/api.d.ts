@@ -21,6 +21,7 @@ import type * as dailyMoods from "../dailyMoods.js";
 import type * as eventRsvps from "../eventRsvps.js";
 import type * as eventTasks from "../eventTasks.js";
 import type * as events from "../events.js";
+import type * as googleImport from "../googleImport.js";
 import type * as http from "../http.js";
 import type * as linkedEvents from "../linkedEvents.js";
 import type * as members from "../members.js";
@@ -51,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   eventRsvps: typeof eventRsvps;
   eventTasks: typeof eventTasks;
   events: typeof events;
+  googleImport: typeof googleImport;
   http: typeof http;
   linkedEvents: typeof linkedEvents;
   members: typeof members;

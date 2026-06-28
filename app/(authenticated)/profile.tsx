@@ -247,7 +247,7 @@ export default function ProfileScreen() {
           {/* Import flows */}
           <SettingsRow
             iconName="sync"
-            label="ייבוא מיומן חיצוני"
+            label="העתקת אירועים מיומן חיצוני"
             onPress={() => router.push('/(authenticated)/import-calendar')}
           />
           {/* Notifications */}
