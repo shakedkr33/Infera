@@ -55,7 +55,7 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { useHolidayOverlay } from '@/lib/hooks/useHolidayOverlay';
-import { APP_IS_RTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 import {
   type CalendarLayerFilters,
   DEFAULT_CALENDAR_LAYER_FILTERS,
@@ -4722,7 +4722,7 @@ function CalendarTaskCard({
           <View style={{ marginTop: 2 }}>
             <Pressable
               style={{
-                flexDirection: 'row-reverse',
+                flexDirection: rtl.flexDirection,
                 alignItems: 'center',
                 gap: 4,
                 paddingVertical: 2,
@@ -4746,7 +4746,7 @@ function CalendarTaskCard({
                 style={{
                   fontSize: 12,
                   color: '#64748b',
-                  textAlign: 'right',
+                  textAlign: rtl.textAlign,
                   flex: 1,
                 }}
               >
@@ -4760,7 +4760,7 @@ function CalendarTaskCard({
                   <View
                     key={sub.id}
                     style={{
-                      flexDirection: 'row-reverse',
+                      flexDirection: rtl.flexDirection,
                       alignItems: 'center',
                       gap: 8,
                       paddingVertical: 2,
@@ -4792,7 +4792,7 @@ function CalendarTaskCard({
                           ? 'line-through'
                           : 'none',
                         flex: 1,
-                        textAlign: 'right',
+                        textAlign: rtl.textAlign,
                       }}
                     >
                       {sub.title}
@@ -5792,8 +5792,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   timelineFilterRow: {
-    // In RTL, flex-start = physical right — filter icon stays on the right side
-    alignItems: 'flex-start',
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
     paddingHorizontal: 12,
     paddingBottom: 4,
     paddingTop: 2,
@@ -5994,8 +5993,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   gapRow: {
-    alignItems: 'flex-end',
-    paddingRight: 6,
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
+    paddingRight: needsExplicitRTL() ? 6 : 0,
+    paddingStart: needsExplicitRTL() ? 0 : 6,
     marginTop: -16,
     marginBottom: 8,
   },
@@ -6346,7 +6346,7 @@ const mStyles = StyleSheet.create({
     elevation: 1,
   },
   dayCellExpanded: {
-    alignItems: 'flex-end',
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
     justifyContent: 'flex-start',
     paddingTop: 6,
     paddingBottom: 4,
