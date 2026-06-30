@@ -13,18 +13,18 @@
  * In native RTL mode (I18nManager.isRTL = true), React Native AUTOMATICALLY FLIPS
  * certain style properties:
  *
- *   - textAlign="right" → gets flipped to → textAlign="left"  (WRONG!)
- *   - textAlign="left"  → gets flipped to → textAlign="right" (What we want!)
+ *   - textAlign: NOT auto-flipped. Must always be set explicitly to "right".
  *   - flexDirection="row" → gets flipped to → flexDirection="row-reverse" (Correct!)
+ *   - absolute left/right coordinates → ARE auto-flipped by the native system.
  *
- * So the solution is to provide INVERSE VALUES in native RTL mode:
+ * So for textAlign we always return "right" directly:
  *
  * ┌─────────────┬───────────────────┬───────────────┬──────────────────┐
  * │ Environment │ rtl.textAlign     │ Native Flips? │ Final Result     │
  * ├─────────────┼───────────────────┼───────────────┼──────────────────┤
  * │ Expo Go     │ "right"           │ No            │ RIGHT ✅         │
- * │ Dev Build   │ "left"            │ Yes → "right" │ RIGHT ✅         │
- * │ Prod Build  │ "left"            │ Yes → "right" │ RIGHT ✅         │
+ * │ Dev Build   │ "right"           │ No            │ RIGHT ✅         │
+ * │ Prod Build  │ "right"           │ No            │ RIGHT ✅         │
  * └─────────────┴───────────────────┴───────────────┴──────────────────┘
  *
  * ┌─────────────┬───────────────────┬───────────────┬──────────────────┐
@@ -106,24 +106,17 @@ export const needsExplicitRTL = (): boolean => APP_IS_RTL && !I18nManager.isRTL;
 /**
  * Get text alignment for Hebrew/RTL content.
  *
- * THE KEY INSIGHT:
- * In native RTL mode, textAlign="right" gets FLIPPED to "left" automatically!
+ * React Native does NOT auto-flip textAlign in native RTL mode, so we
+ * always return "right" explicitly whenever APP_IS_RTL is true.
  *
- * So we need INVERSE logic:
- * - Expo Go (no native RTL): return "right" → stays "right" ✅
- * - Dev Build (native RTL): return "left" → gets flipped to "right" ✅
+ * - Expo Go (no native RTL): return "right" ✅
+ * - Dev/Prod Build (native RTL): return "right" ✅
  *
- * @returns "right" | "left" | undefined
+ * @returns "right" | undefined
  */
-export const getTextAlign = (): 'right' | 'left' | undefined => {
-  if (needsExplicitRTL()) {
-    // Expo Go: no native RTL active, explicitly set "right"
+export const getTextAlign = (): 'right' | undefined => {
+  if (APP_IS_RTL) {
     return 'right';
-  }
-  // Dev/Prod Build with native RTL: textAlign values get FLIPPED!
-  // We use "left" which gets flipped to "right" by the native system
-  if (I18nManager.isRTL) {
-    return 'left';
   }
   return undefined;
 };
@@ -167,11 +160,10 @@ export const getFlexDirection = (): 'row' | 'row-reverse' => {
  */
 export const rtl = {
   /**
-   * Environment-aware text alignment.
-   * - Expo Go: "right"
-   * - Native RTL: "left" (gets flipped to "right")
+   * Text alignment for RTL content.
+   * Always "right" when APP_IS_RTL is true — React Native does not auto-flip textAlign.
    */
-  get textAlign(): 'right' | 'left' | undefined {
+  get textAlign(): 'right' | undefined {
     return getTextAlign();
   },
 
@@ -206,23 +198,19 @@ export const tw = {
   },
 
   /**
-   * Text alignment for start (right in RTL, left in LTR)
+   * Text alignment for start (always "text-right" in RTL apps).
+   * React Native does not auto-flip textAlign, so no inversion is needed.
    */
   get textStart(): string {
-    const align = getTextAlign();
-    if (align === 'right') return 'text-right';
-    if (align === 'left') return 'text-left';
-    return '';
+    return APP_IS_RTL ? 'text-right' : '';
   },
 
   /**
-   * Text alignment for end (left in RTL, right in LTR)
+   * Text alignment for end (always "text-left" in RTL apps).
+   * React Native does not auto-flip textAlign, so no inversion is needed.
    */
   get textEnd(): string {
-    const align = getTextAlign();
-    if (align === 'left') return 'text-right';
-    if (align === 'right') return 'text-left';
-    return '';
+    return APP_IS_RTL ? 'text-left' : '';
   },
 
   /**
