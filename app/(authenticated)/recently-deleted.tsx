@@ -3,6 +3,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
 import {
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,6 +13,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 // ============================================================================
 // Types
@@ -120,7 +124,7 @@ export default function RecentlyDeletedScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <SafeAreaView style={[styles.safeArea, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
         <Pressable
@@ -233,8 +237,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f6f7f8',
   },
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   header: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingTop: 8,
@@ -251,7 +258,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   headerSpacer: {
     width: 36,
@@ -266,7 +273,7 @@ const styles = StyleSheet.create({
   explanationText: {
     fontSize: 13,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 16,
   },
 
@@ -292,7 +299,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 16,
     padding: 16,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 12,
     shadowColor: '#000',
@@ -303,11 +310,11 @@ const styles = StyleSheet.create({
   },
   itemContent: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
     gap: 4,
   },
   itemTypeRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
   },
@@ -330,12 +337,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   daysLeftText: {
     fontSize: 12,
     color: '#f59e0b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   /* Restore button */

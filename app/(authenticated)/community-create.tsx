@@ -1,5 +1,8 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
@@ -8,6 +11,7 @@ import {
   Alert,
   Keyboard,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -177,7 +181,7 @@ export default function CreateCommunityScreen() {
   const canSubmit = name.trim().length > 0 && !loading;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={[styles.container, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
         <Pressable
@@ -217,7 +221,7 @@ export default function CreateCommunityScreen() {
             placeholder="שם הקהילה (למשל: גן שקד)"
             placeholderTextColor="#9ca3af"
             maxLength={40}
-            textAlign="right"
+            textAlign={rtl.textAlign}
             returnKeyType="next"
             onSubmitEditing={() => {}}
             accessible
@@ -238,7 +242,7 @@ export default function CreateCommunityScreen() {
             placeholderTextColor="#9ca3af"
             multiline
             numberOfLines={3}
-            textAlign="right"
+            textAlign={rtl.textAlign}
             textAlignVertical="top"
             accessible
             accessibilityLabel="תיאור הקהילה"
@@ -318,8 +322,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fafc',
   },
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   header: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
@@ -356,7 +363,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   input: {
     backgroundColor: '#fff',
@@ -378,7 +385,7 @@ const styles = StyleSheet.create({
   errorText: {
     fontSize: 13,
     color: '#ef4444',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   charCount: {
     fontSize: 12,

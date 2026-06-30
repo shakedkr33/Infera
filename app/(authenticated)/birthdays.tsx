@@ -4,6 +4,7 @@ import {
   Alert,
   FlatList,
   Image,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -16,6 +17,9 @@ import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 const PRIMARY = '#36a9e2';
 
@@ -84,7 +88,7 @@ export default function BirthdaysScreen(): React.JSX.Element {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
+    <SafeAreaView style={[{ flex: 1, backgroundColor: '#fff' }, ANDROID_MATCH_IOS_LAYOUT ? s.safeAreaRtl : null]}>
       <View style={s.headerSurface}>
         <MainScreenHeader
           title="ימי הולדת 🎂"
@@ -101,17 +105,17 @@ export default function BirthdaysScreen(): React.JSX.Element {
 
       <View style={s.searchContainer}>
         <View style={s.searchBox}>
-          <MaterialIcons name="search" size={20} color="#94a3b8" />
           <TextInput
             placeholder="חיפוש לפי שם..."
             placeholderTextColor="#9ca3af"
             style={s.searchInput}
             value={search}
             onChangeText={setSearch}
-            textAlign="right"
+            textAlign={rtl.textAlign}
             accessible={true}
             accessibilityLabel="חיפוש ימי הולדת"
           />
+          <MaterialIcons name="search" size={20} color="#94a3b8" />
         </View>
       </View>
 
@@ -127,6 +131,9 @@ export default function BirthdaysScreen(): React.JSX.Element {
 }
 
 const s = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   headerSurface: {
     paddingHorizontal: 16,
     paddingTop: 8,
@@ -137,7 +144,7 @@ const s = StyleSheet.create({
   },
   searchContainer: { paddingHorizontal: 24, paddingVertical: 16 },
   searchBox: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#f1f5f9',
@@ -145,10 +152,10 @@ const s = StyleSheet.create({
     borderRadius: 16,
     paddingHorizontal: 16,
   },
-  searchInput: { flex: 1, fontSize: 15, color: '#111517' },
+  searchInput: { flex: 1, fontSize: 15, color: '#111517', textAlign: rtl.textAlign },
   listContent: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 24 },
   card: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#fff',
@@ -163,7 +170,7 @@ const s = StyleSheet.create({
     elevation: 1,
   },
   cardContent: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 16,
     flex: 1,
@@ -191,7 +198,7 @@ const s = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 4,
   },
   cardBadge: {

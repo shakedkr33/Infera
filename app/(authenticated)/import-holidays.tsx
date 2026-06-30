@@ -5,12 +5,16 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 const PRIMARY = '#36a9e2';
 const HOLIDAY_COLOR = '#f59e0b';
@@ -187,7 +191,7 @@ export default function ImportHolidaysScreen(): React.JSX.Element {
   );
 
   return (
-    <SafeAreaView style={s.screen}>
+    <SafeAreaView style={[s.screen, ANDROID_MATCH_IOS_LAYOUT ? s.safeAreaRtl : null]}>
       {/* Header */}
       <View style={s.header}>
         <Pressable
@@ -325,9 +329,12 @@ export default function ImportHolidaysScreen(): React.JSX.Element {
 
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f6f7f8' },
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   // Header
   header: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
@@ -351,7 +358,7 @@ const s = StyleSheet.create({
   },
   // Explanation card
   explainCard: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     backgroundColor: '#fffbeb',
@@ -364,12 +371,12 @@ const s = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#92400e',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     fontWeight: '500',
   },
   // Year pills
   yearRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 8,
     paddingHorizontal: 20,
     paddingVertical: 14,
@@ -393,7 +400,7 @@ const s = StyleSheet.create({
   yearPillTextActive: { color: '#92400e' },
   // Bulk actions
   bulkActions: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
@@ -403,7 +410,7 @@ const s = StyleSheet.create({
     borderBottomColor: '#f1f5f9',
   },
   bulkCount: { fontSize: 13, color: '#64748b', fontWeight: '500' },
-  bulkBtns: { flexDirection: 'row-reverse', gap: 8 },
+  bulkBtns: { flexDirection: rtl.flexDirection, gap: 8 },
   bulkBtn: {
     paddingHorizontal: 14,
     paddingVertical: 6,
@@ -420,7 +427,7 @@ const s = StyleSheet.create({
   // List
   listContent: { paddingVertical: 8, paddingBottom: 100 },
   holidayRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 20,
@@ -449,9 +456,9 @@ const s = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#1e293b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
-  holidayDate: { fontSize: 12, color: '#94a3b8', textAlign: 'right' },
+  holidayDate: { fontSize: 12, color: '#94a3b8', textAlign: rtl.textAlign },
   holidayDot: {
     width: 8,
     height: 8,
@@ -461,7 +468,7 @@ const s = StyleSheet.create({
   // Skeleton
   skeletonContainer: { paddingTop: 8 },
   skeletonRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 20,
@@ -494,7 +501,7 @@ const s = StyleSheet.create({
   },
   errorText: { fontSize: 15, color: '#94a3b8', fontWeight: '500' },
   retryBtn: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
     backgroundColor: PRIMARY,
@@ -513,7 +520,7 @@ const s = StyleSheet.create({
     borderTopColor: '#f1f5f9',
   },
   importBtn: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,

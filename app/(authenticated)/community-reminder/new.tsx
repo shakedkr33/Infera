@@ -21,6 +21,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -249,7 +252,7 @@ export default function CommunityReminderNewScreen() {
       : 'אחר';
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={[styles.safe, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top']}>
       {/* ── Header */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -288,7 +291,7 @@ export default function CommunityReminderNewScreen() {
               }}
               placeholder="הקלידי את הנושא..."
               placeholderTextColor="#9ca3af"
-              textAlign="right"
+              textAlign={rtl.textAlign}
               multiline={false}
               maxLength={120}
               returnKeyType="next"
@@ -309,7 +312,7 @@ export default function CommunityReminderNewScreen() {
               onChangeText={setDescription}
               placeholder="פרטים נוספים (אופציונלי)..."
               placeholderTextColor="#9ca3af"
-              textAlign="right"
+              textAlign={rtl.textAlign}
               multiline
               numberOfLines={3}
               maxLength={300}
@@ -708,9 +711,12 @@ export default function CommunityReminderNewScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f8fafc' },
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
 
   header: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
@@ -751,14 +757,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 10,
   },
   required: { color: '#ef4444' },
   errorText: {
     fontSize: 12,
     color: '#ef4444',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 4,
   },
 
@@ -780,7 +786,7 @@ const styles = StyleSheet.create({
   inputError: { borderColor: '#ef4444' },
 
   chipRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     flexWrap: 'wrap',
     gap: 8,
   },
@@ -845,7 +851,7 @@ const styles = StyleSheet.create({
   },
 
   attachBtn: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
     borderWidth: 1,
@@ -903,16 +909,16 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   customReminderRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 12,
   },
   customReminderBefore: { fontSize: 15, color: '#374151' },
   customReminderUnits: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 6,
   },
   customReminderInput: {

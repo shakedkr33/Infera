@@ -9,6 +9,7 @@ import {
   Image,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -30,7 +31,9 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { InlineSubtasksEditor } from '@/lib/components/task/InlineSubtasksEditor';
-import { needsExplicitRTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getTaskCategoryLabel } from '@/lib/types/task';
 
 const PRIMARY_BLUE = '#36A9E2';
@@ -1126,7 +1129,7 @@ export default function TasksScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]}>
       <View style={styles.container}>
         <View style={styles.headerSurface}>
           <MainScreenHeader
@@ -1964,6 +1967,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#ffffff',
+  },
+  safeAreaRtl: {
+    direction: 'rtl',
   },
   container: {
     flex: 1,

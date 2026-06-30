@@ -43,6 +43,9 @@ import {
 } from '@/lib/components/event/ParticipantsCard';
 import { RelatedTasksSection } from '@/lib/components/event/RelatedTasksSection';
 import { RemindersCard } from '@/lib/components/event/RemindersCard';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import type {
   EventAttachmentDraft,
   EventData,
@@ -479,14 +482,9 @@ export default function EventScreen({
   };
 
   return (
-    <SafeAreaView style={s.safeArea} edges={['top', 'bottom']}>
+    <SafeAreaView style={[s.safeArea, ANDROID_MATCH_IOS_LAYOUT ? s.safeAreaRtl : null]} edges={['top', 'bottom']}>
       {/* Header — title centered, back arrow on RIGHT, no save action here */}
       <View style={s.header}>
-        {/* Left spacer matches back button width for visual centering */}
-        <View style={{ width: 40 }} />
-        <Text style={s.headerTitle}>
-          {isCreate ? headerTitle : 'פרטי אירוע'}
-        </Text>
         <Pressable
           style={s.backButton}
           onPress={handleBack}
@@ -496,6 +494,11 @@ export default function EventScreen({
         >
           <MaterialIcons name="arrow-forward" size={22} color="#111517" />
         </Pressable>
+        <Text style={s.headerTitle}>
+          {isCreate ? headerTitle : 'פרטי אירוע'}
+        </Text>
+        {/* Spacer matches back button width for visual centering */}
+        <View style={{ width: 40 }} />
       </View>
 
       <KeyboardAvoidingView
@@ -523,7 +526,7 @@ export default function EventScreen({
                   }}
                   placeholder="שם האירוע"
                   placeholderTextColor="#94a3b8"
-                  textAlign="right"
+                  textAlign={rtl.textAlign}
                   autoFocus={false}
                   accessible={true}
                   accessibilityLabel="שם האירוע"
@@ -833,7 +836,7 @@ export default function EventScreen({
                       onChangeText={setImportantItemDraft}
                       placeholder={IMPORTANT_ITEMS_PLACEHOLDER}
                       placeholderTextColor="#94a3b8"
-                      textAlign="right"
+                      textAlign={rtl.textAlign}
                       returnKeyType="done"
                       onSubmitEditing={handleAddImportantItem}
                       accessible={true}
@@ -1165,9 +1168,12 @@ export function RecurrenceRow({
 
 const s = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#f6f8f8' },
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   flex: { flex: 1 },
   header: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
@@ -1227,7 +1233,7 @@ const s = StyleSheet.create({
     fontSize: 17,
     fontWeight: '500',
     color: '#0f172a',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     paddingVertical: 12,
     paddingHorizontal: 14,
     backgroundColor: '#fff',
@@ -1244,7 +1250,7 @@ const s = StyleSheet.create({
   errorText: {
     fontSize: 12,
     color: '#ef4444',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 4,
   },
   card: {
@@ -1282,12 +1288,12 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   rsvpDescription: {
     fontSize: 13,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     lineHeight: 18,
   },
   rsvpIconCircle: {
@@ -1307,7 +1313,7 @@ const s = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   importantItemsSection: {
     backgroundColor: '#fff',
@@ -1324,7 +1330,7 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   importantItemsInputRow: {
     flexDirection: 'row',
@@ -1341,7 +1347,7 @@ const s = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 14,
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   importantItemsAddBtn: {
     minHeight: 44,
@@ -1373,7 +1379,7 @@ const s = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     lineHeight: 20,
   },
   importantItemsRemoveBtn: {
@@ -1398,7 +1404,7 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   recurrenceOptions: {
     marginTop: 10,
@@ -1415,7 +1421,7 @@ const s = StyleSheet.create({
   recurrenceOptionText: {
     fontSize: 15,
     color: '#475569',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   recurrenceOptionTextActive: {
     color: PRIMARY,
@@ -1468,7 +1474,7 @@ const s = StyleSheet.create({
   discardMessage: {
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     paddingHorizontal: 20,
     paddingBottom: 20,
     lineHeight: 20,
@@ -1563,7 +1569,7 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   successDetailRow: {
     flexDirection: 'row',
@@ -1574,7 +1580,7 @@ const s = StyleSheet.create({
   successDetailText: {
     fontSize: 13,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   successShareBtn: {
     backgroundColor: PRIMARY,

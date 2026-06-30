@@ -17,6 +17,7 @@ import {
   FlatList,
   type GestureResponderEvent,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -43,7 +44,9 @@ import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
 } from '@/lib/openCommunityCalendarUi';
-import { rtl } from '@/lib/rtl';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -2763,7 +2766,7 @@ export default function CommunityDetailScreen() {
   const showDescription = !!descriptionTrimmed;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={[styles.container, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top']}>
       {/* ── Header */}
       <View style={styles.header}>
         {/* JSX order swapped to match rtl.flexDirection (row-reverse in Expo Go):
@@ -3007,6 +3010,9 @@ export default function CommunityDetailScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   loadingCenter: {
     flex: 1,
     alignItems: 'center',

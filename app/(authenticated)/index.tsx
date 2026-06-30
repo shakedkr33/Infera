@@ -7,6 +7,7 @@ import {
   Dimensions,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,7 +36,9 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
-import { getTextAlign, position, rtl, spacing } from '@/lib/rtl';
+import { APP_IS_RTL, getTextAlign, position, rtl, spacing } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 
@@ -1759,7 +1762,7 @@ export default function HomeScreen() {
   // ══════════════════════════════════════════════════════════════════════════
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
+    <SafeAreaView style={[{ flex: 1, backgroundColor: '#f6f7f8' }, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <View style={stylesRtl.headerSurface}>
         <MainScreenHeader
@@ -3826,6 +3829,9 @@ export default function HomeScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   // ── Header ─────────────────────────────────────────────────────────────────
   headerSurface: {
     backgroundColor: '#f6f7f8',

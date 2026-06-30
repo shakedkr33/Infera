@@ -36,6 +36,9 @@ import type {
   TaskReminderUnit,
 } from '@/lib/types/task';
 import { TASK_CATEGORIES } from '@/lib/types/task';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getHebrewDateInfo } from '@/lib/utils/hebrewDate';
 import { SubtasksSection } from './SubtasksSection';
 
@@ -1425,7 +1428,7 @@ export default function TaskEditorScreen({
 
   if (isCreate && (mySpace === undefined || currentUserId === undefined)) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={[styles.safeArea, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]}>
         <View style={styles.centerState}>
           <ActivityIndicator color={PRIMARY} size="large" />
           <Text style={styles.centerText}>טוען נתונים...</Text>
@@ -1435,16 +1438,8 @@ export default function TaskEditorScreen({
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+    <SafeAreaView style={[styles.safeArea, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top', 'bottom']}>
       <View style={styles.header}>
-        <View style={styles.headerSpacer} />
-        <Text style={styles.headerTitle}>
-          {isCreate
-            ? 'יצירת משימה'
-            : isParticipantNotCreator
-              ? 'צפייה במשימה'
-              : 'עריכת משימה'}
-        </Text>
         <Pressable
           onPress={handleBack}
           style={styles.backButton}
@@ -1454,6 +1449,14 @@ export default function TaskEditorScreen({
         >
           <MaterialIcons name="arrow-forward" size={22} color="#111517" />
         </Pressable>
+        <Text style={styles.headerTitle}>
+          {isCreate
+            ? 'יצירת משימה'
+            : isParticipantNotCreator
+              ? 'צפייה במשימה'
+              : 'עריכת משימה'}
+        </Text>
+        <View style={styles.headerSpacer} />
       </View>
 
       <KeyboardAvoidingView
@@ -1486,7 +1489,7 @@ export default function TaskEditorScreen({
                 titleError && styles.inputError,
                 !canFullyEdit && styles.fieldReadOnly,
               ]}
-              textAlign="right"
+              textAlign={rtl.textAlign}
               accessible={true}
               accessibilityLabel="שם המשימה"
             />
@@ -1830,7 +1833,7 @@ export default function TaskEditorScreen({
               placeholderTextColor="#94a3b8"
               style={styles.notesInput}
               multiline
-              textAlign="right"
+              textAlign={rtl.textAlign}
               textAlignVertical="top"
               accessible={true}
               accessibilityLabel="הערות"
@@ -2221,9 +2224,12 @@ function PickerSheet({
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#f6f8f8' },
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   flex: { flex: 1 },
   header: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
@@ -2261,14 +2267,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 10,
   },
   sectionTitleNoMargin: {
     fontSize: 15,
     fontWeight: '800',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   titleInput: {
     minHeight: 52,
@@ -2277,13 +2283,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontSize: 16,
     color: '#0f172a',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   inputError: { borderWidth: 1.5, borderColor: '#ef4444' },
   errorText: {
     color: '#ef4444',
     fontSize: 12,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 8,
   },
   chipsWrap: {
@@ -2320,12 +2326,12 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     fontSize: 14,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   hebrewDateHint: {
     fontSize: 11,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 3,
     paddingHorizontal: 4,
   },
@@ -2339,13 +2345,13 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 14,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   helperText: {
     marginTop: 12,
     color: '#64748b',
     fontSize: 13,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     lineHeight: 20,
   },
   weekdaysRow: {
@@ -2410,7 +2416,7 @@ const styles = StyleSheet.create({
     padding: 14,
     fontSize: 15,
     color: '#0f172a',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   footer: {
     padding: 16,
@@ -2456,7 +2462,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 11,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   chipsReadOnly: { opacity: 0.7 },
   modalOverlay: {
@@ -2575,14 +2581,14 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 18,
     fontWeight: '900',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 8,
   },
   discardMessage: {
     color: '#475569',
     fontSize: 14,
     lineHeight: 22,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   discardActions: {
     flexDirection: 'row-reverse',

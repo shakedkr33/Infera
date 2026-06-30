@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import {
   Alert,
   Image,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,7 +31,9 @@ import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
-import { needsExplicitRTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 declare const __DEV__: boolean;
 
@@ -168,7 +171,7 @@ export default function ProfileScreen() {
   // ============================================================================
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <SafeAreaView style={[styles.safeArea, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top']}>
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.headerContainer}>
@@ -569,6 +572,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#f6f7f8',
+  },
+  safeAreaRtl: {
+    direction: 'rtl',
   },
   scroll: {
     flex: 1,

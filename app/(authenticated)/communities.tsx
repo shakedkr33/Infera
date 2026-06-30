@@ -6,6 +6,7 @@ import {
   Alert,
   FlatList,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -26,7 +27,9 @@ import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
-import { rtl } from '@/lib/rtl';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -803,7 +806,7 @@ export default function CommunitiesScreen() {
   const cardWidth = (availableGridWidth - GRID_COLUMN_GAP) / 2;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={[styles.container, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top']}>
       <View style={styles.headerSurface}>
         <MainScreenHeader
           title="הקהילות שלי"
@@ -1002,6 +1005,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  safeAreaRtl: {
+    direction: 'rtl',
   },
 
   // ── Header

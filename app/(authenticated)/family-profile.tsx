@@ -32,7 +32,9 @@ import { colors, shadows } from '../../constants/theme';
 import type { FamilyMember } from '../../contexts/OnboardingContext';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import { api } from '../../convex/_generated/api';
-import { needsExplicitRTL, rtl, tw } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, rtl, tw } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { useEffectiveAccess } from '../../hooks/useEffectiveAccess';
 // FIXED: verified family member status reactivity after matchedUserId update
 import {
@@ -357,7 +359,7 @@ export default function FamilyProfileScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
+    <SafeAreaView style={[{ flex: 1, backgroundColor: '#f6f7f8' }, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
@@ -992,6 +994,9 @@ export default function FamilyProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   dashedBorder: {
     borderWidth: 1.5,
     borderStyle: 'dashed',
