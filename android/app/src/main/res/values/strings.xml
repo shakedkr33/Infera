@@ -2,9 +2,6 @@
   <string name="app_name">InYomi</string>
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
   <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
-  <!-- expo-localization reads these in LocalizationModule.OnCreate (before JS loads)
-       and writes them to the React Native I18nUtil SharedPreferences so that
-       I18nManager.isRTL is true from the very first render on every fresh install. -->
   <string name="ExpoLocalization_supportsRTL" translatable="false">true</string>
   <string name="ExpoLocalization_forcesRTL" translatable="false">true</string>
 </resources>
