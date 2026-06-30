@@ -32,6 +32,7 @@ import { colors, shadows } from '../../constants/theme';
 import type { FamilyMember } from '../../contexts/OnboardingContext';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import { api } from '../../convex/_generated/api';
+import { needsExplicitRTL, rtl, tw } from '@/lib/rtl';
 import { useEffectiveAccess } from '../../hooks/useEffectiveAccess';
 // FIXED: verified family member status reactivity after matchedUserId update
 import {
@@ -362,7 +363,7 @@ export default function FamilyProfileScreen() {
         style={{ flex: 1 }}
       >
         {/* Top bar */}
-        <View className="flex-row items-center justify-between px-5 pt-3 pb-1">
+        <View className={`${tw.flexRow} items-center justify-between px-5 pt-3 pb-1`}>
           <Pressable
             onPress={() =>
               isOptionalPostAuthSetup
@@ -381,7 +382,7 @@ export default function FamilyProfileScreen() {
             />
           </Pressable>
           <Text
-            className="text-base font-bold text-right"
+            className={`text-base font-bold ${tw.textStart}`}
             style={{ color: colors.slate }}
           >
             {screenTitle}
@@ -391,7 +392,7 @@ export default function FamilyProfileScreen() {
 
         {isOptionalPostAuthSetup ? (
           <View className="px-5 pb-3">
-            <Text className="text-right text-sm leading-relaxed text-gray-600">
+            <Text className={`${tw.textStart} text-sm leading-relaxed text-gray-600`}>
               אפשר לדלג עכשיו ולהשלים את זה בהמשך דרך ההגדרות.
             </Text>
           </View>
@@ -406,7 +407,7 @@ export default function FamilyProfileScreen() {
           {/* ── Owner card ────────────────────────────────────────────────── */}
           {/* FIXED: replaced ownerFullName with split fields, removed fake camera affordance */}
           {/* FIXED: profile form now collapses to saved display card after save */}
-          <Text className="text-xs font-bold text-gray-400 text-right mb-2 pr-1">
+          <Text className={`text-xs font-bold text-gray-400 ${tw.textStart} mb-2 pr-1`}>
             השם שלך
           </Text>
 
@@ -416,13 +417,13 @@ export default function FamilyProfileScreen() {
               accessible={true}
               accessibilityRole="button"
               accessibilityLabel={`ערוך פרופיל — ${displayName}`}
-              className="bg-white p-4 rounded-2xl flex-row items-center justify-between mb-6"
+              className={`bg-white p-4 rounded-2xl ${tw.flexRow} items-center justify-between mb-6`}
               style={shadows.soft}
             >
               <View className="p-2">
                 <MaterialIcons name="edit" size={18} color="#9ca3af" />
               </View>
-              <View className="flex-row-reverse items-center gap-3 flex-1">
+              <View className={`${tw.flexRow} items-center gap-3 flex-1`}>
                 <View
                   style={{ backgroundColor: personalColor }}
                   className="w-10 h-10 rounded-full items-center justify-center"
@@ -431,7 +432,7 @@ export default function FamilyProfileScreen() {
                     {profileInitials}
                   </Text>
                 </View>
-                <View style={{ alignItems: 'flex-end' }}>
+                <View style={{ alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start' }}>
                   <Text className="font-bold text-[15px] text-gray-900">
                     {displayName}
                   </Text>
@@ -466,7 +467,7 @@ export default function FamilyProfileScreen() {
               className="bg-white rounded-3xl p-5 mb-6"
               style={shadows.soft}
             >
-              <View className="flex-row-reverse items-center gap-4 mb-4">
+              <View className={`${tw.flexRow} items-center gap-4 mb-4`}>
                 <View
                   className="w-14 h-14 rounded-full items-center justify-center"
                   style={{ backgroundColor: personalColor }}
@@ -478,16 +479,16 @@ export default function FamilyProfileScreen() {
                   </Text>
                 </View>
                 <View className="flex-1">
-                  <Text className="text-xs text-gray-400 text-right mb-1">
+                  <Text className={`text-xs text-gray-400 ${tw.textStart} mb-1`}>
                     שם פרטי ושם משפחה
                   </Text>
-                  <View className="flex-row-reverse gap-2 mb-2">
+                  <View className={`${tw.flexRow} gap-2 mb-2`}>
                     <TextInput
                       value={firstName}
                       onChangeText={handleFirstNameChange}
                       placeholder="שם פרטי"
                       placeholderTextColor="#9ca3af"
-                      className="flex-1 bg-[#f6f7f8] rounded-xl px-3 text-right text-base"
+                      className={`flex-1 bg-[#f6f7f8] rounded-xl px-3 ${tw.textStart} text-base`}
                       style={{ height: 44 }}
                       returnKeyType="next"
                       accessible={true}
@@ -498,7 +499,7 @@ export default function FamilyProfileScreen() {
                       onChangeText={handleLastNameChange}
                       placeholder="שם משפחה"
                       placeholderTextColor="#9ca3af"
-                      className="flex-1 bg-[#f6f7f8] rounded-xl px-3 text-right text-base"
+                      className={`flex-1 bg-[#f6f7f8] rounded-xl px-3 ${tw.textStart} text-base`}
                       style={{ height: 44 }}
                       returnKeyType="next"
                       accessible={true}
@@ -510,7 +511,7 @@ export default function FamilyProfileScreen() {
                     onChangeText={handleNicknameChange}
                     placeholder="כינוי (אופציונלי)"
                     placeholderTextColor="#9ca3af"
-                    className="bg-[#f6f7f8] rounded-xl px-3 text-right text-base mb-2"
+                    className={`bg-[#f6f7f8] rounded-xl px-3 ${tw.textStart} text-base mb-2`}
                     style={{ height: 44 }}
                     returnKeyType="done"
                     onSubmitEditing={handleSaveProfile}
@@ -532,7 +533,7 @@ export default function FamilyProfileScreen() {
                   </Pressable>
                   {personalSaved ? (
                     <Text
-                      className="text-xs text-right mt-1"
+                      className={`text-xs ${tw.textStart} mt-1`}
                       style={{ color: colors.primary }}
                     >
                       נשמר ✓
@@ -540,7 +541,7 @@ export default function FamilyProfileScreen() {
                   ) : null}
                 </View>
               </View>
-              <Text className="text-xs text-gray-400 text-right mb-2">
+              <Text className={`text-xs text-gray-400 ${tw.textStart} mb-2`}>
                 בחירת צבע אישי
               </Text>
               {/* FIXED: taken colors now pass { color, name } for initials overlay */}
@@ -558,19 +559,19 @@ export default function FamilyProfileScreen() {
 
           {/* ── Family members section ─────────────────────────────────────── */}
           {/* FIXED: implemented family-member card UI with status chips and masked phone */}
-          <Text className="text-sm font-bold text-gray-700 text-right mb-1 pr-1">
+          <Text className={`text-sm font-bold text-gray-700 ${tw.textStart} mb-1 pr-1`}>
             בני משפחה נוספים (עד {MAX_PEOPLE})
           </Text>
 
           {/* Explainer text */}
-          <Text className="text-xs text-gray-400 text-right mb-4 pr-1 leading-relaxed">
+          <Text className={`text-xs text-gray-400 ${tw.textStart} mb-4 pr-1 leading-relaxed`}>
             אפשר להוסיף בני משפחה דרך אנשי קשר כדי להזמין אותם בהמשך, או ליצור
             פרופיל פנימי לילדים ובני משפחה בלי סמארטפון לצורך שיוך וסינון.
           </Text>
 
           {/* FIXED: add buttons hidden for members — admin only */}
           {isAdmin && canAddPerson && (
-            <View className="flex-row-reverse gap-2 mb-4">
+            <View className={`${tw.flexRow} gap-2 mb-4`}>
               {/* FIXED: opens contact picker directly, skipping intermediate sheet */}
               {/* FIXED: added pressed state feedback to "הוספה מאנשי קשר" button */}
               {/* FIXED: restored button box with NativeWind layout + dynamic pressed state via style function */}
@@ -584,7 +585,7 @@ export default function FamilyProfileScreen() {
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="הוספה מאנשי קשר"
-                className="flex-1 flex-row-reverse items-center justify-center gap-2 py-3 rounded-xl border"
+                className={`flex-1 ${tw.flexRow} items-center justify-center gap-2 py-3 rounded-xl border`}
                 style={({ pressed }) => ({
                   borderColor: colors.primary,
                   backgroundColor: pressed ? '#bde3f7' : '#e8f5fd',
@@ -613,7 +614,7 @@ export default function FamilyProfileScreen() {
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="הוספה ידנית"
-                className="flex-1 flex-row-reverse items-center justify-center gap-2 py-3 rounded-xl border border-gray-200 bg-white"
+                className={`flex-1 ${tw.flexRow} items-center justify-center gap-2 py-3 rounded-xl border border-gray-200 bg-white`}
               >
                 <MaterialIcons name="person-add" size={16} color="#6b7280" />
                 <Text className="font-semibold text-sm text-gray-600">
@@ -702,10 +703,10 @@ export default function FamilyProfileScreen() {
           )}
 
           {/* ── Pets section ───────────────────────────────────────────────── */}
-          <Text className="text-sm font-bold text-gray-700 text-right mb-1 pr-1">
+          <Text className={`text-sm font-bold text-gray-700 ${tw.textStart} mb-1 pr-1`}>
             חיות מחמד (עד {MAX_PETS})
           </Text>
-          <Text className="text-xs text-gray-400 text-right mb-3 pr-1">
+          <Text className={`text-xs text-gray-400 ${tw.textStart} mb-3 pr-1`}>
             {/* FIXED: updated pets section description text */}
             הוסיפו את חיית המחמד שלכם כדי לעקוב אחרי כל המשימות והאירועים שלה
           </Text>
@@ -725,7 +726,7 @@ export default function FamilyProfileScreen() {
                     accessible={true}
                     accessibilityRole="button"
                     accessibilityLabel="הוספת חיית מחמד"
-                    className="flex-row-reverse items-center gap-2 mt-3 px-5 py-2.5 rounded-full border border-gray-300"
+                    className={`${tw.flexRow} items-center gap-2 mt-3 px-5 py-2.5 rounded-full border border-gray-300`}
                   >
                     <MaterialIcons
                       name="pets"
@@ -791,7 +792,7 @@ export default function FamilyProfileScreen() {
                       accessible={true}
                       accessibilityRole="button"
                       accessibilityLabel="הוספת חיית מחמד נוספת"
-                      className="flex-row-reverse items-center justify-center gap-2 py-3 border border-dashed border-gray-200 rounded-xl mt-1"
+                      className={`${tw.flexRow} items-center justify-center gap-2 py-3 border border-dashed border-gray-200 rounded-xl mt-1`}
                     >
                       <MaterialIcons
                         name="pets"
@@ -899,7 +900,7 @@ export default function FamilyProfileScreen() {
                 fontSize: 17,
                 fontWeight: '700',
                 color: '#111827',
-                textAlign: 'right',
+                textAlign: rtl.textAlign,
                 marginBottom: 8,
               }}
             >
@@ -909,14 +910,14 @@ export default function FamilyProfileScreen() {
               style={{
                 fontSize: 14,
                 color: '#6b7280',
-                textAlign: 'right',
+                textAlign: rtl.textAlign,
                 lineHeight: 22,
                 marginBottom: 24,
               }}
             >
               {`האם למחוק את ${deleteTarget?.name ?? ''} מהפרופיל המשפחתי?`}
             </Text>
-            <View style={{ flexDirection: 'row-reverse', gap: 10 }}>
+            <View style={{ flexDirection: rtl.flexDirection, gap: 10 }}>
               <Pressable
                 onPress={() => {
                   if (deleteTarget) {
