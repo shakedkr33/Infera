@@ -6,6 +6,7 @@ import { Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
+import { tw } from '@/lib/rtl';
 
 export default function OnboardingStep1() {
   const router = useRouter();
@@ -28,7 +29,7 @@ export default function OnboardingStep1() {
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
       {/* Header & Progress */}
       <View className="pt-4 px-4">
-        <View className="flex-row-reverse items-center justify-between mb-4">
+        <View className={`${tw.flexRow} items-center justify-between mb-4`}>
           <Pressable
             onPress={() => router.replace('/(auth)/sign-in')}
             className="p-2"
@@ -127,7 +128,7 @@ export default function OnboardingStep1() {
       {/* AI Tip Box */}
       <View className="px-6 py-4">
         <View
-          className="rounded-2xl p-4 flex-row-reverse items-start border"
+          className={`rounded-2xl p-4 ${tw.flexRow} items-start border`}
           style={{
             backgroundColor: 'rgba(74, 159, 226, 0.06)',
             borderColor: 'rgba(74, 159, 226, 0.12)',
@@ -141,7 +142,7 @@ export default function OnboardingStep1() {
           />
           <Text
             style={{ color: colors.slate }}
-            className="text-sm font-medium flex-1 leading-relaxed text-right"
+            className={`text-sm font-medium flex-1 leading-relaxed ${tw.textStart}`}
           >
             זה יעזור לנו להתאים לך את הלוז בצורה טובה יותר
           </Text>

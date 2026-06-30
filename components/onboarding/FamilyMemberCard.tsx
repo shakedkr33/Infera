@@ -1,6 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { colors, shadows } from '../../constants/theme';
+import { tw } from '@/lib/rtl';
 import type { FamilyMember } from '../../contexts/OnboardingContext';
 import { ColorPicker, type TakenColor } from './ColorPicker';
 
@@ -65,8 +66,8 @@ export function FamilyMemberDisplayCard({
 
       {/* Name + avatar — right side (RTL start) */}
       <View
-        className="flex-row items-center gap-3"
-        style={{ flex: isAdmin ? 0 : 1, flexDirection: 'row' }}
+        className={`${tw.flexRow} items-center gap-3`}
+        style={{ flex: isAdmin ? 0 : 1 }}
       >
         <Text className="font-bold text-[15px] text-gray-900">
           {member.name}
@@ -92,7 +93,7 @@ export function FamilyMemberDisplayCard({
         accessible={true}
         accessibilityRole="button"
         accessibilityLabel={`ערוך את ${member.name}`}
-        className="bg-white p-4 rounded-2xl flex-row items-center justify-between mb-3"
+        className={`bg-white p-4 rounded-2xl ${tw.flexRow} items-center justify-between mb-3`}
         style={shadows.soft}
       >
         {inner}
@@ -102,7 +103,7 @@ export function FamilyMemberDisplayCard({
 
   return (
     <View
-      className="bg-white p-4 rounded-2xl flex-row-reverse items-center mb-3"
+      className={`bg-white p-4 rounded-2xl ${tw.flexRow} items-center mb-3`}
       style={shadows.soft}
     >
       {inner}
@@ -144,7 +145,7 @@ export function FamilyMemberEditCard({
       style={[shadows.soft, { borderColor: colors.primary }]}
     >
       {/* Header row: label right, cancel X left */}
-      <View className="flex-row-reverse items-center justify-between mb-3">
+      <View className={`${tw.flexRow} items-center justify-between mb-3`}>
         {label ? (
           <Text className="text-xs font-semibold text-gray-500">{label}</Text>
         ) : (
@@ -332,7 +333,7 @@ export function FamilyMemberManagementCard({
               )}
             </View>
             <Text
-              className="text-xs text-gray-400 mt-0.5 text-right"
+              className={`text-xs text-gray-400 mt-0.5 ${tw.textStart}`}
               numberOfLines={1}
             >
               {secondaryLabel}
@@ -377,7 +378,7 @@ export function FamilyMemberManagementCard({
               )}
             </View>
             <Text
-              className="text-xs text-gray-400 mt-0.5 text-right"
+              className={`text-xs text-gray-400 mt-0.5 ${tw.textStart}`}
               numberOfLines={1}
             >
               {secondaryLabel}

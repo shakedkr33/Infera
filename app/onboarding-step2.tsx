@@ -5,6 +5,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
+import { tw } from '@/lib/rtl';
 
 const challenges = [
   {
@@ -47,7 +48,7 @@ export default function OnboardingStep2() {
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
       {/* Header */}
       <View className="pt-4 px-6">
-        <View className="flex-row-reverse items-center justify-between mb-4">
+        <View className={`${tw.flexRow} items-center justify-between mb-4`}>
           <Pressable
             onPress={() => router.replace('/onboarding-step1')}
             className="p-2"
@@ -104,7 +105,7 @@ export default function OnboardingStep2() {
                   </View>
                 )}
 
-                <View className="flex-row-reverse items-center p-5">
+                <View className={`${tw.flexRow} items-center p-5`}>
                   <View
                     className="w-14 h-14 rounded-full items-center justify-center"
                     style={{
@@ -123,11 +124,11 @@ export default function OnboardingStep2() {
                   <View className="flex-1 mr-4">
                     <Text
                       style={{ color: colors.slate }}
-                      className="text-right text-xl font-bold"
+                      className={`${tw.textStart} text-xl font-bold`}
                     >
                       {item.title}
                     </Text>
-                    <Text className="text-right text-gray-500 text-sm mt-1">
+                    <Text className={`${tw.textStart} text-gray-500 text-sm mt-1`}>
                       {item.desc}
                     </Text>
                   </View>
@@ -141,7 +142,7 @@ export default function OnboardingStep2() {
       {/* Helper Box — consistent with onboarding step 1 */}
       <View className="px-6 pt-3 pb-3 bg-[#f6f7f8]">
         <View
-          className="rounded-2xl p-4 flex-row-reverse items-start border"
+          className={`rounded-2xl p-4 ${tw.flexRow} items-start border`}
           style={{
             backgroundColor: 'rgba(74, 159, 226, 0.06)',
             borderColor: 'rgba(74, 159, 226, 0.12)',
@@ -155,7 +156,7 @@ export default function OnboardingStep2() {
           />
           <Text
             style={{ color: colors.slate }}
-            className="text-sm font-medium flex-1 leading-relaxed text-right"
+            className={`text-sm font-medium flex-1 leading-relaxed ${tw.textStart}`}
           >
             ספר/י לנו קצת על עצמך כדי שנוכל להתאים את המערכת בדיוק לצרכים שלך
           </Text>

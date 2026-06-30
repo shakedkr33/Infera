@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
+import { tw } from '@/lib/rtl';
 
 export default function OnboardingPremium() {
   const router = useRouter();
@@ -42,7 +43,7 @@ export default function OnboardingPremium() {
         contentContainerStyle={{ paddingBottom: 40 }}
       >
         {/* Header with Close */}
-        <View className="flex-row-reverse items-center justify-between p-6">
+        <View className={`${tw.flexRow} items-center justify-between p-6`}>
           <Pressable onPress={handleSkip} className="p-2">
             <MaterialIcons name="close" size={28} color="#94a3b8" />
           </Pressable>
@@ -75,10 +76,10 @@ export default function OnboardingPremium() {
 
         {/* Title & Subtitle */}
         <View className="px-6 mb-8">
-          <Text className="text-[#111617] text-[28px] font-black leading-tight text-right">
+          <Text className={`text-[#111617] text-[28px] font-black leading-tight ${tw.textStart}`}>
             הצטרפו ל-InYomi Pro ושחררו את הבלגן
           </Text>
-          <Text className="text-slate-600 text-[17px] mt-2 text-right leading-snug">
+          <Text className={`text-slate-600 text-[17px] mt-2 ${tw.textStart} leading-snug`}>
             כל מה שצריך כדי לנהל את הבית ואת החיים בשיא, במקום אחד.
           </Text>
         </View>
@@ -102,15 +103,15 @@ export default function OnboardingPremium() {
               desc: 'מערכת תזכורות אינטליגנטית שלא תיתן לכם לשכוח כלום.',
             },
           ].map((item) => (
-            <View key={item.id} className="flex-row-reverse items-start gap-4">
+            <View key={item.id} className={`${tw.flexRow} items-start gap-4`}>
               <View className="w-6 h-6 rounded-full bg-[#36a9e2] items-center justify-center mt-1">
                 <MaterialIcons name="check" size={16} color="white" />
               </View>
               <View className="flex-1">
-                <Text className="text-[#111617] text-base font-bold text-right">
+                <Text className={`text-[#111617] text-base font-bold ${tw.textStart}`}>
                   {item.title}
                 </Text>
-                <Text className="text-slate-500 text-[13px] text-right mt-0.5">
+                <Text className={`text-slate-500 text-[13px] ${tw.textStart} mt-0.5`}>
                   {item.desc}
                 </Text>
               </View>
@@ -146,14 +147,14 @@ export default function OnboardingPremium() {
               primary: true,
             },
           ].map((step, idx) => (
-            <View key={step.id} className="flex-row gap-4 mb-4 items-start">
+            <View key={step.id} className={`${tw.flexRow} gap-4 mb-4 items-start`}>
               <View className="flex-1">
                 <Text
-                  className={`text-[15px] font-bold text-right ${step.primary ? 'text-[#36a9e2]' : 'text-[#111617]'}`}
+                  className={`text-[15px] font-bold ${tw.textStart} ${step.primary ? 'text-[#36a9e2]' : 'text-[#111617]'}`}
                 >
                   {step.day} ({step.title})
                 </Text>
-                <Text className="text-slate-500 text-[13px] text-right">
+                <Text className={`text-slate-500 text-[13px] ${tw.textStart}`}>
                   {step.desc}
                 </Text>
               </View>

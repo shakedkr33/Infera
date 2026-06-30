@@ -86,7 +86,7 @@ export default function FamilyBootstrapScreen(): React.JSX.Element {
   return (
     <View className="flex-1 items-center justify-center bg-white px-8">
       <ActivityIndicator color="#4A9FE2" size="large" />
-      <Text className="mt-6 text-center text-base text-gray-600 text-right">
+      <Text className="mt-6 text-center text-base text-gray-600">
         מכינים את החשבון…
       </Text>
     </View>

@@ -6,6 +6,7 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
+import { tw } from '@/lib/rtl';
 
 const COUNTS = [1, 2, 3, 4, '5+'] as const;
 
@@ -62,7 +63,7 @@ export default function OnboardingChildrenSelect() {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.beige }}>
       {/* Header — label removed, back button kept */}
       <View className="pt-4 px-6">
-        <View className="flex-row-reverse items-center mb-2">
+        <View className={`${tw.flexRow} items-center mb-2`}>
           <Pressable
             onPress={() => router.replace('/onboarding-step1')}
             className="p-2"
@@ -190,7 +191,7 @@ export default function OnboardingChildrenSelect() {
       {/* Bottom section — helper box anchored directly above CTA, matches step 1 */}
       <View className="px-6 mb-3">
         <View
-          className="rounded-2xl p-4 flex-row-reverse items-start border"
+          className={`rounded-2xl p-4 ${tw.flexRow} items-start border`}
           style={{
             backgroundColor: 'rgba(74, 159, 226, 0.06)',
             borderColor: 'rgba(74, 159, 226, 0.12)',
@@ -204,7 +205,7 @@ export default function OnboardingChildrenSelect() {
           />
           <Text
             style={{ color: colors.slate }}
-            className="text-sm font-medium flex-1 leading-relaxed text-right"
+            className={`text-sm font-medium flex-1 leading-relaxed ${tw.textStart}`}
           >
             זה יעזור לנו להתאים את הלוז בצורה טובה יותר למשפחה שלכם
           </Text>

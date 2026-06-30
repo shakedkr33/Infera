@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { Image, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
+import { tw } from '@/lib/rtl';
 
 export default function OnboardingHero() {
   const router = useRouter();
@@ -17,11 +18,11 @@ export default function OnboardingHero() {
           accessibilityLabel="InYomi Logo"
         />
 
-        <Text className="text-3xl font-black text-[#111418] text-right mb-4 leading-tight">
+        <Text className={`text-3xl font-black text-[#111418] ${tw.textStart} mb-4 leading-tight`}>
           העוזרת האישית של המשפחה שלך
         </Text>
 
-        <Text className="text-gray-500 text-lg text-right leading-relaxed">
+        <Text className={`text-gray-500 text-lg ${tw.textStart} leading-relaxed`}>
           InYomi לומדת את הלו"ז שלכם, מסנכרנת בין כולם ודואגת שלא תפספסו אף
           איסוף מהגן או חוג כדורגל.
         </Text>
