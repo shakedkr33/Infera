@@ -55,7 +55,7 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { useHolidayOverlay } from '@/lib/hooks/useHolidayOverlay';
-import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, position, rtl, spacing } from '@/lib/rtl';
 import {
   type CalendarLayerFilters,
   DEFAULT_CALENDAR_LAYER_FILTERS,
@@ -6152,7 +6152,7 @@ const styles = StyleSheet.create({
 
   eventAccentBar: {
     position: 'absolute',
-    right: 0,
+    ...position.start(0),
     top: 0,
     bottom: 0,
     width: 4,
@@ -6160,7 +6160,7 @@ const styles = StyleSheet.create({
   },
   eventCardContent: {
     padding: 12,
-    paddingRight: 16,
+    ...spacing.paddingStart(16),
     minHeight: 72,
   },
   eventCardHeader: {

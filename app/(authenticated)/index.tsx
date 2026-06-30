@@ -35,7 +35,7 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
-import { getTextAlign, rtl } from '@/lib/rtl';
+import { getTextAlign, position, rtl, spacing } from '@/lib/rtl';
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 
@@ -1954,7 +1954,7 @@ export default function HomeScreen() {
                 ]}
               >
                 <View style={stylesRtl.eventAccentBar} />
-                <View style={{ padding: 24, paddingRight: 32 }}>
+                <View style={{ padding: 24, ...spacing.paddingStart(32) }}>
                   {/* Top row: "הפעילות הבאה" pill (right) + relative start time (left) */}
                   <View style={stylesRtl.eventTopRow}>
                     <View style={stylesRtl.eventNextPill}>
@@ -4132,7 +4132,7 @@ const styles = StyleSheet.create({
   },
   eventAccentBar: {
     position: 'absolute',
-    right: 0,
+    ...position.start(0),
     top: 0,
     bottom: 0,
     width: 6,
@@ -4315,7 +4315,7 @@ const styles = StyleSheet.create({
   },
   timelineAccent: {
     position: 'absolute',
-    right: 0,
+    ...position.start(0),
     top: 0,
     bottom: 0,
     width: 4,
