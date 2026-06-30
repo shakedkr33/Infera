@@ -838,10 +838,10 @@ export default function CommunitiesScreen() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipsRow}
+        contentContainerStyle={[styles.chipsRow, { flexDirection: rtl.flexDirection }]}
         style={styles.chipsScroll}
       >
-        {[...FILTER_CHIPS].reverse().map((chip) => {
+        {FILTER_CHIPS.map((chip) => {
           const active = chip === activeFilter;
           return (
             <TouchableOpacity
@@ -1052,7 +1052,6 @@ const styles = StyleSheet.create({
     maxHeight: 52,
   },
   chipsRow: {
-    flexDirection: 'row',
     paddingHorizontal: 16,
     paddingVertical: 10,
     gap: 8,

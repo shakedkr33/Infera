@@ -476,6 +476,10 @@ export default function AuthenticatedLayout() {
               paddingBottom: 25,
               paddingTop: 10,
               overflow: 'visible',
+              // Keep tab order physically LTR on every platform regardless of I18nManager.isRTL.
+              // Android with supportsRTL=true would otherwise mirror the row, moving "בית" to the right.
+              // Screen content RTL is unaffected — this only controls the tab bar container direction.
+              direction: 'ltr',
             },
             tabBarLabelStyle: { display: 'none' }, // labels rendered inside our custom buttons
           }}
