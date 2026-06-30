@@ -35,7 +35,7 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
-import { getTextAlign } from '@/lib/rtl';
+import { getTextAlign, rtl } from '@/lib/rtl';
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 
@@ -4160,7 +4160,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   eventAddressRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 12,
@@ -4186,7 +4186,7 @@ const styles = StyleSheet.create({
 
   // ── Birthdays ───────────────────────────────────────────────────────────────
   sectionHeader: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     paddingHorizontal: 24,
     marginBottom: 12,
@@ -4288,7 +4288,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 12,
     minHeight: 72,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,

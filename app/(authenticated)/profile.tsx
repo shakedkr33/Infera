@@ -30,7 +30,7 @@ import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
-import { rtl } from '@/lib/rtl';
+import { needsExplicitRTL, rtl } from '@/lib/rtl';
 
 declare const __DEV__: boolean;
 
@@ -574,7 +574,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerContainer: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingLeft: 0,
@@ -588,7 +588,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   headerRightGroup: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
   },
@@ -624,7 +624,7 @@ const styles = StyleSheet.create({
 
   // ── Profile card ───────────────────────────────────────────────────────────
   profileRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     padding: 16,
     gap: 12,
@@ -644,7 +644,7 @@ const styles = StyleSheet.create({
   },
   profileTexts: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
   },
   profileName: {
     fontSize: 17,
@@ -688,7 +688,7 @@ const styles = StyleSheet.create({
 
   // ── Settings rows ──────────────────────────────────────────────────────────
   row: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 15,
@@ -700,8 +700,8 @@ const styles = StyleSheet.create({
   },
   rowTextContainer: {
     flex: 1,
-    marginRight: 12,
-    alignItems: 'flex-end',
+    ...(needsExplicitRTL() ? { marginRight: 12 } : { marginStart: 12 }),
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
   },
   rowTextNoChevron: {
     marginRight: 0,

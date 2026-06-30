@@ -27,6 +27,7 @@ import type {
   Notification,
   NotificationType,
 } from '@/lib/notificationsStorage';
+import { rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -392,7 +393,7 @@ const s = StyleSheet.create({
 
   // Header
   header: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -404,7 +405,7 @@ const s = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#0f172a',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   clearAllText: {
     fontSize: 13,
@@ -446,14 +447,14 @@ const s = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 8,
     paddingHorizontal: 4,
   },
 
   // Card
   card: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'flex-start',
     paddingVertical: 12,
     paddingHorizontal: 4,
@@ -479,17 +480,17 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#1e293b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   cardBody: {
     fontSize: 12,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   cardTime: {
     fontSize: 11,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   unseenDot: {

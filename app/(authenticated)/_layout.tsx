@@ -32,6 +32,7 @@ import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getHasSeenOnboarding } from '@/lib/onboardingState';
 import { PENDING_COMMUNITY_EVENT_ID_KEY } from '@/lib/pendingEventLink';
+import { rtl } from '@/lib/rtl';
 
 // ─── Regular Tab Button (icon + label wrapped in selection pill) ──────────────
 
@@ -665,7 +666,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f3f4f6',
     borderRadius: 16,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -673,14 +674,14 @@ const styles = StyleSheet.create({
   },
   sheetTextInput: {
     flex: 1,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     fontSize: 16,
     paddingHorizontal: 12,
     color: '#111517',
   },
-  sheetInputIcons: { flexDirection: 'row-reverse', gap: 8 },
+  sheetInputIcons: { flexDirection: rtl.flexDirection, gap: 8 },
   sheetActions: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-around',
     alignItems: 'center',
   },
