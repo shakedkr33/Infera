@@ -1159,6 +1159,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: PRIMARY,
     writingDirection: 'rtl',
+    textAlign: rtl.textAlign,
   },
   categoryPillPlaceholder: {
     minHeight: 30,
@@ -1169,6 +1170,7 @@ const styles = StyleSheet.create({
     color: TITLE_COLOR,
     marginTop: 12,
     writingDirection: 'rtl',
+    textAlign: rtl.textAlign,
     lineHeight: 26,
   },
   membersRow: {

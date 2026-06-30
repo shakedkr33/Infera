@@ -43,6 +43,7 @@ import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
 } from '@/lib/openCommunityCalendarUi';
+import { rtl } from '@/lib/rtl';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -2765,37 +2766,22 @@ export default function CommunityDetailScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* ── Header */}
       <View style={styles.header}>
-        {/* שמאל: ⋯ בלבד */}
-        <View style={styles.headerLeft}>
-          <View ref={menuBtnRef}>
-            <TouchableOpacity
-              onPress={handleMenuPress}
-              style={styles.headerIconBtn}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel="אפשרויות"
-            >
-              <Ionicons name="ellipsis-vertical" size={20} color="#374151" />
-            </TouchableOpacity>
-          </View>
-        </View>
+        {/* JSX order swapped to match rtl.flexDirection (row-reverse in Expo Go):
+            first child renders on the RIGHT, second child on the LEFT.
+            headerRight (back + name + add) → physical RIGHT ✓
+            headerLeft (⋯ menu)             → physical LEFT  ✓ */}
 
         {/* ימין: › + שם + "+" */}
         <View style={styles.headerRight}>
-          {(community.myRole === 'owner' || community.myRole === 'admin') && (
-            <View ref={addBtnRef}>
-              <TouchableOpacity
-                onPress={handleAddPress}
-                activeOpacity={0.75}
-                accessible
-                accessibilityRole="button"
-                accessibilityLabel="הוסף אירוע או תזכורת"
-                style={styles.communityHeaderAddButton}
-              >
-                <Plus size={18} color="#36a9e2" strokeWidth={2.4} />
-              </TouchableOpacity>
-            </View>
-          )}
+          <TouchableOpacity
+            onPress={handleBack}
+            style={styles.headerIconBtn}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel="חזור"
+          >
+            <Ionicons name="chevron-forward" size={22} color="#374151" />
+          </TouchableOpacity>
           <View style={styles.headerTextBlock}>
             <Text style={styles.headerTitle} numberOfLines={2}>
               {community.name}
@@ -2843,15 +2829,35 @@ export default function CommunityDetailScreen() {
               </View>
             ) : null}
           </View>
-          <TouchableOpacity
-            onPress={handleBack}
-            style={styles.headerIconBtn}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="חזור"
-          >
-            <Ionicons name="chevron-forward" size={22} color="#374151" />
-          </TouchableOpacity>
+          {(community.myRole === 'owner' || community.myRole === 'admin') && (
+            <View ref={addBtnRef}>
+              <TouchableOpacity
+                onPress={handleAddPress}
+                activeOpacity={0.75}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="הוסף אירוע או תזכורת"
+                style={styles.communityHeaderAddButton}
+              >
+                <Plus size={18} color="#36a9e2" strokeWidth={2.4} />
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* שמאל: ⋯ בלבד */}
+        <View style={styles.headerLeft}>
+          <View ref={menuBtnRef}>
+            <TouchableOpacity
+              onPress={handleMenuPress}
+              style={styles.headerIconBtn}
+              accessible
+              accessibilityRole="button"
+              accessibilityLabel="אפשרויות"
+            >
+              <Ionicons name="ellipsis-vertical" size={20} color="#374151" />
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -3010,7 +3016,7 @@ const styles = StyleSheet.create({
 
   // ── Header
   header: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
@@ -3022,24 +3028,24 @@ const styles = StyleSheet.create({
   },
   headerRight: {
     flex: 1,
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: 8,
   },
   headerTextBlock: { alignItems: 'flex-end', flex: 1 },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  headerLeft: { flexDirection: rtl.flexDirection, alignItems: 'center', gap: 4 },
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   headerSubtitle: {
     fontSize: 12,
     color: '#6b7280',
     marginTop: 2,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   headerDescriptionWrap: { marginTop: 6, width: '100%' },
   headerDescriptionRow: {
@@ -3048,7 +3054,7 @@ const styles = StyleSheet.create({
   headerDescription: {
     fontSize: 13,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     lineHeight: 18,
     writingDirection: 'rtl',
   },
@@ -3064,7 +3070,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#36a9e2',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   headerIconBtn: {
@@ -3094,7 +3100,7 @@ const styles = StyleSheet.create({
   },
   tabsRow: {
     flexGrow: 1,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'flex-start',
     alignItems: 'center',
     paddingHorizontal: 16,
@@ -3122,7 +3128,7 @@ const styles = StyleSheet.create({
 
   // ── Section header
   sectionHeader: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 10,
@@ -3133,12 +3139,12 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   sectionSubtitle: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   sectionAction: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
@@ -3296,14 +3302,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   myTasksTooltipText: {
     fontSize: 13,
     color: '#374151',
     lineHeight: 19,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   flyerCtaWrap: {
@@ -3377,25 +3383,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#fff',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   eventCardMeta: {
     fontSize: 10,
     color: '#fff',
     opacity: 0.9,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   eventCardConfirmed: {
     fontSize: 11,
     fontWeight: '700',
     color: '#86efac',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 4,
   },
   eventCardTaskSummary: {
     fontSize: 12,
     color: 'rgba(255,255,255,0.7)',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   eventCardTaskSummaryDone: {
@@ -3408,13 +3414,13 @@ const styles = StyleSheet.create({
   cancelledEventsTitle: {
     fontSize: 16,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     color: '#111827',
   },
   cancelledEventsSubtitle: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   // Keep eventBadge for EventRow (אירועים tab) — unchanged
@@ -3452,14 +3458,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     flex: 1,
   },
-  eventRowLocation: { fontSize: 12, color: '#9ca3af', textAlign: 'right' },
+  eventRowLocation: { fontSize: 12, color: '#9ca3af', textAlign: rtl.textAlign },
   eventRowCancelReason: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   eventRowCancelledBadge: {
@@ -3484,7 +3490,7 @@ const styles = StyleSheet.create({
   eventRowTaskSummary: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   eventRowTaskSummaryDone: {
@@ -3526,7 +3532,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   checkboxChecked: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  taskTitle: { flex: 1, fontSize: 14, color: '#111827', textAlign: 'right' },
+  taskTitle: { flex: 1, fontSize: 14, color: '#111827', textAlign: rtl.textAlign },
   taskTitleDone: { textDecorationLine: 'line-through', color: '#9ca3af' },
   taskDue: { fontSize: 11, color: '#9ca3af', minWidth: 36, textAlign: 'left' },
 
@@ -3560,7 +3566,7 @@ const styles = StyleSheet.create({
 
   // ── Empty states
   emptySmall: { paddingVertical: 16, alignItems: 'flex-end' },
-  emptySmallText: { fontSize: 13, color: '#9ca3af', textAlign: 'right' },
+  emptySmallText: { fontSize: 13, color: '#9ca3af', textAlign: rtl.textAlign },
   emptyFull: {
     flex: 1,
     alignItems: 'center',
@@ -3644,7 +3650,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 12,
   },
   sheetOption: {
@@ -3657,7 +3663,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheetOptionActive: { backgroundColor: '#f8fafc' },
-  sheetOptionText: { fontSize: 17, color: '#374151', textAlign: 'right' },
+  sheetOptionText: { fontSize: 17, color: '#374151', textAlign: rtl.textAlign },
 
   // ── Add Action Sheet
   addSheet: {
@@ -3692,7 +3698,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   // ── Overflow popover
@@ -3730,7 +3736,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f3f4f6',
   },
-  popoverLabel: { fontSize: 15, color: '#374151', textAlign: 'right', flex: 1 },
+  popoverLabel: { fontSize: 15, color: '#374151', textAlign: rtl.textAlign, flex: 1 },
   popoverDanger: { color: '#ef4444' },
 
   // ── Reminder rows (כדאי לזכור section in הכל tab)
@@ -3762,7 +3768,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   reminderTitleDone: { textDecorationLine: 'line-through', color: '#9ca3af' },
   reminderDue: {
@@ -3819,13 +3825,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   activityDescription: {
     fontSize: 12,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   activityTime: {
@@ -3846,7 +3852,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     paddingHorizontal: 2,
   },
 
@@ -3861,7 +3867,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   accordionLeft: {
     flexDirection: 'row',
@@ -3882,7 +3888,7 @@ const styles = StyleSheet.create({
   completedGroupTitle: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 8,
     fontWeight: '500',
   },

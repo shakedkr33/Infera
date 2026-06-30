@@ -30,7 +30,7 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { InlineSubtasksEditor } from '@/lib/components/task/InlineSubtasksEditor';
-import { rtl } from '@/lib/rtl';
+import { needsExplicitRTL, rtl } from '@/lib/rtl';
 import { getTaskCategoryLabel } from '@/lib/types/task';
 
 const PRIMARY_BLUE = '#36A9E2';
@@ -1146,18 +1146,18 @@ export default function TasksScreen() {
         {/* Search Bar */}
         <View style={styles.searchContainer}>
           <View style={styles.searchBar}>
-            <MaterialIcons
-              name="search"
-              size={20}
-              color="#637588"
-              style={styles.searchIcon}
-            />
             <TextInput
               style={styles.searchInput}
               placeholder="חיפוש משימה..."
               value={searchQuery}
               onChangeText={setSearchQuery}
               placeholderTextColor="#9ca3af"
+            />
+            <MaterialIcons
+              name="search"
+              size={20}
+              color="#637588"
+              style={styles.searchIcon}
             />
           </View>
         </View>
@@ -1601,29 +1601,6 @@ function TaskCard({
       accessibilityLabel={`משימה: ${task.title}`}
     >
       <View style={styles.taskCardRow}>
-        <Pressable
-          style={styles.checkbox}
-          onPress={(event) => {
-            event.stopPropagation();
-            onToggleCompletion();
-          }}
-          hitSlop={10}
-          accessible={true}
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: task.completed }}
-          accessibilityLabel={`סימון השלמה עבור ${task.title}`}
-        >
-          {task.completed ? (
-            <MaterialIcons name="check-circle" size={30} color={PRIMARY_BLUE} />
-          ) : (
-            <View
-              style={[
-                styles.checkboxEmpty,
-                isOverdue && styles.checkboxOverdue,
-              ]}
-            />
-          )}
-        </Pressable>
         <View style={styles.taskContent}>
           <Text
             style={[
@@ -1662,6 +1639,7 @@ function TaskCard({
           {hasSubtasks && !task.completed ? (
             <View style={styles.subtasksProgress}>
               <View style={styles.subtasksProgressHeader}>
+                <Text style={styles.subtasksProgressText}>{progressText}</Text>
                 <Pressable
                   style={styles.expandButton}
                   onPress={(event) => {
@@ -1681,7 +1659,6 @@ function TaskCard({
                     color={TEXT_MUTED}
                   />
                 </Pressable>
-                <Text style={styles.subtasksProgressText}>{progressText}</Text>
               </View>
               <View style={styles.progressBar}>
                 <View
@@ -1750,6 +1727,29 @@ function TaskCard({
             </View>
           ) : null}
         </View>
+        <Pressable
+          style={styles.checkbox}
+          onPress={(event) => {
+            event.stopPropagation();
+            onToggleCompletion();
+          }}
+          hitSlop={10}
+          accessible={true}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: task.completed }}
+          accessibilityLabel={`סימון השלמה עבור ${task.title}`}
+        >
+          {task.completed ? (
+            <MaterialIcons name="check-circle" size={30} color={PRIMARY_BLUE} />
+          ) : (
+            <View
+              style={[
+                styles.checkboxEmpty,
+                isOverdue && styles.checkboxOverdue,
+              ]}
+            />
+          )}
+        </Pressable>
       </View>
     </Pressable>
   );
@@ -1989,8 +1989,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
   },
   searchBar: {
-    direction: 'rtl',
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     backgroundColor: '#f6f7f8',
     borderRadius: 12,
@@ -1998,7 +1997,7 @@ const styles = StyleSheet.create({
     height: 44,
   },
   searchIcon: {
-    marginLeft: 8,
+    ...(needsExplicitRTL() ? { marginRight: 8 } : { marginStart: 8 }),
   },
   searchInput: {
     flex: 1,
@@ -2149,7 +2148,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9fafb',
   },
   taskCardRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'flex-start',
   },
 
@@ -2159,7 +2158,7 @@ const styles = StyleSheet.create({
     height: 44,
     alignItems: 'center',
     justifyContent: 'flex-start',
-    marginRight: 10,
+    ...(needsExplicitRTL() ? { marginRight: 10 } : { marginStart: 10 }),
     paddingTop: 1,
   },
   checkboxEmpty: {
@@ -2264,7 +2263,7 @@ const styles = StyleSheet.create({
 
   /* Tags */
   tagsRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     flexWrap: 'wrap',
     justifyContent: 'flex-start',
     alignSelf: 'stretch',
@@ -2315,7 +2314,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   subtasksProgressHeader: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
@@ -2346,7 +2345,7 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: PRIMARY_BLUE,
     borderRadius: 3,
-    alignSelf: 'flex-end',
+    alignSelf: needsExplicitRTL() ? 'flex-end' : 'flex-start',
   },
   subtasksList: {
     marginTop: 10,
