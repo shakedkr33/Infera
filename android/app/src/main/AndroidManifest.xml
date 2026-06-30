@@ -30,6 +30,12 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="inyomi"/>
       </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="exp+inyomi"/>
+      </intent-filter>
       <intent-filter android:autoVerify="true" data-generated="true">
         <action android:name="android.intent.action.VIEW"/>
         <data android:scheme="https" android:host="inyomi.app" android:pathPrefix="/shared/"/>
