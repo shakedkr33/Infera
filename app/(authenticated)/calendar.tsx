@@ -6019,10 +6019,11 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   eventRow: {
-    alignItems: 'flex-start',
+    width: '100%',
+    alignItems: 'stretch',
   },
   eventRowInner: {
-    flex: 1,
+    width: '100%',
     flexDirection: rtl.flexDirection,
     alignItems: 'flex-start',
     gap: 10,
@@ -6216,7 +6217,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111517',
     marginBottom: 4,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   eventTitleCancelled: {
     textDecorationLine: 'line-through',
@@ -6232,7 +6233,7 @@ const styles = StyleSheet.create({
   locationText: {
     fontSize: 13,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     flex: 1,
   },
   eventNavBtn: {

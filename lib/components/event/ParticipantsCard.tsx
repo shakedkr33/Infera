@@ -1,7 +1,7 @@
 // FIXED: added dimmed backdrop, strengthened sheet elevation, clearer grabber
 import { Ionicons } from '@expo/vector-icons';
 import * as Contacts from 'expo-contacts';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -116,6 +116,12 @@ export function ParticipantsCard({
   // "הצג הכל" list modal
   const [listOpen, setListOpen] = useState(false);
 
+  // Tracks whether an async contacts operation is in progress.
+  // Used to guard onRequestClose from closing the sheet while permissions
+  // dialog is shown or contacts are loading (Android fires onRequestClose
+  // when system dialogs appear/disappear over a React Native Modal).
+  const isContactsLoadingRef = useRef(false);
+
   const openSheet = useCallback((): void => {
     setSheetView('main');
     setEmailText('');
@@ -155,6 +161,7 @@ export function ParticipantsCard({
 
   // ── Load device contacts (filtered by phone, not email) ───────────────────
   const openContactsPicker = useCallback(async (): Promise<void> => {
+    isContactsLoadingRef.current = true;
     setLoadingContacts(true);
     try {
       const { status } = await Contacts.requestPermissionsAsync();
@@ -164,7 +171,6 @@ export function ParticipantsCard({
           'אנא אפשרי גישה לאנשי קשר בהגדרות הטלפון.',
           [{ text: 'הבנתי' }]
         );
-        setLoadingContacts(false);
         return;
       }
       const result = await Contacts.getContactsAsync({
@@ -183,6 +189,7 @@ export function ParticipantsCard({
     } catch {
       Alert.alert('שגיאה', 'לא ניתן לטעון אנשי קשר.');
     } finally {
+      isContactsLoadingRef.current = false;
       setLoadingContacts(false);
     }
   }, []);
@@ -378,7 +385,11 @@ export function ParticipantsCard({
         visible={sheetOpen}
         transparent
         animationType="slide"
-        onRequestClose={closeSheet}
+        onRequestClose={() => {
+          // Guard against Android firing onRequestClose when the system
+          // permissions dialog appears/disappears over this Modal.
+          if (!isContactsLoadingRef.current) closeSheet();
+        }}
       >
         <KeyboardAvoidingView
           style={{ flex: 1 }}
@@ -389,16 +400,21 @@ export function ParticipantsCard({
             {/* FIXED: added dimmed backdrop behind participants bottom sheet */}
             <Pressable
               style={[StyleSheet.absoluteFill, s.backdropDim]}
-              onPress={closeSheet}
+              onPress={() => {
+                if (!isContactsLoadingRef.current) closeSheet();
+              }}
             />
             <View style={s.modalSheetWrapper}>
-              <View
+              {/* Pressable with onPress={() => undefined} absorbs all touches
+                  inside the sheet, preventing them from reaching the backdrop. */}
+              <Pressable
                 style={[
                   s.sheet,
                   (sheetView === 'contacts' ||
                     sheetView === 'phone-disambig') &&
                     s.sheetContacts,
                 ]}
+                onPress={() => undefined}
               >
                 <View style={s.handle} />
 
@@ -925,7 +941,7 @@ export function ParticipantsCard({
                     </Pressable>
                   </>
                 )}
-              </View>
+              </Pressable>
             </View>
           </View>
         </KeyboardAvoidingView>

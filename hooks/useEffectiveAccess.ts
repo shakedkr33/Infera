@@ -30,11 +30,16 @@
 // ============================================================================
 
 import { useQuery } from 'convex/react';
+import { useEffect, useState } from 'react';
 import { PAYMENT_SYSTEM_ENABLED } from '@/config/appConfig';
 import {
   DEV_ACCESS_OVERRIDE,
   type EffectiveAccess,
 } from '@/config/devAccessConfig';
+import {
+  getDevPlanOverride,
+  subscribeDevPlanOverride,
+} from '@/config/devPlanOverride';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
 import type { SubscriptionTier } from '@/utils/revenueCatConfig';
@@ -238,6 +243,17 @@ export function useEffectiveAccess(): UseEffectiveAccessResult {
   // ⚠️  Remove QA_FULL_ACCESS_PHONES from Convex env before production release.
   const isQaUser = useQuery(api.users.getIsQaUser);
 
+  // ── Runtime dev plan override — UI-driven, persisted to AsyncStorage ─────
+  // Set via the dev debug panel in the profile screen (long-press footer).
+  // Always null in production builds (__DEV__ guard inside getDevPlanOverride).
+  const [runtimeDevOverride, setRuntimeDevOverride] =
+    useState<EffectiveAccess | null>(() => getDevPlanOverride());
+  useEffect(() => {
+    return subscribeDevPlanOverride(() => {
+      setRuntimeDevOverride(getDevPlanOverride());
+    });
+  }, []);
+
   // ── Derive effectiveAccess using priority order ──────────────────────────
 
   let effectiveAccess: EffectiveAccess;
@@ -249,8 +265,13 @@ export function useEffectiveAccess(): UseEffectiveAccessResult {
     // Treats the QA user as 'trial_active' (full personal + family access).
     effectiveAccess = 'trial_active';
     isQaOverride = true;
+  } else if (__DEV__ && runtimeDevOverride !== null) {
+    // ── Priority 2a: Runtime UI-driven dev override (profile debug panel) ───
+    // Only active in __DEV__ builds. Set via the dev debug panel; persists
+    // across hot reloads via AsyncStorage. Never runs in production.
+    effectiveAccess = runtimeDevOverride;
   } else if (__DEV__ && DEV_ACCESS_OVERRIDE !== null) {
-    // ── Priority 2: Dev build override (all users in dev) ───────────────────
+    // ── Priority 2b: Static dev build override (code constant) ──────────────
     // Only active in __DEV__ builds. Never runs in production.
     effectiveAccess = DEV_ACCESS_OVERRIDE;
   } else if (PAYMENT_SYSTEM_ENABLED) {

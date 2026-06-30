@@ -3,7 +3,7 @@ import { useAuthActions } from '@convex-dev/auth/react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Image,
@@ -19,12 +19,20 @@ import {
   MOCK_PAYMENTS,
   PAYMENT_SYSTEM_ENABLED,
 } from '@/config/appConfig';
+import type { EffectiveAccess } from '@/config/devAccessConfig';
+import {
+  getDevPlanOverride,
+  setDevPlanOverride,
+  subscribeDevPlanOverride,
+} from '@/config/devPlanOverride';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { rtl } from '@/lib/rtl';
+
+declare const __DEV__: boolean;
 
 // ============================================================================
 // מסך פרופיל
@@ -39,6 +47,16 @@ export default function ProfileScreen() {
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   // Debug panel is hidden in normal UI; revealed only by long-pressing the version footer
   const [isDebugUnlocked, setIsDebugUnlocked] = useState(false);
+
+  // Dev-only: runtime plan override state (mirrors the global devPlanOverride store)
+  const [devPlan, setDevPlanState] = useState<EffectiveAccess | null>(() =>
+    getDevPlanOverride()
+  );
+  useEffect(() => {
+    return subscribeDevPlanOverride(() => {
+      setDevPlanState(getDevPlanOverride());
+    });
+  }, []);
 
   const {
     effectiveAccess,
@@ -266,7 +284,9 @@ export default function ProfileScreen() {
             iconName="event"
             label="חגים ומועדים"
             note="בחירת חגים וימים מיוחדים להצגה ביומן"
-            onPress={() => router.push('/(authenticated)/holiday-overlay-settings')}
+            onPress={() =>
+              router.push('/(authenticated)/holiday-overlay-settings')
+            }
           />
           {/* Danger zone */}
           <SettingsRow
@@ -363,6 +383,74 @@ export default function ProfileScreen() {
                     onPress={openSignUpPreview}
                   />
                 </View>
+
+                {/* Dev subscription plan selector — __DEV__ only */}
+                {__DEV__ && (
+                  <>
+                    <Text style={[styles.debugSectionLabel, { marginTop: 16 }]}>
+                      סימולציית מסלול מנוי (בדיקות בלבד)
+                    </Text>
+                    {devPlan !== null && (
+                      <View style={styles.devOverrideBanner}>
+                        <Text style={styles.devOverrideBannerText}>
+                          {`⚠️ מצב בדיקה פעיל: ${
+                            devPlan === 'trial_expired_free'
+                              ? 'Free'
+                              : devPlan === 'personal'
+                                ? 'Plus'
+                                : devPlan === 'family'
+                                  ? 'Family'
+                                  : devPlan
+                          }`}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={styles.devPlanRow}>
+                      {(
+                        [
+                          { label: 'Free', value: 'trial_expired_free' },
+                          { label: 'Plus', value: 'personal' },
+                          { label: 'Family', value: 'family' },
+                        ] as { label: string; value: EffectiveAccess }[]
+                      ).map(({ label, value }) => (
+                        <TouchableOpacity
+                          key={value}
+                          onPress={() => setDevPlanOverride(value)}
+                          style={[
+                            styles.devPlanBtn,
+                            devPlan === value && styles.devPlanBtnActive,
+                          ]}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityLabel={`הפעל סימולציית מסלול ${label}`}
+                        >
+                          <Text
+                            style={[
+                              styles.devPlanBtnText,
+                              devPlan === value && styles.devPlanBtnTextActive,
+                            ]}
+                          >
+                            {label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                      <TouchableOpacity
+                        onPress={() => setDevPlanOverride(null)}
+                        style={styles.devPlanBtnClear}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="איפוס סימולציית מסלול"
+                      >
+                        <Text style={styles.devPlanBtnClearText}>איפוס</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.devOverrideNote}>
+                      {devPlan !== null
+                        ? 'האיפוס יחזיר את לוגיקת הגישה האמיתית.'
+                        : 'בחר מסלול לסימולציה. השינוי נשמר גם לאחר reload.'}
+                    </Text>
+                  </>
+                )}
               </View>
             )}
           </View>
@@ -725,6 +813,68 @@ const styles = StyleSheet.create({
     color: '#eab308',
     textAlign: 'center',
     fontSize: 14,
+  },
+
+  // ── Dev plan override selector ──────────────────────────────────────────────
+  devOverrideBanner: {
+    backgroundColor: '#fef9c3',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#fde047',
+    alignItems: 'center',
+  },
+  devOverrideBannerText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#854d0e',
+    textAlign: 'center',
+  },
+  devPlanRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  devPlanBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  devPlanBtnActive: {
+    backgroundColor: '#dbeafe',
+    borderColor: '#3b82f6',
+  },
+  devPlanBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  devPlanBtnTextActive: {
+    color: '#1d4ed8',
+  },
+  devPlanBtnClear: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  devPlanBtnClearText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#dc2626',
+  },
+  devOverrideNote: {
+    fontSize: 11,
+    color: '#9ca3af',
+    textAlign: 'center',
+    marginTop: 2,
   },
 
   // ── Footer ─────────────────────────────────────────────────────────────────

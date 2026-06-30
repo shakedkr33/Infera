@@ -88,6 +88,30 @@ async function getUserDisplayName(
   return user?.fullName?.trim() || 'משתמש';
 }
 
+/**
+ * Returns true when the user can manage (create/update/delete) tasks on an event.
+ * Rules:
+ *   - Personal event: only the creator.
+ *   - Community event: creator OR active community owner/admin.
+ */
+async function canManageEventTasks(
+  ctx: MutationCtx,
+  event: { createdBy: Id<'users'>; communityId?: Id<'communities'> },
+  userId: Id<'users'>
+): Promise<boolean> {
+  if (event.createdBy === userId) return true;
+  if (!event.communityId) return false;
+  const membership = await getCommunityMembership(
+    ctx,
+    event.communityId,
+    userId
+  );
+  return (
+    isActiveCommunityMember(membership) &&
+    (membership.role === 'owner' || membership.role === 'admin')
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // שליפת משימות אירוע (כולל assignee display)
 // ─────────────────────────────────────────────────────────────
@@ -162,7 +186,8 @@ export const create = mutation({
 
     const event = await ctx.db.get(eventId);
     if (!event) throw new Error('אירוע לא נמצא');
-    if (event.createdBy !== userId) throw new Error('אין הרשאה להוסיף משימות');
+    if (!(await canManageEventTasks(ctx, event, userId)))
+      throw new Error('אין הרשאה להוסיף משימות');
 
     return await ctx.db.insert('eventTasks', {
       eventId,
@@ -187,7 +212,8 @@ export const createBatch = mutation({
 
     const event = await ctx.db.get(eventId);
     if (!event) throw new Error('אירוע לא נמצא');
-    if (event.createdBy !== userId) throw new Error('אין הרשאה להוסיף משימות');
+    if (!(await canManageEventTasks(ctx, event, userId)))
+      throw new Error('אין הרשאה להוסיף משימות');
 
     const ids: string[] = [];
     for (let i = 0; i < tasks.length; i++) {
@@ -221,7 +247,8 @@ export const update = mutation({
     if (!task) throw new Error('משימה לא נמצאה');
 
     const event = await ctx.db.get(task.eventId);
-    if (!event || event.createdBy !== userId)
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (!(await canManageEventTasks(ctx, event, userId)))
       throw new Error('אין הרשאה לערוך משימות');
 
     await ctx.db.patch(id, { title: title.trim() });
@@ -749,7 +776,8 @@ export const remove = mutation({
     if (!task) throw new Error('משימה לא נמצאה');
 
     const event = await ctx.db.get(task.eventId);
-    if (!event || event.createdBy !== userId)
+    if (!event) throw new Error('אירוע לא נמצא');
+    if (!(await canManageEventTasks(ctx, event, userId)))
       throw new Error('אין הרשאה למחוק משימות');
 
     await ctx.db.delete(id);

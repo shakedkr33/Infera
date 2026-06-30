@@ -1,13 +1,13 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import {
-  Alert,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import type { EventTask, Participant } from '@/lib/types/event';
@@ -47,6 +47,10 @@ export function RelatedTasksSection({
   assignmentSectionLabel = 'משתתפים',
   showAddParticipantsEmptyAction = true,
 }: RelatedTasksSectionProps): React.JSX.Element {
+  // ── Add-task modal state (cross-platform replacement for Alert.prompt) ────
+  const [addTaskModalVisible, setAddTaskModalVisible] = useState(false);
+  const [addTaskDraft, setAddTaskDraft] = useState('');
+
   // ── Assign sheet state ────────────────────────────────────────────────────
   const [assigningTaskId, setAssigningTaskId] = useState<string | null>(null);
   const [draftSelected, setDraftSelected] = useState<string[]>([]);
@@ -86,22 +90,24 @@ export function RelatedTasksSection({
   };
 
   const addTask = (): void => {
-    Alert.prompt(
-      'משימה חדשה',
-      'הכנס שם המשימה',
-      (text) => {
-        if (text == null || text.trim() === '') return;
-        const newTask: EventTask = {
-          id: Date.now().toString(),
-          title: text.trim(),
-          completed: false,
-        };
-        onChange([...tasks, newTask]);
-      },
-      'plain-text',
-      '',
-      'default'
-    );
+    setAddTaskDraft('');
+    setAddTaskModalVisible(true);
+  };
+
+  const confirmAddTask = (): void => {
+    const title = addTaskDraft.trim();
+    if (!title) {
+      setAddTaskModalVisible(false);
+      return;
+    }
+    const newTask: EventTask = {
+      id: Date.now().toString(),
+      title,
+      completed: false,
+    };
+    onChange([...tasks, newTask]);
+    setAddTaskModalVisible(false);
+    setAddTaskDraft('');
   };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -221,13 +227,13 @@ export function RelatedTasksSection({
 
       {/* ── Add Task ── */}
       <Pressable
-        style={s.addTaskRow}
+        style={({ pressed }) => [s.addTaskRow, pressed && s.addTaskRowPressed]}
         onPress={addTask}
         accessible={true}
         accessibilityRole="button"
         accessibilityLabel="הוסף משימה חדשה"
       >
-        <MaterialIcons name="add" size={18} color="#94a3b8" />
+        <MaterialIcons name="add" size={18} color={PRIMARY} />
         <Text style={s.addTaskText}>הוסף משימה חדשה</Text>
       </Pressable>
 
@@ -252,6 +258,70 @@ export function RelatedTasksSection({
           />
         </View>
       )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          Add Task Modal (cross-platform — replaces Alert.prompt which is iOS-only)
+         ══════════════════════════════════════════════════════════════════════ */}
+      <Modal
+        visible={addTaskModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAddTaskModalVisible(false)}
+      >
+        <Pressable
+          style={s.addModalOverlay}
+          onPress={() => setAddTaskModalVisible(false)}
+          accessible={false}
+        >
+          <Pressable style={s.addModalBox} onPress={() => undefined}>
+            <Text style={s.addModalTitle}>משימה חדשה</Text>
+            <TextInput
+              style={s.addModalInput}
+              value={addTaskDraft}
+              onChangeText={setAddTaskDraft}
+              placeholder="שם המשימה"
+              placeholderTextColor="#94a3b8"
+              textAlign="right"
+              autoFocus={true}
+              returnKeyType="done"
+              onSubmitEditing={confirmAddTask}
+              accessible={true}
+              accessibilityLabel="שם המשימה"
+            />
+            <View style={s.addModalBtns}>
+              <Pressable
+                style={s.addModalCancelBtn}
+                onPress={() => setAddTaskModalVisible(false)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="ביטול"
+              >
+                <Text style={s.addModalCancelText}>ביטול</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  s.addModalConfirmBtn,
+                  !addTaskDraft.trim() && s.addModalConfirmBtnDisabled,
+                ]}
+                onPress={confirmAddTask}
+                disabled={!addTaskDraft.trim()}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="הוסף"
+              >
+                <Text
+                  style={[
+                    s.addModalConfirmText,
+                    !addTaskDraft.trim() && s.addModalConfirmTextDisabled,
+                  ]}
+                >
+                  הוסף
+                </Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* ══════════════════════════════════════════════════════════════════════
           Task Assignment Bottom Sheet
@@ -535,17 +605,94 @@ const s = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderWidth: 1.5,
+    borderColor: PRIMARY,
     borderStyle: 'dashed',
     borderRadius: 10,
     justifyContent: 'center',
     marginTop: 8,
+    backgroundColor: TINT,
+  },
+  addTaskRowPressed: {
+    opacity: 0.7,
   },
   addTaskText: {
     fontSize: 14,
+    color: PRIMARY,
+    fontWeight: '600',
+  },
+
+  // ── Add task modal ──────────────────────────────────────────────────────────
+  addModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  addModalBox: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 8,
+    gap: 16,
+  },
+  addModalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'center',
+  },
+  addModalInput: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#0f172a',
+    textAlign: 'right',
+  },
+  addModalBtns: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  addModalCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addModalCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  addModalConfirmBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addModalConfirmBtnDisabled: {
+    backgroundColor: '#e2e8f0',
+  },
+  addModalConfirmText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  addModalConfirmTextDisabled: {
     color: '#94a3b8',
-    fontWeight: '500',
   },
 
   // ── Visibility toggle ─────────────────────────────────────────────────────
