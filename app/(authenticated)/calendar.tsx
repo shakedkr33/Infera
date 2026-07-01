@@ -3656,13 +3656,11 @@ export default function CalendarScreen(): React.JSX.Element {
             returnTo="/(authenticated)/calendar"
           />
 
-          {/* View Toggle — iOS: rtl.flexDirection. Android: LTR track so pill translateX matches segments (חודשי right). */}
+          {/* View Toggle — LTR track on all platforms: pill left= is physical, ציר זמן LEFT, חודשי RIGHT. */}
           <View
             style={[
               styles.segmentedControl,
-              ANDROID_MATCH_IOS_LAYOUT
-                ? styles.segmentedControlAndroidTrack
-                : { flexDirection: rtl.flexDirection },
+              styles.segmentedControlAndroidTrack,
             ]}
             onLayout={(e) =>
               setSegmentContainerWidth(e.nativeEvent.layout.width)
@@ -3682,89 +3680,44 @@ export default function CalendarScreen(): React.JSX.Element {
                 ]}
               />
             )}
-            {ANDROID_MATCH_IOS_LAYOUT ? (
-              <>
-                <Pressable
-                  style={styles.segmentButton}
-                  onPress={() => handleViewModeChange('timeline')}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel="תצוגת ציר זמן"
-                >
-                  <Text
-                    style={[
-                      styles.segmentText,
-                      viewMode === 'timeline' && styles.segmentTextActive,
-                    ]}
-                  >
-                    ציר זמן
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={styles.segmentButton}
-                  onPress={() => handleViewModeChange('monthly')}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    isFiltered
-                      ? 'תצוגה חודשית (לא זמינה בסינון קהילה)'
-                      : 'תצוגה חודשית'
-                  }
-                  accessibilityState={{ disabled: isFiltered }}
-                >
-                  <Text
-                    style={[
-                      styles.segmentText,
-                      viewMode === 'monthly' && styles.segmentTextActive,
-                      isFiltered && styles.segmentTextDisabled,
-                    ]}
-                  >
-                    חודשי
-                  </Text>
-                </Pressable>
-              </>
-            ) : (
-              <>
-                <Pressable
-                  style={styles.segmentButton}
-                  onPress={() => handleViewModeChange('monthly')}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    isFiltered
-                      ? 'תצוגה חודשית (לא זמינה בסינון קהילה)'
-                      : 'תצוגה חודשית'
-                  }
-                  accessibilityState={{ disabled: isFiltered }}
-                >
-                  <Text
-                    style={[
-                      styles.segmentText,
-                      viewMode === 'monthly' && styles.segmentTextActive,
-                      isFiltered && styles.segmentTextDisabled,
-                    ]}
-                  >
-                    חודשי
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={styles.segmentButton}
-                  onPress={() => handleViewModeChange('timeline')}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel="תצוגת ציר זמן"
-                >
-                  <Text
-                    style={[
-                      styles.segmentText,
-                      viewMode === 'timeline' && styles.segmentTextActive,
-                    ]}
-                  >
-                    ציר זמן
-                  </Text>
-                </Pressable>
-              </>
-            )}
+            <Pressable
+              style={styles.segmentButton}
+              onPress={() => handleViewModeChange('timeline')}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="תצוגת ציר זמן"
+            >
+              <Text
+                style={[
+                  styles.segmentText,
+                  viewMode === 'timeline' && styles.segmentTextActive,
+                ]}
+              >
+                ציר זמן
+              </Text>
+            </Pressable>
+            <Pressable
+              style={styles.segmentButton}
+              onPress={() => handleViewModeChange('monthly')}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isFiltered
+                  ? 'תצוגה חודשית (לא זמינה בסינון קהילה)'
+                  : 'תצוגה חודשית'
+              }
+              accessibilityState={{ disabled: isFiltered }}
+            >
+              <Text
+                style={[
+                  styles.segmentText,
+                  viewMode === 'monthly' && styles.segmentTextActive,
+                  isFiltered && styles.segmentTextDisabled,
+                ]}
+              >
+                חודשי
+              </Text>
+            </Pressable>
           </View>
 
           {viewMode === 'monthly' ? (

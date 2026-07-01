@@ -1104,6 +1104,7 @@ const styles = StyleSheet.create({
   },
   cardInner: {
     flex: 1,
+    width: '100%',
     padding: 16,
     alignItems: 'stretch',
     justifyContent: 'flex-start',

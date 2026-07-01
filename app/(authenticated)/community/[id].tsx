@@ -3170,6 +3170,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   flyerCardBody: {
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'flex-start',
     paddingHorizontal: 12,
