@@ -11,23 +11,26 @@
  * ══════════════════════════════════════════════════════════════════════════════
  *
  * textAlign is NOT auto-flipped by I18nManager (unlike flexDirection).
- * However, when `direction: 'rtl'` is placed on the root View, Yoga enters RTL
- * layout mode and treats textAlign values as LOGICAL (not physical):
+ * iOS and Android handle it differently:
  *
- *   - textAlign: 'left'  → Yoga RTL mode → physical RIGHT  ✓
- *   - textAlign: 'right' → Yoga RTL mode → physical LEFT   ✗
+ *   iOS native (I18nManager.isRTL=true):
+ *     Yoga inherits RTL direction from the OS → 'left' is logical-start →
+ *     physical RIGHT. Use 'left' (logical inverse) so text lands on the right.
  *
- * In Expo Go there is NO Yoga RTL mode (no direction: 'rtl' on root), so
- * textAlign values are physical and 'right' means physical right.
+ *   Android native (I18nManager.isRTL=true):
+ *     Yoga does NOT auto-flip textAlign. 'left' stays physical LEFT. Must use
+ *     'right' explicitly so text lands on the physical right.
  *
- * Therefore getTextAlign() uses INVERSE logic for native RTL builds:
+ *   Expo Go (no native RTL active):
+ *     No Yoga RTL mode; textAlign values are physical. Use 'right'.
  *
- * ┌──────────────────┬───────────────────┬────────────────────┬──────────────────┐
- * │ Environment      │ rtl.textAlign     │ Yoga direction:rtl │ Final Result     │
- * ├──────────────────┼───────────────────┼────────────────────┼──────────────────┤
- * │ Expo Go          │ "right"           │ No (physical)      │ RIGHT ✅         │
- * │ Native RTL build │ "left"            │ Yes (logical)      │ RIGHT ✅         │
- * └──────────────────┴───────────────────┴────────────────────┴──────────────────┘
+ * ┌────────────────────┬───────────────────┬────────────────────┬──────────────────┐
+ * │ Environment        │ rtl.textAlign     │ Yoga direction:rtl │ Final Result     │
+ * ├────────────────────┼───────────────────┼────────────────────┼──────────────────┤
+ * │ Expo Go            │ "right"           │ No  (physical)     │ RIGHT ✅         │
+ * │ iOS native RTL     │ "left"            │ Yes (logical)      │ RIGHT ✅         │
+ * │ Android native RTL │ "right"           │ No  (not flipped)  │ RIGHT ✅         │
+ * └────────────────────┴───────────────────┴────────────────────┴──────────────────┘
  *
  * ┌─────────────┬───────────────────┬───────────────┬──────────────────┐
  * │ Environment │ rtl.flexDirection │ Native Flips? │ Final Result     │
@@ -56,7 +59,7 @@
  */
 
 import Constants from 'expo-constants';
-import { I18nManager } from 'react-native';
+import { I18nManager, Platform } from 'react-native';
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -108,22 +111,38 @@ export const needsExplicitRTL = (): boolean => APP_IS_RTL && !I18nManager.isRTL;
 /**
  * Get text alignment for Hebrew/RTL content.
  *
- * textAlign is NOT auto-flipped by I18nManager. However, when the root View
- * has `direction: 'rtl'`, Yoga treats 'left' as logical-start → physical RIGHT.
- * So native RTL builds must return 'left' (logical) while Expo Go must return
- * 'right' (physical), because Expo Go has no Yoga RTL mode on its root.
+ * textAlign is NOT auto-flipped by I18nManager. The platforms diverge here:
  *
- * - needsExplicitRTL() (Expo Go / no native RTL): return "right" ✅ (physical)
- * - I18nManager.isRTL (native RTL build, Yoga RTL active): return "left" ✅ (logical)
+ *   iOS native (I18nManager.isRTL=true):
+ *     Yoga inherits RTL direction from the native environment, so 'left' means
+ *     logical-start → physical RIGHT. Return 'left' (logical). ✅
+ *
+ *   Android native (I18nManager.isRTL=true):
+ *     Yoga does NOT auto-flip textAlign even with direction:'rtl' on the root
+ *     View. 'left' stays physical LEFT. Return 'right' (explicit physical). ✅
+ *
+ *   Expo Go (needsExplicitRTL()=true, no native RTL):
+ *     No Yoga RTL mode on root. Return 'right' (explicit physical). ✅
+ *
+ * ┌────────────────────┬─────────────────┬────────────────────┬──────────────┐
+ * │ Environment        │ getTextAlign()  │ Yoga direction:rtl │ Final Result │
+ * ├────────────────────┼─────────────────┼────────────────────┼──────────────┤
+ * │ Expo Go            │ "right"         │ No  (physical)     │ RIGHT ✅     │
+ * │ iOS native RTL     │ "left"          │ Yes (logical)      │ RIGHT ✅     │
+ * │ Android native RTL │ "right"         │ No  (not flipped)  │ RIGHT ✅     │
+ * └────────────────────┴─────────────────┴────────────────────┴──────────────┘
  *
  * @returns "right" | "left" | undefined
  */
 export const getTextAlign = (): 'right' | 'left' | undefined => {
   if (needsExplicitRTL()) {
-    return 'right';
+    return 'right'; // Expo Go: physical right (no Yoga RTL)
   }
-  if (I18nManager.isRTL) {
-    return 'left';
+  if (I18nManager.isRTL && Platform.OS === 'android') {
+    return 'right'; // Android native: Yoga does not auto-flip textAlign
+  }
+  if (I18nManager.isRTL && Platform.OS === 'ios') {
+    return 'left'; // iOS native: Yoga logical-start → physical right
   }
   return undefined;
 };
@@ -207,12 +226,13 @@ export const tw = {
 
   /**
    * Tailwind text-alignment class for logical "start" (right side in RTL).
-   * - Expo Go (no Yoga RTL): 'text-right' (physical right)
-   * - Native RTL build (Yoga RTL active): 'text-left' (logical start → physical right)
+   * Mirrors getTextAlign() — Expo Go and Android need explicit 'text-right';
+   * iOS Yoga logical mode uses 'text-left' which renders as physical right.
    */
   get textStart(): string {
     if (needsExplicitRTL()) return 'text-right';
-    if (I18nManager.isRTL) return 'text-left';
+    if (I18nManager.isRTL && Platform.OS === 'android') return 'text-right';
+    if (I18nManager.isRTL && Platform.OS === 'ios') return 'text-left';
     return '';
   },
 
@@ -222,7 +242,8 @@ export const tw = {
    */
   get textEnd(): string {
     if (needsExplicitRTL()) return 'text-left';
-    if (I18nManager.isRTL) return 'text-right';
+    if (I18nManager.isRTL && Platform.OS === 'android') return 'text-left';
+    if (I18nManager.isRTL && Platform.OS === 'ios') return 'text-right';
     return '';
   },
 
