@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { needsExplicitRTL } from '@/lib/rtl';
 import {
   classifyPhoneAuthError,
   mapPhoneAuthError,
@@ -340,9 +341,13 @@ const styles = StyleSheet.create({
     opacity: 0,
     pointerEvents: 'none',
   },
-  // Force LTR for digit boxes — OTP codes are always left-to-right
+  // Force LTR for digit boxes — OTP codes are always left-to-right.
+  // Plain 'row' isn't enough: I18nManager auto-flips 'row' to visually
+  // render as 'row-reverse' when native RTL is active, which reversed the
+  // digit order. Using the inverse of rtl.flexDirection's logic counteracts
+  // that auto-flip so the boxes stay physically LTR in every environment.
   boxesRow: {
-    flexDirection: 'row',
+    flexDirection: needsExplicitRTL() ? 'row' : 'row-reverse',
     gap: 10,
   },
   digitBox: {

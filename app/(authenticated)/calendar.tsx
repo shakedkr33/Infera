@@ -5792,7 +5792,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   timelineFilterRow: {
-    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
+    // Column cross-axis alignment: hardcoded 'flex-end' renders physical
+    // RIGHT in both Expo Go and native RTL builds (verified against the
+    // untouched sibling styles expandedEventRow/expandedTaskRow/
+    // expandedHolidayRow below, which already rely on bare 'flex-end' inside
+    // this same day-cell tree). needsExplicitRTL() was only correct before
+    // this screen's native RTL rendering was verified — with native RTL,
+    // needsExplicitRTL() is false and the old ternary fell through to
+    // 'flex-start', which renders physical LEFT.
+    alignItems: 'flex-end',
     paddingHorizontal: 12,
     paddingBottom: 4,
     paddingTop: 2,
@@ -5993,7 +6001,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   gapRow: {
-    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
+    // See timelineFilterRow comment above — 'flex-end' is the physical-right
+    // value in both environments. Consistent with paddingStart below, which
+    // already resolves to the right side via RN's logical-property support.
+    alignItems: 'flex-end',
     paddingRight: needsExplicitRTL() ? 6 : 0,
     paddingStart: needsExplicitRTL() ? 0 : 6,
     marginTop: -16,
@@ -6346,7 +6357,9 @@ const mStyles = StyleSheet.create({
     elevation: 1,
   },
   dayCellExpanded: {
-    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
+    // See timelineFilterRow comment above — 'flex-end' matches the already
+    // physical-right children of this exact cell (expandedEventRow, etc.).
+    alignItems: 'flex-end',
     justifyContent: 'flex-start',
     paddingTop: 6,
     paddingBottom: 4,

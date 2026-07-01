@@ -422,9 +422,9 @@ export default function FamilyProfileScreen() {
               className={`bg-white p-4 rounded-2xl ${tw.flexRow} items-center justify-between mb-6`}
               style={shadows.soft}
             >
-              <View className="p-2">
-                <MaterialIcons name="edit" size={18} color="#9ca3af" />
-              </View>
+              {/* Name + avatar — first child renders on the physical RIGHT (RTL
+                  start) with tw.flexRow + justify-between, matching the
+                  FamilyMemberDisplayCard convention. */}
               <View className={`${tw.flexRow} items-center gap-3 flex-1`}>
                 <View
                   style={{ backgroundColor: personalColor }}
@@ -462,6 +462,10 @@ export default function FamilyProfileScreen() {
                     </View>
                   )}
                 </View>
+              </View>
+              {/* Edit pencil — second child renders on the physical LEFT (RTL end) */}
+              <View className="p-2">
+                <MaterialIcons name="edit" size={18} color="#9ca3af" />
               </View>
             </Pressable>
           ) : (

@@ -27,13 +27,15 @@ import type {
   Notification,
   NotificationType,
 } from '@/lib/notificationsStorage';
-import { rtl } from '@/lib/rtl';
+import { position, rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const DRAWER_WIDTH = Math.round(SCREEN_WIDTH * 0.7);
-// Drawer always slides in from the left regardless of RTL locale
+// Drawer always slides in from the left regardless of RTL locale.
+// translateX is a physical transform (never auto-flipped by I18nManager), so
+// these stay negative-to-hide / 0-to-show in every environment.
 const CLOSED_X = -DRAWER_WIDTH;
 const OPEN_X = 0;
 const SPRING = { damping: 26, stiffness: 130 } as const;
@@ -377,7 +379,12 @@ const s = StyleSheet.create({
   },
   drawerPanel: {
     position: 'absolute',
-    left: 0,
+    // React Native auto-flips physical `left`/`right` values when native RTL
+    // is active (I18nManager.isRTL): code-level `left` renders on-screen RIGHT.
+    // Since this drawer must always pin to the physical LEFT, we need the
+    // logical "end" side (`position.end`), not "start" — `position.start`
+    // would resolve to `left: 0` again on native RTL and leave the bug in place.
+    ...position.end(0),
     top: 0,
     bottom: 0,
     width: DRAWER_WIDTH,
