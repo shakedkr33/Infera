@@ -5573,14 +5573,14 @@ function TimelineView({
                                         accessibilityRole="button"
                                         accessibilityLabel="נווט"
                                       >
+                                        <Text style={styles.eventNavBtnText}>
+                                          נווט
+                                        </Text>
                                         <MaterialIcons
                                           name="near-me"
                                           size={13}
                                           color="#8d6e63"
                                         />
-                                        <Text style={styles.eventNavBtnText}>
-                                          נווט
-                                        </Text>
                                       </Pressable>
                                     </>
                                   ) : null}
@@ -6237,7 +6237,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   eventNavBtn: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
     backgroundColor: 'rgba(141,110,99,0.1)',

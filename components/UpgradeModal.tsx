@@ -4,6 +4,7 @@ import {
   Animated,
   Dimensions,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -11,7 +12,9 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { rtl } from '@/lib/rtl';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -104,7 +107,7 @@ export function UpgradeModal({
       animationType="none"
       onRequestClose={onClose}
     >
-      <View style={s.overlay}>
+      <View style={[s.overlay, ANDROID_MATCH_IOS_LAYOUT && { direction: 'rtl' }]}>
         {/* Backdrop — tap to dismiss */}
         <Pressable
           style={s.backdrop}

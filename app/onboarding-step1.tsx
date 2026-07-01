@@ -161,8 +161,8 @@ export default function OnboardingStep1() {
             backgroundColor: selected ? colors.sage : '#d1d5db',
           }}
         >
-          <Text className="text-white text-xl font-bold">המשך</Text>
           <MaterialIcons name="chevron-left" size={24} color="white" />
+          <Text className="text-white text-xl font-bold">המשך</Text>
         </Pressable>
       </View>
     </SafeAreaView>

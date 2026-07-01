@@ -1,6 +1,9 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 const PRIMARY = '#36a9e2';
 
@@ -34,7 +37,7 @@ export function BirthdayAddChoiceSheet({
           accessible={false}
         />
 
-        <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={[s.sheet, { paddingBottom: Math.max(insets.bottom, 16) }, ANDROID_MATCH_IOS_LAYOUT && { direction: 'rtl' }]}>
           {/* Drag handle */}
           <View style={s.handleContainer}>
             <View style={s.handle} />
@@ -114,11 +117,11 @@ const s = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 20,
   },
   optionRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 16,
     backgroundColor: '#f6f7f8',
@@ -141,12 +144,12 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   optionSub: {
     fontSize: 13,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
 });

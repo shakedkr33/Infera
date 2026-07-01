@@ -22,12 +22,15 @@ import {
 
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
+import { APP_IS_RTL } from '@/lib/rtl';
 import {
   getCurrentPlatformRevenueCatApiKey,
   PACKAGE_IDS,
 } from '@/utils/revenueCatConfig';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 const PRIMARY = '#36a9e2';
 const PRIMARY_LIGHT = '#eaf6fd';
@@ -249,7 +252,7 @@ export default function SubscriptionScreen() {
     billingCycle === 'monthly' ? 'להמשיך עם מנוי חודשי' : 'להמשיך עם מנוי שנתי';
 
   return (
-    <SafeAreaView style={s.safe} edges={['top']}>
+    <SafeAreaView style={[s.safe, ANDROID_MATCH_IOS_LAYOUT && s.safeAreaRtl]} edges={['top']}>
       {/* Header */}
       <View style={s.header}>
         <Pressable
@@ -892,6 +895,9 @@ const s = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: BG,
+  },
+  safeAreaRtl: {
+    direction: 'rtl',
   },
   header: {
     flexDirection: 'row',
