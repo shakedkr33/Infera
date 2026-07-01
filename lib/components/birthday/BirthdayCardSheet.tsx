@@ -2,7 +2,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useQuery } from 'convex/react';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { UpgradeModal } from '@/components/UpgradeModal';
@@ -17,6 +18,8 @@ import {
 import type { BirthdayTaskOptionType } from './BirthdayTaskOptionsSheet';
 import { BirthdayTaskOptionsSheet } from './BirthdayTaskOptionsSheet';
 import { BottomSheet } from './BottomSheet';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 function formatEventDate(startTime: number): string {
   return new Date(startTime).toLocaleDateString('he-IL', {
@@ -139,6 +142,7 @@ export function BirthdayCardSheet({
       onClose={onClose}
       maxHeight={560 + extraHeight}
     >
+      <View style={ANDROID_MATCH_IOS_LAYOUT ? { direction: 'rtl' } : undefined}>
       {/* Header */}
       <View style={s.header}>
         <Text style={s.headerTitle}>יום הולדת 🎂</Text>
@@ -285,6 +289,16 @@ export function BirthdayCardSheet({
       {/* Footer */}
       <View style={s.footer}>
         <Pressable
+          style={s.deleteBtn}
+          onPress={handleDelete}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="מחק יום הולדת"
+        >
+          <Text style={s.deleteBtnText}>מחק יום הולדת</Text>
+          <MaterialIcons name="delete" size={18} color="#ef4444" />
+        </Pressable>
+        <Pressable
           style={s.footerBtn}
           onPress={() => {
             onClose();
@@ -295,16 +309,6 @@ export function BirthdayCardSheet({
           accessibilityLabel="צפייה בכל ימי ההולדת"
         >
           <Text style={s.footerBtnText}>צפייה בכל ימי ההולדת</Text>
-        </Pressable>
-        <Pressable
-          style={s.deleteBtn}
-          onPress={handleDelete}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="מחק יום הולדת"
-        >
-          <MaterialIcons name="delete" size={18} color="#ef4444" />
-          <Text style={s.deleteBtnText}>מחק יום הולדת</Text>
         </Pressable>
       </View>
 
@@ -337,6 +341,7 @@ export function BirthdayCardSheet({
         visible={selectedRelatedTaskId !== null}
         onClose={() => setSelectedRelatedTaskId(null)}
       />
+      </View>
     </BottomSheet>
   );
 }
@@ -433,11 +438,11 @@ const s = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 8,
   },
   relatedTaskRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
     paddingVertical: 6,
@@ -455,10 +460,10 @@ const s = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#334155',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   relatedEventRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
     paddingVertical: 6,
@@ -468,18 +473,18 @@ const s = StyleSheet.create({
   },
   relatedEventInfo: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
   },
   relatedEventTitle: {
     fontSize: 14,
     color: '#334155',
     fontWeight: '500',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   relatedEventDate: {
     fontSize: 12,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 1,
   },
   footer: { paddingHorizontal: 24, paddingBottom: 16, gap: 4 },
@@ -492,7 +497,7 @@ const s = StyleSheet.create({
   },
   footerBtnText: { fontSize: 15, fontWeight: '700', color: PRIMARY },
   deleteBtn: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
