@@ -7,25 +7,27 @@
  * - Dev/Prod builds (native RTL works via I18nManager)
  *
  * ══════════════════════════════════════════════════════════════════════════════
- * THE BREAKTHROUGH DISCOVERY:
+ * HOW textAlign WORKS WITH Yoga direction: 'rtl'
  * ══════════════════════════════════════════════════════════════════════════════
  *
- * In native RTL mode (I18nManager.isRTL = true), React Native AUTOMATICALLY FLIPS
- * certain style properties:
+ * textAlign is NOT auto-flipped by I18nManager (unlike flexDirection).
+ * However, when `direction: 'rtl'` is placed on the root View, Yoga enters RTL
+ * layout mode and treats textAlign values as LOGICAL (not physical):
  *
- *   - textAlign: NOT auto-flipped. Must always be set explicitly to "right".
- *   - flexDirection="row" → gets flipped to → flexDirection="row-reverse" (Correct!)
- *   - absolute left/right coordinates → ARE auto-flipped by the native system.
+ *   - textAlign: 'left'  → Yoga RTL mode → physical RIGHT  ✓
+ *   - textAlign: 'right' → Yoga RTL mode → physical LEFT   ✗
  *
- * So for textAlign we always return "right" directly:
+ * In Expo Go there is NO Yoga RTL mode (no direction: 'rtl' on root), so
+ * textAlign values are physical and 'right' means physical right.
  *
- * ┌─────────────┬───────────────────┬───────────────┬──────────────────┐
- * │ Environment │ rtl.textAlign     │ Native Flips? │ Final Result     │
- * ├─────────────┼───────────────────┼───────────────┼──────────────────┤
- * │ Expo Go     │ "right"           │ No            │ RIGHT ✅         │
- * │ Dev Build   │ "right"           │ No            │ RIGHT ✅         │
- * │ Prod Build  │ "right"           │ No            │ RIGHT ✅         │
- * └─────────────┴───────────────────┴───────────────┴──────────────────┘
+ * Therefore getTextAlign() uses INVERSE logic for native RTL builds:
+ *
+ * ┌──────────────────┬───────────────────┬────────────────────┬──────────────────┐
+ * │ Environment      │ rtl.textAlign     │ Yoga direction:rtl │ Final Result     │
+ * ├──────────────────┼───────────────────┼────────────────────┼──────────────────┤
+ * │ Expo Go          │ "right"           │ No (physical)      │ RIGHT ✅         │
+ * │ Native RTL build │ "left"            │ Yes (logical)      │ RIGHT ✅         │
+ * └──────────────────┴───────────────────┴────────────────────┴──────────────────┘
  *
  * ┌─────────────┬───────────────────┬───────────────┬──────────────────┐
  * │ Environment │ rtl.flexDirection │ Native Flips? │ Final Result     │
@@ -106,17 +108,22 @@ export const needsExplicitRTL = (): boolean => APP_IS_RTL && !I18nManager.isRTL;
 /**
  * Get text alignment for Hebrew/RTL content.
  *
- * React Native does NOT auto-flip textAlign in native RTL mode, so we
- * always return "right" explicitly whenever APP_IS_RTL is true.
+ * textAlign is NOT auto-flipped by I18nManager. However, when the root View
+ * has `direction: 'rtl'`, Yoga treats 'left' as logical-start → physical RIGHT.
+ * So native RTL builds must return 'left' (logical) while Expo Go must return
+ * 'right' (physical), because Expo Go has no Yoga RTL mode on its root.
  *
- * - Expo Go (no native RTL): return "right" ✅
- * - Dev/Prod Build (native RTL): return "right" ✅
+ * - needsExplicitRTL() (Expo Go / no native RTL): return "right" ✅ (physical)
+ * - I18nManager.isRTL (native RTL build, Yoga RTL active): return "left" ✅ (logical)
  *
- * @returns "right" | undefined
+ * @returns "right" | "left" | undefined
  */
-export const getTextAlign = (): 'right' | undefined => {
-  if (APP_IS_RTL) {
+export const getTextAlign = (): 'right' | 'left' | undefined => {
+  if (needsExplicitRTL()) {
     return 'right';
+  }
+  if (I18nManager.isRTL) {
+    return 'left';
   }
   return undefined;
 };
@@ -161,9 +168,10 @@ export const getFlexDirection = (): 'row' | 'row-reverse' => {
 export const rtl = {
   /**
    * Text alignment for RTL content.
-   * Always "right" when APP_IS_RTL is true — React Native does not auto-flip textAlign.
+   * Returns 'right' in Expo Go (physical), 'left' in native RTL builds (logical,
+   * because Yoga direction:'rtl' on root makes 'left' render as physical right).
    */
-  get textAlign(): 'right' | undefined {
+  get textAlign(): 'right' | 'left' | undefined {
     return getTextAlign();
   },
 
@@ -198,19 +206,24 @@ export const tw = {
   },
 
   /**
-   * Text alignment for start (always "text-right" in RTL apps).
-   * React Native does not auto-flip textAlign, so no inversion is needed.
+   * Tailwind text-alignment class for logical "start" (right side in RTL).
+   * - Expo Go (no Yoga RTL): 'text-right' (physical right)
+   * - Native RTL build (Yoga RTL active): 'text-left' (logical start → physical right)
    */
   get textStart(): string {
-    return APP_IS_RTL ? 'text-right' : '';
+    if (needsExplicitRTL()) return 'text-right';
+    if (I18nManager.isRTL) return 'text-left';
+    return '';
   },
 
   /**
-   * Text alignment for end (always "text-left" in RTL apps).
-   * React Native does not auto-flip textAlign, so no inversion is needed.
+   * Tailwind text-alignment class for logical "end" (left side in RTL).
+   * Opposite of textStart.
    */
   get textEnd(): string {
-    return APP_IS_RTL ? 'text-left' : '';
+    if (needsExplicitRTL()) return 'text-left';
+    if (I18nManager.isRTL) return 'text-right';
+    return '';
   },
 
   /**

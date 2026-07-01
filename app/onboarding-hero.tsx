@@ -1,14 +1,16 @@
 import { useRouter } from 'expo-router';
-import { Image, Pressable, Text, View } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
-import { tw } from '@/lib/rtl';
+import { APP_IS_RTL, tw } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 export default function OnboardingHero() {
   const router = useRouter();
 
   return (
-    <SafeAreaView className="flex-1 bg-white px-8 py-12">
+    <SafeAreaView className="flex-1 bg-white px-8 py-12" style={ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : undefined}>
       <View className="flex-1 justify-center items-center">
         {/* לוגו InYomi */}
         <Image
@@ -42,3 +44,9 @@ export default function OnboardingHero() {
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
+});

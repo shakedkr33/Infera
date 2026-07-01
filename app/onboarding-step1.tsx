@@ -2,11 +2,13 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
-import { tw } from '@/lib/rtl';
+import { APP_IS_RTL, tw } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 export default function OnboardingStep1() {
   const router = useRouter();
@@ -26,7 +28,7 @@ export default function OnboardingStep1() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
+    <SafeAreaView style={[{ flex: 1, backgroundColor: '#f6f7f8' }, ANDROID_MATCH_IOS_LAYOUT && styles.safeAreaRtl]}>
       {/* Header & Progress */}
       <View className="pt-4 px-4">
         <View className={`${tw.flexRow} items-center justify-between mb-4`}>
@@ -166,3 +168,9 @@ export default function OnboardingStep1() {
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
+});

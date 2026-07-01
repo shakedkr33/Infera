@@ -1,11 +1,14 @@
 import { useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { api } from '@/convex/_generated/api';
+import { APP_IS_RTL } from '@/lib/rtl';
 import { getHasSeenOnboarding } from '@/lib/onboardingState';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 /**
  * Post-OTP routing: Home if family exists / invite join / skipped setup;
@@ -84,7 +87,7 @@ export default function FamilyBootstrapScreen(): React.JSX.Element {
   ]);
 
   return (
-    <View className="flex-1 items-center justify-center bg-white px-8">
+    <View className="flex-1 items-center justify-center bg-white px-8" style={ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : undefined}>
       <ActivityIndicator color="#4A9FE2" size="large" />
       <Text className="mt-6 text-center text-base text-gray-600">
         מכינים את החשבון…
@@ -92,3 +95,9 @@ export default function FamilyBootstrapScreen(): React.JSX.Element {
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
+});

@@ -4,14 +4,18 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
-import { tw } from '@/lib/rtl';
+import { APP_IS_RTL, tw } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 export default function OnboardingPremium() {
   const router = useRouter();
@@ -37,7 +41,7 @@ export default function OnboardingPremium() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: 'white' }}>
+    <SafeAreaView style={[{ flex: 1, backgroundColor: 'white' }, ANDROID_MATCH_IOS_LAYOUT && styles.safeAreaRtl]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 40 }}
@@ -203,3 +207,9 @@ export default function OnboardingPremium() {
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
+});

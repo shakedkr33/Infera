@@ -1,12 +1,14 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
 import { markOnboardingSeen } from '../lib/onboardingState';
-import { tw } from '@/lib/rtl';
+import { APP_IS_RTL, tw } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 const sources = [
   { id: 'whatsapp', title: 'הודעות וואטסאפ', icon: 'chat' },
@@ -36,7 +38,7 @@ export default function OnboardingStep3() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f6f7f8' }}>
+    <SafeAreaView style={[{ flex: 1, backgroundColor: '#f6f7f8' }, ANDROID_MATCH_IOS_LAYOUT && styles.safeAreaRtl]}>
       {/* Header & Progress — consistent with step 1 / step 2 */}
       <View className="pt-4 px-6">
         <View className={`${tw.flexRow} items-center justify-between mb-4`}>
@@ -173,6 +175,9 @@ export default function OnboardingStep3() {
 }
 
 const styles = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
   card: { backgroundColor: 'white' },
   selectedCard: {
     borderColor: '#4A9FE2',

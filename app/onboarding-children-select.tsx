@@ -2,11 +2,13 @@ import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../constants/theme';
 import { useOnboarding } from '../contexts/OnboardingContext';
-import { tw } from '@/lib/rtl';
+import { APP_IS_RTL, tw } from '@/lib/rtl';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 const COUNTS = [1, 2, 3, 4, '5+'] as const;
 
@@ -60,7 +62,7 @@ export default function OnboardingChildrenSelect() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.beige }}>
+    <SafeAreaView style={[{ flex: 1, backgroundColor: colors.beige }, ANDROID_MATCH_IOS_LAYOUT && styles.safeAreaRtl]}>
       {/* Header — label removed, back button kept */}
       <View className="pt-4 px-6">
         <View className={`${tw.flexRow} items-center mb-2`}>
@@ -243,3 +245,9 @@ export default function OnboardingChildrenSelect() {
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safeAreaRtl: {
+    direction: 'rtl',
+  },
+});

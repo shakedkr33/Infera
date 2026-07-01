@@ -1,11 +1,14 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
+import { APP_IS_RTL } from '@/lib/rtl';
 import { getHasSeenOnboarding } from '@/lib/onboardingState';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -37,7 +40,7 @@ export default function WelcomeScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={[styles.safe, ANDROID_MATCH_IOS_LAYOUT && styles.safeAreaRtl]}>
       <View style={styles.content}>
         <View style={styles.phoneSection}>
           <View style={styles.phoneMockup}>
@@ -79,6 +82,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f6f7f8',
     paddingHorizontal: 24,
     position: 'relative',
+  },
+  safeAreaRtl: {
+    direction: 'rtl',
   },
 
   content: {
