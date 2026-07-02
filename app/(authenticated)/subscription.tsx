@@ -1062,7 +1062,7 @@ const s = StyleSheet.create({
     borderBottomColor: '#f3f4f6',
   },
   priceRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'baseline',
     gap: 6,
   },
