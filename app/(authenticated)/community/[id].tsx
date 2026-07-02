@@ -44,7 +44,7 @@ import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
 } from '@/lib/openCommunityCalendarUi';
-import { APP_IS_RTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getConvexErrorCode } from '@/lib/utils/convexError';
@@ -946,22 +946,19 @@ function EventRow({
       accessibilityRole="button"
       accessibilityLabel={event.title}
     >
-      <View style={styles.eventRowLeft}>
-        <Text style={styles.eventRowDate}>
-          {new Date(event.startTime).toLocaleDateString('he-IL', {
-            day: 'numeric',
-            month: 'short',
-          })}
-        </Text>
-        <View
-          style={[
-            styles.eventDot,
-            { backgroundColor: getEventColor(event._id) },
-          ]}
-        />
-      </View>
+      {/* First child = physical RIGHT in effective row-reverse */}
       <View style={styles.eventRowContent}>
         <View style={styles.eventRowTop}>
+          {/* Title first = physical RIGHT in effective row-reverse */}
+          <Text
+            style={[
+              styles.eventRowTitle,
+              past && !isCancelled && { color: '#9ca3af' },
+            ]}
+            numberOfLines={2}
+          >
+            {event.title}
+          </Text>
           {past && !isCancelled && (
             <View
               style={[
@@ -972,15 +969,6 @@ function EventRow({
               <Text style={styles.eventBadgeText}>עבר</Text>
             </View>
           )}
-          <Text
-            style={[
-              styles.eventRowTitle,
-              past && !isCancelled && { color: '#9ca3af' },
-            ]}
-            numberOfLines={2}
-          >
-            {event.title}
-          </Text>
         </View>
         {cancelReason ? (
           <Text style={styles.eventRowCancelReason} numberOfLines={1}>
@@ -1021,6 +1009,21 @@ function EventRow({
             taskSummary={taskSummary}
           />
         ) : null}
+      </View>
+      {/* Second child = physical LEFT in effective row-reverse: date column */}
+      <View style={styles.eventRowLeft}>
+        <Text style={styles.eventRowDate}>
+          {new Date(event.startTime).toLocaleDateString('he-IL', {
+            day: 'numeric',
+            month: 'short',
+          })}
+        </Text>
+        <View
+          style={[
+            styles.eventDot,
+            { backgroundColor: getEventColor(event._id) },
+          ]}
+        />
       </View>
     </Pressable>
   );
@@ -1076,6 +1079,12 @@ function SectionHeader({
 }: SectionHeaderProps) {
   return (
     <View style={styles.sectionHeader}>
+      <View style={styles.sectionRight}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {subtitle ? (
+          <Text style={styles.sectionSubtitle}>{subtitle}</Text>
+        ) : null}
+      </View>
       <View style={styles.sectionLeft}>
         {actionLabel && onAction && (
           <TouchableOpacity
@@ -1086,12 +1095,6 @@ function SectionHeader({
             <Text style={styles.sectionAction}>{actionLabel}</Text>
           </TouchableOpacity>
         )}
-      </View>
-      <View style={styles.sectionRight}>
-        <Text style={styles.sectionTitle}>{title}</Text>
-        {subtitle ? (
-          <Text style={styles.sectionSubtitle}>{subtitle}</Text>
-        ) : null}
       </View>
     </View>
   );
@@ -2072,20 +2075,7 @@ function TabEvents({
     <View style={styles.tabFlex}>
       {/* Month selector */}
       <View style={styles.monthSelector}>
-        <TouchableOpacity
-          onPress={() => {
-            const d = new Date(selectedMonth);
-            d.setMonth(d.getMonth() + 1);
-            onMonthChange(d);
-          }}
-          style={styles.monthArrow}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="חודש הבא"
-        >
-          <Ionicons name="chevron-back" size={20} color="#374151" />
-        </TouchableOpacity>
-        <Text style={styles.monthLabel}>{monthLabel}</Text>
+        {/* First child = physical RIGHT in effective row-reverse: previous month */}
         <TouchableOpacity
           onPress={() => {
             const d = new Date(selectedMonth);
@@ -2098,6 +2088,21 @@ function TabEvents({
           accessibilityLabel="חודש קודם"
         >
           <Ionicons name="chevron-forward" size={20} color="#374151" />
+        </TouchableOpacity>
+        <Text style={styles.monthLabel}>{monthLabel}</Text>
+        {/* Last child = physical LEFT in effective row-reverse: next month */}
+        <TouchableOpacity
+          onPress={() => {
+            const d = new Date(selectedMonth);
+            d.setMonth(d.getMonth() + 1);
+            onMonthChange(d);
+          }}
+          style={styles.monthArrow}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel="חודש הבא"
+        >
+          <Ionicons name="chevron-back" size={20} color="#374151" />
         </TouchableOpacity>
       </View>
 
@@ -2268,6 +2273,12 @@ function TabReminders({ communityId, onToggle }: TabRemindersProps) {
       {historyCount > 0 ? (
         <View style={{ marginHorizontal: 16, marginTop: 24 }}>
           <View style={styles.sectionHeader}>
+            <View style={styles.sectionRight}>
+              <Text style={styles.sectionTitle}>תזכורות אחרונות</Text>
+              <Text style={styles.sectionSubtitle}>
+                תזכורות שטופלו נשמרות כאן עד 30 יום
+              </Text>
+            </View>
             <TouchableOpacity
               onPress={() => setShowHistory((v) => !v)}
               accessible
@@ -2280,12 +2291,6 @@ function TabReminders({ communityId, onToggle }: TabRemindersProps) {
                 {showHistory ? 'הסתר' : `הצג היסטוריה (${historyCount})`}
               </Text>
             </TouchableOpacity>
-            <View style={styles.sectionRight}>
-              <Text style={styles.sectionTitle}>תזכורות אחרונות</Text>
-              <Text style={styles.sectionSubtitle}>
-                תזכורות שטופלו נשמרות כאן עד 30 יום
-              </Text>
-            </View>
           </View>
           {showHistory ? (
             <View style={{ gap: 8 }}>
@@ -3139,8 +3144,8 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 10,
   },
-  sectionRight: { flex: 1, alignItems: 'flex-end' },
-  sectionLeft: { alignItems: 'flex-start', minWidth: 60 },
+  sectionRight: { flex: 1, alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start' },
+  sectionLeft: { alignItems: needsExplicitRTL() ? 'flex-start' : 'flex-end', minWidth: 60 },
   sectionTitle: {
     fontSize: 20,
     fontWeight: '700',
@@ -3441,7 +3446,7 @@ const styles = StyleSheet.create({
 
   // ── Event Row (events tab)
   eventRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'flex-start',
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -3453,12 +3458,12 @@ const styles = StyleSheet.create({
   eventRowLeft: { alignItems: 'center', gap: 4, minWidth: 44 },
   eventDot: { width: 8, height: 8, borderRadius: 4 },
   eventRowDate: { fontSize: 11, color: '#9ca3af', textAlign: 'center' },
-  eventRowContent: { flex: 1, alignItems: 'flex-end', gap: 4 },
+  eventRowContent: { flex: 1, alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start', gap: 4 },
   eventRowTop: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     width: '100%',
   },
   eventRowTitle: {
@@ -3476,7 +3481,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   eventRowCancelledBadge: {
-    alignSelf: 'flex-end',
+    alignSelf: needsExplicitRTL() ? 'flex-end' : 'flex-start',
     backgroundColor: '#fee2e2',
     borderRadius: 999,
     paddingHorizontal: 8,
@@ -3488,7 +3493,7 @@ const styles = StyleSheet.create({
     color: '#dc2626',
   },
   rsvpStatusBadge: {
-    alignSelf: 'flex-end',
+    alignSelf: needsExplicitRTL() ? 'flex-end' : 'flex-start',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
@@ -3545,7 +3550,7 @@ const styles = StyleSheet.create({
 
   // ── Month selector
   monthSelector: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
@@ -3748,7 +3753,7 @@ const styles = StyleSheet.create({
 
   // ── Reminder rows (כדאי לזכור section in הכל tab)
   reminderRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     backgroundColor: '#fff',
     borderRadius: 16,

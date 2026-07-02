@@ -1077,7 +1077,7 @@ const styles = StyleSheet.create({
   // ── Grid
   listContent: { padding: GRID_HORIZONTAL_PADDING, gap: 14 },
   columnWrapper: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: GRID_COLUMN_GAP,
     justifyContent: 'flex-start',
   },
