@@ -24,6 +24,7 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { AttachmentSourceSheet } from '@/lib/components/attachments/AttachmentSourceSheet';
 import type { EventAttachmentDraft } from '@/lib/types/event';
 import type { SubTask, SubTaskAttachment } from '@/lib/types/task';
+import { rtl } from '@/lib/rtl';
 
 const PRIMARY = '#36a9e2';
 
@@ -287,7 +288,7 @@ export function SubtasksSection({
             style={[s.subtaskInput, st.completed && s.subtaskInputCompleted]}
             value={st.title}
             editable={false}
-            textAlign="right"
+            textAlign={rtl.inputTextAlign}
             accessible={true}
             accessibilityLabel={st.title || 'תת־משימה'}
           />
@@ -335,7 +336,7 @@ export function SubtasksSection({
             onChangeText={(text) => updateSubtask(st.id, text)}
             placeholder="הוספת תת־משימה..."
             placeholderTextColor="#9ca3af"
-            textAlign="right"
+            textAlign={rtl.inputTextAlign}
             returnKeyType="done"
             onSubmitEditing={() => setFocusDraftTick((tick) => tick + 1)}
             accessible={true}
@@ -437,6 +438,7 @@ export function SubtasksSection({
       </Modal>
 
       <View style={s.header}>
+        <Text style={s.title}>תתי־משימות</Text>
         {canEditSubtasks ? (
           <Pressable
             style={s.addBtn}
@@ -453,11 +455,16 @@ export function SubtasksSection({
         ) : (
           <View />
         )}
-        <Text style={s.title}>תתי־משימות</Text>
       </View>
 
       {showToggle ? (
         <View style={s.toggleRow}>
+          <View style={s.toggleTextBlock}>
+            <Text style={s.toggleLabel}>משתתפים יכולים לערוך</Text>
+            <Text style={s.helperText}>
+              מתאים לרשימות קניות או משימות משותפות
+            </Text>
+          </View>
           <Switch
             value={allowEditing}
             onValueChange={onAllowEditingChange}
@@ -466,12 +473,6 @@ export function SubtasksSection({
             accessible={true}
             accessibilityLabel="משתתפים יכולים לערוך"
           />
-          <View style={s.toggleTextBlock}>
-            <Text style={s.toggleLabel}>משתתפים יכולים לערוך</Text>
-            <Text style={s.helperText}>
-              מתאים לרשימות קניות או משימות משותפות
-            </Text>
-          </View>
         </View>
       ) : null}
 
@@ -520,7 +521,7 @@ export function SubtasksSection({
               onChangeText={setDraftTitle}
               placeholder="הוסיפי תת־משימה..."
               placeholderTextColor="#9ca3af"
-              textAlign="right"
+              textAlign={rtl.inputTextAlign}
               returnKeyType="done"
               blurOnSubmit={false}
               onSubmitEditing={commitDraft}
@@ -538,34 +539,34 @@ export function SubtasksSection({
 
 const s = StyleSheet.create({
   header: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 10,
   },
   title: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  addBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  addBtn: { flexDirection: rtl.flexDirection, alignItems: 'center', gap: 4 },
   addBtnText: { fontSize: 14, fontWeight: '700', color: PRIMARY },
   toggleRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 12,
   },
   toggleTextBlock: {
     flex: 1,
-    marginRight: 8,
+    marginEnd: 8,
   },
   toggleLabel: {
     fontSize: 12,
     color: '#111827',
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   helperText: {
     fontSize: 11,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 2,
   },
   list: {
@@ -576,7 +577,7 @@ const s = StyleSheet.create({
     padding: 14,
   },
   subtaskRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
     paddingVertical: 6,
@@ -636,7 +637,7 @@ const s = StyleSheet.create({
   },
   fileChip: {
     maxWidth: 72,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: 6,
@@ -649,7 +650,7 @@ const s = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   imageBtn: {
     width: 40,
@@ -671,7 +672,7 @@ const s = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.inputTextAlign,
     minHeight: 38,
   },
   subtaskInputCompleted: {
@@ -682,7 +683,7 @@ const s = StyleSheet.create({
   readOnlyHint: {
     fontSize: 11,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 8,
   },
   previewOverlay: {

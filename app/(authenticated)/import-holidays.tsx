@@ -355,6 +355,7 @@ const s = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: '#0f172a',
+    textAlign: rtl.textAlign,
   },
   // Explanation card
   explainCard: {
@@ -409,7 +410,7 @@ const s = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
-  bulkCount: { fontSize: 13, color: '#64748b', fontWeight: '500' },
+  bulkCount: { fontSize: 13, color: '#64748b', fontWeight: '500', textAlign: rtl.textAlign },
   bulkBtns: { flexDirection: rtl.flexDirection, gap: 8 },
   bulkBtn: {
     paddingHorizontal: 14,

@@ -1489,7 +1489,7 @@ export default function TaskEditorScreen({
                 titleError && styles.inputError,
                 !canFullyEdit && styles.fieldReadOnly,
               ]}
-              textAlign={rtl.textAlign}
+              textAlign={rtl.inputTextAlign}
               accessible={true}
               accessibilityLabel="שם המשימה"
             />
@@ -1543,6 +1543,7 @@ export default function TaskEditorScreen({
             ) : null}
             {showTimeToggle ? (
               <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>הוסף שעה</Text>
                 <Switch
                   value={draft.hasTime}
                   onValueChange={setHasTime}
@@ -1551,7 +1552,6 @@ export default function TaskEditorScreen({
                   accessible={true}
                   accessibilityLabel="הוסף שעה"
                 />
-                <Text style={styles.toggleLabel}>הוסף שעה</Text>
               </View>
             ) : null}
             {shouldShowTimePicker ? (
@@ -1599,6 +1599,7 @@ export default function TaskEditorScreen({
           {hasDueDate && canFullyEdit ? (
             <View style={styles.card}>
               <View style={styles.toggleRow}>
+                <Text style={styles.sectionTitleNoMargin}>משימה חוזרת</Text>
                 <Switch
                   value={draft.recurrenceType !== 'none'}
                   onValueChange={(active) =>
@@ -1612,7 +1613,6 @@ export default function TaskEditorScreen({
                   accessible={true}
                   accessibilityLabel="משימה חוזרת"
                 />
-                <Text style={styles.sectionTitleNoMargin}>משימה חוזרת</Text>
               </View>
               {draft.recurrenceType !== 'none' ? (
                 <>
@@ -1833,7 +1833,7 @@ export default function TaskEditorScreen({
               placeholderTextColor="#94a3b8"
               style={styles.notesInput}
               multiline
-              textAlign={rtl.textAlign}
+              textAlign={rtl.inputTextAlign}
               textAlignVertical="top"
               accessible={true}
               accessibilityLabel="הערות"
@@ -2283,7 +2283,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontSize: 16,
     color: '#0f172a',
-    textAlign: rtl.textAlign,
+    textAlign: rtl.inputTextAlign,
   },
   inputError: { borderWidth: 1.5, borderColor: '#ef4444' },
   errorText: {
@@ -2293,7 +2293,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   chipsWrap: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     flexWrap: 'wrap',
     gap: 8,
   },
@@ -2317,7 +2317,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#f8fafc',
     paddingHorizontal: 12,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
   },
@@ -2337,7 +2337,7 @@ const styles = StyleSheet.create({
   },
   toggleRow: {
     marginTop: 12,
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
   },
@@ -2356,7 +2356,7 @@ const styles = StyleSheet.create({
   },
   weekdaysRow: {
     marginTop: 12,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 8,
   },
   weekdayChip: {
@@ -2371,7 +2371,7 @@ const styles = StyleSheet.create({
   weekdayText: { color: '#64748b', fontWeight: '800' },
   weekdayTextActive: { color: '#fff' },
   assigneesRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 10,
     paddingLeft: 4,
   },
@@ -2416,7 +2416,7 @@ const styles = StyleSheet.create({
     padding: 14,
     fontSize: 15,
     color: '#0f172a',
-    textAlign: rtl.textAlign,
+    textAlign: rtl.inputTextAlign,
   },
   footer: {
     padding: 16,
@@ -2591,7 +2591,7 @@ const styles = StyleSheet.create({
     textAlign: rtl.textAlign,
   },
   discardActions: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 10,
     marginTop: 20,
   },

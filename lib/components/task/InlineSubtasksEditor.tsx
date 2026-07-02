@@ -442,7 +442,7 @@ export function InlineSubtasksEditor({
             onChangeText={setAddingTitle}
             placeholder="הוסיפי פריט..."
             placeholderTextColor="#9ca3af"
-            textAlign="right"
+            textAlign={rtl.inputTextAlign}
             returnKeyType="done"
             autoFocus
             blurOnSubmit={false}
@@ -561,7 +561,7 @@ const ils = StyleSheet.create({
     flex: 1,
     fontSize: 13,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.inputTextAlign,
     minHeight: 32,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',

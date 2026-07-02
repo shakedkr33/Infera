@@ -178,15 +178,15 @@ export function BirthdayCardSheet({
       <View style={s.actions}>
         <Pressable
           style={s.action}
-          onPress={onEdit}
+          onPress={handleCreateTask}
           accessible={true}
           accessibilityRole="button"
-          accessibilityLabel="עריכה"
+          accessibilityLabel="יצירת משימה"
         >
           <View style={s.actionIcon}>
-            <MaterialIcons name="edit" size={24} color={PRIMARY} />
+            <MaterialIcons name="add-task" size={24} color={PRIMARY} />
           </View>
-          <Text style={s.actionText}>עריכה</Text>
+          <Text style={s.actionText}>יצירת משימה</Text>
         </Pressable>
 
         <Pressable
@@ -204,15 +204,15 @@ export function BirthdayCardSheet({
 
         <Pressable
           style={s.action}
-          onPress={handleCreateTask}
+          onPress={onEdit}
           accessible={true}
           accessibilityRole="button"
-          accessibilityLabel="יצירת משימה"
+          accessibilityLabel="עריכה"
         >
           <View style={s.actionIcon}>
-            <MaterialIcons name="add-task" size={24} color={PRIMARY} />
+            <MaterialIcons name="edit" size={24} color={PRIMARY} />
           </View>
-          <Text style={s.actionText}>יצירת משימה</Text>
+          <Text style={s.actionText}>עריכה</Text>
         </Pressable>
       </View>
 
@@ -348,7 +348,7 @@ export function BirthdayCardSheet({
 
 const s = StyleSheet.create({
   header: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 24,
@@ -359,6 +359,7 @@ const s = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
     flex: 1,
+    textAlign: rtl.textAlign,
   },
   closeBtn: {
     width: 40,
@@ -403,7 +404,7 @@ const s = StyleSheet.create({
   },
   badgeText: { fontSize: 14, fontWeight: '700', color: '#fff' },
   actions: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-around',
     paddingHorizontal: 24,
     marginBottom: 16,

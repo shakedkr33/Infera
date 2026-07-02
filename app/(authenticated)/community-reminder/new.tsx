@@ -291,7 +291,7 @@ export default function CommunityReminderNewScreen() {
               }}
               placeholder="הקלידי את הנושא..."
               placeholderTextColor="#9ca3af"
-              textAlign={rtl.textAlign}
+              textAlign={rtl.inputTextAlign}
               multiline={false}
               maxLength={120}
               returnKeyType="next"
@@ -312,7 +312,7 @@ export default function CommunityReminderNewScreen() {
               onChangeText={setDescription}
               placeholder="פרטים נוספים (אופציונלי)..."
               placeholderTextColor="#9ca3af"
-              textAlign={rtl.textAlign}
+              textAlign={rtl.inputTextAlign}
               multiline
               numberOfLines={3}
               maxLength={300}
@@ -478,6 +478,7 @@ export default function CommunityReminderNewScreen() {
           {dateOption !== 'none' ? (
             <View style={styles.card}>
               <View style={styles.rowBetween}>
+                <FieldLabel text="שעה" />
                 <Switch
                   value={timeEnabled}
                   onValueChange={setTimeEnabled}
@@ -488,7 +489,6 @@ export default function CommunityReminderNewScreen() {
                   accessibilityLabel="הפעל שעה"
                   accessibilityRole="switch"
                 />
-                <FieldLabel text="שעה" />
               </View>
               {timeEnabled ? (
                 <>
@@ -803,7 +803,7 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#fff', fontWeight: '700' },
 
   rowBetween: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: '#f8fafc',

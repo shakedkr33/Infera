@@ -221,7 +221,7 @@ export default function CreateCommunityScreen() {
             placeholder="שם הקהילה (למשל: גן שקד)"
             placeholderTextColor="#9ca3af"
             maxLength={40}
-            textAlign={rtl.textAlign}
+            textAlign={rtl.inputTextAlign}
             returnKeyType="next"
             onSubmitEditing={() => {}}
             accessible
@@ -242,7 +242,7 @@ export default function CreateCommunityScreen() {
             placeholderTextColor="#9ca3af"
             multiline
             numberOfLines={3}
-            textAlign={rtl.textAlign}
+            textAlign={rtl.inputTextAlign}
             textAlignVertical="top"
             accessible
             accessibilityLabel="תיאור הקהילה"
@@ -390,10 +390,10 @@ const styles = StyleSheet.create({
   charCount: {
     fontSize: 12,
     color: '#9ca3af',
-    textAlign: 'left',
+    textAlign: rtl.textAlign,
   },
   chipsRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     flexWrap: 'wrap',
     gap: 8,
   },

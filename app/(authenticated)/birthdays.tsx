@@ -17,7 +17,7 @@ import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
-import { APP_IS_RTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
@@ -111,7 +111,7 @@ export default function BirthdaysScreen(): React.JSX.Element {
             style={s.searchInput}
             value={search}
             onChangeText={setSearch}
-            textAlign={rtl.textAlign}
+            textAlign={rtl.inputTextAlign}
             accessible={true}
             accessibilityLabel="חיפוש ימי הולדת"
           />
@@ -152,7 +152,7 @@ const s = StyleSheet.create({
     borderRadius: 16,
     paddingHorizontal: 16,
   },
-  searchInput: { flex: 1, fontSize: 15, color: '#111517', textAlign: rtl.textAlign },
+  searchInput: { flex: 1, fontSize: 15, color: '#111517', textAlign: rtl.inputTextAlign },
   listContent: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 24 },
   card: {
     flexDirection: rtl.flexDirection,
@@ -203,7 +203,7 @@ const s = StyleSheet.create({
   },
   cardBadge: {
     backgroundColor: '#eff6ff',
-    alignSelf: 'flex-end',
+    alignSelf: needsExplicitRTL() ? 'flex-end' : 'flex-start',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 12,

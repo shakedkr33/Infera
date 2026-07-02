@@ -205,7 +205,9 @@ export default function ProfileScreen() {
           accessibilityLabel="עריכת פרופיל"
         >
           <View style={styles.profileRow}>
-            <MaterialIcons name="chevron-left" size={22} color="#9ca3af" />
+            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+              <Text style={styles.avatarInitial}>{avatarInitial}</Text>
+            </View>
             <View style={styles.profileTexts}>
               <Text style={styles.profileName}>{displayName}</Text>
               {/* Subscription status — access-aware label */}
@@ -254,9 +256,7 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               )}
             </View>
-            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-              <Text style={styles.avatarInitial}>{avatarInitial}</Text>
-            </View>
+            <MaterialIcons name="chevron-left" size={22} color="#9ca3af" />
           </View>
         </TouchableOpacity>
 
@@ -267,24 +267,20 @@ export default function ProfileScreen() {
         <View style={[styles.card, styles.settingsCard]}>
           {/* Import flows */}
           <SettingsRow
-            iconName="sync"
             label="העתקת אירועים מיומן חיצוני"
             onPress={() => router.push('/(authenticated)/import-calendar')}
           />
           {/* Notifications */}
           <SettingsRow
-            iconName="notifications-none"
             label="התראות"
             onPress={() => console.log('TODO: notifications settings')}
           />
           {/* Recently Deleted */}
           <SettingsRow
-            iconName="delete-outline"
             label="נמחקו לאחרונה"
             onPress={() => router.push('/(authenticated)/recently-deleted')}
           />
           <SettingsRow
-            iconName="event"
             label="חגים ומועדים"
             note="בחירת חגים וימים מיוחדים להצגה ביומן"
             onPress={() =>
@@ -293,13 +289,11 @@ export default function ProfileScreen() {
           />
           {/* Danger zone */}
           <SettingsRow
-            iconName="delete-outline"
             label="מחיקת חשבון"
             danger
             onPress={handleDeleteAccount}
           />
           <SettingsRow
-            iconName="logout"
             label="התנתקות"
             danger
             hideChevron
@@ -459,6 +453,17 @@ export default function ProfileScreen() {
           </View>
         )}
 
+        {/* TODO: REMOVE BEFORE LAUNCH — temporary RTL diagnostic shortcut */}
+        <TouchableOpacity
+          onPress={() => router.push('/(authenticated)/rtl-debug')}
+          style={{ alignSelf: 'center', marginBottom: 8, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#fef9c3', borderRadius: 8, borderWidth: 1, borderColor: '#fde047' }}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="RTL Debug"
+        >
+          <Text style={{ fontSize: 12, color: '#854d0e', fontWeight: '600' }}>RTL Debug</Text>
+        </TouchableOpacity>
+
         {/* Version footer — long-press to unlock hidden debug panel */}
         <TouchableOpacity
           onLongPress={() => setIsDebugUnlocked((v) => !v)}
@@ -477,7 +482,6 @@ export default function ProfileScreen() {
 // ============================================================================
 
 function SettingsRow({
-  iconName,
   label,
   onPress,
   danger = false,
@@ -485,7 +489,6 @@ function SettingsRow({
   hideChevron = false,
   isLast = false,
 }: {
-  iconName: string;
   label: string;
   onPress: () => void;
   danger?: boolean;
@@ -501,28 +504,17 @@ function SettingsRow({
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      {/* Chevron on the left */}
-      {!hideChevron && (
-        <MaterialIcons name="chevron-left" size={20} color="#d1d5db" />
-      )}
-      {/* Label + note in the middle */}
-      <View
-        style={[
-          styles.rowTextContainer,
-          hideChevron && styles.rowTextNoChevron,
-        ]}
-      >
+      {/* Label + note */}
+      <View style={styles.rowTextContainer}>
         <Text style={[styles.rowLabel, danger && styles.rowLabelDanger]}>
           {label}
         </Text>
         {note !== undefined && <Text style={styles.rowNote}>{note}</Text>}
       </View>
-      {/* Icon on the right */}
-      <MaterialIcons
-        name={iconName as never}
-        size={21}
-        color={danger ? '#ef4444' : '#9ca3af'}
-      />
+      {/* Chevron on the physical left (last in RTL flex row) */}
+      {!hideChevron && (
+        <MaterialIcons name="chevron-left" size={20} color="#d1d5db" />
+      )}
     </TouchableOpacity>
   );
 }
@@ -602,6 +594,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: '#1e293b',
+    textAlign: rtl.textAlign,
   },
   closeBtn: {
     width: 36,
@@ -706,11 +699,7 @@ const styles = StyleSheet.create({
   },
   rowTextContainer: {
     flex: 1,
-    ...(needsExplicitRTL() ? { marginRight: 12 } : { marginStart: 12 }),
     alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
-  },
-  rowTextNoChevron: {
-    marginRight: 0,
   },
   rowLabel: {
     fontSize: 15,

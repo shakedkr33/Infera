@@ -510,7 +510,7 @@ export default function SubscriptionScreen() {
               style={s.couponInput}
               placeholder="הכניסו קוד קופון"
               placeholderTextColor="#9ca3af"
-              textAlign="right"
+              textAlign={rtl.inputTextAlign}
             />
           </View>
         )}
@@ -967,7 +967,7 @@ const s = StyleSheet.create({
 
   // Tabs
   tabsRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 10,
     marginBottom: 12,
   },
@@ -995,7 +995,7 @@ const s = StyleSheet.create({
 
   // Billing toggle (compact segmented control inside plan card)
   billingToggle: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     backgroundColor: '#f3f4f6',
     borderRadius: 8,
     padding: 3,
@@ -1147,13 +1147,13 @@ const s = StyleSheet.create({
     gap: 6,
   },
   featureItemRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
   },
   featureTextRow: {
     flex: 1,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
   },
@@ -1185,7 +1185,7 @@ const s = StyleSheet.create({
 
   // Coupon
   couponLink: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
     alignSelf: 'flex-end',
@@ -1198,7 +1198,7 @@ const s = StyleSheet.create({
     color: PRIMARY,
   },
   couponInputRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     marginBottom: 16,

@@ -43,7 +43,7 @@ import {
 } from '@/lib/components/event/ParticipantsCard';
 import { RelatedTasksSection } from '@/lib/components/event/RelatedTasksSection';
 import { RemindersCard } from '@/lib/components/event/RemindersCard';
-import { APP_IS_RTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import type {
@@ -847,6 +847,9 @@ export default function EventScreen({
                     <View style={s.importantItemsList}>
                       {(event.importantItems ?? []).map((item) => (
                         <View key={item.id} style={s.importantItemsRow}>
+                          <Text style={s.importantItemsBulletText}>
+                            {item.title}
+                          </Text>
                           <Pressable
                             style={s.importantItemsRemoveBtn}
                             onPress={() => handleRemoveImportantItem(item.id)}
@@ -856,9 +859,6 @@ export default function EventScreen({
                           >
                             <Text style={s.importantItemsRemoveText}>×</Text>
                           </Pressable>
-                          <Text style={s.importantItemsBulletText}>
-                            {item.title}
-                          </Text>
                         </View>
                       ))}
                     </View>
@@ -884,6 +884,7 @@ export default function EventScreen({
                     </View>
                   </View>
                   <View style={s.rsvpToggleRow}>
+                    <Text style={s.rsvpToggleText}>נדרש אישור הגעה</Text>
                     <Switch
                       value={rsvpRequired}
                       onValueChange={(val) => {
@@ -895,7 +896,6 @@ export default function EventScreen({
                       accessible={true}
                       accessibilityLabel="נדרש אישור הגעה"
                     />
-                    <Text style={s.rsvpToggleText}>נדרש אישור הגעה</Text>
                   </View>
                 </View>
               ) : null}
@@ -1128,8 +1128,8 @@ export function RecurrenceRow({
         accessibilityRole="button"
         accessibilityLabel={`אירוע חוזר: ${labels[value]}`}
       >
-        <MaterialIcons name="expand-more" size={24} color="#94a3b8" />
         <Text style={s.recurrenceText}>אירוע חוזר: {labels[value]}</Text>
+        <MaterialIcons name="expand-more" size={24} color="#94a3b8" />
       </Pressable>
       {open && (
         <View style={s.recurrenceOptions}>
@@ -1196,6 +1196,7 @@ const s = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: '#111517',
+    textAlign: rtl.textAlign,
   },
   // ── Sticky bottom save CTA ────────────────────────────────────────────────
   footer: {
@@ -1275,13 +1276,13 @@ const s = StyleSheet.create({
     gap: 14,
   },
   rsvpHeaderRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 12,
   },
   rsvpTextBlock: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
     gap: 4,
   },
   rsvpTitle: {
@@ -1305,7 +1306,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   rsvpToggleRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
   },
@@ -1366,7 +1367,7 @@ const s = StyleSheet.create({
     gap: 8,
   },
   importantItemsRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
@@ -1396,7 +1397,7 @@ const s = StyleSheet.create({
     fontWeight: '500',
   },
   recurrenceRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
   },

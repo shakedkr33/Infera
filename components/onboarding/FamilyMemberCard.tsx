@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { colors, shadows } from '../../constants/theme';
-import { tw } from '@/lib/rtl';
+import { rtl, tw } from '@/lib/rtl';
 import type { FamilyMember } from '../../contexts/OnboardingContext';
 import { ColorPicker, type TakenColor } from './ColorPicker';
 
@@ -174,7 +174,7 @@ export function FamilyMemberEditCard({
           placeholder="שם..."
           placeholderTextColor="#9ca3af"
           className="flex-1 px-4 text-base font-bold text-[#111517]"
-          style={{ textAlign: 'right', height: 52 }}
+          style={{ textAlign: rtl.inputTextAlign, height: 52 }}
           autoFocus
           returnKeyType="done"
           onSubmitEditing={canSave ? onConfirm : undefined}
@@ -271,7 +271,7 @@ export function FamilyMemberManagementCard({
     <View className="bg-white rounded-2xl p-4 mb-3" style={shadows.soft}>
       {/* ── Top area: avatar | name+secondary | admin badge ── */}
       <View
-        style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 12 }}
+        style={{ flexDirection: rtl.flexDirection, alignItems: 'center', gap: 12 }}
       >
         {/* Avatar — rightmost in RTL */}
         <View
@@ -298,7 +298,7 @@ export function FamilyMemberManagementCard({
           >
             <View
               style={{
-                flexDirection: 'row-reverse',
+                flexDirection: rtl.flexDirection,
                 alignItems: 'center',
                 gap: 6,
                 flexWrap: 'wrap',
@@ -343,7 +343,7 @@ export function FamilyMemberManagementCard({
           <View style={{ flex: 1 }}>
             <View
               style={{
-                flexDirection: 'row-reverse',
+                flexDirection: rtl.flexDirection,
                 alignItems: 'center',
                 gap: 6,
                 flexWrap: 'wrap',
@@ -391,13 +391,13 @@ export function FamilyMemberManagementCard({
       {showActionsRow && (
         <View
           style={{
-            flexDirection: 'row-reverse',
-            alignItems: 'center',
-            marginTop: 10,
-            paddingTop: 10,
-            borderTopWidth: 1,
-            borderTopColor: '#f1f5f9',
-            gap: 8,
+          flexDirection: rtl.flexDirection,
+          alignItems: 'center',
+          marginTop: 10,
+          paddingTop: 10,
+          borderTopWidth: 1,
+          borderTopColor: '#f1f5f9',
+          gap: 8,
           }}
         >
           {/* Primary action (admin only) — rightmost in RTL */}
