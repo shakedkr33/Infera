@@ -16,6 +16,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { rtl } from '@/lib/rtl';
 
 export interface AssignedEventTask {
   id: string;
@@ -107,7 +108,7 @@ const s = StyleSheet.create({
     paddingTop: 6,
   },
   chevronRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     minHeight: 28,
   },
@@ -119,14 +120,14 @@ const s = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#36a9e2',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   allDoneText: {
     flex: 1,
     fontSize: 12,
     fontWeight: '600',
     color: '#16a34a',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   taskList: {
     marginTop: 6,
@@ -136,13 +137,13 @@ const s = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginBottom: 2,
   },
   taskRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     paddingVertical: 2,
@@ -152,7 +153,7 @@ const s = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#1e293b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     lineHeight: 20,
   },
   taskTitleDone: {
@@ -163,7 +164,7 @@ const s = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#16a34a',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 4,
   },
 });

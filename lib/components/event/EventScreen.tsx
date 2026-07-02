@@ -526,7 +526,7 @@ export default function EventScreen({
                   }}
                   placeholder="שם האירוע"
                   placeholderTextColor="#94a3b8"
-                  textAlign={rtl.textAlign}
+                  textAlign={rtl.inputTextAlign}
                   autoFocus={false}
                   accessible={true}
                   accessibilityLabel="שם האירוע"
@@ -819,6 +819,18 @@ export default function EventScreen({
                     {IMPORTANT_ITEMS_SECTION_TITLE}
                   </Text>
                   <View style={s.importantItemsInputRow}>
+                    <TextInput
+                      style={s.importantItemsInput}
+                      value={importantItemDraft}
+                      onChangeText={setImportantItemDraft}
+                      placeholder={IMPORTANT_ITEMS_PLACEHOLDER}
+                      placeholderTextColor="#94a3b8"
+                      textAlign={rtl.inputTextAlign}
+                      returnKeyType="done"
+                      onSubmitEditing={handleAddImportantItem}
+                      accessible={true}
+                      accessibilityLabel={IMPORTANT_ITEMS_SECTION_TITLE}
+                    />
                     <Pressable
                       style={s.importantItemsAddBtn}
                       onPress={handleAddImportantItem}
@@ -830,18 +842,6 @@ export default function EventScreen({
                         {IMPORTANT_ITEMS_ADD_LABEL}
                       </Text>
                     </Pressable>
-                    <TextInput
-                      style={s.importantItemsInput}
-                      value={importantItemDraft}
-                      onChangeText={setImportantItemDraft}
-                      placeholder={IMPORTANT_ITEMS_PLACEHOLDER}
-                      placeholderTextColor="#94a3b8"
-                      textAlign={rtl.textAlign}
-                      returnKeyType="done"
-                      onSubmitEditing={handleAddImportantItem}
-                      accessible={true}
-                      accessibilityLabel={IMPORTANT_ITEMS_SECTION_TITLE}
-                    />
                   </View>
                   {(event.importantItems ?? []).length > 0 ? (
                     <View style={s.importantItemsList}>
@@ -1233,7 +1233,7 @@ const s = StyleSheet.create({
     fontSize: 17,
     fontWeight: '500',
     color: '#0f172a',
-    textAlign: rtl.textAlign,
+    textAlign: rtl.inputTextAlign,
     paddingVertical: 12,
     paddingHorizontal: 14,
     backgroundColor: '#fff',
@@ -1333,7 +1333,7 @@ const s = StyleSheet.create({
     textAlign: rtl.textAlign,
   },
   importantItemsInputRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
   },
@@ -1347,7 +1347,7 @@ const s = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 14,
     color: '#111827',
-    textAlign: rtl.textAlign,
+    textAlign: rtl.inputTextAlign,
   },
   importantItemsAddBtn: {
     minHeight: 44,
