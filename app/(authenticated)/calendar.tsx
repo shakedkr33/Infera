@@ -55,7 +55,7 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { useHolidayOverlay } from '@/lib/hooks/useHolidayOverlay';
-import { APP_IS_RTL, needsExplicitRTL, position, rtl, spacing } from '@/lib/rtl';
+import { APP_IS_RTL, getTextAlign, needsExplicitRTL, position, rtl, spacing } from '@/lib/rtl';
 import {
   type CalendarLayerFilters,
   DEFAULT_CALENDAR_LAYER_FILTERS,
@@ -1011,6 +1011,9 @@ const sheetStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 20,
+    // Modal creates a new Yoga root — explicit direction ensures RTL layout
+    // in both Expo Go and native RTL builds (ANDROID_MATCH_IOS_LAYOUT pattern).
+    direction: 'rtl',
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -1060,7 +1063,7 @@ const sheetStyles = StyleSheet.create({
     fontSize: 13,
     color: '#be185d',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: getTextAlign() ?? 'right',
     marginBottom: 10,
   },
   sheetScroll: {
@@ -1073,7 +1076,7 @@ const sheetStyles = StyleSheet.create({
   sheetEmpty: {
     fontSize: 14,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: getTextAlign() ?? 'right',
     paddingVertical: 20,
     paddingHorizontal: 4,
   },
@@ -1102,7 +1105,7 @@ const sheetStyles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#92400e',
-    textAlign: 'right',
+    textAlign: getTextAlign() ?? 'right',
     writingDirection: 'rtl',
   },
   sheetRow: {
@@ -1132,7 +1135,7 @@ const sheetStyles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: getTextAlign() ?? 'right',
   },
   sheetEventTitleCancelled: {
     color: '#9ca3af',
@@ -1143,7 +1146,7 @@ const sheetStyles = StyleSheet.create({
     fontWeight: '700',
     color: '#647b87',
     minWidth: 44,
-    textAlign: 'right',
+    textAlign: getTextAlign() ?? 'right',
   },
   sheetTaskRow: {
     backgroundColor: '#f9fafb',
@@ -1159,7 +1162,7 @@ const sheetStyles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: getTextAlign() ?? 'right',
   },
   sheetOverdueBadge: {
     paddingHorizontal: 7,
@@ -5931,7 +5934,7 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     color: '#a8bbc6',
     marginTop: 1,
-    textAlign: 'right',
+    textAlign: getTextAlign() ?? 'right',
   },
   dayDivider: {
     flex: 1,
@@ -6203,6 +6206,10 @@ const styles = StyleSheet.create({
   eventNavBtn: {
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
+    // Shrink-wrap to content, positioned at physical LEFT (logical end in RTL).
+    // needsExplicitRTL()=true (Expo Go): column cross-axis flex-start = physical LEFT.
+    // needsExplicitRTL()=false (native RTL): flex-end = logical end = physical LEFT.
+    alignSelf: needsExplicitRTL() ? 'flex-start' : 'flex-end',
     gap: 4,
     backgroundColor: 'rgba(141,110,99,0.1)',
     paddingHorizontal: 8,
@@ -6682,7 +6689,7 @@ const dStyles = StyleSheet.create({
     fontWeight: '400',
     color: '#8fa3b0',
     marginTop: 1,
-    textAlign: 'right',
+    textAlign: getTextAlign() ?? 'right',
   },
   addBtn: {
     backgroundColor: `${PRIMARY_BLUE}15`,

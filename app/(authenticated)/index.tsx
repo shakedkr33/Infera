@@ -2071,15 +2071,15 @@ export default function HomeScreen() {
                   {nextEvent.location ? (
                     <View style={stylesRtl.eventAddressRow}>
                       <View style={stylesRtl.eventAddressGroup}>
-                        {/* Text first in row-reverse = rightmost; icon on its left */}
-                        <Text style={stylesRtl.eventAddress} numberOfLines={1}>
-                          {nextEvent.location}
-                        </Text>
+                        {/* Icon first = physical rightmost (rtl.flexDirection = physical row-reverse) */}
                         <MaterialIcons
                           name="location-on"
                           size={16}
                           color="#94a3b8"
                         />
+                        <Text style={stylesRtl.eventAddress} numberOfLines={1}>
+                          {nextEvent.location}
+                        </Text>
                       </View>
                       <Pressable
                         style={stylesRtl.navBtn}
@@ -2295,7 +2295,6 @@ export default function HomeScreen() {
                 style={{
                   marginHorizontal: 24,
                   paddingVertical: 12,
-                  alignItems: 'flex-end',
                 }}
               >
                 <Text
@@ -3435,7 +3434,7 @@ export default function HomeScreen() {
                   {/* Main task row — tap to open edit */}
                   <Pressable
                     style={{
-                      flexDirection: 'row-reverse',
+                      flexDirection: rtl.flexDirection,
                       justifyContent: 'space-between',
                       alignItems: 'center',
                     }}
@@ -3446,7 +3445,7 @@ export default function HomeScreen() {
                   >
                     <View
                       style={{
-                        flexDirection: 'row-reverse',
+                        flexDirection: rtl.flexDirection,
                         alignItems: 'center',
                         gap: 8,
                         flex: 1,
@@ -4145,7 +4144,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#36a9e2',
   },
   eventTopRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 6,
@@ -4172,7 +4171,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   eventAddressGroup: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
     flex: 1,
