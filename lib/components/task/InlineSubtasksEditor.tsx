@@ -27,6 +27,7 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { uploadAttachmentDraftsForConvex } from '@/lib/attachmentUpload';
 import { AttachmentSourceSheet } from '@/lib/components/attachments/AttachmentSourceSheet';
 import type { EventAttachmentDraft } from '@/lib/types/event';
+import { rtl } from '@/lib/rtl';
 
 const PRIMARY = '#36a9e2';
 
@@ -476,7 +477,7 @@ const ils = StyleSheet.create({
     paddingHorizontal: 4,
   },
   row: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     paddingVertical: 6,
     minHeight: 44,
@@ -511,7 +512,7 @@ const ils = StyleSheet.create({
     flex: 1,
     fontSize: 13,
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   titleDone: {
     color: '#9ca3af',
@@ -541,7 +542,7 @@ const ils = StyleSheet.create({
     borderRadius: 6,
   },
   addRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     paddingVertical: 4,
     gap: 6,
@@ -566,7 +567,7 @@ const ils = StyleSheet.create({
     borderBottomColor: '#e5e7eb',
   },
   addTrigger: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
     paddingVertical: 6,
@@ -575,5 +576,6 @@ const ils = StyleSheet.create({
     fontSize: 12,
     color: PRIMARY,
     fontWeight: '600',
+    textAlign: rtl.textAlign,
   },
 });

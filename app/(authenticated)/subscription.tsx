@@ -22,7 +22,7 @@ import {
 
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
-import { APP_IS_RTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 import {
   getCurrentPlatformRevenueCatApiKey,
   PACKAGE_IDS,
@@ -296,8 +296,8 @@ export default function SubscriptionScreen() {
 
         {/* Free community message */}
         <View style={s.freeMessageContainer}>
-          <MaterialIcons name="groups" size={20} color={PRIMARY} />
           <Text style={s.freeMessageText}>קהילות נשארות חינם — תמיד.</Text>
+          <MaterialIcons name="groups" size={20} color={PRIMARY} />
         </View>
 
         {/* Plan Tabs */}
@@ -416,14 +416,14 @@ export default function SubscriptionScreen() {
                   accessibilityRole="button"
                   accessibilityLabel="להפעיל את מתנת ההשקה"
                 >
+                  <Text style={s.launchGiftReopenText}>
+                    להפעיל את מתנת ההשקה
+                  </Text>
                   <MaterialIcons
                     name="card-giftcard"
                     size={16}
                     color={PRIMARY}
                   />
-                  <Text style={s.launchGiftReopenText}>
-                    להפעיל את מתנת ההשקה
-                  </Text>
                 </Pressable>
               )}
           </View>
@@ -948,7 +948,7 @@ const s = StyleSheet.create({
 
   // Free message
   freeMessageContainer: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
     backgroundColor: PRIMARY_LIGHT,
@@ -1041,14 +1041,14 @@ const s = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     color: TEXT_DARK,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
     marginBottom: 4,
   },
   planDescription: {
     fontSize: 14,
     color: TEXT_MUTED,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
     lineHeight: 20,
     marginBottom: 16,
@@ -1070,11 +1070,13 @@ const s = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
     color: TEXT_DARK,
+    textAlign: rtl.textAlign,
   },
   pricePeriod: {
     fontSize: 15,
     fontWeight: '600',
     color: TEXT_MUTED,
+    textAlign: rtl.textAlign,
   },
   priceStrikethrough: {
     fontSize: 16,
@@ -1113,7 +1115,7 @@ const s = StyleSheet.create({
 
   // Launch gift reopen
   launchGiftReopenCta: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
     marginTop: 12,
@@ -1121,7 +1123,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 8,
     backgroundColor: '#fef9e7',
-    alignSelf: 'flex-end',
+    alignSelf: needsExplicitRTL() ? 'flex-end' : 'flex-start',
   },
   launchGiftReopenText: {
     fontSize: 13,
