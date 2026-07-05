@@ -2799,7 +2799,7 @@ export default function HomeScreen() {
                     >
                       <View
                         style={{
-                          flexDirection: 'row-reverse',
+                          flexDirection: rtl.flexDirection,
                           gap: 16,
                           marginBottom: 4,
                         }}
@@ -2840,7 +2840,7 @@ export default function HomeScreen() {
                               />
                               <View
                                 style={{
-                                  flexDirection: 'row-reverse',
+                                  flexDirection: rtl.flexDirection,
                                   alignItems: 'flex-start',
                                   gap: 10,
                                   flex: 1,
@@ -2863,7 +2863,7 @@ export default function HomeScreen() {
                                   {/* Title row: title + assignee circles (tasks) / profile circles (events) */}
                                   <View
                                     style={{
-                                      flexDirection: 'row-reverse',
+                                      flexDirection: rtl.flexDirection,
                                       alignItems: 'center',
                                       gap: 6,
                                     }}
@@ -3025,7 +3025,7 @@ export default function HomeScreen() {
                                     item.pendingPersonalInvite) && (
                                     <View
                                       style={{
-                                        flexDirection: 'row-reverse',
+                                        flexDirection: rtl.flexDirection,
                                         justifyContent: 'space-between',
                                         alignItems: 'flex-start',
                                         marginTop: 4,
@@ -3233,7 +3233,7 @@ export default function HomeScreen() {
                                         }
                                       }}
                                       style={{
-                                        alignSelf: 'flex-start',
+                                        alignSelf: rtl.alignEnd,
                                         marginTop: 6,
                                         backgroundColor: item.remoteUrl
                                           ? 'rgba(54,169,226,0.1)'
