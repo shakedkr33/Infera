@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { GooglePlaceDetail } from 'react-native-google-places-autocomplete';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import { rtl } from '@/lib/rtl';
 import { buildGeoUri } from '@/lib/utils/geoUri';
 
 const PRIMARY = '#36a9e2';
@@ -91,8 +92,9 @@ export function LocationCard({
 
   return (
     <View style={s.card}>
-      {/* Header: label (right) + X button (left) */}
+      {/* Header: label first (physical RIGHT in RTL), X button last (physical LEFT) */}
       <View style={s.headerRow}>
+        <Text style={s.headerLabel}>מיקום</Text>
         <Pressable
           onPress={handleClose}
           accessible={true}
@@ -102,20 +104,19 @@ export function LocationCard({
         >
           <MaterialIcons name="close" size={16} color="#94a3b8" />
         </Pressable>
-        <Text style={s.headerLabel}>מיקום</Text>
       </View>
 
-      {/* Mode chips — right-aligned for RTL */}
+      {/* Mode chips — כתובת first (physical RIGHT in RTL), קישור second */}
       <View style={s.typeRow}>
-        <TypeChip
-          label="קישור"
-          active={locMode === 'link'}
-          onPress={() => switchMode('link')}
-        />
         <TypeChip
           label="כתובת"
           active={locMode === 'address'}
           onPress={() => switchMode('address')}
+        />
+        <TypeChip
+          label="קישור"
+          active={locMode === 'link'}
+          onPress={() => switchMode('link')}
         />
       </View>
 
@@ -148,7 +149,7 @@ export function LocationCard({
                   onlineUrl: '',
                   locationUrl: undefined,
                 }),
-              textAlign: 'right' as const,
+              textAlign: rtl.inputTextAlign,
               placeholderTextColor: '#94a3b8',
               accessibilityLabel: 'חיפוש כתובת',
             }}
@@ -225,7 +226,7 @@ function TypeChip({
 
 const s = StyleSheet.create({
   emptyRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#fff',
@@ -242,7 +243,7 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#374151',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   emptyIconCircle: {
     width: 36,
@@ -266,7 +267,7 @@ const s = StyleSheet.create({
     gap: 10,
   },
   headerRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
   },
@@ -274,15 +275,15 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   closeBtn: {
     padding: 4,
   },
   typeRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     gap: 8,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
   },
   typeChip: {
     paddingHorizontal: 14,
@@ -330,7 +331,7 @@ const s = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
     backgroundColor: '#fafafa',
-    textAlign: 'right',
+    textAlign: rtl.inputTextAlign,
     marginBottom: 0,
   },
   placesList: {
@@ -353,7 +354,7 @@ const s = StyleSheet.create({
   placesDescription: {
     fontSize: 14,
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   placesSeparator: {
     height: StyleSheet.hairlineWidth,
@@ -370,6 +371,6 @@ const s = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
     backgroundColor: '#fafafa',
-    textAlign: 'right',
+    textAlign: rtl.inputTextAlign,
   },
 });

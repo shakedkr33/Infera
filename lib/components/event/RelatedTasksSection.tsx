@@ -1,4 +1,4 @@
-import { MaterialIcons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import {
   Modal,
@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import type { EventTask, Participant } from '@/lib/types/event';
+import { rtl } from '@/lib/rtl';
 
 const PRIMARY = '#36a9e2';
 const TINT = '#e8f5fd';
@@ -232,9 +233,12 @@ export function RelatedTasksSection({
         accessible={true}
         accessibilityRole="button"
         accessibilityLabel="הוסף משימה חדשה"
+        hitSlop={4}
       >
-        <MaterialIcons name="add" size={18} color={PRIMARY} />
         <Text style={s.addTaskText}>הוסף משימה חדשה</Text>
+        <View style={s.addTaskBtn}>
+          <Ionicons name="add" size={18} color={PRIMARY} />
+        </View>
       </Pressable>
 
       {/* ── Visibility Toggle ── */}
@@ -470,7 +474,7 @@ const s = StyleSheet.create({
 
   // ── Header ────────────────────────────────────────────────────────────────
   headerRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     marginBottom: 10,
@@ -487,13 +491,13 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 2,
   },
   progressText: {
     fontSize: 14,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   // ── Progress bar ──────────────────────────────────────────────────────────
@@ -512,7 +516,7 @@ const s = StyleSheet.create({
 
   // ── Task row ──────────────────────────────────────────────────────────────
   taskRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     paddingVertical: 8,
     borderBottomWidth: 1,
@@ -521,7 +525,7 @@ const s = StyleSheet.create({
   },
   taskCheckArea: {
     flex: 1,
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
   },
@@ -542,7 +546,7 @@ const s = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     color: '#0f172a',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   taskTitleDone: {
     textDecorationLine: 'line-through',
@@ -601,25 +605,29 @@ const s = StyleSheet.create({
 
   // ── Add task row ───────────────────────────────────────────────────────────
   addTaskRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderWidth: 1.5,
-    borderColor: PRIMARY,
-    borderStyle: 'dashed',
-    borderRadius: 10,
-    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 10,
     marginTop: 8,
+  },
+  addTaskBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: TINT,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   addTaskRowPressed: {
     opacity: 0.7,
   },
   addTaskText: {
+    flex: 1,
     fontSize: 14,
     color: PRIMARY,
     fontWeight: '600',
+    textAlign: rtl.textAlign,
   },
 
   // ── Add task modal ──────────────────────────────────────────────────────────
@@ -697,7 +705,7 @@ const s = StyleSheet.create({
 
   // ── Visibility toggle ─────────────────────────────────────────────────────
   visibilityRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 14,
@@ -707,20 +715,20 @@ const s = StyleSheet.create({
   },
   visibilityTextWrap: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
     marginLeft: 8,
   },
   visibilityTitle: {
     fontSize: 13,
     color: '#111827',
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 2,
   },
   visibilityText: {
     fontSize: 12,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   // ── Assign bottom sheet ───────────────────────────────────────────────────
@@ -793,7 +801,7 @@ const s = StyleSheet.create({
   },
   participantInfo: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   participantName: {
     fontSize: 15,

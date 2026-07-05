@@ -1485,7 +1485,7 @@ const s = StyleSheet.create({
     backgroundColor: '#e2e8f0',
   },
   discardBtns: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
   },
   discardBtnDivider: {
     width: StyleSheet.hairlineWidth,
@@ -1573,10 +1573,10 @@ const s = StyleSheet.create({
     textAlign: rtl.textAlign,
   },
   successDetailRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
   },
   successDetailText: {
     fontSize: 13,
@@ -1587,7 +1587,7 @@ const s = StyleSheet.create({
     backgroundColor: PRIMARY,
     borderRadius: 16,
     height: 52,
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,

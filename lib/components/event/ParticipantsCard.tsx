@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import type { Participant } from '@/lib/types/event';
+import { rtl } from '@/lib/rtl';
 // SHARED: phone selection logic for contact import
 // FIXED: updated phone label filter to mobile-capable labels only
 // FIXED: event flow now requires explicit number selection for contacts with 2+ mobile numbers
@@ -323,6 +324,10 @@ export function ParticipantsCard({
     <View style={s.card}>
       {/* ── Header ── */}
       <View style={s.headerRow}>
+        <View style={[s.iconCircle, { backgroundColor: TINT }]}>
+          <Ionicons name="people-outline" size={20} color={PRIMARY} />
+        </View>
+        <Text style={s.label}>משתתפים</Text>
         <Pressable
           style={s.addBtn}
           onPress={openSheet}
@@ -332,10 +337,6 @@ export function ParticipantsCard({
         >
           <Ionicons name="add" size={18} color={PRIMARY} />
         </Pressable>
-        <Text style={s.label}>משתתפים</Text>
-        <View style={[s.iconCircle, { backgroundColor: TINT }]}>
-          <Ionicons name="people-outline" size={20} color={PRIMARY} />
-        </View>
       </View>
 
       {/* ── Participant circles row ── */}
@@ -1039,7 +1040,7 @@ const s = StyleSheet.create({
     elevation: 1,
   },
   headerRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
   },
@@ -1055,7 +1056,7 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   addBtn: {
     width: 32,
@@ -1067,12 +1068,12 @@ const s = StyleSheet.create({
   },
   // ── Circles row ───────────────────────────────────────────────────────────
   circlesRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     flexWrap: 'wrap',
     gap: 8,
     marginTop: 10,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
   },
   circle: {
     width: 36,
@@ -1257,7 +1258,7 @@ const s = StyleSheet.create({
   },
   contactRowInfo: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   contactName: {
     fontSize: 14,

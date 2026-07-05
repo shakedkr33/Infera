@@ -18,6 +18,7 @@ import {
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import type { EventAttachmentDraft } from '@/lib/types/event';
+import { rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -185,7 +186,6 @@ function DraftFileRow({
         />
       ) : (
         <View style={s.docCard}>
-          <MaterialIcons name="insert-drive-file" size={28} color={PRIMARY} />
           <View style={s.docMeta}>
             <Text style={s.docName} numberOfLines={1}>
               {attachment.originalName}
@@ -194,6 +194,7 @@ function DraftFileRow({
               <Text style={s.docSize}>{formatBytes(attachment.sizeBytes)}</Text>
             )}
           </View>
+          <MaterialIcons name="insert-drive-file" size={28} color={PRIMARY} />
         </View>
       )}
       <TextInput
@@ -358,6 +359,14 @@ export function EventAttachmentsSection({
     <View style={s.card}>
       {/* Header — matches ParticipantsCard exactly */}
       <View style={s.headerRow}>
+        {/* Right: icon circle */}
+        <View style={s.iconCircle}>
+          <MaterialIcons name="attach-file" size={20} color={PRIMARY} />
+        </View>
+
+        {/* Center: label */}
+        <Text style={s.headerLabel}>קבצים מצורפים</Text>
+
         {/* Left: plus-circle (hidden at cap) */}
         {canAddMore ? (
           <Pressable
@@ -375,14 +384,6 @@ export function EventAttachmentsSection({
         ) : (
           <View style={s.addCircleBtnDisabled} />
         )}
-
-        {/* Center: label */}
-        <Text style={s.headerLabel}>קבצים מצורפים</Text>
-
-        {/* Right: icon circle */}
-        <View style={s.iconCircle}>
-          <MaterialIcons name="attach-file" size={20} color={PRIMARY} />
-        </View>
       </View>
 
       {/* File list */}
@@ -483,7 +484,7 @@ const s = StyleSheet.create({
   },
   // ── Header — matches ParticipantsCard pattern ──────────────────────────────
   headerRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
   },
@@ -500,13 +501,13 @@ const s = StyleSheet.create({
     width: 32,
     height: 32,
   },
-  // Label in the center (flex: 1, right-aligned — same as ParticipantsCard label)
+  // Label in the center (flex: 1, RTL-aligned — same as ParticipantsCard label)
   headerLabel: {
     flex: 1,
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     paddingHorizontal: 8,
   },
   // Icon-circle on the right (same as ParticipantsCard iconCircle)
@@ -537,30 +538,30 @@ const s = StyleSheet.create({
 
   // ── Draft: document card ──
   docCard: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     backgroundColor: '#f3f4f6',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 10,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
   },
   docMeta: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
     gap: 2,
   },
   docName: {
     fontSize: 13,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   docSize: {
     fontSize: 11,
     color: '#9ca3af',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   // ── Display name input ──
@@ -578,9 +579,9 @@ const s = StyleSheet.create({
 
   // ── Actions row (replace | remove) ──
   fileActions: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     gap: 6,
   },
   actionBtn: {
@@ -599,7 +600,7 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: PRIMARY,
     textDecorationLine: 'underline',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   savedLinkLoading: {
     color: '#9ca3af',

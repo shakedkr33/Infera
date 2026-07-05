@@ -10,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { rtl } from '@/lib/rtl';
 import type { Reminder, ReminderPreset, ReminderUnit } from '@/lib/types/event';
 import { makeReminder } from '@/lib/types/event';
 
@@ -122,6 +123,21 @@ export function RemindersCard({
     <View style={s.card}>
       {/* ── Header ── */}
       <View style={s.headerRow}>
+        {/* Icon circle — first = physical RIGHT in RTL */}
+        <View style={[s.iconCircle, { backgroundColor: TINT }]}>
+          <MaterialIcons
+            name="notifications-active"
+            size={20}
+            color={PRIMARY}
+          />
+        </View>
+        <View style={s.headerContent}>
+          <Text style={s.label}>תזכורות</Text>
+          <Text style={s.statusText}>
+            {enabled ? 'תזכורות מופעלות' : 'תזכורות כבויות'}
+          </Text>
+        </View>
+        {/* Switch — last = physical LEFT in RTL */}
         <Switch
           value={enabled}
           onValueChange={(v) => {
@@ -138,19 +154,6 @@ export function RemindersCard({
           accessible={true}
           accessibilityLabel="הפעל תזכורות"
         />
-        <View style={s.headerContent}>
-          <Text style={s.label}>תזכורות</Text>
-          <Text style={s.statusText}>
-            {enabled ? 'תזכורות מופעלות' : 'תזכורות כבויות'}
-          </Text>
-        </View>
-        <View style={[s.iconCircle, { backgroundColor: TINT }]}>
-          <MaterialIcons
-            name="notifications-active"
-            size={20}
-            color={PRIMARY}
-          />
-        </View>
       </View>
 
       {/* ── Options ── */}
@@ -201,10 +204,12 @@ export function RemindersCard({
                     accessibilityRole="button"
                     accessibilityLabel="ערוך תזכורת מותאמת"
                   >
-                    <MaterialIcons name="edit" size={14} color={PRIMARY} />
+                    {/* Text first = physical RIGHT in RTL */}
                     <Text style={s.customSummaryText}>
                       {formatCustomSummary(customReminder)}
                     </Text>
+                    {/* Edit icon last = physical LEFT in RTL */}
+                    <MaterialIcons name="edit" size={14} color={PRIMARY} />
                   </Pressable>
                 )}
               </View>
@@ -229,36 +234,9 @@ export function RemindersCard({
             {/* Title */}
             <Text style={s.pickerTitle}>תזכורת מותאמת</Text>
 
-            {/* Row: number list + unit chips + "לפני" */}
+            {/* Row: number list | unit chips | "לפני" — in RTL: number on RIGHT, לפני on LEFT */}
             <View style={s.pickerRow}>
-              {/* Fixed "לפני" suffix — bold, prominent */}
-              <Text style={s.beforeLabel}>לפני</Text>
-
-              {/* Unit chips */}
-              <View style={s.unitChipsCol}>
-                {UNITS.map((unit) => (
-                  <Pressable
-                    key={unit}
-                    style={[s.unitChip, draftUnit === unit && s.unitChipActive]}
-                    onPress={() => setDraftUnit(unit)}
-                    accessible={true}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: draftUnit === unit }}
-                    accessibilityLabel={UNIT_LABELS[unit]}
-                  >
-                    <Text
-                      style={[
-                        s.unitChipText,
-                        draftUnit === unit && s.unitChipTextActive,
-                      ]}
-                    >
-                      {UNIT_LABELS[unit]}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              {/* Number scroll list — tap or scroll to select */}
+              {/* Number scroll list — first = physical RIGHT in RTL */}
               <View style={s.numListContainer}>
                 <FlatList
                   ref={numListRef}
@@ -312,6 +290,33 @@ export function RemindersCard({
                   }}
                 />
               </View>
+
+              {/* Unit chips */}
+              <View style={s.unitChipsCol}>
+                {UNITS.map((unit) => (
+                  <Pressable
+                    key={unit}
+                    style={[s.unitChip, draftUnit === unit && s.unitChipActive]}
+                    onPress={() => setDraftUnit(unit)}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: draftUnit === unit }}
+                    accessibilityLabel={UNIT_LABELS[unit]}
+                  >
+                    <Text
+                      style={[
+                        s.unitChipText,
+                        draftUnit === unit && s.unitChipTextActive,
+                      ]}
+                    >
+                      {UNIT_LABELS[unit]}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {/* "לפני" fixed label — last = physical LEFT in RTL */}
+              <Text style={s.beforeLabel}>לפני</Text>
             </View>
 
             {/* Live preview */}
@@ -350,7 +355,7 @@ const s = StyleSheet.create({
     elevation: 1,
   },
   headerRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
   },
@@ -368,17 +373,17 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   statusText: {
     fontSize: 12,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   allDayNote: {
     fontSize: 12,
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     backgroundColor: '#f8fafc',
     borderRadius: 8,
     paddingHorizontal: 10,
@@ -393,7 +398,7 @@ const s = StyleSheet.create({
     paddingTop: 10,
   },
   optionRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     paddingVertical: 8,
@@ -415,7 +420,7 @@ const s = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     flex: 1,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   optionTextActive: {
     color: '#0f172a',
@@ -423,10 +428,10 @@ const s = StyleSheet.create({
   },
   // Custom summary row (tappable, shows after custom is selected)
   customSummaryRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     backgroundColor: TINT,
     borderRadius: 8,
     paddingHorizontal: 10,
@@ -437,7 +442,7 @@ const s = StyleSheet.create({
     fontSize: 13,
     color: PRIMARY,
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   // ── Picker modal ──────────────────────────────────────────────────────────
   modalOverlay: {
@@ -469,9 +474,9 @@ const s = StyleSheet.create({
     marginBottom: 20,
   },
   pickerRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     gap: 12,
     height: NUM_ITEM_H * 3, // show 3 rows at once
   },
@@ -480,7 +485,7 @@ const s = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   // Unit chips column
   unitChipsCol: {

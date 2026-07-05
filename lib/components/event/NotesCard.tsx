@@ -1,6 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { rtl } from '@/lib/rtl';
 
 const PRIMARY = '#36a9e2';
 const TINT = '#e8f5fd';
@@ -34,8 +35,9 @@ export function NotesCard({
   return (
     <View style={s.card}>
       <View style={s.headerRow}>
+        {/* Label is first child = physical RIGHT in RTL */}
         <Text style={s.label}>הערות</Text>
-        {/* Icon badge — last child = right side in flexDirection:'row', matching תזכורות/מיקום */}
+        {/* Icon circle is last child = physical LEFT in RTL */}
         <View style={s.iconCircle}>
           <MaterialIcons name="description" size={20} color={PRIMARY} />
         </View>
@@ -48,7 +50,7 @@ export function NotesCard({
         placeholderTextColor="#94a3b8"
         multiline
         numberOfLines={3}
-        textAlign="right"
+        textAlign={rtl.inputTextAlign}
       />
     </View>
   );
@@ -67,7 +69,7 @@ const s = StyleSheet.create({
     gap: 10,
   },
   emptyCard: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#fff',
@@ -79,9 +81,9 @@ const s = StyleSheet.create({
     shadowRadius: 8,
     elevation: 1,
   },
-  emptyText: { fontSize: 15, color: '#94a3b8' },
+  emptyText: { fontSize: 15, color: '#94a3b8', textAlign: rtl.textAlign },
   headerRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
   },
@@ -98,12 +100,12 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   notesInput: {
     fontSize: 15,
     color: '#0f172a',
-    textAlign: 'right',
+    textAlign: rtl.inputTextAlign,
     minHeight: 60,
     lineHeight: 22,
   },

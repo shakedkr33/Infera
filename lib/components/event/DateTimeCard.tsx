@@ -9,6 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { rtl } from '@/lib/rtl';
 import {
   getHebrewDateInfo,
   getHebrewMonthRangeForGregorianMonth,
@@ -127,16 +128,18 @@ function CalendarGrid({
 
       {/* Header */}
       <View style={cal.header}>
-        <Pressable onPress={goToNext} hitSlop={8}>
-          <MaterialIcons name="chevron-left" size={24} color={accentColor} />
+        {/* goToPrev is first child = physical RIGHT in RTL (→ points to past) */}
+        <Pressable onPress={goToPrev} hitSlop={8}>
+          <MaterialIcons name="chevron-right" size={24} color={accentColor} />
         </Pressable>
         <Text style={cal.headerTitle}>
           {calMode === 'heb' && hebMonthHeader
             ? hebMonthHeader
             : `${MONTH_NAMES_HE[viewMonth]} ${viewYear}`}
         </Text>
-        <Pressable onPress={goToPrev} hitSlop={8}>
-          <MaterialIcons name="chevron-right" size={24} color={accentColor} />
+        {/* goToNext is last child = physical LEFT in RTL (← points to future) */}
+        <Pressable onPress={goToNext} hitSlop={8}>
+          <MaterialIcons name="chevron-left" size={24} color={accentColor} />
         </Pressable>
       </View>
 
@@ -210,7 +213,7 @@ function CalendarGrid({
 const cal = StyleSheet.create({
   wrapper: { paddingHorizontal: 4, paddingBottom: 8 },
   modeToggleRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'center',
     gap: 6,
     marginBottom: 8,
@@ -236,15 +239,15 @@ const cal = StyleSheet.create({
     color: '#36a9e2',
   },
   header: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 8,
     paddingBottom: 8,
   },
   headerTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
-  // row-reverse so index-0 (Sunday) appears on the RIGHT
-  row: { flexDirection: 'row-reverse' },
+  // row-reverse via rtl.flexDirection so Sunday (index 0) stays on the physical RIGHT
+  row: { flexDirection: rtl.flexDirection },
   cell: { flex: 1, alignItems: 'center', paddingVertical: 4 },
   dayLabel: { fontSize: 12, color: '#6b7280', fontWeight: '600' },
   dayCircle: {
@@ -377,11 +380,12 @@ export function DateTimeCard({
   })();
 
   // ── Day chips ─────────────────────────────────────────────────────────────
-  const DAY_CHIPS = [
-    { label: 'מחרתיים', daysFromNow: 2 },
-    { label: 'מחר', daysFromNow: 1 },
-    { label: 'היום', daysFromNow: 0 },
-  ] as const;
+// Ordered so that היום is the first (physical RIGHT) chip in RTL layout.
+const DAY_CHIPS = [
+  { label: 'היום', daysFromNow: 0 },
+  { label: 'מחר', daysFromNow: 1 },
+  { label: 'מחרתיים', daysFromNow: 2 },
+] as const;
 
   const chipMidnight = (daysFromNow: number): number => {
     const base = new Date();
@@ -419,18 +423,7 @@ export function DateTimeCard({
   // ── Shared "start date" row chips (reused in allDay and timed modes) ──────
   const StartDateChips = (
     <View style={s.chipsGroup}>
-      {/* Calendar icon → inline grid */}
-      <Pressable
-        style={[s.calIconBtn, openPicker === 'startDateGrid' && s.chipActive]}
-        onPress={() => togglePicker('startDateGrid')}
-        accessible={true}
-        accessibilityRole="button"
-        accessibilityLabel="לוח שנה - תאריך התחלה"
-      >
-        <MaterialIcons name="calendar-today" size={14} color={PRIMARY} />
-      </Pressable>
-
-      {/* Date text chip → spinner wheel */}
+      {/* Date text chip — first = physical RIGHT in RTL */}
       <Pressable
         style={[s.dateTextChip, openPicker === 'startDate' && s.dateChipOpen]}
         onPress={() => togglePicker('startDate')}
@@ -440,6 +433,17 @@ export function DateTimeCard({
       >
         <Text style={s.dateChipText}>{toNumericDate(startDate)}</Text>
       </Pressable>
+
+      {/* Calendar icon — last = physical LEFT in RTL */}
+      <Pressable
+        style={[s.calIconBtn, openPicker === 'startDateGrid' && s.chipActive]}
+        onPress={() => togglePicker('startDateGrid')}
+        accessible={true}
+        accessibilityRole="button"
+        accessibilityLabel="לוח שנה - תאריך התחלה"
+      >
+        <MaterialIcons name="calendar-today" size={14} color={PRIMARY} />
+      </Pressable>
     </View>
   );
 
@@ -447,6 +451,9 @@ export function DateTimeCard({
     <View style={s.card}>
       {/* ── "כל היום" toggle ─────────────────────────────────────────────────── */}
       <View style={s.toggleRow}>
+        {/* Label is first child = physical RIGHT in RTL */}
+        <Text style={s.toggleLabel}>כל היום</Text>
+        {/* Switch is last child = physical LEFT in RTL */}
         <Switch
           value={isAllDay}
           onValueChange={(v) => {
@@ -460,7 +467,6 @@ export function DateTimeCard({
           accessibilityLabel="כל היום"
           accessibilityRole="switch"
         />
-        <Text style={s.toggleLabel}>כל היום</Text>
       </View>
 
       <View style={s.divider} />
@@ -469,8 +475,9 @@ export function DateTimeCard({
       {isAllDay ? (
         <>
           <View style={[s.dateRow, { marginBottom: 0 }]}>
-            {StartDateChips}
+            {/* Label first = physical RIGHT in RTL */}
             <Text style={s.rowLabel}>תאריך</Text>
+            {StartDateChips}
           </View>
           {getHebrewDateInfo(startDate).fullHebrewDate ? (
             <Text style={s.hebrewDateHint}>
@@ -482,19 +489,24 @@ export function DateTimeCard({
         <>
           {/* ── Timed mode: start row ── */}
           <View style={s.dateRow}>
+            {/* Label first = physical RIGHT in RTL */}
+            <Text style={s.rowLabel}>התחלה</Text>
             <View style={s.chipsGroup}>
-              {/* Time chip — only visible in timed mode */}
+              {/* Date text chip — first = physical RIGHT in RTL */}
               <Pressable
-                style={[s.timeChip, openPicker === 'startTime' && s.chipActive]}
-                onPress={() => togglePicker('startTime')}
+                style={[
+                  s.dateTextChip,
+                  openPicker === 'startDate' && s.dateChipOpen,
+                ]}
+                onPress={() => togglePicker('startDate')}
                 accessible={true}
                 accessibilityRole="button"
-                accessibilityLabel={`שעת התחלה: ${startTime ?? 'לא נבחרה'}`}
+                accessibilityLabel={`תאריך התחלה: ${toNumericDate(startDate)}`}
               >
-                <Text style={s.timeChipText}>{startTime ?? '--:--'}</Text>
+                <Text style={s.dateChipText}>{toNumericDate(startDate)}</Text>
               </Pressable>
 
-              {/* Calendar icon → inline grid */}
+              {/* Calendar icon */}
               <Pressable
                 style={[
                   s.calIconBtn,
@@ -512,21 +524,17 @@ export function DateTimeCard({
                 />
               </Pressable>
 
-              {/* Date text chip → spinner wheel */}
+              {/* Time chip — last = physical LEFT in RTL */}
               <Pressable
-                style={[
-                  s.dateTextChip,
-                  openPicker === 'startDate' && s.dateChipOpen,
-                ]}
-                onPress={() => togglePicker('startDate')}
+                style={[s.timeChip, openPicker === 'startTime' && s.chipActive]}
+                onPress={() => togglePicker('startTime')}
                 accessible={true}
                 accessibilityRole="button"
-                accessibilityLabel={`תאריך התחלה: ${toNumericDate(startDate)}`}
+                accessibilityLabel={`שעת התחלה: ${startTime ?? 'לא נבחרה'}`}
               >
-                <Text style={s.dateChipText}>{toNumericDate(startDate)}</Text>
+                <Text style={s.timeChipText}>{startTime ?? '--:--'}</Text>
               </Pressable>
             </View>
-            <Text style={s.rowLabel}>התחלה</Text>
           </View>
           {getHebrewDateInfo(startDate).fullHebrewDate ? (
             <Text style={s.hebrewDateHint}>
@@ -536,26 +544,29 @@ export function DateTimeCard({
 
           {/* ── Timed mode: end row ── */}
           <View style={[s.dateRow, { marginBottom: 0 }]}>
+            {/* Label first = physical RIGHT in RTL */}
+            <Text style={s.rowLabel}>סיום</Text>
             <View style={s.chipsGroup}>
+              {/* Date text chip — first = physical RIGHT in RTL */}
               <Pressable
                 style={[
-                  s.timeChip,
-                  openPicker === 'endTime' && s.chipActive,
+                  s.dateTextChip,
+                  openPicker === 'endDate' && s.dateChipOpen,
                   isInvalidRange && s.chipInvalid,
                 ]}
-                onPress={() => togglePicker('endTime')}
+                onPress={() => togglePicker('endDate')}
                 accessible={true}
                 accessibilityRole="button"
-                accessibilityLabel={`שעת סיום: ${endTime ?? 'לא נבחרה'}`}
+                accessibilityLabel={`תאריך סיום: ${toNumericDate(endDate)}`}
               >
                 <Text
-                  style={[s.timeChipText, isInvalidRange && s.chipTextInvalid]}
+                  style={[s.dateChipText, isInvalidRange && s.chipTextInvalid]}
                 >
-                  {endTime ?? '--:--'}
+                  {toNumericDate(endDate)}
                 </Text>
               </Pressable>
 
-              {/* Calendar icon → inline grid */}
+              {/* Calendar icon */}
               <Pressable
                 style={[
                   s.calIconBtn,
@@ -574,25 +585,25 @@ export function DateTimeCard({
                 />
               </Pressable>
 
+              {/* Time chip — last = physical LEFT in RTL */}
               <Pressable
                 style={[
-                  s.dateTextChip,
-                  openPicker === 'endDate' && s.dateChipOpen,
+                  s.timeChip,
+                  openPicker === 'endTime' && s.chipActive,
                   isInvalidRange && s.chipInvalid,
                 ]}
-                onPress={() => togglePicker('endDate')}
+                onPress={() => togglePicker('endTime')}
                 accessible={true}
                 accessibilityRole="button"
-                accessibilityLabel={`תאריך סיום: ${toNumericDate(endDate)}`}
+                accessibilityLabel={`שעת סיום: ${endTime ?? 'לא נבחרה'}`}
               >
                 <Text
-                  style={[s.dateChipText, isInvalidRange && s.chipTextInvalid]}
+                  style={[s.timeChipText, isInvalidRange && s.chipTextInvalid]}
                 >
-                  {toNumericDate(endDate)}
+                  {endTime ?? '--:--'}
                 </Text>
               </Pressable>
             </View>
-            <Text style={s.rowLabel}>סיום</Text>
           </View>
 
           {getHebrewDateInfo(endDate).fullHebrewDate ? (
@@ -799,7 +810,7 @@ const s = StyleSheet.create({
     elevation: 1,
   },
   toggleRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: '#f8fafc',
@@ -811,7 +822,7 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#111827',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   divider: {
     height: 1,
@@ -819,7 +830,7 @@ const s = StyleSheet.create({
     marginVertical: 10,
   },
   dateRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 8,
@@ -828,11 +839,11 @@ const s = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     minWidth: 48,
   },
   chipsGroup: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
   },
@@ -898,19 +909,19 @@ const s = StyleSheet.create({
   hebrewDateHint: {
     fontSize: 11,
     color: '#94a3b8',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 4,
     marginBottom: 4,
   },
   invalidHint: {
     fontSize: 11,
     color: '#ef4444',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginTop: 4,
   },
   dayChipsRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
+    flexDirection: rtl.flexDirection,
+    justifyContent: 'flex-start',
     gap: 8,
   },
   dayChip: {
