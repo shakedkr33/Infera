@@ -1756,7 +1756,9 @@ function TabAll({
             accessibilityLabel={`כדאי לזכור, ${remindersSummaryText}`}
             accessibilityState={{ expanded: isRemindersOpen }}
           >
-            {/* Left: chevron + summary badge */}
+            {/* Right (RTL start): title */}
+            <Text style={styles.accordionTitle}>כדאי לזכור</Text>
+            {/* Left (RTL end): chevron + summary badge */}
             <View style={styles.accordionLeft}>
               <Ionicons
                 name={isRemindersOpen ? 'chevron-up' : 'chevron-down'}
@@ -1771,8 +1773,6 @@ function TabAll({
                 </View>
               )}
             </View>
-            {/* Right: title */}
-            <Text style={styles.accordionTitle}>כדאי לזכור</Text>
           </Pressable>
 
           {/* Body — visible only when open */}
@@ -3161,7 +3161,9 @@ const styles = StyleSheet.create({
   sectionAction: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
 
   // ── Events grid
-  eventsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  // direction:'ltr' cancels the inherited direction:'rtl' (from ANDROID_MATCH_IOS_LAYOUT root)
+  // so cards always flow physical left→right. Text inside cards is textAlign:'center' — unaffected.
+  eventsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, direction: 'ltr' },
 
   flyerCard: {
     minHeight: 272,
@@ -3870,7 +3872,7 @@ const styles = StyleSheet.create({
 
   // ── Accordion (כדאי לזכור)
   accordionHeader: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 0,
