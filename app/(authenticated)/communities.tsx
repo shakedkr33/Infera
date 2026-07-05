@@ -146,7 +146,12 @@ interface ActivitySummaryProps {
 }
 
 function ActivitySummary({ nextActivity, referenceNow }: ActivitySummaryProps) {
-  const titleAlign = rtl.textAlign ?? 'right';
+  // Inside direction:'ltr' cardWrapper, Yoga's RTL flip is suppressed on Android
+  // (because ANDROID_MATCH_IOS_LAYOUT adds an explicit direction:'rtl' root that the
+  // card's direction:'ltr' overrides cleanly). On Android we must use physical 'right'.
+  // On iOS the global I18nManager.isRTL=true is not cancelled by direction:'ltr',
+  // so rtl.textAlign='left' still lands on physical right via Yoga flip (no change).
+  const titleAlign = ANDROID_MATCH_IOS_LAYOUT ? 'right' : (rtl.textAlign ?? 'right');
   const rowDir = rtl.flexDirection;
 
   if (nextActivity) {
@@ -251,7 +256,10 @@ function CommunityCard({
   const { community } = item;
   const menuRef = useRef<View>(null);
   const firstTag = community.tags?.[0];
-  const titleAlign = rtl.textAlign ?? 'right';
+  // Inside direction:'ltr' cardWrapper, Android's explicit direction:'rtl' root makes
+  // the card's direction:'ltr' a clean override — Yoga no longer flips 'left' to right.
+  // Use physical 'right' on Android. iOS global RTL is unaffected (no change there).
+  const titleAlign = ANDROID_MATCH_IOS_LAYOUT ? 'right' : (rtl.textAlign ?? 'right');
   const rowDir = rtl.flexDirection;
   const membersCount = Number.isFinite(item.membersCount)
     ? item.membersCount
