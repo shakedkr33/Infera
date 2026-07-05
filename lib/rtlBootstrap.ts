@@ -1,43 +1,48 @@
 /**
- * RTL Bootstrap - Auto-force RTL in Expo Go
+ * RTL Bootstrap - Force RTL in all runtime environments
  *
- * This module ensures that Expo Go behaves like native builds by forcing
- * RTL mode on first launch. After the reload, I18nManager.isRTL will be
- * true, and the RTL utilities will work correctly without manual hacks.
+ * This module ensures all runtime environments (Expo Go, dev client, production
+ * builds) start with RTL active. On the first launch after install or an OTA
+ * update that has not yet applied RTL, I18nManager.isRTL is false; we force it
+ * and reload the JS bundle so every subsequent render starts with the correct
+ * direction. The setting is persistent, so the reload only ever happens once.
  *
- * IMPORTANT: This only runs in Expo Go. Native builds use expo-localization
- * plugin which handles RTL automatically.
+ * NOTE for native builds: the expo-localization plugin also sets
+ * android:supportsRTL="true" in the manifest and ExpoLocalization_forcesRTL in
+ * iOS Info.plist as a build-time safety net. This JS bootstrap is still
+ * required because the plugin alone does not call I18nManager.forceRTL().
  */
 
-import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { I18nManager } from 'react-native';
 
-const isExpoGo = Constants.executionEnvironment === 'storeClient';
 const APP_IS_RTL = true;
 
 /**
- * Bootstraps RTL mode for Expo Go environments.
- * If RTL is not enabled, it forces it and reloads the app.
+ * Forces RTL mode in all runtime environments.
+ * If RTL is not yet active, enables it and reloads the JS bundle.
  *
- * @returns Promise<boolean> - true if app will reload, false otherwise
+ * @returns Promise<boolean> - true if the app is about to reload, false otherwise
  */
 export async function bootstrapRTL(): Promise<boolean> {
-  // Only run in Expo Go and if app is RTL
-  if (!isExpoGo || !APP_IS_RTL) {
+  if (!APP_IS_RTL) {
     return false;
   }
 
-  // Check if RTL is already enabled
   if (!I18nManager.isRTL) {
-    // Force RTL mode
     I18nManager.allowRTL(true);
     I18nManager.forceRTL(true);
 
-    // Reload app to apply changes
-    // This is a one-time operation - after reload, isRTL will be true
-    await Updates.reloadAsync();
-    return true; // App will reload, so this return won't execute
+    try {
+      // Reload so all StyleSheet.create() calls happen with isRTL = true.
+      // In production builds without an active EAS Update channel this may
+      // throw — the RTL flag is still saved and takes effect on the next
+      // cold start.
+      await Updates.reloadAsync();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   return false;

@@ -7,30 +7,44 @@
  * - Dev/Prod builds (native RTL works via I18nManager)
  *
  * ══════════════════════════════════════════════════════════════════════════════
- * HOW textAlign WORKS WITH Yoga direction: 'rtl'
+ * MEASURED GROUND TRUTH (measured on real devices, 2026-07)
+ * iOS native and Android native behave IDENTICALLY — platform splits removed.
+ * Text and TextInput behave DIFFERENTLY — do not unify.
+ * alignItems/alignSelf in COLUMN containers are logical (auto-flipped) on native.
+ * direction:'rtl' wrapper has NO effect on column cross-axis alignment.
  * ══════════════════════════════════════════════════════════════════════════════
  *
- * textAlign is NOT auto-flipped by I18nManager (unlike flexDirection).
- * iOS and Android handle it differently:
+ * ── <Text> components (use rtl.textAlign / getTextAlign) ──────────────────
  *
- *   iOS native (I18nManager.isRTL=true):
- *     Yoga inherits RTL direction from the OS → 'left' is logical-start →
- *     physical RIGHT. Use 'left' (logical inverse) so text lands on the right.
+ *   Native RTL (I18nManager.isRTL=true) — iOS and Android identical:
+ *     <Text> textAlign IS auto-flipped by Yoga. 'left' renders physical RIGHT.
+ *     Return 'left' so Yoga logical flip lands on the right side.
  *
- *   Android native (I18nManager.isRTL=true):
- *     Yoga does NOT auto-flip textAlign. 'left' stays physical LEFT. Must use
- *     'right' explicitly so text lands on the physical right.
+ *   Expo Go / iOS storeClient (I18nManager.isRTL=false):
+ *     No Yoga RTL mode; no direction wrapper. textAlign is physical.
+ *     Return 'right'.
  *
- *   Expo Go (no native RTL active):
- *     No Yoga RTL mode; textAlign values are physical. Use 'right'.
+ * ┌─────────────────────────────┬────────────────────┬──────────────────┐
+ * │ Environment                 │ getTextAlign()     │ Physical result  │
+ * ├─────────────────────────────┼────────────────────┼──────────────────┤
+ * │ Expo Go (isRTL=false)       │ "right"            │ RIGHT ✅         │
+ * │ iOS native RTL (isRTL=true) │ "left"             │ RIGHT ✅         │
+ * │ Android native (isRTL=true) │ "left"             │ RIGHT ✅         │
+ * └─────────────────────────────┴────────────────────┴──────────────────┘
  *
- * ┌────────────────────┬───────────────────┬────────────────────┬──────────────────┐
- * │ Environment        │ rtl.textAlign     │ Yoga direction:rtl │ Final Result     │
- * ├────────────────────┼───────────────────┼────────────────────┼──────────────────┤
- * │ Expo Go            │ "right"           │ No  (physical)     │ RIGHT ✅         │
- * │ iOS native RTL     │ "left"            │ Yes (logical)      │ RIGHT ✅         │
- * │ Android native RTL │ "right"           │ No  (not flipped)  │ RIGHT ✅         │
- * └────────────────────┴───────────────────┴────────────────────┴──────────────────┘
+ * ── <TextInput> components (use rtl.inputTextAlign / getInputTextAlign) ───
+ *
+ *   All environments:
+ *     <TextInput> textAlign is NEVER auto-flipped. 'right' = physical RIGHT.
+ *     direction:'rtl' wrapper has NO effect on TextInput textAlign.
+ *
+ * ┌─────────────────────────────┬───────────────────────┬──────────────────┐
+ * │ Environment                 │ getInputTextAlign()   │ Physical result  │
+ * ├─────────────────────────────┼───────────────────────┼──────────────────┤
+ * │ All environments            │ "right"               │ RIGHT ✅         │
+ * └─────────────────────────────┴───────────────────────┴──────────────────┘
+ *
+ * ── flexDirection (row axis) ───────────────────────────────────────────────
  *
  * ┌─────────────┬───────────────────┬───────────────┬──────────────────┐
  * │ Environment │ rtl.flexDirection │ Native Flips? │ Final Result     │
@@ -40,14 +54,38 @@
  * │ Prod Build  │ "row"             │ Yes           │ row-reverse ✅   │
  * └─────────────┴───────────────────┴───────────────┴──────────────────┘
  *
+ * ── alignItems / alignSelf (column cross-axis) — measured 2026-07, Section D ──
+ *
+ *   Native RTL (isRTL=true): column cross-axis IS logical (auto-flipped).
+ *     'flex-start' → physical RIGHT   'flex-end' → physical LEFT
+ *   Expo Go (isRTL=false): column cross-axis is physical.
+ *     'flex-start' → physical LEFT    'flex-end' → physical RIGHT
+ *
+ *   direction:'rtl' wrapper has NO effect on column cross-axis alignment.
+ *
+ *   Use rtl.alignStart for physical RIGHT (logical start in RTL app).
+ *   Use rtl.alignEnd   for physical LEFT  (logical end   in RTL app).
+ *
+ * ┌─────────────┬────────────────┬─────────────────┬──────────────────┐
+ * │ Environment │ rtl.alignStart │ Physical result │ Note             │
+ * ├─────────────┼────────────────┼─────────────────┼──────────────────┤
+ * │ Expo Go     │ "flex-end"     │ RIGHT ✅        │ physical         │
+ * │ Native RTL  │ "flex-start"   │ RIGHT ✅        │ logical (flipped)│
+ * └─────────────┴────────────────┴─────────────────┴──────────────────┘
+ *
  * ══════════════════════════════════════════════════════════════════════════════
  * USAGE:
  * ══════════════════════════════════════════════════════════════════════════════
  *
  * import { rtl } from "@/lib/rtl";
  *
- * // Text alignment (environment-aware)
+ * // Text alignment for <Text> (environment-aware, Text auto-flip logic)
  * <Text style={{ textAlign: rtl.textAlign }}>כותרת בעברית</Text>
+ *
+ * // Text alignment for <TextInput> (never auto-flipped — always physical 'right')
+ * <TextInput style={{ textAlign: rtl.inputTextAlign }} />
+ * // or as a JSX prop:
+ * <TextInput textAlign={rtl.inputTextAlign} />
  *
  * // Flex direction (environment-aware)
  * <View style={{ flexDirection: rtl.flexDirection }}>
@@ -55,11 +93,19 @@
  *   <Text>Item</Text>
  * </View>
  *
+ * // Column cross-axis alignment — physical RIGHT (e.g. RTL text block)
+ * <View style={{ alignItems: rtl.alignStart }}>
+ *   <Text>עברית</Text>
+ * </View>
+ *
+ * // Column cross-axis alignment — physical LEFT (e.g. "see more" at left)
+ * <Pressable style={{ alignSelf: rtl.alignEnd }}>...</Pressable>
+ *
  * ══════════════════════════════════════════════════════════════════════════════
  */
 
 import Constants from 'expo-constants';
-import { I18nManager, Platform } from 'react-native';
+import { I18nManager } from 'react-native';
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -109,42 +155,41 @@ export const isNativeRTLEnabled = (): boolean => I18nManager.isRTL;
 export const needsExplicitRTL = (): boolean => APP_IS_RTL && !I18nManager.isRTL;
 
 /**
- * Get text alignment for Hebrew/RTL content.
+ * Get text alignment for <Text> components.
  *
- * textAlign is NOT auto-flipped by I18nManager. The platforms diverge here:
- *
- *   iOS native (I18nManager.isRTL=true):
- *     Yoga inherits RTL direction from the native environment, so 'left' means
- *     logical-start → physical RIGHT. Return 'left' (logical). ✅
+ * MEASURED 2026-07 on real devices — Text and TextInput behave differently,
+ * do NOT use this for TextInput (use getInputTextAlign instead).
  *
  *   Android native (I18nManager.isRTL=true):
- *     Yoga does NOT auto-flip textAlign even with direction:'rtl' on the root
- *     View. 'left' stays physical LEFT. Return 'right' (explicit physical). ✅
+ *     <Text> textAlign IS auto-flipped by Yoga. 'left' renders physical RIGHT.
+ *     Return 'left'. ✅
  *
- *   Expo Go (needsExplicitRTL()=true, no native RTL):
- *     No Yoga RTL mode on root. Return 'right' (explicit physical). ✅
+ *   iOS native (I18nManager.isRTL=true):
+ *     Same behaviour. 'left' is logical-start → physical RIGHT. Return 'left'. ✅
  *
- * ┌────────────────────┬─────────────────┬────────────────────┬──────────────┐
- * │ Environment        │ getTextAlign()  │ Yoga direction:rtl │ Final Result │
- * ├────────────────────┼─────────────────┼────────────────────┼──────────────┤
- * │ Expo Go            │ "right"         │ No  (physical)     │ RIGHT ✅     │
- * │ iOS native RTL     │ "left"          │ Yes (logical)      │ RIGHT ✅     │
- * │ Android native RTL │ "right"         │ No  (not flipped)  │ RIGHT ✅     │
- * └────────────────────┴─────────────────┴────────────────────┴──────────────┘
+ *   Expo Go (I18nManager.isRTL=false):
+ *     No Yoga RTL mode. textAlign is physical. Return 'right'. ✅
  *
  * @returns "right" | "left" | undefined
  */
 export const getTextAlign = (): 'right' | 'left' | undefined => {
-  if (needsExplicitRTL()) {
-    return 'right'; // Expo Go: physical right (no Yoga RTL)
-  }
-  if (I18nManager.isRTL && Platform.OS === 'android') {
-    return 'right'; // Android native: Yoga does not auto-flip textAlign
-  }
-  if (I18nManager.isRTL && Platform.OS === 'ios') {
-    return 'left'; // iOS native: Yoga logical-start → physical right
-  }
-  return undefined;
+  if (!APP_IS_RTL) return undefined;
+  if (I18nManager.isRTL) return 'left'; // native: Text auto-flips left→right
+  return 'right'; // Expo Go: physical right
+};
+
+/**
+ * Get text alignment for <TextInput> components.
+ *
+ * MEASURED 2026-07 on real devices — TextInput NEVER auto-flips textAlign,
+ * regardless of I18nManager.isRTL or any direction:'rtl' wrapper.
+ * Physical 'right' is correct everywhere.
+ *
+ * @returns "right" | undefined
+ */
+export const getInputTextAlign = (): 'right' | undefined => {
+  if (!APP_IS_RTL) return undefined;
+  return 'right'; // TextInput never auto-flips — physical 'right' everywhere
 };
 
 /**
@@ -186,12 +231,21 @@ export const getFlexDirection = (): 'row' | 'row-reverse' => {
  */
 export const rtl = {
   /**
-   * Text alignment for RTL content.
-   * Returns 'right' in Expo Go (physical), 'left' in native RTL builds (logical,
-   * because Yoga direction:'rtl' on root makes 'left' render as physical right).
+   * Text alignment for <Text> components.
+   * 'left' in native RTL builds (Yoga auto-flips to physical right).
+   * 'right' in Expo Go (physical right, no Yoga RTL mode).
+   * Use rtl.inputTextAlign for <TextInput> instead.
    */
   get textAlign(): 'right' | 'left' | undefined {
     return getTextAlign();
+  },
+
+  /**
+   * Text alignment for <TextInput> components.
+   * Always 'right' (physical) — TextInput never auto-flips on any platform.
+   */
+  get inputTextAlign(): 'right' | undefined {
+    return getInputTextAlign();
   },
 
   /**
@@ -201,6 +255,34 @@ export const rtl = {
    */
   get flexDirection(): 'row' | 'row-reverse' {
     return getFlexDirection();
+  },
+
+  /**
+   * Column cross-axis alignment for physical RIGHT (logical start in RTL).
+   *
+   * Measured 2026-07 on device (Section D):
+   *   Native RTL (isRTL=true): 'flex-start' → physical RIGHT (Yoga logical flip)
+   *   Expo Go (isRTL=false):   'flex-end'   → physical RIGHT (no flip)
+   *
+   * Use for: alignItems / alignSelf on COLUMN containers where you want
+   * content to sit at the physical right edge (Hebrew text blocks, RTL cards).
+   */
+  get alignStart(): 'flex-start' | 'flex-end' {
+    return needsExplicitRTL() ? 'flex-end' : 'flex-start';
+  },
+
+  /**
+   * Column cross-axis alignment for physical LEFT (logical end in RTL).
+   *
+   * Measured 2026-07 on device (Section D):
+   *   Native RTL (isRTL=true): 'flex-end'   → physical LEFT (Yoga logical flip)
+   *   Expo Go (isRTL=false):   'flex-start' → physical LEFT (no flip)
+   *
+   * Use for: alignItems / alignSelf on COLUMN containers where you want
+   * content to sit at the physical left edge (e.g. "see more" nav button).
+   */
+  get alignEnd(): 'flex-start' | 'flex-end' {
+    return needsExplicitRTL() ? 'flex-start' : 'flex-end';
   },
 };
 
@@ -225,26 +307,28 @@ export const tw = {
   },
 
   /**
-   * Tailwind text-alignment class for logical "start" (right side in RTL).
-   * Mirrors getTextAlign() — Expo Go and Android need explicit 'text-right';
-   * iOS Yoga logical mode uses 'text-left' which renders as physical right.
+   * Tailwind text-alignment class for <Text> logical "start" (right side in RTL).
+   * Mirrors getTextAlign() — native RTL (both iOS and Android) uses 'text-left'
+   * because Yoga auto-flips Text to physical right; Expo Go uses 'text-right'.
+   * For <TextInput> use an explicit style={{ textAlign: rtl.inputTextAlign }}
+   * instead of this class, because TextInput does not auto-flip.
    */
   get textStart(): string {
-    if (needsExplicitRTL()) return 'text-right';
-    if (I18nManager.isRTL && Platform.OS === 'android') return 'text-right';
-    if (I18nManager.isRTL && Platform.OS === 'ios') return 'text-left';
-    return '';
+    if (!APP_IS_RTL) return '';
+    return I18nManager.isRTL ? 'text-left' : 'text-right';
   },
 
   /**
    * Tailwind text-alignment class for logical "end" (left side in RTL).
    * Opposite of textStart.
+   *
+   * iOS and Android native are identical — no Platform.OS split needed.
+   * Measured 2026-07: native RTL Text is logical, so 'text-right' → physical LEFT.
    */
   get textEnd(): string {
-    if (needsExplicitRTL()) return 'text-left';
-    if (I18nManager.isRTL && Platform.OS === 'android') return 'text-left';
-    if (I18nManager.isRTL && Platform.OS === 'ios') return 'text-right';
-    return '';
+    if (!APP_IS_RTL) return '';
+    if (needsExplicitRTL()) return 'text-left'; // Expo Go: physical left
+    return 'text-right'; // Native RTL (iOS + Android): Yoga flips right → left
   },
 
   /**

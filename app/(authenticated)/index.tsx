@@ -3344,7 +3344,7 @@ export default function HomeScreen() {
                   {/* Main task row — tap to open edit */}
                   <Pressable
                     style={{
-                      flexDirection: 'row-reverse',
+                      flexDirection: rtl.flexDirection,
                       alignItems: 'center',
                       gap: 12,
                     }}
@@ -3562,7 +3562,7 @@ export default function HomeScreen() {
                 >
                   <Pressable
                     style={{
-                      flexDirection: 'row-reverse',
+                      flexDirection: rtl.flexDirection,
                       alignItems: 'center',
                       gap: 12,
                     }}
@@ -3676,7 +3676,7 @@ export default function HomeScreen() {
                       >
                         <Pressable
                           style={{
-                            flexDirection: 'row-reverse',
+                            flexDirection: rtl.flexDirection,
                             alignItems: 'center',
                             gap: 12,
                           }}
