@@ -33,7 +33,7 @@ import ReAnimated, {
   useSharedValue,
   withSpring,
 } from 'react-native-reanimated';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
@@ -801,6 +801,7 @@ function CalendarFilterPanel({
   rows,
 }: CalendarFilterPanelProps): React.JSX.Element | null {
   const translateY = useRef(new Animated.Value(400)).current;
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (visible) {
@@ -894,7 +895,7 @@ function CalendarFilterPanel({
             );
           })}
 
-          <View style={filterPanelStyles.bottomPad} />
+          <View style={{ height: Math.max(24, insets.bottom) }} />
         </Animated.View>
       </View>
     </Modal>
