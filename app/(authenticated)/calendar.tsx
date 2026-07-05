@@ -4894,6 +4894,29 @@ function DayEventsList({
         ) : (
           <>
             <Pressable
+              onPress={onClose}
+              hitSlop={12}
+              style={dStyles.closeBtn}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="סגור רשימת אירועים"
+            >
+              <MaterialIcons name="close" size={20} color="#647b87" />
+            </Pressable>
+            <View style={dStyles.headerTitleBlock}>
+              <Text
+                style={[
+                  dStyles.headerTitle,
+                  { textAlign: rtl.textAlign ?? 'right' },
+                ]}
+              >
+                {dayLabel}
+              </Text>
+              {hebrewDayLabel ? (
+                <Text style={dStyles.headerHebrewDate}>{hebrewDayLabel}</Text>
+              ) : null}
+            </View>
+            <Pressable
               style={dStyles.addBtn}
               onPress={() => {
                 const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayData.day).padStart(2, '0')}`;
@@ -4916,29 +4939,6 @@ function DayEventsList({
               accessibilityLabel="הוסף אירוע חדש"
             >
               <Text style={dStyles.addBtnText}>+ הוסף אירוע</Text>
-            </Pressable>
-            <View style={dStyles.headerTitleBlock}>
-              <Text
-                style={[
-                  dStyles.headerTitle,
-                  { textAlign: rtl.textAlign ?? 'right' },
-                ]}
-              >
-                {dayLabel}
-              </Text>
-              {hebrewDayLabel ? (
-                <Text style={dStyles.headerHebrewDate}>{hebrewDayLabel}</Text>
-              ) : null}
-            </View>
-            <Pressable
-              onPress={onClose}
-              hitSlop={12}
-              style={dStyles.closeBtn}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="סגור רשימת אירועים"
-            >
-              <MaterialIcons name="close" size={20} color="#647b87" />
             </Pressable>
           </>
         )}
@@ -5008,18 +5008,16 @@ function DayEventsList({
           >
             {ANDROID_MATCH_IOS_LAYOUT ? (
               <>
+                <View style={dStyles.timeCol}>
+                  <Text style={dStyles.timeText}>{event.time}</Text>
+                  <Text style={dStyles.durationText}>{duration} דק׳</Text>
+                </View>
                 <View
                   style={[
-                    dStyles.iconBox,
-                    { backgroundColor: `${event.categoryColor}20` },
+                    dStyles.divider,
+                    { backgroundColor: `${event.categoryColor}50` },
                   ]}
-                >
-                  <MaterialIcons
-                    name={iconName as 'event'}
-                    size={20}
-                    color={event.categoryColor}
-                  />
-                </View>
+                />
                 <View style={dStyles.content}>
                   {event.communityName ? (
                     <View style={{ marginBottom: 4 }}>
@@ -5063,13 +5061,15 @@ function DayEventsList({
                 </View>
                 <View
                   style={[
-                    dStyles.divider,
-                    { backgroundColor: `${event.categoryColor}50` },
+                    dStyles.iconBox,
+                    { backgroundColor: `${event.categoryColor}20` },
                   ]}
-                />
-                <View style={dStyles.timeCol}>
-                  <Text style={dStyles.timeText}>{event.time}</Text>
-                  <Text style={dStyles.durationText}>{duration} דק׳</Text>
+                >
+                  <MaterialIcons
+                    name={iconName as 'event'}
+                    size={20}
+                    color={event.categoryColor}
+                  />
                 </View>
               </>
             ) : (
@@ -5739,7 +5739,7 @@ const styles = StyleSheet.create({
   },
   monthNavFilterBtn: {
     position: 'absolute',
-    right: 4,
+    ...position.start(4),
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -5748,15 +5748,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   timelineFilterRow: {
-    // Column cross-axis alignment: hardcoded 'flex-end' renders physical
-    // RIGHT in both Expo Go and native RTL builds (verified against the
-    // untouched sibling styles expandedEventRow/expandedTaskRow/
-    // expandedHolidayRow below, which already rely on bare 'flex-end' inside
-    // this same day-cell tree). needsExplicitRTL() was only correct before
-    // this screen's native RTL rendering was verified — with native RTL,
-    // needsExplicitRTL() is false and the old ternary fell through to
-    // 'flex-start', which renders physical LEFT.
-    alignItems: 'flex-end',
+    // Column cross-axis: rtl.alignStart = physical RIGHT (measured 2026-07, Section D).
+    alignItems: rtl.alignStart,
     paddingHorizontal: 12,
     paddingBottom: 4,
     paddingTop: 2,
@@ -5957,10 +5950,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   gapRow: {
-    // See timelineFilterRow comment above — 'flex-end' is the physical-right
-    // value in both environments. Consistent with paddingStart below, which
-    // already resolves to the right side via RN's logical-property support.
-    alignItems: 'flex-end',
+    // Column cross-axis: rtl.alignStart = physical RIGHT (measured 2026-07, Section D).
+    alignItems: rtl.alignStart,
     paddingRight: needsExplicitRTL() ? 6 : 0,
     paddingStart: needsExplicitRTL() ? 0 : 6,
     marginTop: -16,
@@ -6109,7 +6100,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#f1f5f9',
     marginTop: 4,
-    alignSelf: 'flex-end',
+    alignSelf: rtl.alignStart,
   },
   pendingRsvpBadgeText: {
     fontSize: 11,
@@ -6207,16 +6198,13 @@ const styles = StyleSheet.create({
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
     // Shrink-wrap to content, positioned at physical LEFT (logical end in RTL).
-    // needsExplicitRTL()=true (Expo Go): column cross-axis flex-start = physical LEFT.
-    // needsExplicitRTL()=false (native RTL): flex-end = logical end = physical LEFT.
-    alignSelf: needsExplicitRTL() ? 'flex-start' : 'flex-end',
+    alignSelf: rtl.alignEnd,
     gap: 4,
     backgroundColor: 'rgba(141,110,99,0.1)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 10,
     marginTop: 6,
-    alignSelf: 'flex-start',
   },
   eventNavBtnText: {
     color: '#8d6e63',
@@ -6317,9 +6305,8 @@ const mStyles = StyleSheet.create({
     elevation: 1,
   },
   dayCellExpanded: {
-    // See timelineFilterRow comment above — 'flex-end' matches the already
-    // physical-right children of this exact cell (expandedEventRow, etc.).
-    alignItems: 'flex-end',
+    // Column cross-axis: rtl.alignStart = physical RIGHT (measured 2026-07, Section D).
+    alignItems: rtl.alignStart,
     justifyContent: 'flex-start',
     paddingTop: 6,
     paddingBottom: 4,
@@ -6419,7 +6406,7 @@ const mStyles = StyleSheet.create({
     fontSize: 10,
     color: '#be185d',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   expandedEventRow: {
     width: '100%',
@@ -6429,7 +6416,7 @@ const mStyles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'transparent',
     justifyContent: 'center',
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   expandedEventRowCompact: {
     minHeight: EXPANDED_ROW_ITEM_HEIGHT,
@@ -6462,10 +6449,10 @@ const mStyles = StyleSheet.create({
     paddingTop: 1,
     paddingBottom: 1,
     flexDirection: 'column',
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   expandedEventSingleTitle: {
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
     width: '100%',
     fontSize: 10,
@@ -6477,7 +6464,7 @@ const mStyles = StyleSheet.create({
   expandedEventText: {
     width: '100%',
     minWidth: 0,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     flexShrink: 1,
     fontSize: 10,
     color: '#111827',
@@ -6487,7 +6474,7 @@ const mStyles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '500',
     color: '#6b7280',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     width: '100%',
     marginTop: 1,
     includeFontPadding: false,
@@ -6518,13 +6505,13 @@ const mStyles = StyleSheet.create({
     backgroundColor: '#fffbeb',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#fde68a',
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   expandedTaskText: {
     fontSize: 9,
     color: '#b45309',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   /* Holiday indicators — warm amber, non-interactive */
@@ -6547,13 +6534,13 @@ const mStyles = StyleSheet.create({
     backgroundColor: '#fef3c7',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#fde68a',
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   expandedHolidayText: {
     fontSize: 9,
     color: '#92400e',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     includeFontPadding: false,
   },
 });
@@ -6670,7 +6657,7 @@ const dStyles = StyleSheet.create({
 
   /* Header */
   header: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
@@ -6708,7 +6695,7 @@ const dStyles = StyleSheet.create({
 
   /* Birthday Card */
   birthdayCard: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     backgroundColor: '#fdf2f8',
     borderRadius: 16,
@@ -6728,18 +6715,18 @@ const dStyles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#be185d',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
   birthdayAge: {
     fontSize: 13,
     color: '#9d174d',
     marginTop: 2,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
   },
 
   /* Event Card - Stitch Design */
   card: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     backgroundColor: '#ffffff',
     borderRadius: 16,
@@ -6780,14 +6767,14 @@ const dStyles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#111517',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     marginBottom: 4,
   },
   locationRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
   },
   locationDot: {
     width: 5,
@@ -6820,7 +6807,7 @@ const dStyles = StyleSheet.create({
 
   /* Task Card (day panel) */
   taskCard: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     backgroundColor: '#ffffff',
     borderRadius: 16,
@@ -6849,7 +6836,7 @@ const dStyles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#fee2e2',
     marginTop: 4,
-    alignSelf: 'flex-end',
+    alignSelf: rtl.alignStart,
   },
   taskOverdueText: {
     fontSize: 11,
@@ -6868,7 +6855,7 @@ const dStyles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#f1f5f9',
     marginTop: 4,
-    alignSelf: 'flex-end',
+    alignSelf: rtl.alignStart,
   },
   pendingRsvpBadgeText: {
     fontSize: 11,
@@ -6876,7 +6863,7 @@ const dStyles = StyleSheet.create({
     color: '#64748b',
   },
   taskTitleRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
   },
@@ -6893,7 +6880,7 @@ const dStyles = StyleSheet.create({
     color: '#ffffff',
   },
   taskSubtasksRowDay: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
     marginTop: 4,
@@ -6916,7 +6903,7 @@ const dStyles = StyleSheet.create({
 
   /* Holiday row — read-only, warm amber, above event cards */
   holidayRow: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: 12,
@@ -6939,7 +6926,7 @@ const dStyles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#92400e',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
 });
