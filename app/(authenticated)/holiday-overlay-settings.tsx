@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { rtl } from '@/lib/rtl';
 import {
   loadCalendarLayerFilters,
   saveCalendarLayerFilters,
@@ -198,7 +199,7 @@ export default function HolidayOverlaySettingsScreen(): React.JSX.Element {
                   accessibilityState={{ checked: isEnabled, disabled: !isHydrated }}
                   accessibilityLabel={cat.label}
                   style={{
-                    flexDirection: 'row',
+                    flexDirection: rtl.flexDirection,
                     alignItems: 'center',
                     paddingHorizontal: 16,
                     paddingVertical: 14,
@@ -206,7 +207,37 @@ export default function HolidayOverlaySettingsScreen(): React.JSX.Element {
                     backgroundColor: '#ffffff',
                   }}
                 >
-                  {/* Physical LEFT: Toggle — fixed 60pt column, pointer events blocked */}
+                  {/* Physical RIGHT (RTL start): Text — flex 1 fills remaining space, never clipped */}
+                  <View style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
+                    <Text
+                      style={{
+                        fontSize: 16,
+                        fontWeight: '600',
+                        color: isHydrated ? '#1a1a2e' : '#94a3b8',
+                        textAlign: rtl.textAlign,
+                        lineHeight: 22,
+                        flexShrink: 1,
+                      }}
+                    >
+                      {cat.label}
+                    </Text>
+                    {cat.subtitle !== undefined && (
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          color: '#6b7280',
+                          textAlign: rtl.textAlign,
+                          marginTop: 2,
+                          lineHeight: 19,
+                          flexShrink: 1,
+                        }}
+                      >
+                        {cat.subtitle}
+                      </Text>
+                    )}
+                  </View>
+
+                  {/* Physical LEFT (RTL end): Toggle — fixed 60pt column, pointer events blocked */}
                   <View
                     style={{
                       width: 60,
@@ -223,36 +254,6 @@ export default function HolidayOverlaySettingsScreen(): React.JSX.Element {
                       thumbColor="#ffffff"
                       ios_backgroundColor="#b0bec5"
                     />
-                  </View>
-
-                  {/* Physical RIGHT: Text — flex 1 fills remaining space, never clipped */}
-                  <View style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
-                    <Text
-                      style={{
-                        fontSize: 16,
-                        fontWeight: '600',
-                        color: isHydrated ? '#1a1a2e' : '#94a3b8',
-                        textAlign: 'right',
-                        lineHeight: 22,
-                        flexShrink: 1,
-                      }}
-                    >
-                      {cat.label}
-                    </Text>
-                    {cat.subtitle !== undefined && (
-                      <Text
-                        style={{
-                          fontSize: 13,
-                          color: '#6b7280',
-                          textAlign: 'right',
-                          marginTop: 2,
-                          lineHeight: 19,
-                          flexShrink: 1,
-                        }}
-                      >
-                        {cat.subtitle}
-                      </Text>
-                    )}
                   </View>
                 </TouchableOpacity>
 
@@ -276,7 +277,7 @@ export default function HolidayOverlaySettingsScreen(): React.JSX.Element {
           style={{
             fontSize: 13,
             color: '#6b7280',
-            textAlign: 'right',
+            textAlign: rtl.textAlign,
             paddingHorizontal: 16,
             paddingTop: 16,
             paddingBottom: 24,
@@ -298,7 +299,7 @@ const s = StyleSheet.create({
     backgroundColor: '#f6f7f8',
   },
   header: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
@@ -319,6 +320,7 @@ const s = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: '#0f172a',
+    textAlign: rtl.textAlign,
   },
   headerSpacer: {
     width: 40,
@@ -332,7 +334,7 @@ const s = StyleSheet.create({
   description: {
     fontSize: 14,
     color: '#64748b',
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     paddingHorizontal: 16,
     paddingTop: 20,
     paddingBottom: 12,
