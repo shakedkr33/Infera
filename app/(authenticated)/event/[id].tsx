@@ -1718,7 +1718,7 @@ const styles = StyleSheet.create({
   },
   attachmentContent: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: HEB_FLEX_END,
     gap: 2,
   },
   attachmentName: {
@@ -2095,7 +2095,7 @@ const styles = StyleSheet.create({
   },
   taskVisibilityTextBlock: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: HEB_FLEX_END,
     gap: 2,
   },
   taskVisibilityTitle: {

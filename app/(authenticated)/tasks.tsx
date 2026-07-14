@@ -2009,7 +2009,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     color: TEXT_DARK,
-    textAlign: rtl.textAlign,
+    textAlign: rtl.inputTextAlign,
     writingDirection: 'rtl',
   },
 
@@ -2421,7 +2421,7 @@ const styles = StyleSheet.create({
     marginTop: 28,
     borderRadius: 18,
     padding: 20,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: CARD_BORDER,

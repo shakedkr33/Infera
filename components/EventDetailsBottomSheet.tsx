@@ -2206,7 +2206,7 @@ const styles = StyleSheet.create({
   dateTimeBlock: {
     flex: 1,
     gap: 1,
-    alignItems: 'flex-end',
+    alignItems: HEB_FLEX_END,
   },
   dateLine: {
     fontSize: 14,
