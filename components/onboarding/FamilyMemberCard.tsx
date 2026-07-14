@@ -50,7 +50,28 @@ export function FamilyMemberDisplayCard({
 
   const inner = (
     <>
-      {/* Remove button — left side (RTL end), admin only */}
+      {/* Name + avatar — right side (RTL start); first child = physical RIGHT in tw.flexRow */}
+      <View
+        className={`${tw.flexRow} items-center gap-3`}
+        style={{ flex: isAdmin ? 0 : 1 }}
+      >
+        {/* Avatar — rightmost in RTL (first child in inner tw.flexRow row) */}
+        <View
+          style={{ backgroundColor: member.color }}
+          className="w-10 h-10 rounded-full items-center justify-center"
+        >
+          {isPet ? (
+            <MaterialIcons name="pets" size={18} color="white" />
+          ) : (
+            <Text className="text-xs font-bold opacity-80">{initials}</Text>
+          )}
+        </View>
+        <Text className={`font-bold text-[15px] text-gray-900 ${tw.textStart}`}>
+          {member.name}
+        </Text>
+      </View>
+
+      {/* Remove button — left side (RTL end); last child = physical LEFT in tw.flexRow */}
       {isAdmin && (
         <Pressable
           onPress={onRemove}
@@ -63,26 +84,6 @@ export function FamilyMemberDisplayCard({
           <MaterialIcons name="close" size={20} color="#9ca3af" />
         </Pressable>
       )}
-
-      {/* Name + avatar — right side (RTL start) */}
-      <View
-        className={`${tw.flexRow} items-center gap-3`}
-        style={{ flex: isAdmin ? 0 : 1 }}
-      >
-        <Text className="font-bold text-[15px] text-gray-900">
-          {member.name}
-        </Text>
-        <View
-          style={{ backgroundColor: member.color }}
-          className="w-10 h-10 rounded-full items-center justify-center"
-        >
-          {isPet ? (
-            <MaterialIcons name="pets" size={18} color="white" />
-          ) : (
-            <Text className="text-xs font-bold opacity-80">{initials}</Text>
-          )}
-        </View>
-      </View>
     </>
   );
 
