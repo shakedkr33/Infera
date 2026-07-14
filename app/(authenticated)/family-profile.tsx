@@ -447,7 +447,7 @@ export default function FamilyProfileScreen() {
                         paddingVertical: 2,
                         borderRadius: 99,
                         backgroundColor: '#e8f5fd',
-                        alignSelf: 'flex-end',
+                        alignSelf: rtl.alignStart,
                       }}
                     >
                       <Text
@@ -494,8 +494,8 @@ export default function FamilyProfileScreen() {
                       onChangeText={handleFirstNameChange}
                       placeholder="שם פרטי"
                       placeholderTextColor="#9ca3af"
-                      className={`flex-1 bg-[#f6f7f8] rounded-xl px-3 ${tw.textStart} text-base`}
-                      style={{ height: 44 }}
+                      className="flex-1 bg-[#f6f7f8] rounded-xl px-3 text-base"
+                      style={{ height: 44, textAlign: rtl.inputTextAlign }}
                       returnKeyType="next"
                       accessible={true}
                       accessibilityLabel="שם פרטי"
@@ -505,8 +505,8 @@ export default function FamilyProfileScreen() {
                       onChangeText={handleLastNameChange}
                       placeholder="שם משפחה"
                       placeholderTextColor="#9ca3af"
-                      className={`flex-1 bg-[#f6f7f8] rounded-xl px-3 ${tw.textStart} text-base`}
-                      style={{ height: 44 }}
+                      className="flex-1 bg-[#f6f7f8] rounded-xl px-3 text-base"
+                      style={{ height: 44, textAlign: rtl.inputTextAlign }}
                       returnKeyType="next"
                       accessible={true}
                       accessibilityLabel="שם משפחה"
@@ -517,8 +517,8 @@ export default function FamilyProfileScreen() {
                     onChangeText={handleNicknameChange}
                     placeholder="כינוי (אופציונלי)"
                     placeholderTextColor="#9ca3af"
-                    className={`bg-[#f6f7f8] rounded-xl px-3 ${tw.textStart} text-base mb-2`}
-                    style={{ height: 44 }}
+                    className="bg-[#f6f7f8] rounded-xl px-3 text-base mb-2"
+                    style={{ height: 44, textAlign: rtl.inputTextAlign }}
                     returnKeyType="done"
                     onSubmitEditing={handleSaveProfile}
                     accessible={true}
