@@ -490,7 +490,7 @@ const s = StyleSheet.create({
     height: 12,
     backgroundColor: '#e2e8f0',
     borderRadius: 6,
-    alignSelf: 'flex-end',
+    alignSelf: rtl.alignStart,
   },
   // Error state
   errorState: {

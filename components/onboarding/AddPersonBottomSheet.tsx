@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import { colors, shadows } from '../../constants/theme';
+import { rtl } from '@/lib/rtl';
 // SHARED: phone selection logic for contact import
 // FIXED: removed label filtering — branching now based on total phone count
 import { getPhoneLabel, normalizePhone } from '../../lib/utils/contactPhone';
@@ -703,7 +704,7 @@ const s = StyleSheet.create({
   },
   contactRowInfo: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   contactName: {
     fontSize: 14,

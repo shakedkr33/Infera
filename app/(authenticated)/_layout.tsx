@@ -674,7 +674,7 @@ const styles = StyleSheet.create({
   },
   sheetTextInput: {
     flex: 1,
-    textAlign: rtl.textAlign,
+    textAlign: rtl.inputTextAlign,
     fontSize: 16,
     paddingHorizontal: 12,
     color: '#111517',

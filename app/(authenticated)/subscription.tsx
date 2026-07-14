@@ -1188,7 +1188,7 @@ const s = StyleSheet.create({
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 4,
-    alignSelf: 'flex-end',
+    alignSelf: rtl.alignStart,
     marginBottom: 8,
     paddingVertical: 6,
   },
