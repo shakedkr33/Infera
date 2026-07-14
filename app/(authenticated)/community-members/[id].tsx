@@ -18,6 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -665,7 +666,7 @@ const styles = StyleSheet.create({
   },
   memberInfo: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   memberName: {
     fontSize: 15,

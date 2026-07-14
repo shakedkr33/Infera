@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/convex/_generated/api';
+import { rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -254,7 +255,7 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     padding: 24,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
     gap: 10,
   },
   communityName: {

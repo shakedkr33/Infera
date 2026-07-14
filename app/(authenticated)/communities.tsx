@@ -1158,7 +1158,7 @@ const styles = StyleSheet.create({
   },
   cardTopRight: {
     flex: 1,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
     justifyContent: 'flex-start',
     minWidth: 0,
   },
@@ -1276,7 +1276,7 @@ const styles = StyleSheet.create({
     height: 14,
     backgroundColor: '#e5e7eb',
     borderRadius: 7,
-    alignSelf: 'flex-end',
+    alignSelf: rtl.alignStart,
   },
 
   // ── Empty
@@ -1333,7 +1333,7 @@ const styles = StyleSheet.create({
   popoverLabelCol: {
     flex: 1,
     minWidth: 0,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   popoverItemBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,

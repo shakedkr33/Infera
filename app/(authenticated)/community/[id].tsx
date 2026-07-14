@@ -3044,7 +3044,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 8,
   },
-  headerTextBlock: { alignItems: 'flex-end', flex: 1 },
+  headerTextBlock: { alignItems: rtl.alignStart, flex: 1 },
   headerLeft: { flexDirection: rtl.flexDirection, alignItems: 'center', gap: 4 },
   headerTitle: {
     fontSize: 18,
@@ -3060,7 +3060,7 @@ const styles = StyleSheet.create({
   },
   headerDescriptionWrap: { marginTop: 6, width: '100%' },
   headerDescriptionRow: {
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
   },
   headerDescription: {
     fontSize: 13,
@@ -3298,7 +3298,7 @@ const styles = StyleSheet.create({
   myTasksTooltip: {
     minWidth: 220,
     maxWidth: 300,
-    alignItems: 'flex-end',
+    alignItems: rtl.alignStart,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#e5e7eb',
@@ -3575,11 +3575,11 @@ const styles = StyleSheet.create({
   },
 
   // ── See more
-  seeMoreBtn: { alignSelf: 'flex-end', marginTop: 8 },
+  seeMoreBtn: { alignSelf: rtl.alignStart, marginTop: 8 },
   seeMoreText: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
 
   // ── Empty states
-  emptySmall: { paddingVertical: 16, alignItems: 'flex-end' },
+  emptySmall: { paddingVertical: 16, alignItems: rtl.alignStart },
   emptySmallText: { fontSize: 13, color: '#9ca3af', textAlign: rtl.textAlign },
   emptyFull: {
     flex: 1,
