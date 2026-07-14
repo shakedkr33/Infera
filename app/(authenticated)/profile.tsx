@@ -1,4 +1,3 @@
-// FIXED: title → "הגדרות"; logo aligned left; debug panel hidden behind long-press on version footer
 import { useAuthActions } from '@convex-dev/auth/react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
@@ -31,14 +30,208 @@ import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getAvatarInitials } from '@/lib/avatarInitials';
-import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 declare const __DEV__: boolean;
 
 // ============================================================================
-// מסך פרופיל
+// AccountCard
+// ============================================================================
+
+function AccountCard({
+  displayName,
+  avatarInitial,
+  avatarColor,
+}: {
+  displayName: string;
+  avatarInitial: string;
+  avatarColor: string;
+}) {
+  return (
+    <View style={styles.card}>
+      <View style={styles.accountRow}>
+        <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+          <Text style={styles.avatarInitial}>{avatarInitial}</Text>
+        </View>
+        <View style={styles.accountTexts}>
+          <Text style={styles.accountName}>{displayName}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ============================================================================
+// FamilyCard
+// ============================================================================
+
+function FamilyCard({ onPress }: { onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      style={styles.card}
+      onPress={onPress}
+      accessible={true}
+      accessibilityRole="button"
+      accessibilityLabel="ניהול המשפחה שלי"
+    >
+      <View style={styles.familyRow}>
+        <View style={styles.familyIconWrap}>
+          <MaterialIcons name="group" size={22} color="#36a9e2" />
+        </View>
+        <View style={styles.familyTexts}>
+          <Text style={styles.familyTitle}>המשפחה שלי</Text>
+          <Text style={styles.familySubtitle}>ניהול בני משפחה והרשאות</Text>
+        </View>
+        <MaterialIcons name="chevron-left" size={22} color="#9ca3af" />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ============================================================================
+// SubscriptionStatusCard
+// ============================================================================
+
+function SubscriptionStatusCard({
+  isPersonal,
+  isFamily,
+  isTrialActive,
+  isExpiredFree,
+  isQaOverride,
+  trialDaysRemaining,
+  onUpgradePress,
+  onManagePress,
+}: {
+  isPersonal: boolean;
+  isFamily: boolean;
+  isTrialActive: boolean;
+  isExpiredFree: boolean;
+  isQaOverride: boolean;
+  trialDaysRemaining: number | null;
+  onUpgradePress: () => void;
+  onManagePress: () => void;
+}) {
+  const isPaid = isPersonal || isFamily;
+
+  // QA / dev override — show muted test badge, no purchase UI
+  if (isQaOverride) {
+    return (
+      <View style={styles.card}>
+        <View style={styles.subContent}>
+          <View style={[styles.subBadgeRow, styles.subBadgeQa]}>
+            <MaterialIcons name="science" size={14} color="#ca8a04" />
+            <Text style={[styles.subBadgeText, styles.subBadgeTextQa]}>
+              מצב בדיקה
+            </Text>
+          </View>
+          <Text style={styles.subTitle}>גישת בדיקה פעילה</Text>
+          <Text style={styles.subSubtitle}>מצב זה מיועד לבדיקה בלבד</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Paid subscription active — never show upgrade CTA here
+  if (isPaid) {
+    return (
+      <View style={styles.card}>
+        <View style={styles.subContent}>
+          <View style={[styles.subBadgeRow, styles.subBadgeActive]}>
+            <MaterialIcons name="check-circle" size={14} color="#16a34a" />
+            <Text style={[styles.subBadgeText, styles.subBadgeTextActive]}>
+              פעיל
+            </Text>
+          </View>
+          <Text style={styles.subTitle}>המנוי שלך פעיל</Text>
+          <Text style={styles.subSubtitle}>
+            {isFamily ? 'מסלול משפחתי' : 'מסלול אישי'}
+          </Text>
+          <Text style={styles.subNote}>
+            ניהול המנוי מתבצע דרך App Store או Google Play
+          </Text>
+          <TouchableOpacity
+            onPress={onManagePress}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="ניהול מנוי"
+            style={styles.subManageBtn}
+          >
+            <Text style={styles.subManageBtnText}>ניהול מנוי</Text>
+            <MaterialIcons name="chevron-left" size={15} color="#36a9e2" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // Trial active
+  if (isTrialActive) {
+    const daysLabel =
+      trialDaysRemaining === null
+        ? 'תקופת ניסיון פעילה'
+        : trialDaysRemaining === 1
+          ? 'נותר יום אחד לניסיון'
+          : `נותרו ${trialDaysRemaining} ימים לניסיון`;
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.subContent}>
+          <View style={[styles.subBadgeRow, styles.subBadgeTrial]}>
+            <MaterialIcons name="hourglass-empty" size={14} color="#2563eb" />
+            <Text style={[styles.subBadgeText, styles.subBadgeTextTrial]}>
+              ניסיון
+            </Text>
+          </View>
+          <Text style={styles.subTitle}>תקופת הניסיון פעילה</Text>
+          <Text style={styles.subSubtitle}>{daysLabel}</Text>
+          <Text style={styles.subNote}>אפשר לשדרג בכל עת</Text>
+          <TouchableOpacity
+            onPress={onUpgradePress}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="שדרוג למנוי"
+            style={styles.subUpgradeBtn}
+          >
+            <Text style={styles.subUpgradeBtnText}>שדרוג למנוי</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // Expired / free
+  return (
+    <View style={styles.card}>
+      <View style={styles.subContent}>
+        <View style={[styles.subBadgeRow, styles.subBadgeFree]}>
+          <MaterialIcons name="lock-open" size={14} color="#6b7280" />
+          <Text style={[styles.subBadgeText, styles.subBadgeTextFree]}>
+            חינמי
+          </Text>
+        </View>
+        <Text style={styles.subTitle}>גישה חינמית</Text>
+        <Text style={styles.subSubtitle}>קהילות נשארות זמינות</Text>
+        <Text style={styles.subNote}>
+          לניהול משפחתי מלא אפשר לשדרג למנוי
+        </Text>
+        <TouchableOpacity
+          onPress={onUpgradePress}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="שדרוג למנוי"
+          style={styles.subUpgradeBtn}
+        >
+          <Text style={styles.subUpgradeBtnText}>שדרוג למנוי</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+// ============================================================================
+// ProfileScreen
 // ============================================================================
 
 export default function ProfileScreen() {
@@ -48,10 +241,8 @@ export default function ProfileScreen() {
   const { isPremium, isConfigured, isExpoGo, customerData } = useRevenueCat();
   const deleteMyAccount = useMutation(api.users.deleteMyAccount);
   const [isDebugOpen, setIsDebugOpen] = useState(false);
-  // Debug panel is hidden in normal UI; revealed only by long-pressing the version footer
   const [isDebugUnlocked, setIsDebugUnlocked] = useState(false);
 
-  // Dev-only: runtime plan override state (mirrors the global devPlanOverride store)
   const [devPlan, setDevPlanState] = useState<EffectiveAccess | null>(() =>
     getDevPlanOverride()
   );
@@ -67,8 +258,10 @@ export default function ProfileScreen() {
     isExpiredFree,
     isPersonal,
     isFamily,
+    isQaOverride,
     trialDaysRemaining,
   } = useEffectiveAccess();
+
   const { data: onboardingData } = useOnboarding();
   const rawFirstName = onboardingData.firstName ?? '';
   const rawLastName = onboardingData.lastName ?? '';
@@ -85,9 +278,7 @@ export default function ProfileScreen() {
     }) || 'מ';
   const avatarColor = onboardingData.personalColor || '#36a9e2';
 
-  // ============================================================================
-  // פעולות
-  // ============================================================================
+  // ── Handlers ────────────────────────────────────────────────────────────────
 
   const handleSignOut = async () => {
     Alert.alert(
@@ -161,19 +352,22 @@ export default function ProfileScreen() {
     router.replace(destination as never);
   };
 
-  // Debug-only preview helpers — only used inside IS_DEV_MODE block
   const openPaywallPreview = () => router.push('/(auth)/paywall?preview=true');
   const openSignInPreview = () => router.push('/(auth)/sign-in?preview=true');
   const openSignUpPreview = () => router.push('/(auth)/sign-up?preview=true');
 
-  // ============================================================================
-  // רינדור
-  // ============================================================================
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <SafeAreaView style={[styles.safeArea, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top']}>
+    <SafeAreaView
+      style={[
+        styles.safeArea,
+        ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,
+      ]}
+      edges={['top']}
+    >
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Header */}
+        {/* ── Header ── */}
         <View style={styles.headerContainer}>
           <Image
             source={require('@/assets/images/logo-inyomi.png')}
@@ -196,89 +390,48 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Profile card — tapping opens family-profile (profile management) */}
-        <TouchableOpacity
-          style={styles.card}
-          onPress={() => router.push('/(authenticated)/family-profile')}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="עריכת פרופיל"
-        >
-          <View style={styles.profileRow}>
-            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-              <Text style={styles.avatarInitial}>{avatarInitial}</Text>
-            </View>
-            <View style={styles.profileTexts}>
-              <Text style={styles.profileName}>{displayName}</Text>
-              {/* Subscription status — access-aware label */}
-              <Text
-                style={[
-                  styles.profileSubtitle,
-                  (isPersonal || isFamily) && styles.premiumLabel,
-                ]}
-              >
-                {isTrialActive
-                  ? 'גישה מלאה פעילה'
-                  : isExpiredFree
-                    ? 'מסלול חינמי'
-                    : isPersonal
-                      ? 'מנוי Plus פעיל'
-                      : 'מנוי Family פעיל'}
-              </Text>
-              {isTrialActive && trialDaysRemaining !== null && (
-                <Text style={styles.profileSubtitle}>
-                  {trialDaysRemaining === 1
-                    ? 'נותר לך יום אחד לגישה מלאה'
-                    : `נותרו לך ${trialDaysRemaining} ימים לגישה מלאה`}
-                </Text>
-              )}
-              {isExpiredFree && (
-                <Text style={styles.profileSubtitle}>
-                  {'קהילות נשארות פתוחות בחינם — תמיד.'}
-                </Text>
-              )}
-              {isTrialActive && trialDaysRemaining !== null && (
-                <Text style={styles.profileNote}>
-                  {'אחרי זה אפשר להמשיך עם קהילות בחינם.'}
-                </Text>
-              )}
-              {(isExpiredFree || isTrialActive) && (
-                <TouchableOpacity
-                  onPress={() => {
-                    router.push('/(authenticated)/subscription' as never);
-                  }}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel="לשדרוג למנוי"
-                  hitSlop={8}
-                >
-                  <Text style={styles.upgradeCta}>לשדרוג למנוי</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            <MaterialIcons name="chevron-left" size={22} color="#9ca3af" />
-          </View>
-        </TouchableOpacity>
+        {/* ── Account ── */}
+        <Text style={styles.sectionTitle}>החשבון שלי</Text>
+        <AccountCard
+          displayName={displayName}
+          avatarInitial={avatarInitial}
+          avatarColor={avatarColor}
+        />
 
-        {/* Section title */}
+        {/* ── Family ── */}
+        <FamilyCard
+          onPress={() =>
+            router.push('/(authenticated)/family-profile' as never)
+          }
+        />
+
+        {/* ── Subscription ── */}
+        <Text style={styles.sectionTitle}>המנוי</Text>
+        <SubscriptionStatusCard
+          isPersonal={isPersonal}
+          isFamily={isFamily}
+          isTrialActive={isTrialActive}
+          isExpiredFree={isExpiredFree}
+          isQaOverride={isQaOverride}
+          trialDaysRemaining={trialDaysRemaining}
+          onUpgradePress={() =>
+            router.push('/(authenticated)/subscription' as never)
+          }
+          onManagePress={() =>
+            router.push('/(authenticated)/subscription' as never)
+          }
+        />
+
+        {/* ── Settings ── */}
         <Text style={styles.sectionTitle}>הגדרות</Text>
-
-        {/* Settings list — MVP structure */}
         <View style={[styles.card, styles.settingsCard]}>
-          {/* Import flows */}
           <SettingsRow
             label="העתקת אירועים מיומן חיצוני"
             onPress={() => router.push('/(authenticated)/import-calendar')}
           />
-          {/* Notifications */}
           <SettingsRow
             label="התראות"
             onPress={() => console.log('TODO: notifications settings')}
-          />
-          {/* Recently Deleted */}
-          <SettingsRow
-            label="נמחקו לאחרונה"
-            onPress={() => router.push('/(authenticated)/recently-deleted')}
           />
           <SettingsRow
             label="חגים ומועדים"
@@ -287,23 +440,31 @@ export default function ProfileScreen() {
               router.push('/(authenticated)/holiday-overlay-settings')
             }
           />
-          {/* Danger zone */}
           <SettingsRow
-            label="מחיקת חשבון"
-            danger
-            onPress={handleDeleteAccount}
-          />
-          <SettingsRow
-            label="התנתקות"
-            danger
-            hideChevron
+            label="נמחקו לאחרונה"
             isLast
-            onPress={handleSignOut}
+            onPress={() => router.push('/(authenticated)/recently-deleted')}
           />
         </View>
 
-        {/* Debug panel — hidden by default; revealed by long-pressing the version footer */}
-        {isDebugUnlocked && (
+        {/* ── Destructive actions ── */}
+        <View style={[styles.card, styles.settingsCard, styles.dangerCard]}>
+          <SettingsRow
+            label="התנתקות"
+            danger
+            onPress={handleSignOut}
+          />
+          <SettingsRow
+            label="מחיקת חשבון"
+            danger
+            hideChevron
+            isLast
+            onPress={handleDeleteAccount}
+          />
+        </View>
+
+        {/* ── Debug panel — only in __DEV__ builds ── */}
+        {__DEV__ && isDebugUnlocked && (
           <View style={styles.debugContainer}>
             <TouchableOpacity
               onPress={() => setIsDebugOpen(!isDebugOpen)}
@@ -353,7 +514,7 @@ export default function ProfileScreen() {
                   />
                   <DebugRow label="effectiveAccess" value={effectiveAccess} />
                   <DebugRow label="Entitlement" value="InYomi Pro" />
-                  {customerData && (
+                  {customerData !== null && customerData !== undefined && (
                     <DebugRow
                       label="App User ID"
                       value={customerData.appUserID.substring(0, 20)}
@@ -380,93 +541,91 @@ export default function ProfileScreen() {
                     onPress={openSignUpPreview}
                   />
                 </View>
-
-                {/* Dev subscription plan selector — __DEV__ only */}
-                {__DEV__ && (
-                  <>
-                    <Text style={[styles.debugSectionLabel, { marginTop: 16 }]}>
-                      סימולציית מסלול מנוי (בדיקות בלבד)
+                <Text style={[styles.debugSectionLabel, { marginTop: 16 }]}>
+                  סימולציית מסלול מנוי (בדיקות בלבד)
+                </Text>
+                {devPlan !== null && (
+                  <View style={styles.devOverrideBanner}>
+                    <Text style={styles.devOverrideBannerText}>
+                      {`⚠️ מצב בדיקה פעיל: ${
+                        devPlan === 'trial_expired_free'
+                          ? 'Free'
+                          : devPlan === 'personal'
+                            ? 'Plus'
+                            : devPlan === 'family'
+                              ? 'Family'
+                              : devPlan
+                      }`}
                     </Text>
-                    {devPlan !== null && (
-                      <View style={styles.devOverrideBanner}>
-                        <Text style={styles.devOverrideBannerText}>
-                          {`⚠️ מצב בדיקה פעיל: ${
-                            devPlan === 'trial_expired_free'
-                              ? 'Free'
-                              : devPlan === 'personal'
-                                ? 'Plus'
-                                : devPlan === 'family'
-                                  ? 'Family'
-                                  : devPlan
-                          }`}
-                        </Text>
-                      </View>
-                    )}
-                    <View style={styles.devPlanRow}>
-                      {(
-                        [
-                          { label: 'Free', value: 'trial_expired_free' },
-                          { label: 'Plus', value: 'personal' },
-                          { label: 'Family', value: 'family' },
-                        ] as { label: string; value: EffectiveAccess }[]
-                      ).map(({ label, value }) => (
-                        <TouchableOpacity
-                          key={value}
-                          onPress={() => setDevPlanOverride(value)}
-                          style={[
-                            styles.devPlanBtn,
-                            devPlan === value && styles.devPlanBtnActive,
-                          ]}
-                          accessible={true}
-                          accessibilityRole="button"
-                          accessibilityLabel={`הפעל סימולציית מסלול ${label}`}
-                        >
-                          <Text
-                            style={[
-                              styles.devPlanBtnText,
-                              devPlan === value && styles.devPlanBtnTextActive,
-                            ]}
-                          >
-                            {label}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                      <TouchableOpacity
-                        onPress={() => setDevPlanOverride(null)}
-                        style={styles.devPlanBtnClear}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel="איפוס סימולציית מסלול"
-                      >
-                        <Text style={styles.devPlanBtnClearText}>איפוס</Text>
-                      </TouchableOpacity>
-                    </View>
-                    <Text style={styles.devOverrideNote}>
-                      {devPlan !== null
-                        ? 'האיפוס יחזיר את לוגיקת הגישה האמיתית.'
-                        : 'בחר מסלול לסימולציה. השינוי נשמר גם לאחר reload.'}
-                    </Text>
-                  </>
+                  </View>
                 )}
+                <View style={styles.devPlanRow}>
+                  {(
+                    [
+                      { label: 'Free', value: 'trial_expired_free' },
+                      { label: 'Plus', value: 'personal' },
+                      { label: 'Family', value: 'family' },
+                    ] as { label: string; value: EffectiveAccess }[]
+                  ).map(({ label, value }) => (
+                    <TouchableOpacity
+                      key={value}
+                      onPress={() => setDevPlanOverride(value)}
+                      style={[
+                        styles.devPlanBtn,
+                        devPlan === value && styles.devPlanBtnActive,
+                      ]}
+                      accessible={true}
+                      accessibilityRole="button"
+                      accessibilityLabel={`הפעל סימולציית מסלול ${label}`}
+                    >
+                      <Text
+                        style={[
+                          styles.devPlanBtnText,
+                          devPlan === value && styles.devPlanBtnTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                  <TouchableOpacity
+                    onPress={() => setDevPlanOverride(null)}
+                    style={styles.devPlanBtnClear}
+                    accessible={true}
+                    accessibilityRole="button"
+                    accessibilityLabel="איפוס סימולציית מסלול"
+                  >
+                    <Text style={styles.devPlanBtnClearText}>איפוס</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.devOverrideNote}>
+                  {devPlan !== null
+                    ? 'האיפוס יחזיר את לוגיקת הגישה האמיתית.'
+                    : 'בחר מסלול לסימולציה. השינוי נשמר גם לאחר reload.'}
+                </Text>
               </View>
             )}
           </View>
         )}
 
-        {/* TODO: REMOVE BEFORE LAUNCH — temporary RTL diagnostic shortcut */}
-        <TouchableOpacity
-          onPress={() => router.push('/(authenticated)/rtl-debug')}
-          style={{ alignSelf: 'center', marginBottom: 8, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#fef9c3', borderRadius: 8, borderWidth: 1, borderColor: '#fde047' }}
-          accessible={true}
-          accessibilityRole="button"
-          accessibilityLabel="RTL Debug"
-        >
-          <Text style={{ fontSize: 12, color: '#854d0e', fontWeight: '600' }}>RTL Debug</Text>
-        </TouchableOpacity>
+        {/* RTL Debug shortcut — __DEV__ only */}
+        {__DEV__ && (
+          <TouchableOpacity
+            onPress={() => router.push('/(authenticated)/rtl-debug')}
+            style={styles.rtlDebugBtn}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="RTL Debug"
+          >
+            <Text style={styles.rtlDebugBtnText}>RTL Debug</Text>
+          </TouchableOpacity>
+        )}
 
-        {/* Version footer — long-press to unlock hidden debug panel */}
+        {/* Version footer — long-press unlocks debug panel (__DEV__ only) */}
         <TouchableOpacity
-          onLongPress={() => setIsDebugUnlocked((v) => !v)}
+          onLongPress={
+            __DEV__ ? () => setIsDebugUnlocked((v) => !v) : undefined
+          }
           delayLongPress={800}
           accessible={false}
         >
@@ -504,14 +663,12 @@ function SettingsRow({
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      {/* Label + note */}
       <View style={styles.rowTextContainer}>
         <Text style={[styles.rowLabel, danger && styles.rowLabelDanger]}>
           {label}
         </Text>
         {note !== undefined && <Text style={styles.rowNote}>{note}</Text>}
       </View>
-      {/* Chevron on the physical left (last in RTL flex row) */}
       {!hideChevron && (
         <MaterialIcons name="chevron-left" size={20} color="#d1d5db" />
       )}
@@ -571,6 +728,8 @@ const styles = StyleSheet.create({
   scroll: {
     flex: 1,
   },
+
+  // ── Header ─────────────────────────────────────────────────────────────────
   headerContainer: {
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
@@ -605,7 +764,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // ── Cards ──────────────────────────────────────────────────────────────────
+  // ── Section title ──────────────────────────────────────────────────────────
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6b7280',
+    paddingHorizontal: 20,
+    marginBottom: 8,
+    textAlign: rtl.textAlign,
+  },
+
+  // ── Card base ──────────────────────────────────────────────────────────────
   card: {
     backgroundColor: '#fff',
     borderRadius: 20,
@@ -620,9 +789,12 @@ const styles = StyleSheet.create({
   settingsCard: {
     overflow: 'hidden',
   },
+  dangerCard: {
+    marginTop: 4,
+  },
 
-  // ── Profile card ───────────────────────────────────────────────────────────
-  profileRow: {
+  // ── Account card ───────────────────────────────────────────────────────────
+  accountRow: {
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
     padding: 16,
@@ -641,47 +813,134 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#fff',
   },
-  profileTexts: {
+  accountTexts: {
     flex: 1,
-    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
+    alignItems: rtl.alignStart,
   },
-  profileName: {
+  accountName: {
     fontSize: 17,
     fontWeight: '700',
     color: '#111517',
     textAlign: rtl.textAlign,
   },
-  profileSubtitle: {
+
+  // ── Family card ────────────────────────────────────────────────────────────
+  familyRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    padding: 16,
+    gap: 12,
+  },
+  familyIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#eff8ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  familyTexts: {
+    flex: 1,
+    alignItems: rtl.alignStart,
+  },
+  familyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111517',
+    textAlign: rtl.textAlign,
+  },
+  familySubtitle: {
     fontSize: 13,
     color: '#6b7280',
     textAlign: rtl.textAlign,
     marginTop: 2,
   },
-  premiumLabel: {
-    color: '#36a9e2',
+
+  // ── Subscription card ──────────────────────────────────────────────────────
+  subContent: {
+    padding: 16,
+  },
+  subBadgeRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 20,
+    alignSelf: rtl.alignStart,
+    marginBottom: 10,
+  },
+  subBadgeText: {
+    fontSize: 12,
     fontWeight: '600',
   },
-  profileNote: {
-    fontSize: 11,
-    color: '#9ca3af',
-    textAlign: rtl.textAlign,
-    marginTop: 2,
+  subBadgeActive: {
+    backgroundColor: '#dcfce7',
   },
-  upgradeCta: {
-    fontSize: 13,
+  subBadgeTextActive: {
+    color: '#16a34a',
+  },
+  subBadgeTrial: {
+    backgroundColor: '#dbeafe',
+  },
+  subBadgeTextTrial: {
+    color: '#2563eb',
+  },
+  subBadgeFree: {
+    backgroundColor: '#f3f4f6',
+  },
+  subBadgeTextFree: {
+    color: '#6b7280',
+  },
+  subBadgeQa: {
+    backgroundColor: '#fef9c3',
+  },
+  subBadgeTextQa: {
+    color: '#ca8a04',
+  },
+  subTitle: {
+    fontSize: 16,
     fontWeight: '700',
-    color: '#36a9e2',
+    color: '#111517',
+    textAlign: rtl.textAlign,
+  },
+  subSubtitle: {
+    fontSize: 14,
+    color: '#374151',
     textAlign: rtl.textAlign,
     marginTop: 4,
   },
-
-  // ── Section title ──────────────────────────────────────────────────────────
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#6b7280',
+  subNote: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
+    marginTop: 6,
+  },
+  subUpgradeBtn: {
+    marginTop: 14,
+    alignSelf: rtl.alignStart,
     paddingHorizontal: 20,
-    marginBottom: 8,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: '#36a9e2',
+  },
+  subUpgradeBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+    textAlign: rtl.textAlign,
+  },
+  subManageBtn: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 2,
+    marginTop: 12,
+    alignSelf: rtl.alignStart,
+  },
+  subManageBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#36a9e2',
     textAlign: rtl.textAlign,
   },
 
@@ -699,7 +958,7 @@ const styles = StyleSheet.create({
   },
   rowTextContainer: {
     flex: 1,
-    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
+    alignItems: rtl.alignStart,
   },
   rowLabel: {
     fontSize: 15,
@@ -715,6 +974,23 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
     textAlign: rtl.textAlign,
     marginTop: 2,
+  },
+
+  // ── RTL Debug button ───────────────────────────────────────────────────────
+  rtlDebugBtn: {
+    alignSelf: 'center',
+    marginBottom: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#fef9c3',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fde047',
+  },
+  rtlDebugBtnText: {
+    fontSize: 12,
+    color: '#854d0e',
+    fontWeight: '600',
   },
 
   // ── Debug panel ────────────────────────────────────────────────────────────
@@ -794,23 +1070,7 @@ const styles = StyleSheet.create({
     textAlign: rtl.textAlign,
   },
 
-  // ── Dev banner ─────────────────────────────────────────────────────────────
-  devBanner: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: 'rgba(234, 179, 8, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(234, 179, 8, 0.3)',
-  },
-  devBannerText: {
-    color: '#eab308',
-    textAlign: 'center',
-    fontSize: 14,
-  },
-
-  // ── Dev plan override selector ──────────────────────────────────────────────
+  // ── Dev plan override selector ─────────────────────────────────────────────
   devOverrideBanner: {
     backgroundColor: '#fef9c3',
     borderRadius: 8,

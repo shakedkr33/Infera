@@ -92,6 +92,10 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         const code =
           typeof credentials.code === 'string' ? credentials.code : null;
 
+        if (phone === null || code === null) {
+          return null;
+        }
+
         if (phone !== reviewEnv.phone || code !== reviewEnv.otp) {
           return null;
         }
