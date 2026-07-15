@@ -64,25 +64,35 @@ function AccountCard({
 }
 
 // ============================================================================
-// FamilyCard
+// ProfileFamilyCard
 // ============================================================================
 
-function FamilyCard({ onPress }: { onPress: () => void }) {
+function ProfileFamilyCard({
+  title,
+  subtitle,
+  iconName,
+  onPress,
+}: {
+  title: string;
+  subtitle: string;
+  iconName: 'group' | 'person';
+  onPress: () => void;
+}) {
   return (
     <TouchableOpacity
       style={styles.card}
       onPress={onPress}
       accessible={true}
       accessibilityRole="button"
-      accessibilityLabel="ניהול המשפחה שלי"
+      accessibilityLabel={title}
     >
       <View style={styles.familyRow}>
         <View style={styles.familyIconWrap}>
-          <MaterialIcons name="group" size={22} color="#36a9e2" />
+          <MaterialIcons name={iconName} size={22} color="#36a9e2" />
         </View>
         <View style={styles.familyTexts}>
-          <Text style={styles.familyTitle}>המשפחה שלי</Text>
-          <Text style={styles.familySubtitle}>ניהול בני משפחה והרשאות</Text>
+          <Text style={styles.familyTitle}>{title}</Text>
+          <Text style={styles.familySubtitle}>{subtitle}</Text>
         </View>
         <MaterialIcons name="chevron-left" size={22} color="#9ca3af" />
       </View>
@@ -113,8 +123,6 @@ function SubscriptionStatusCard({
   onUpgradePress: () => void;
   onManagePress: () => void;
 }) {
-  const isPaid = isPersonal || isFamily;
-
   // QA / dev override — show muted test badge, no purchase UI
   if (isQaOverride) {
     return (
@@ -133,8 +141,8 @@ function SubscriptionStatusCard({
     );
   }
 
-  // Paid subscription active — never show upgrade CTA here
-  if (isPaid) {
+  // Family paid — manage only, no upgrade CTA
+  if (isFamily) {
     return (
       <View style={styles.card}>
         <View style={styles.subContent}>
@@ -145,9 +153,7 @@ function SubscriptionStatusCard({
             </Text>
           </View>
           <Text style={styles.subTitle}>המנוי שלך פעיל</Text>
-          <Text style={styles.subSubtitle}>
-            {isFamily ? 'מסלול משפחתי' : 'מסלול אישי'}
-          </Text>
+          <Text style={styles.subSubtitle}>מסלול משפחתי</Text>
           <Text style={styles.subNote}>
             ניהול המנוי מתבצע דרך App Store או Google Play
           </Text>
@@ -160,6 +166,33 @@ function SubscriptionStatusCard({
           >
             <Text style={styles.subManageBtnText}>ניהול מנוי</Text>
             <MaterialIcons name="chevron-left" size={15} color="#36a9e2" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // Personal paid — offer upgrade to family plan
+  if (isPersonal) {
+    return (
+      <View style={styles.card}>
+        <View style={styles.subContent}>
+          <View style={[styles.subBadgeRow, styles.subBadgeActive]}>
+            <MaterialIcons name="check-circle" size={14} color="#16a34a" />
+            <Text style={[styles.subBadgeText, styles.subBadgeTextActive]}>
+              פעיל
+            </Text>
+          </View>
+          <Text style={styles.subTitle}>המנוי שלך פעיל</Text>
+          <Text style={styles.subSubtitle}>מסלול אישי</Text>
+          <TouchableOpacity
+            onPress={onUpgradePress}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="שדרג למנוי משפחתי"
+            style={styles.subUpgradeBtn}
+          >
+            <Text style={styles.subUpgradeBtnText}>שדרג למנוי משפחתי</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -263,6 +296,7 @@ export default function ProfileScreen() {
   } = useEffectiveAccess();
 
   const { data: onboardingData } = useOnboarding();
+  const isSpaceFamily = onboardingData.spaceType === 'family';
   const rawFirstName = onboardingData.firstName ?? '';
   const rawLastName = onboardingData.lastName ?? '';
   const rawNickname = onboardingData.nickname ?? '';
@@ -398,8 +432,15 @@ export default function ProfileScreen() {
           avatarColor={avatarColor}
         />
 
-        {/* ── Family ── */}
-        <FamilyCard
+        {/* ── Profile / Family row ── */}
+        <ProfileFamilyCard
+          title={isSpaceFamily ? 'המשפחה שלי' : 'הפרופיל שלי'}
+          subtitle={
+            isSpaceFamily
+              ? 'ניהול בני משפחה והרשאות'
+              : 'פרטים אישיים והגדרות'
+          }
+          iconName={isSpaceFamily ? 'group' : 'person'}
           onPress={() =>
             router.push('/(authenticated)/family-profile' as never)
           }
