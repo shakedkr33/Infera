@@ -7,6 +7,87 @@ import { Platform } from 'react-native';
 
 const PROMPT_SEEN_KEY = 'inyomi_push_permission_prompt_seen';
 
+// ─── Android Notification Channels ───────────────────────────────────────────
+// Only "communities" is used in this sprint.
+// The other channels (reminders, family, system) are pre-registered here so
+// that future sprints can target them without requiring another native build.
+
+export async function setupAndroidChannels(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+
+  await Notifications.setNotificationChannelAsync('communities', {
+    name: 'קהילות',
+    importance: Notifications.AndroidImportance.DEFAULT,
+    description: 'עדכונים ואירועים מקהילות',
+  });
+
+  await Notifications.setNotificationChannelAsync('reminders', {
+    name: 'תזכורות',
+    importance: Notifications.AndroidImportance.HIGH,
+    description: 'תזכורות לאירועים ומשימות',
+  });
+
+  await Notifications.setNotificationChannelAsync('family', {
+    name: 'משפחה',
+    importance: Notifications.AndroidImportance.DEFAULT,
+    description: 'עדכוני משפחה',
+  });
+
+  await Notifications.setNotificationChannelAsync('system', {
+    name: 'מערכת',
+    importance: Notifications.AndroidImportance.LOW,
+    description: 'עדכוני מערכת',
+  });
+}
+
+// ─── Notification Action Categories ──────────────────────────────────────────
+// Registered for BOTH iOS and Android.
+// expo-notifications supports setNotificationCategoryAsync on Android via the
+// same API — action buttons are shown in the notification shade when the
+// notification's categoryId matches a registered category.
+// opensAppToForeground: true is intentional on all actions — these are
+// state-changing operations (RSVP / calendar add / task add) where foreground
+// execution guarantees the JS handler runs and the user sees the result.
+
+export async function setupNotificationCategories(): Promise<void> {
+  await Notifications.setNotificationCategoryAsync('COMMUNITY_EVENT_RSVP', [
+    {
+      identifier: 'RSVP_YES',
+      buttonTitle: 'כן',
+      options: { opensAppToForeground: true },
+    },
+    {
+      identifier: 'RSVP_MAYBE',
+      buttonTitle: 'אולי',
+      options: { opensAppToForeground: true },
+    },
+    {
+      identifier: 'RSVP_NO',
+      buttonTitle: 'לא',
+      options: { opensAppToForeground: true },
+    },
+  ]);
+
+  await Notifications.setNotificationCategoryAsync('COMMUNITY_EVENT_ADD', [
+    {
+      identifier: 'ADD_TO_CALENDAR',
+      buttonTitle: 'הוסף ליומן',
+      options: { opensAppToForeground: true },
+    },
+  ]);
+
+  await Notifications.setNotificationCategoryAsync(
+    'COMMUNITY_IMPORTANT_ITEM',
+    [
+      {
+        identifier: 'ADD_TO_TASKS',
+        buttonTitle: 'הוסף למשימות שלי',
+        options: { opensAppToForeground: true },
+      },
+    ]
+  );
+}
+
 export async function registerForPushNotifications(): Promise<string | null> {
   if (Platform.OS === 'web') return null;
   if (!Device.isDevice) return null;

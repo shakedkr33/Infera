@@ -27,6 +27,7 @@
     },
     "android": {
       "package": "com.shakedkr.inyomi",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
@@ -64,7 +65,10 @@
       "expo-font",
       "expo-router",
       ["expo-localization", { "supportsRTL": true }],
-      "expo-notifications"
+      ["expo-notifications", {
+        "color": "#36a9e2",
+        "defaultChannel": "communities"
+      }]
     ],
     "owner": "shakedkr",
     "extra": {

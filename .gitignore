@@ -145,3 +145,10 @@ expo-env.d.ts
 # @end expo-cli
 # Expo local cache
 .expo/
+
+# macOS
+.DS_Store
+
+# Firebase private service account keys
+*firebase-adminsdk*.json
+*service-account*.json

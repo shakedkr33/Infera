@@ -17,7 +17,12 @@ export const getPushRecipients = internalQuery({
     v.object({
       userId: v.id('users'),
       enabled: v.boolean(),
-      tokens: v.array(v.string()),
+      tokens: v.array(
+        v.object({
+          token: v.string(),
+          platform: v.union(v.literal('ios'), v.literal('android')),
+        })
+      ),
     })
   ),
   handler: async (ctx, args) => {
@@ -32,7 +37,9 @@ export const getPushRecipients = internalQuery({
         .withIndex('by_user', (q) => q.eq('userId', userId))
         .collect();
 
-      const tokens = activeTokens.filter((t) => t.isActive).map((t) => t.token);
+      const tokens = activeTokens
+        .filter((t) => t.isActive)
+        .map((t) => ({ token: t.token, platform: t.platform }));
 
       results.push({ userId, enabled, tokens });
     }
@@ -106,6 +113,9 @@ export const sendPush = internalAction({
     body: v.string(),
     data: v.optional(v.any()),
     categoryId: v.optional(v.string()),
+    // Android notification channel; defaults to "communities" when not provided.
+    // Ignored for iOS — channelId is an Android-only Expo push field.
+    channelId: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -120,8 +130,11 @@ export const sendPush = internalAction({
       body: string;
       data?: unknown;
       sound: string;
-      categoryIdentifier?: string;
       priority: string;
+      // Android-only: routes the notification to the correct channel
+      channelId?: string;
+      // Both platforms: links the notification to registered action buttons
+      categoryId?: string;
     };
 
     const messages: PushMessage[] = [];
@@ -155,7 +168,7 @@ export const sendPush = internalAction({
         continue;
       }
 
-      for (const token of recipient.tokens) {
+      for (const { token, platform } of recipient.tokens) {
         tokenToUserId.set(token, recipient.userId);
         const msg: PushMessage = {
           to: token,
@@ -165,8 +178,14 @@ export const sendPush = internalAction({
           sound: 'default',
           priority: 'high',
         };
+        // channelId is Android-only — do not include in iOS messages
+        if (platform === 'android') {
+          msg.channelId = args.channelId ?? 'communities';
+        }
+        // categoryId selects the registered notification action category.
+        // Supported on both iOS and Android via expo-notifications.
         if (args.categoryId) {
-          msg.categoryIdentifier = args.categoryId;
+          msg.categoryId = args.categoryId;
         }
         messages.push(msg);
       }

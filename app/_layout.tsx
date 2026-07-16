@@ -14,6 +14,10 @@ import { NotificationsProvider } from '@/contexts/NotificationsContext';
 import { RevenueCatProvider } from '@/contexts/RevenueCatContext';
 import { BirthdaySheetsProvider } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { bootstrapRTL } from '@/lib/rtlBootstrap';
+import {
+  setupAndroidChannels,
+  setupNotificationCategories,
+} from '@/lib/pushNotifications';
 import { getConvexUrl } from '@/utils/convexConfig';
 import { OnboardingProvider } from '../contexts/OnboardingContext';
 
@@ -43,6 +47,8 @@ const secureStorage = {
 export default function RootLayout() {
   useEffect(() => {
     bootstrapRTL().catch(() => {});
+    setupAndroidChannels().catch(() => {});
+    setupNotificationCategories().catch(() => {});
   }, []);
 
   return (
