@@ -28,8 +28,11 @@ import type * as members from "../members.js";
 import type * as onboarding from "../onboarding.js";
 import type * as personalEventCalendar from "../personalEventCalendar.js";
 import type * as profileCircles from "../profileCircles.js";
+import type * as pushNotifications from "../pushNotifications.js";
+import type * as pushTokens from "../pushTokens.js";
 import type * as shareLinks from "../shareLinks.js";
 import type * as tasks from "../tasks.js";
+import type * as userCalendarEntries from "../userCalendarEntries.js";
 import type * as users from "../users.js";
 
 import type {
@@ -59,8 +62,11 @@ declare const fullApi: ApiFromModules<{
   onboarding: typeof onboarding;
   personalEventCalendar: typeof personalEventCalendar;
   profileCircles: typeof profileCircles;
+  pushNotifications: typeof pushNotifications;
+  pushTokens: typeof pushTokens;
   shareLinks: typeof shareLinks;
   tasks: typeof tasks;
+  userCalendarEntries: typeof userCalendarEntries;
   users: typeof users;
 }>;
 

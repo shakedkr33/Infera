@@ -1,6 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useConvexAuth, useMutation, useQuery } from 'convex/react';
+import * as Device from 'expo-device';
 import {
   Tabs,
   useRootNavigationState,
@@ -32,6 +33,10 @@ import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getHasSeenOnboarding } from '@/lib/onboardingState';
 import { PENDING_COMMUNITY_EVENT_ID_KEY } from '@/lib/pendingEventLink';
+import {
+  registerForPushNotifications,
+  setupNotificationHandlers,
+} from '@/lib/pushNotifications';
 import { rtl } from '@/lib/rtl';
 
 // ─── Regular Tab Button (icon + label wrapped in selection pill) ──────────────
@@ -232,6 +237,7 @@ export default function AuthenticatedLayout() {
   const navigationState = useRootNavigationState();
   const router = useRouter();
   const segments = useSegments();
+  const registerPushToken = useMutation(api.pushTokens.registerPushToken);
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>('general');
@@ -376,6 +382,36 @@ export default function AuthenticatedLayout() {
       })
       .catch(() => {});
   }, [isAuthenticated, router]);
+
+  // Register push token and wire notification tap handler once onboarding is done
+  useEffect(() => {
+    if (userStatus?.onboardingComplete !== true) return;
+
+    let cleanup: (() => void) | undefined;
+
+    const init = async () => {
+      try {
+        const token = await registerForPushNotifications();
+        if (token) {
+          await registerPushToken({
+            token,
+            platform: Platform.OS as 'ios' | 'android',
+            deviceId: Device.modelId ?? undefined,
+          });
+        }
+      } catch (err) {
+        console.warn('[Push] Token registration failed:', err);
+      }
+
+      cleanup = setupNotificationHandlers(router);
+    };
+
+    init();
+
+    return () => {
+      cleanup?.();
+    };
+  }, [userStatus?.onboardingComplete, registerPushToken, router]);
 
   // Wait for: navigation tree, auth state, RevenueCat, and user profile to resolve
   const isUserStatusLoading = isAuthenticated && userStatus === undefined;

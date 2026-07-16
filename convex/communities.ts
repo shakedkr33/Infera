@@ -976,3 +976,29 @@ export const getCommunityMembers = query({
     };
   },
 });
+
+export const toggleAutoAddEvents = mutation({
+  args: {
+    communityId: v.id('communities'),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('Not authenticated');
+
+    const member = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community_user', (q) =>
+        q.eq('communityId', args.communityId).eq('userId', userId)
+      )
+      .unique();
+
+    if (!member || !isActiveCommunityMember(member)) {
+      throw new Error('Not a member of this community');
+    }
+
+    const next = !(member.autoAddEventsToCalendar === true);
+    await ctx.db.patch(member._id, { autoAddEventsToCalendar: next });
+    return next;
+  },
+});

@@ -31,6 +31,8 @@ export default defineSchema({
     profileSetupCompletedAt: v.optional(v.number()),
     /** Post-auth optional family setup was skipped; prevents nag on every launch */
     familySetupSkippedAt: v.optional(v.number()),
+    // undefined = true (push enabled by default)
+    pushNotificationsEnabled: v.optional(v.boolean()),
   })
     .index('by_email', ['email'])
     .index('by_phone', ['phone'])
@@ -522,6 +524,8 @@ export default defineSchema({
     ),
     /** Last time the user opened this community detail (for "new events" hints on the list). */
     lastViewedAt: v.optional(v.number()),
+    // undefined = false (no auto-add)
+    autoAddEventsToCalendar: v.optional(v.boolean()),
   })
     .index('by_community', ['communityId'])
     .index('by_user', ['userId'])
@@ -704,4 +708,85 @@ export default defineSchema({
   })
     // Primary dedup lookup: is this externalId already copied by this user?
     .index('by_owner_external_id', ['createdBy', 'externalId']),
+
+  // ═══════════════════════════════════════════════════════
+  // Push notification tokens per device
+  // ═══════════════════════════════════════════════════════
+  pushTokens: defineTable({
+    userId: v.id('users'),
+    token: v.string(), // Expo push token (ExponentPushToken[xxx])
+    platform: v.union(v.literal('ios'), v.literal('android')),
+    deviceId: v.optional(v.string()),
+    isActive: v.boolean(), // false when DeviceNotRegistered
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_user', ['userId'])
+    .index('by_token', ['token']),
+
+  // ═══════════════════════════════════════════════════════
+  // Single source of truth — user's community calendar
+  // ═══════════════════════════════════════════════════════
+  userCalendarEntries: defineTable({
+    userId: v.id('users'),
+    eventId: v.id('events'),
+    communityId: v.id('communities'),
+    source: v.union(
+      v.literal('auto_add'),
+      v.literal('manual_add'),
+      v.literal('rsvp_yes'),
+      v.literal('rsvp_maybe')
+    ),
+    status: v.union(v.literal('active'), v.literal('removed')),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_user_event', ['userId', 'eventId'])
+    .index('by_event', ['eventId'])
+    .index('by_user', ['userId'])
+    .index('by_user_community', ['userId', 'communityId']),
+
+  // ═══════════════════════════════════════════════════════
+  // Convex scheduled function IDs for cancellable reminders
+  // ═══════════════════════════════════════════════════════
+  scheduledReminders: defineTable({
+    eventId: v.optional(v.id('events')),
+    taskId: v.optional(v.id('tasks')),
+    userId: v.id('users'),
+    scheduledFunctionId: v.id('_scheduled_functions'),
+    reminderKey: v.string(), // e.g. "30min_before", "24h_rsvp"
+    scheduledFor: v.number(), // epoch ms
+    status: v.union(
+      v.literal('pending'),
+      v.literal('sent'),
+      v.literal('canceled')
+    ),
+    createdAt: v.number(),
+  })
+    .index('by_event', ['eventId'])
+    .index('by_task', ['taskId'])
+    .index('by_event_user', ['eventId', 'userId'])
+    .index('by_status', ['status']),
+
+  // ═══════════════════════════════════════════════════════
+  // Audit trail for push notification debugging
+  // ═══════════════════════════════════════════════════════
+  notificationLog: defineTable({
+    recipientUserId: v.id('users'),
+    pushType: v.string(),
+    title: v.string(),
+    body: v.string(),
+    data: v.optional(v.any()),
+    status: v.union(
+      v.literal('sent'),
+      v.literal('skipped'),
+      v.literal('failed')
+    ),
+    skipReason: v.optional(v.string()), // "no_token" | "notifications_disabled" | ...
+    expoReceiptId: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index('by_recipient', ['recipientUserId'])
+    .index('by_push_type', ['pushType'])
+    .index('by_created', ['createdAt']),
 });

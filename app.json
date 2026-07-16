@@ -63,7 +63,8 @@
       "expo-audio",
       "expo-font",
       "expo-router",
-      ["expo-localization", { "supportsRTL": true }]
+      ["expo-localization", { "supportsRTL": true }],
+      "expo-notifications"
     ],
     "owner": "shakedkr",
     "extra": {
