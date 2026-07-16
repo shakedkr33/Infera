@@ -402,15 +402,20 @@ export default function ProfileScreen() {
     >
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
         {/* ── Header ── */}
-        <View style={styles.headerContainer}>
-          <Image
-            source={require('@/assets/images/logo-inyomi.png')}
-            style={styles.headerLogo}
-            resizeMode="contain"
-            accessibilityLabel="InYomi logo"
-          />
-          <View style={styles.headerRightGroup}>
-            <Text style={styles.headerTitle}>הגדרות</Text>
+        {/* direction:'ltr' locks to physical row regardless of native RTL flip — matches MainScreenHeader pattern */}
+        <View
+          style={styles.headerContainer}
+          onLayout={(e) =>
+            console.log('[header] container', e.nativeEvent.layout)
+          }
+        >
+          {/* Physical LEFT: X first, then logo immediately to its right */}
+          <View
+            style={styles.headerLeftGroup}
+            onLayout={(e) =>
+              console.log('[header] leftGroup', e.nativeEvent.layout)
+            }
+          >
             <TouchableOpacity
               onPress={handleClose}
               style={styles.closeBtn}
@@ -418,9 +423,25 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityLabel="סגור הגדרות"
               hitSlop={8}
+              onLayout={(e) =>
+                console.log('[header] xButton', e.nativeEvent.layout)
+              }
             >
               <MaterialIcons name="close" size={22} color="#64748b" />
             </TouchableOpacity>
+            <Image
+              source={require('@/assets/images/logo-inyomi-current.png')}
+              style={styles.headerLogo}
+              resizeMode="contain"
+              accessibilityLabel="InYomi logo"
+              onLayout={(e) =>
+                console.log('[header] logo', e.nativeEvent.layout)
+              }
+            />
+          </View>
+          {/* Physical RIGHT: title */}
+          <View style={styles.headerTitleGroup}>
+            <Text style={styles.headerTitle}>הגדרות</Text>
           </View>
         </View>
 
@@ -771,30 +792,37 @@ const styles = StyleSheet.create({
   },
 
   // ── Header ─────────────────────────────────────────────────────────────────
+  // direction:'ltr' locks physical row on all platforms — same pattern as MainScreenHeader.tsx
   headerContainer: {
-    flexDirection: rtl.flexDirection,
+    flexDirection: 'row',
+    direction: 'ltr',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingLeft: 0,
-    paddingRight: 24,
-    paddingTop: 12,
-    paddingBottom: 4,
+    height: 96,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
   },
   headerLogo: {
-    width: 220,
-    height: 88,
-    backgroundColor: 'transparent',
+    width: 132,
+    height: 90,
   },
-  headerRightGroup: {
-    flexDirection: rtl.flexDirection,
+  headerTitleGroup: {
+    alignItems: 'flex-end',
+  },
+  headerLeftGroup: {
+    flexDirection: 'row',
+    direction: 'ltr',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'flex-start',
+    gap: 12,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: '700',
     color: '#1e293b',
-    textAlign: rtl.textAlign,
+    textAlign: 'right',
+    writingDirection: 'rtl',
   },
   closeBtn: {
     width: 36,
