@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "89347240186",
+    "project_id": "inyomi-37f08",
+    "storage_bucket": "inyomi-37f08.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:89347240186:android:c7e39b9e8ddd4ae9371943",
+        "android_client_info": {
+          "package_name": "com.shakedkr.inyomi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC5vlVYCxSOU50-SJawE0k1XTqLMjQ3fUc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
