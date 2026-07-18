@@ -390,17 +390,23 @@ export default function AuthenticatedLayout() {
     let cleanup: (() => void) | undefined;
 
     const init = async () => {
+      let token: string | null = null;
       try {
-        const token = await registerForPushNotifications();
-        if (token) {
+        token = await registerForPushNotifications();
+      } catch (err) {
+        console.warn('[Push] registerForPushNotifications threw:', err);
+      }
+
+      if (token) {
+        try {
           await registerPushToken({
             token,
             platform: Platform.OS as 'ios' | 'android',
             deviceId: Device.modelId ?? undefined,
           });
+        } catch (err) {
+          console.warn('[Push] registerPushToken mutation failed:', err);
         }
-      } catch (err) {
-        console.warn('[Push] Token registration failed:', err);
       }
 
       cleanup = setupNotificationHandlers(router);

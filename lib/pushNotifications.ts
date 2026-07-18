@@ -89,22 +89,25 @@ export async function setupNotificationCategories(): Promise<void> {
 }
 
 export async function registerForPushNotifications(): Promise<string | null> {
-  if (Platform.OS === 'web') return null;
-  if (!Device.isDevice) return null;
+  if (Platform.OS === 'web') {
+    return null;
+  }
+  if (!Device.isDevice) {
+    return null;
+  }
 
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
 
-  if (existingStatus === 'granted') {
-    // Permission already granted — fall through to token fetch
-  } else {
+  if (existingStatus !== 'granted') {
     const seen = await AsyncStorage.getItem(PROMPT_SEEN_KEY);
     if (seen) {
-      // Already asked once — do not re-prompt automatically
       return null;
     }
     const { status } = await Notifications.requestPermissionsAsync();
     await AsyncStorage.setItem(PROMPT_SEEN_KEY, 'true');
-    if (status !== 'granted') return null;
+    if (status !== 'granted') {
+      return null;
+    }
   }
 
   const projectId =
