@@ -884,7 +884,32 @@ export const removeMember = mutation({
       throw new Error('החבר אינו נמצא בקהילה זו');
     }
 
+    const community = await ctx.db.get(communityId);
+
     await ctx.db.delete(targetMembership._id);
+
+    if (community) {
+      const removedTitle = 'הוסרת מהקהילה';
+      const removedBody = `הוסרת מקהילת ${community.name}`;
+      const removedScreen = '/(authenticated)/communities';
+
+      await createUserNotifications(ctx, {
+        recipientUserIds: [targetUserId],
+        pushType: 'community_member_removed',
+        title: removedTitle,
+        body: removedBody,
+        screen: removedScreen,
+      });
+
+      await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+        recipientUserIds: [targetUserId],
+        pushType: 'community_member_removed',
+        title: removedTitle,
+        body: removedBody,
+        data: { screen: removedScreen },
+        channelId: 'communities',
+      });
+    }
   },
 });
 
