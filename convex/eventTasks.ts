@@ -1,11 +1,13 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { ConvexError, v } from 'convex/values';
+import { internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
 import { saveCommunityEventToPersonalCalendar } from './communityEventCalendarHelpers';
 import { isActiveCommunityMember } from './communityMemberUtils';
+import { createUserNotifications } from './userNotifications';
 
 // ─────────────────────────────────────────────────────────────
 // סיכום משימות לפי קהילה (לתצוגת כרטיסי אירועים — ללא N+1)
@@ -395,6 +397,8 @@ export const setAssignee = mutation({
         throw new Error('משימה לא מוקצית – ניתן להקצות רק את עצמך');
       if (task.assignedToUserId === assignee.userId && !hasManual) return;
 
+      const existingAssignedUserId = task.assignedToUserId;
+
       const now = Date.now();
       await ctx.db.patch(id, {
         assignedToUserId: assignee.userId,
@@ -434,6 +438,34 @@ export const setAssignee = mutation({
             }
           }
         }
+      }
+
+      if (
+        assignee.userId !== userId &&
+        existingAssignedUserId !== assignee.userId &&
+        event.tasksVisibleToParticipants === true
+      ) {
+        const assignerName = await getUserDisplayName(ctx, userId);
+        const taskAssignedTitle = 'משימה שויכה לך';
+        const taskAssignedBody = `המשימה "${task.title}" שויכה לך על ידי ${assignerName}`;
+        const taskAssignedScreen = `/(authenticated)/event/${event._id}`;
+
+        await createUserNotifications(ctx, {
+          recipientUserIds: [assignee.userId],
+          pushType: 'community_task_assigned',
+          title: taskAssignedTitle,
+          body: taskAssignedBody,
+          screen: taskAssignedScreen,
+        });
+
+        await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+          recipientUserIds: [assignee.userId],
+          pushType: 'community_task_assigned',
+          title: taskAssignedTitle,
+          body: taskAssignedBody,
+          data: { screen: taskAssignedScreen },
+          channelId: 'communities',
+        });
       }
     }
   },
