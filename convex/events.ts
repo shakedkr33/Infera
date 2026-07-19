@@ -1163,6 +1163,63 @@ export const update = mutation({
         }
       }
     }
+
+    if (importantItems !== undefined) {
+      const existingItemIds = new Set(
+        (existing.importantItems ?? []).map((item) => item.id)
+      );
+      const newItems = (syncedImportantItems ?? []).filter(
+        (item) => !existingItemIds.has(item.id)
+      );
+      const communityId = existing.communityId;
+
+      if (communityId && newItems.length > 0) {
+        const allMembers = await ctx.db
+          .query('communityMembers')
+          .withIndex('by_community', (q) => q.eq('communityId', communityId))
+          .collect();
+
+        const recipientUserIds = allMembers
+          .filter(
+            (m) =>
+              isActiveCommunityMember(m) &&
+              m.userId !== userId &&
+              m.notificationsEnabled !== false
+          )
+          .map((m) => m.userId);
+
+        if (recipientUserIds.length > 0) {
+          const importantItemTitle = 'נוסף פריט חשוב לאירוע';
+          const eventTitleForBody =
+            typeof fields.title === 'string' && fields.title.trim()
+              ? fields.title.trim()
+              : existing.title;
+          const importantItemBody = `${eventTitleForBody}: ${
+            newItems.length === 1
+              ? newItems[0].title
+              : `${newItems.length} פריטים חדשים`
+          }`;
+          const importantItemScreen = `/(authenticated)/event/${id}`;
+
+          await createUserNotifications(ctx, {
+            recipientUserIds,
+            pushType: 'community_event_important_item_created',
+            title: importantItemTitle,
+            body: importantItemBody,
+            screen: importantItemScreen,
+          });
+
+          await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+            recipientUserIds,
+            pushType: 'community_event_important_item_created',
+            title: importantItemTitle,
+            body: importantItemBody,
+            data: { screen: importantItemScreen },
+            channelId: 'communities',
+          });
+        }
+      }
+    }
   },
 });
 
