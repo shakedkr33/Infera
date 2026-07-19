@@ -1063,12 +1063,27 @@ export const create = mutation({
       ...restInsertArgs
     } = args;
 
-    const normalizedAssignees = normalizeAssigneesForWrite(userId, {
+    const explicitAssigneeArgs = {
       assignedTo: argAssignedTo,
       assignedToMemberId: argAssignedToMemberId,
       assignedToUserIds: argAssignedToUserIds,
       assignedToMemberIds: argAssignedToMemberIds,
-    });
+    };
+
+    // Community reminders with no explicit assignee must be stored with
+    // assignedTo === undefined so they match the filter in
+    // listCommunityRemindersPaged / listCompletedCommunityReminders / listByCommunity.
+    // Personal tasks (no communityId) keep the creator-fallback assignment.
+    const normalizedAssignees =
+      args.communityId !== undefined &&
+      !hadExplicitAssigneeForCommunityActivity(explicitAssigneeArgs)
+        ? {
+            assignedTo: undefined as Id<'users'> | undefined,
+            assignedToMemberId: undefined as Id<'members'> | undefined,
+            assignedToUserIds: [] as Id<'users'>[],
+            assignedToMemberIds: [] as Id<'members'>[],
+          }
+        : normalizeAssigneesForWrite(userId, explicitAssigneeArgs);
 
     const taskId = await ctx.db.insert('tasks', {
       ...restInsertArgs,
@@ -1714,6 +1729,31 @@ export const remove = mutation({
 
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
+
+    // Community reminder (communityId set, no sourceType) — requires active
+    // owner/admin membership, mirroring the same gate used in tasks.create.
+    // softDeleteTask explicitly blocks this path for community reminders,
+    // confirming that hard-delete via remove() is their intended deletion route,
+    // managed at the community role level rather than individual ownership.
+    if (existing.communityId !== undefined && existing.sourceType === undefined) {
+      const membership = await getCommunityMembership(
+        ctx,
+        existing.communityId,
+        userId
+      );
+      if (
+        !isActiveCommunityMember(membership) ||
+        (membership.role !== 'owner' && membership.role !== 'admin')
+      ) {
+        throw new Error('אין לך הרשאה למחוק משימה זו');
+      }
+    } else {
+      // Personal task or event-linked task — participant check, consistent
+      // with the same gate used by update() and toggleCompleted().
+      if (!isUserParticipantInTask(existing, userId)) {
+        throw new Error('אין לך הרשאה למחוק משימה זו');
+      }
+    }
 
     await ctx.db.delete(id);
   },
