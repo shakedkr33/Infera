@@ -1296,7 +1296,50 @@ export const cancelEvent = mutation({
       });
     }
 
-    // TODO(server-push): notify members that the event was cancelled.
+    const communityId = event.communityId;
+
+    if (communityId) {
+      const community = await ctx.db.get(communityId);
+      if (community) {
+        const allMembers = await ctx.db
+          .query('communityMembers')
+          .withIndex('by_community', (q) => q.eq('communityId', communityId))
+          .collect();
+
+        const recipientUserIds = allMembers
+          .filter(
+            (m) =>
+              isActiveCommunityMember(m) &&
+              m.userId !== userId &&
+              m.notificationsEnabled !== false
+          )
+          .map((m) => m.userId);
+
+        if (recipientUserIds.length > 0) {
+          const canceledTitle = 'האירוע בוטל';
+          const canceledBody = `${event.title} ב${community.name} בוטל`;
+          const canceledScreen = `/(authenticated)/event/${eventId}`;
+
+          await createUserNotifications(ctx, {
+            recipientUserIds,
+            pushType: 'community_event_canceled',
+            title: canceledTitle,
+            body: canceledBody,
+            screen: canceledScreen,
+          });
+
+          await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+            recipientUserIds,
+            pushType: 'community_event_canceled',
+            title: canceledTitle,
+            body: canceledBody,
+            data: { screen: canceledScreen },
+            channelId: 'communities',
+          });
+        }
+      }
+    }
+
     // TODO(server-push): notify assigned users that their tasks were cancelled because the event was cancelled.
   },
 });
