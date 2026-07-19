@@ -1,6 +1,7 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel';
+import { internal } from './_generated/api';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
@@ -617,6 +618,11 @@ export const approvePendingMember = mutation({
       throw new Error('המשתמש אינו ממתין לאישור');
     }
 
+    const community = await ctx.db.get(communityId);
+    if (!community) {
+      throw new Error('הקהילה לא נמצאה');
+    }
+
     await ctx.db.patch(memberId, { status: 'active' });
     const targetUser = await ctx.db.get(target.userId);
     await insertCommunityActivity(ctx, {
@@ -626,6 +632,14 @@ export const approvePendingMember = mutation({
       entityType: 'member',
       entityId: memberId,
       title: `${targetUser?.fullName?.trim() || 'משתמש'} הצטרף/ה לקהילה`,
+    });
+    await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+      recipientUserIds: [target.userId],
+      pushType: 'community_join_approved',
+      title: 'בקשת ההצטרפות אושרה',
+      body: `אפשר להיכנס עכשיו לקהילת ${community.name}`,
+      data: { screen: `/(authenticated)/community/${communityId}` },
+      channelId: 'communities',
     });
     return { success: true as const };
   },
