@@ -9,6 +9,7 @@ import {
   effectiveMemberStatus,
   isActiveCommunityMember,
 } from './communityMemberUtils';
+import { createUserNotifications } from './userNotifications';
 
 async function requireOwnerOrAdminActive(
   ctx: MutationCtx,
@@ -409,6 +410,44 @@ export const joinCommunityByCode = mutation({
         return { status: 'joined' as const, communityId: community._id };
       }
       await ctx.db.patch(rowId, { ...basePatch, status: 'pending' });
+
+      const allMembersA = await ctx.db
+        .query('communityMembers')
+        .withIndex('by_community', (q) => q.eq('communityId', community._id))
+        .collect();
+
+      const adminRecipientUserIdsA = allMembersA
+        .filter(
+          (m) =>
+            isActiveCommunityMember(m) &&
+            (m.role === 'owner' || m.role === 'admin') &&
+            m.notificationsEnabled !== false
+        )
+        .map((m) => m.userId);
+
+      if (adminRecipientUserIdsA.length > 0) {
+        const requestTitle = 'בקשת הצטרפות חדשה';
+        const requestBody = `${user.fullName?.trim() || 'משתמש'} ביקש/ה להצטרף לקהילת ${community.name}`;
+        const requestScreen = `/(authenticated)/community-members/${community._id}`;
+
+        await createUserNotifications(ctx, {
+          recipientUserIds: adminRecipientUserIdsA,
+          pushType: 'community_join_request_received',
+          title: requestTitle,
+          body: requestBody,
+          screen: requestScreen,
+        });
+
+        await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+          recipientUserIds: adminRecipientUserIdsA,
+          pushType: 'community_join_request_received',
+          title: requestTitle,
+          body: requestBody,
+          data: { screen: requestScreen },
+          channelId: 'communities',
+        });
+      }
+
       return {
         status: 'pending_approval' as const,
         communityId: community._id,
@@ -444,6 +483,44 @@ export const joinCommunityByCode = mutation({
       joinedAt: Date.now(),
       status: 'pending',
     });
+
+    const allMembersB = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_community', (q) => q.eq('communityId', community._id))
+      .collect();
+
+    const adminRecipientUserIdsB = allMembersB
+      .filter(
+        (m) =>
+          isActiveCommunityMember(m) &&
+          (m.role === 'owner' || m.role === 'admin') &&
+          m.notificationsEnabled !== false
+      )
+      .map((m) => m.userId);
+
+    if (adminRecipientUserIdsB.length > 0) {
+      const requestTitle = 'בקשת הצטרפות חדשה';
+      const requestBody = `${user.fullName?.trim() || 'משתמש'} ביקש/ה להצטרף לקהילת ${community.name}`;
+      const requestScreen = `/(authenticated)/community-members/${community._id}`;
+
+      await createUserNotifications(ctx, {
+        recipientUserIds: adminRecipientUserIdsB,
+        pushType: 'community_join_request_received',
+        title: requestTitle,
+        body: requestBody,
+        screen: requestScreen,
+      });
+
+      await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+        recipientUserIds: adminRecipientUserIdsB,
+        pushType: 'community_join_request_received',
+        title: requestTitle,
+        body: requestBody,
+        data: { screen: requestScreen },
+        channelId: 'communities',
+      });
+    }
+
     return {
       status: 'pending_approval' as const,
       communityId: community._id,
@@ -636,12 +713,23 @@ export const approvePendingMember = mutation({
       entityId: memberId,
       title: `${targetUser?.fullName?.trim() || 'משתמש'} הצטרף/ה לקהילה`,
     });
+    const approvedTitle = 'בקשת ההצטרפות אושרה';
+    const approvedBody = `אפשר להיכנס עכשיו לקהילת ${community.name}`;
+    const approvedScreen = `/(authenticated)/community/${communityId}`;
+
+    await createUserNotifications(ctx, {
+      recipientUserIds: [target.userId],
+      pushType: 'community_join_approved',
+      title: approvedTitle,
+      body: approvedBody,
+      screen: approvedScreen,
+    });
     await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
       recipientUserIds: [target.userId],
       pushType: 'community_join_approved',
-      title: 'בקשת ההצטרפות אושרה',
-      body: `אפשר להיכנס עכשיו לקהילת ${community.name}`,
-      data: { screen: `/(authenticated)/community/${communityId}` },
+      title: approvedTitle,
+      body: approvedBody,
+      data: { screen: approvedScreen },
       channelId: 'communities',
     });
     return { success: true as const };
