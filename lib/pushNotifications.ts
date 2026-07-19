@@ -2,10 +2,42 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import type { Router } from 'expo-router';
 import { Platform } from 'react-native';
 
 const PROMPT_SEEN_KEY = 'inyomi_push_permission_prompt_seen';
+
+// ─── Pending Navigation Store ─────────────────────────────────────────────────
+// Notification handlers publish a screen target here.
+// The authenticated layout subscribes and consumes the target when routing is
+// ready. This decouples delivery (which can happen before the nav tree mounts)
+// from execution.
+
+type PendingNavigationListener = (screen: string) => void;
+
+let pendingNavigationTarget: string | null = null;
+const pendingNavigationListeners = new Set<PendingNavigationListener>();
+
+function setPendingNavigationTarget(screen: string): void {
+  pendingNavigationTarget = screen;
+  for (const listener of pendingNavigationListeners) {
+    listener(screen);
+  }
+}
+
+export function consumePendingNavigationTarget(): string | null {
+  const target = pendingNavigationTarget;
+  pendingNavigationTarget = null;
+  return target;
+}
+
+export function subscribeToPendingNavigation(
+  listener: PendingNavigationListener,
+): () => void {
+  pendingNavigationListeners.add(listener);
+  return () => {
+    pendingNavigationListeners.delete(listener);
+  };
+}
 
 // ─── Android Notification Channels ───────────────────────────────────────────
 // Only "communities" is used in this sprint.
@@ -124,7 +156,36 @@ export async function registerForPushNotifications(): Promise<string | null> {
   return tokenData.data;
 }
 
-export function setupNotificationHandlers(router: Router): () => void {
+// ─── Cold-Start Capture ───────────────────────────────────────────────────────
+// Must be called as early as possible (root layout mount). Reads the response
+// that Expo Notifications stores when the OS launches the app from a cold state
+// due to a notification tap, and publishes it to the pending navigation store.
+// clearLastNotificationResponseAsync is available in expo-notifications ≥ 0.29;
+// confirmed present in 0.32.17. It prevents the same response from being
+// replayed on a subsequent app launch.
+
+export async function captureColdStartNotification(): Promise<void> {
+  try {
+    const response = await Notifications.getLastNotificationResponseAsync();
+    if (!response) return;
+
+    const data = response.notification.request.content.data as
+      | Record<string, unknown>
+      | undefined;
+
+    if (data?.screen && typeof data.screen === 'string') {
+      setPendingNavigationTarget(data.screen);
+    }
+
+    await Notifications.clearLastNotificationResponseAsync();
+  } catch (err) {
+    console.warn('[Push] captureColdStartNotification failed:', err);
+  }
+}
+
+// ─── Notification Response Listener ──────────────────────────────────────────
+
+export function setupNotificationHandlers(): () => void {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowAlert: true,
@@ -172,7 +233,7 @@ export function setupNotificationHandlers(router: Router): () => void {
       }
 
       if (data?.screen && typeof data.screen === 'string') {
-        router.push(data.screen as Parameters<typeof router.push>[0]);
+        setPendingNavigationTarget(data.screen);
       }
     }
   );

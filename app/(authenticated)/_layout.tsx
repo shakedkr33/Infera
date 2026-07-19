@@ -34,8 +34,10 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { getHasSeenOnboarding } from '@/lib/onboardingState';
 import { PENDING_COMMUNITY_EVENT_ID_KEY } from '@/lib/pendingEventLink';
 import {
+  consumePendingNavigationTarget,
   registerForPushNotifications,
   setupNotificationHandlers,
+  subscribeToPendingNavigation,
 } from '@/lib/pushNotifications';
 import { rtl } from '@/lib/rtl';
 
@@ -409,7 +411,7 @@ export default function AuthenticatedLayout() {
         }
       }
 
-      cleanup = setupNotificationHandlers(router);
+      cleanup = setupNotificationHandlers();
     };
 
     init();
@@ -467,6 +469,46 @@ export default function AuthenticatedLayout() {
     !isUserStatusLoading &&
     !isFamilyBootstrapLoading &&
     !needsHydration;
+
+  // ─── Push notification navigation ──────────────────────────────────────────
+  // Keep a ref that always mirrors the current readiness so the subscription
+  // callback (which closes over a stale value) can check it synchronously.
+  const isReadyToRouteRef = useRef(isReadyToRoute);
+  useEffect(() => {
+    isReadyToRouteRef.current = isReadyToRoute;
+  }, [isReadyToRoute]);
+
+  // Subscribe to targets that arrive while the component is mounted (warm /
+  // background taps, or a cold-start target that was stored before readiness).
+  useEffect(() => {
+    const navigateToPendingTarget = () => {
+      if (!isReadyToRouteRef.current) return;
+      const target = consumePendingNavigationTarget();
+      if (!target) return;
+      router.replace(target as Parameters<typeof router.replace>[0]);
+    };
+
+    const unsubscribe = subscribeToPendingNavigation(() => {
+      navigateToPendingTarget();
+    });
+
+    // Also attempt immediately in case the target was stored before this
+    // effect ran (e.g. cold-start capture completed before layout mounted).
+    navigateToPendingTarget();
+
+    return unsubscribe;
+  }, [router]);
+
+  // When routing becomes ready, check whether a pending target was stored
+  // before readiness arrived (the subscription callback would have returned
+  // early because isReadyToRouteRef was still false at that moment).
+  useEffect(() => {
+    if (!isReadyToRoute) return;
+    const target = consumePendingNavigationTarget();
+    if (target) {
+      router.replace(target as Parameters<typeof router.replace>[0]);
+    }
+  }, [isReadyToRoute, router]);
 
   useEffect(() => {
     if (!isReadyToRoute) return;

@@ -15,6 +15,7 @@ import { RevenueCatProvider } from '@/contexts/RevenueCatContext';
 import { BirthdaySheetsProvider } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { bootstrapRTL } from '@/lib/rtlBootstrap';
 import {
+  captureColdStartNotification,
   setupAndroidChannels,
   setupNotificationCategories,
 } from '@/lib/pushNotifications';
@@ -49,6 +50,9 @@ export default function RootLayout() {
     bootstrapRTL().catch(() => {});
     setupAndroidChannels().catch(() => {});
     setupNotificationCategories().catch(() => {});
+    // Must run as early as possible: reads the OS-buffered notification response
+    // that exists when the app was launched cold by a notification tap.
+    captureColdStartNotification().catch(() => {});
   }, []);
 
   return (
