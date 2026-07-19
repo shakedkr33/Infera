@@ -16,6 +16,7 @@ import {
   ScrollView,
   Share,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -130,6 +131,7 @@ export default function CreateCommunityScreen() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [selectedTags, setSelectedTags] = useState<Tag[]>([]);
+  const [requiresApproval, setRequiresApproval] = useState(true);
   const [nameError, setNameError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -162,6 +164,7 @@ export default function CreateCommunityScreen() {
         name: trimmed,
         description: description.trim() || undefined,
         tags: selectedTags.length > 0 ? [...selectedTags] : undefined,
+        joinApprovalMode: requiresApproval ? 'manual' : 'automatic',
       });
 
       if (!community) throw new Error('שגיאה ביצירת הקהילה');
@@ -277,6 +280,28 @@ export default function CreateCommunityScreen() {
               );
             })}
           </View>
+        </View>
+
+        {/* אישור הצטרפות */}
+        <View style={styles.field}>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>אישור מנהל להצטרפות</Text>
+            <Switch
+              value={requiresApproval}
+              onValueChange={setRequiresApproval}
+              trackColor={{ true: PRIMARY, false: '#e2e8f0' }}
+              thumbColor="#fff"
+              accessible
+              accessibilityLabel="אישור מנהל להצטרפות"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: requiresApproval }}
+            />
+          </View>
+          <Text style={styles.toggleHelperText}>
+            {requiresApproval
+              ? 'חברים חדשים יצטרכו את האישור שלך לפני שיוכלו להצטרף'
+              : 'חברים עם קישור או קוד הצטרפות יוכלו להצטרף מיד'}
+          </Text>
         </View>
       </ScrollView>
 
@@ -396,6 +421,26 @@ const styles = StyleSheet.create({
     flexDirection: rtl.flexDirection,
     flexWrap: 'wrap',
     gap: 8,
+  },
+  toggleRow: {
+    flexDirection: rtl.flexDirection,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  toggleLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    textAlign: rtl.textAlign,
+  },
+  toggleHelperText: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: rtl.textAlign,
   },
   chip: {
     paddingHorizontal: 14,

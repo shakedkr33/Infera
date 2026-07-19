@@ -157,8 +157,11 @@ export const createCommunity = mutation({
     name: v.string(),
     description: v.optional(v.string()),
     tags: v.optional(v.array(v.string())),
+    joinApprovalMode: v.optional(
+      v.union(v.literal('manual'), v.literal('automatic'))
+    ),
   },
-  handler: async (ctx, { name, description, tags }) => {
+  handler: async (ctx, { name, description, tags, joinApprovalMode }) => {
     // TODO: auth – validate that user has an active space
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error('לא מחובר למערכת');
@@ -176,7 +179,7 @@ export const createCommunity = mutation({
       createdAt: Date.now(),
       archived: false,
       pinnedByUserIds: [], // deprecated, kept for schema compat
-      joinApprovalMode: 'manual',
+      joinApprovalMode: joinApprovalMode ?? 'manual',
     });
 
     await ctx.db.insert('communityMembers', {
