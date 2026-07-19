@@ -1,10 +1,12 @@
 // FIXED: added generateUploadUrl, getAttachmentUrl, and attachment support to create + update
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
+import { internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
+import { createUserNotifications } from './userNotifications';
 import {
   computeIsSavedToMyCalendar,
   enrichEventsWithCalendarFlags,
@@ -801,11 +803,13 @@ export const create = mutation({
       args.spaceId ??
       (args.communityId ? await getUserSpaceId(ctx, userId) : undefined);
 
+    let communityName = '';
     if (args.communityId) {
       const community = await ctx.db.get(args.communityId);
       if (!community || community.archived) {
         throw new Error('קהילה לא נמצאה');
       }
+      communityName = community.name;
       const membership = await getCommunityMembership(
         ctx,
         args.communityId,
@@ -888,6 +892,44 @@ export const create = mutation({
         entityId: eventId,
         title: `נוצר אירוע חדש: ${args.title}`,
       });
+
+      const communityId = args.communityId;
+      const allMembers = await ctx.db
+        .query('communityMembers')
+        .withIndex('by_community', (q) => q.eq('communityId', communityId))
+        .collect();
+
+      const recipientUserIds = allMembers
+        .filter(
+          (m) =>
+            isActiveCommunityMember(m) &&
+            m.userId !== userId &&
+            m.notificationsEnabled !== false
+        )
+        .map((m) => m.userId);
+
+      if (recipientUserIds.length > 0) {
+        const eventCreatedTitle = `אירוע חדש ב${communityName}`;
+        const eventCreatedBody = `${args.title}`;
+        const eventCreatedScreen = `/(authenticated)/event/${eventId}`;
+
+        await createUserNotifications(ctx, {
+          recipientUserIds,
+          pushType: 'community_event_created',
+          title: eventCreatedTitle,
+          body: eventCreatedBody,
+          screen: eventCreatedScreen,
+        });
+
+        await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+          recipientUserIds,
+          pushType: 'community_event_created',
+          title: eventCreatedTitle,
+          body: eventCreatedBody,
+          data: { screen: eventCreatedScreen },
+          channelId: 'communities',
+        });
+      }
     }
 
     return eventId;
