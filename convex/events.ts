@@ -54,6 +54,23 @@ function didFieldChange(previousValue: unknown, nextValue: unknown): boolean {
   return JSON.stringify(previousValue) !== JSON.stringify(nextValue);
 }
 
+function formatHebrewDate(ts: number): string {
+  return new Intl.DateTimeFormat('he-IL', {
+    day: 'numeric',
+    month: 'numeric',
+    timeZone: 'Asia/Jerusalem',
+  }).format(ts);
+}
+
+function formatHebrewTime(ts: number): string {
+  return new Intl.DateTimeFormat('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Asia/Jerusalem',
+    hour12: false,
+  }).format(ts);
+}
+
 async function syncCommunityEventImportantItemTasks(
   ctx: MutationCtx,
   args: {
@@ -1056,18 +1073,95 @@ export const update = mutation({
     await ctx.db.patch(id, patch);
 
     if (existing.communityId && hasActualChange) {
+      const communityId = existing.communityId;
       const activityTitle =
         typeof fields.title === 'string' && fields.title.trim()
           ? fields.title.trim()
           : existing.title;
       await insertCommunityActivity(ctx, {
-        communityId: existing.communityId,
+        communityId,
         actorUserId: userId,
         type: 'event_updated',
         entityType: 'event',
         entityId: id,
         title: `עודכן האירוע: ${activityTitle}`,
       });
+
+      const dateChanged =
+        fields.startTime !== undefined &&
+        didFieldChange(existing.startTime, fields.startTime) &&
+        formatHebrewDate(existing.startTime) !== formatHebrewDate(fields.startTime);
+
+      const timeOnlyChanged =
+        fields.startTime !== undefined &&
+        didFieldChange(existing.startTime, fields.startTime) &&
+        !dateChanged;
+
+      const endTimeChanged =
+        fields.endTime !== undefined && didFieldChange(existing.endTime, fields.endTime);
+
+      const locationChanged =
+        (fields.location !== undefined && didFieldChange(existing.location, fields.location)) ||
+        (fields.locationUrl !== undefined && didFieldChange(existing.locationUrl, fields.locationUrl)) ||
+        (fields.onlineUrl !== undefined && didFieldChange(existing.onlineUrl, fields.onlineUrl));
+
+      const meaningfulChange = dateChanged || timeOnlyChanged || endTimeChanged || locationChanged;
+
+      if (meaningfulChange) {
+        const changeParts: string[] = [];
+        if (dateChanged) {
+          changeParts.push(`תאריך האירוע השתנה ל-${formatHebrewDate(fields.startTime as number)}`);
+        }
+        if (timeOnlyChanged) {
+          changeParts.push(`שעת האירוע השתנתה ל-${formatHebrewTime(fields.startTime as number)}`);
+        }
+        if (endTimeChanged) {
+          changeParts.push(`שעת הסיום השתנתה ל-${formatHebrewTime(fields.endTime as number)}`);
+        }
+        if (locationChanged) {
+          changeParts.push('מיקום האירוע עודכן');
+        }
+
+        const updatedBody = changeParts.length > 0
+          ? changeParts.join(', ')
+          : 'פרטי האירוע עודכנו';
+
+        const allMembers = await ctx.db
+          .query('communityMembers')
+          .withIndex('by_community', (q) => q.eq('communityId', communityId))
+          .collect();
+
+        const recipientUserIds = allMembers
+          .filter(
+            (m) =>
+              isActiveCommunityMember(m) &&
+              m.userId !== userId &&
+              m.notificationsEnabled !== false
+          )
+          .map((m) => m.userId);
+
+        if (recipientUserIds.length > 0) {
+          const updatedTitle = 'פרטי האירוע עודכנו';
+          const updatedScreen = `/(authenticated)/event/${id}`;
+
+          await createUserNotifications(ctx, {
+            recipientUserIds,
+            pushType: 'community_event_updated',
+            title: updatedTitle,
+            body: updatedBody,
+            screen: updatedScreen,
+          });
+
+          await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+            recipientUserIds,
+            pushType: 'community_event_updated',
+            title: updatedTitle,
+            body: updatedBody,
+            data: { screen: updatedScreen },
+            channelId: 'communities',
+          });
+        }
+      }
     }
   },
 });
