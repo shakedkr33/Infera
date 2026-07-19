@@ -957,6 +957,31 @@ export const promoteMemberToAdmin = mutation({
     }
 
     await ctx.db.patch(targetMembership._id, { role: 'admin' });
+
+    const community = await ctx.db.get(communityId);
+    if (community) {
+      const promotedTitle = 'יש לך הרשאות ניהול בקהילה';
+      const promotedBody = `הוענקו לך הרשאות ניהול בקהילת ${community.name}`;
+      const promotedScreen = `/(authenticated)/community/${communityId}`;
+
+      await createUserNotifications(ctx, {
+        recipientUserIds: [targetUserId],
+        pushType: 'community_manager_promoted',
+        title: promotedTitle,
+        body: promotedBody,
+        screen: promotedScreen,
+      });
+
+      await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+        recipientUserIds: [targetUserId],
+        pushType: 'community_manager_promoted',
+        title: promotedTitle,
+        body: promotedBody,
+        data: { screen: promotedScreen },
+        channelId: 'communities',
+      });
+    }
+
     return { role: 'admin' as const };
   },
 });
