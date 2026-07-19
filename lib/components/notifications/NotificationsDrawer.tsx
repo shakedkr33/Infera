@@ -22,11 +22,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNotifications } from '@/contexts/NotificationsContext';
+import type { UserNotification } from '@/contexts/NotificationsContext';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
-import type {
-  Notification,
-  NotificationType,
-} from '@/lib/notificationsStorage';
 import { position, rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -41,22 +38,29 @@ const OPEN_X = 0;
 const SPRING = { damping: 26, stiffness: 130 } as const;
 const PRIMARY = '#36a9e2';
 
-// ─── Notification type → icon + color mapping ────────────────────────────────
+// ─── pushType → icon + color mapping (cosmetic display only) ─────────────────
+// Navigation is driven exclusively by notification.screen — not by this map.
 
-const TYPE_CONFIG: Record<NotificationType, { icon: string; color: string }> = {
+const PUSH_TYPE_CONFIG: Record<string, { icon: string; color: string }> = {
   event_reminder: { icon: 'schedule', color: '#f59e0b' },
   birthday_today: { icon: 'cake', color: '#a855f7' },
   task_assigned: { icon: 'check-circle', color: '#22c55e' },
   event_updated: { icon: 'edit-calendar', color: '#36a9e2' },
+  community_join_approved: { icon: 'group', color: '#36a9e2' },
+};
+
+const DEFAULT_TYPE_CONFIG: { icon: string; color: string } = {
+  icon: 'notifications',
+  color: '#64748b',
 };
 
 // ─── Time grouping helpers ────────────────────────────────────────────────────
 
 type TimeGroup = 'today' | 'this_week' | 'older';
 
-function getTimeGroup(dateStr: string): TimeGroup {
+function getTimeGroup(createdAt: number): TimeGroup {
   const now = new Date();
-  const date = new Date(dateStr);
+  const date = new Date(createdAt);
 
   const startOfToday = new Date(
     now.getFullYear(),
@@ -80,9 +84,9 @@ const GROUP_LABELS: Record<TimeGroup, string> = {
 
 const GROUP_ORDER: TimeGroup[] = ['today', 'this_week', 'older'];
 
-function getRelativeTime(dateStr: string): string {
+function getRelativeTime(createdAt: number): string {
   const now = Date.now();
-  const diff = now - new Date(dateStr).getTime();
+  const diff = now - createdAt;
   const minutes = Math.floor(diff / 60_000);
   if (minutes < 1) return 'עכשיו';
   if (minutes < 60) return `לפני ${minutes} דקות`;
@@ -111,7 +115,9 @@ export function NotificationsDrawer({
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { notifications, archiveAll } = useNotifications();
-  const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
+  // useBirthdaySheets is retained so callers that previously relied on
+  // birthday card opening via the drawer don't break at import time.
+  useBirthdaySheets();
 
   const [modalVisible, setModalVisible] = useState(false);
   const translateX = useSharedValue(CLOSED_X);
@@ -189,7 +195,7 @@ export function NotificationsDrawer({
 
   // Group notifications by recency
   const grouped = useMemo(() => {
-    const groups: Record<TimeGroup, Notification[]> = {
+    const groups: Record<TimeGroup, UserNotification[]> = {
       today: [],
       this_week: [],
       older: [],
@@ -202,30 +208,17 @@ export function NotificationsDrawer({
 
   const hasNotifications = notifications.length > 0;
 
-  const handleTap = (n: Notification): void => {
+  // Navigation is driven exclusively by the stored screen string.
+  // No switch on pushType — that is cosmetic only (icon selection).
+  const handleTap = (n: UserNotification): void => {
     onClose();
     setTimeout(() => {
-      switch (n.type) {
-        case 'event_reminder':
-        case 'event_updated':
-          router.push(`/(authenticated)/event/${n.entityId}` as never);
-          break;
-        case 'birthday_today': {
-          const found = findBirthdayByName(
-            n.title.replace(/.*של\s+/, '').replace(/\s*🎂.*/, '')
-          );
-          if (found) openBirthdayCard(found);
-          break;
-        }
-        case 'task_assigned':
-          router.push('/(authenticated)/tasks' as never);
-          break;
-      }
+      router.replace(n.screen as Parameters<typeof router.replace>[0]);
     }, 280);
   };
 
   const handleArchiveAll = async (): Promise<void> => {
-    await archiveAll();
+    archiveAll();
   };
 
   if (!modalVisible) return null;
@@ -304,7 +297,7 @@ export function NotificationsDrawer({
                       <Text style={s.groupLabel}>{GROUP_LABELS[group]}</Text>
                       {items.map((n) => (
                         <NotificationCard
-                          key={n.id}
+                          key={n._id}
                           notification={n}
                           onPress={() => handleTap(n)}
                         />
@@ -327,11 +320,11 @@ function NotificationCard({
   notification,
   onPress,
 }: {
-  notification: Notification;
+  notification: UserNotification;
   onPress: () => void;
 }): React.JSX.Element {
-  const config = TYPE_CONFIG[notification.type];
-  const isUnseen = notification.seenAt === null;
+  const config = PUSH_TYPE_CONFIG[notification.pushType] ?? DEFAULT_TYPE_CONFIG;
+  const isUnseen = notification.readAt === undefined;
 
   return (
     <Pressable

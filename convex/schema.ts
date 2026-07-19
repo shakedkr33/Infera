@@ -769,6 +769,22 @@ export default defineSchema({
     .index('by_status', ['status']),
 
   // ═══════════════════════════════════════════════════════
+  // In-app notification inbox (user-facing bell drawer)
+  // Written synchronously by business mutations for ALL
+  // intended recipients, independent of push opt-out state.
+  // ═══════════════════════════════════════════════════════
+  userNotifications: defineTable({
+    recipientUserId: v.id('users'),
+    pushType: v.string(),
+    title: v.string(),
+    body: v.string(),
+    screen: v.string(),
+    readAt: v.optional(v.number()),
+    archivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index('by_recipient_created', ['recipientUserId', 'createdAt']),
+
+  // ═══════════════════════════════════════════════════════
   // Audit trail for push notification debugging
   // ═══════════════════════════════════════════════════════
   notificationLog: defineTable({

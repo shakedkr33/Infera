@@ -33,6 +33,7 @@ import type * as pushTokens from "../pushTokens.js";
 import type * as shareLinks from "../shareLinks.js";
 import type * as tasks from "../tasks.js";
 import type * as userCalendarEntries from "../userCalendarEntries.js";
+import type * as userNotifications from "../userNotifications.js";
 import type * as users from "../users.js";
 
 import type {
@@ -67,6 +68,7 @@ declare const fullApi: ApiFromModules<{
   shareLinks: typeof shareLinks;
   tasks: typeof tasks;
   userCalendarEntries: typeof userCalendarEntries;
+  userNotifications: typeof userNotifications;
   users: typeof users;
 }>;
 

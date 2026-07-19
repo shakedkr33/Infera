@@ -1,30 +1,24 @@
-import { useQuery } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useState,
 } from 'react';
 import { api } from '@/convex/_generated/api';
-import type { Notification } from '@/lib/notificationsStorage';
-import {
-  getNotifications,
-  getUnseenCount,
-  addNotification as storageAdd,
-  archiveAll as storageArchiveAll,
-  markAllSeen as storageMarkAllSeen,
-} from '@/lib/notificationsStorage';
+import type { Doc } from '@/convex/_generated/dataModel';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export type UserNotification = Doc<'userNotifications'>;
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 
 interface NotificationsContextValue {
-  notifications: Notification[];
+  notifications: UserNotification[];
   unseenCount: number;
-  markAllSeen: () => Promise<void>;
-  archiveAll: () => Promise<void>;
-  addNotification: (n: Notification) => Promise<void>;
+  markAllSeen: () => void;
+  archiveAll: () => void;
   isLoading: boolean;
 }
 
@@ -39,71 +33,27 @@ export function NotificationsProvider({
 }: {
   children: React.ReactNode;
 }): React.JSX.Element {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unseenCount, setUnseenCount] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
+  const rawNotifications = useQuery(api.userNotifications.list);
+  const markAllReadMutation = useMutation(api.userNotifications.markAllRead);
+  const archiveAllMutation = useMutation(api.userNotifications.archiveAll);
 
-  const currentUser = useQuery(api.users.getCurrentUser);
-  // undefined = still loading, null = not authenticated, Doc = resolved
-  const userId: string | null = currentUser?._id
-    ? String(currentUser._id)
-    : null;
+  // undefined while the query is in-flight; resolved to [] when unauthenticated
+  // (the server throws "Not authenticated" and Convex surfaces undefined).
+  const notifications: UserNotification[] = rawNotifications ?? [];
+  const isLoading = rawNotifications === undefined;
 
-  const refresh = useCallback(async (): Promise<void> => {
-    if (!userId) {
-      setNotifications([]);
-      setUnseenCount(0);
-      return;
-    }
-    const [list, count] = await Promise.all([
-      getNotifications(userId),
-      getUnseenCount(userId),
-    ]);
-    setNotifications(list);
-    setUnseenCount(count);
-  }, [userId]);
-
-  // Load real notifications once the authenticated user is known
-  useEffect(() => {
-    // currentUser === undefined means the query is still in-flight; wait.
-    if (currentUser === undefined) return;
-
-    const init = async (): Promise<void> => {
-      try {
-        if (!userId) {
-          setNotifications([]);
-          setUnseenCount(0);
-          return;
-        }
-        await refresh();
-      } catch {
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    init();
-  }, [currentUser, userId, refresh]);
-
-  const markAllSeen = useCallback(async (): Promise<void> => {
-    if (!userId) return;
-    await storageMarkAllSeen(userId);
-    await refresh();
-  }, [userId, refresh]);
-
-  const archiveAll = useCallback(async (): Promise<void> => {
-    if (!userId) return;
-    await storageArchiveAll(userId);
-    await refresh();
-  }, [userId, refresh]);
-
-  const addOne = useCallback(
-    async (n: Notification): Promise<void> => {
-      if (!userId) return;
-      await storageAdd(n);
-      await refresh();
-    },
-    [userId, refresh]
+  const unseenCount = useMemo(
+    () => notifications.filter((n) => n.readAt === undefined).length,
+    [notifications]
   );
+
+  const markAllSeen = useCallback((): void => {
+    void markAllReadMutation();
+  }, [markAllReadMutation]);
+
+  const archiveAll = useCallback((): void => {
+    void archiveAllMutation();
+  }, [archiveAllMutation]);
 
   const value = useMemo<NotificationsContextValue>(
     () => ({
@@ -111,10 +61,9 @@ export function NotificationsProvider({
       unseenCount,
       markAllSeen,
       archiveAll,
-      addNotification: addOne,
       isLoading,
     }),
-    [notifications, unseenCount, markAllSeen, archiveAll, addOne, isLoading]
+    [notifications, unseenCount, markAllSeen, archiveAll, isLoading]
   );
 
   return (
