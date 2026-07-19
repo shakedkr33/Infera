@@ -1,10 +1,12 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
+import { internal } from './_generated/api';
 import type { Doc, Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
 import { isActiveCommunityMember } from './communityMemberUtils';
+import { createUserNotifications } from './userNotifications';
 
 const taskReminderTypeValidator = v.union(
   v.literal('none'),
@@ -1112,14 +1114,55 @@ export const create = mutation({
     });
 
     if (args.communityId && !hadExplicitAssigneeForCommunityActivity(args)) {
+      const communityId = args.communityId;
       await insertCommunityActivity(ctx, {
-        communityId: args.communityId,
+        communityId,
         actorUserId: userId,
         type: 'reminder_created',
         entityType: 'reminder',
         entityId: taskId,
         title: `נוספה תזכורת: ${args.title.trim()}`,
       });
+
+      const community = await ctx.db.get(communityId);
+      if (community) {
+        const allMembers = await ctx.db
+          .query('communityMembers')
+          .withIndex('by_community', (q) => q.eq('communityId', communityId))
+          .collect();
+
+        const recipientUserIds = allMembers
+          .filter(
+            (m) =>
+              isActiveCommunityMember(m) &&
+              m.userId !== userId &&
+              m.notificationsEnabled !== false
+          )
+          .map((m) => m.userId);
+
+        if (recipientUserIds.length > 0) {
+          const reminderCreatedTitle = `תזכורת חדשה ב${community.name}`;
+          const reminderCreatedBody = args.title.trim();
+          const reminderCreatedScreen = `/(authenticated)/community/${communityId}?tab=תזכורות`;
+
+          await createUserNotifications(ctx, {
+            recipientUserIds,
+            pushType: 'community_general_reminder_created',
+            title: reminderCreatedTitle,
+            body: reminderCreatedBody,
+            screen: reminderCreatedScreen,
+          });
+
+          await ctx.scheduler.runAfter(0, internal.pushNotifications.sendPush, {
+            recipientUserIds,
+            pushType: 'community_general_reminder_created',
+            title: reminderCreatedTitle,
+            body: reminderCreatedBody,
+            data: { screen: reminderCreatedScreen },
+            channelId: 'communities',
+          });
+        }
+      }
     }
 
     return taskId;
