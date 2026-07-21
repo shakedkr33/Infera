@@ -22,9 +22,9 @@ import DraggableFlatList, {
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { AttachmentSourceSheet } from '@/lib/components/attachments/AttachmentSourceSheet';
+import { rtl } from '@/lib/rtl';
 import type { EventAttachmentDraft } from '@/lib/types/event';
 import type { SubTask, SubTaskAttachment } from '@/lib/types/task';
-import { rtl } from '@/lib/rtl';
 
 const PRIMARY = '#36a9e2';
 
@@ -46,6 +46,14 @@ interface SubtasksSectionProps {
    * Defaults to true for backward compatibility.
    */
   showToggle?: boolean;
+  /**
+   * When provided (editing an existing task), subtask attachment URLs are
+   * fetched via the task-scoped getTaskAttachmentUrl query so the server
+   * verifies both task access and the exact storageId reference.
+   * When absent (creating a new task), falls back to the auth-only
+   * getAttachmentUrl query for pre-save upload previews.
+   */
+  taskId?: string;
 }
 
 function createSubtaskId(): string {
@@ -76,16 +84,21 @@ function draftToSubtaskAttachment(
 }
 
 function SubtaskAttachmentPreview({
+  taskId,
   attachment,
   onImageThumbnailPress,
 }: {
+  taskId?: Id<'tasks'>;
   attachment: SubTaskAttachment | undefined;
   onImageThumbnailPress?: (uri: string) => void;
 }): React.JSX.Element | null {
   const storageId = attachment?.storageId as Id<'_storage'> | undefined;
+  // Use task-scoped query when taskId is available (existing task with saved
+  // attachment). Fall back to auth-only query only during new task creation
+  // (no document reference exists yet — pre-save upload preview).
   const urlFromStorage = useQuery(
-    api.events.getAttachmentUrl,
-    storageId ? { storageId } : 'skip'
+    api.tasks.getTaskAttachmentUrl,
+    taskId && storageId ? { taskId, storageId } : 'skip'
   );
   const uri = attachment?.localUri ?? urlFromStorage ?? null;
   const isImage = (attachment?.mimeType ?? '').startsWith('image/');
@@ -139,7 +152,9 @@ export function SubtasksSection({
   onPendingDraftChange,
   canEditSubtasks = true,
   showToggle = true,
+  taskId,
 }: SubtasksSectionProps): React.JSX.Element {
+  const taskIdTyped = taskId as Id<'tasks'> | undefined;
   const [draftTitle, setDraftTitle] = useState('');
   const [focusDraftTick, setFocusDraftTick] = useState(0);
   const draftInputRef = useRef<TextInput>(null);
@@ -293,6 +308,7 @@ export function SubtasksSection({
             accessibilityLabel={st.title || 'תת־משימה'}
           />
           <SubtaskAttachmentPreview
+            taskId={taskIdTyped}
             attachment={st.attachment}
             onImageThumbnailPress={(uri) => setImagePreviewUri(uri)}
           />
@@ -344,6 +360,7 @@ export function SubtasksSection({
           />
 
           <SubtaskAttachmentPreview
+            taskId={taskIdTyped}
             attachment={st.attachment}
             onImageThumbnailPress={(uri) => setImagePreviewUri(uri)}
           />

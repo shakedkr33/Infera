@@ -1680,6 +1680,7 @@ export function EventDetailsBottomSheet({
                     {displayEvent.attachments.map((attachment) => (
                       <AttachmentRow
                         attachment={attachment}
+                        eventId={convexEventId}
                         key={String(attachment.storageId)}
                         onPreviewImage={setPreviewImageUrl}
                       />
@@ -1984,14 +1985,17 @@ function QuickAction({
 
 function AttachmentRow({
   attachment,
+  eventId,
   onPreviewImage,
 }: {
   attachment: Attachment;
+  eventId: Id<'events'> | null;
   onPreviewImage: (url: string) => void;
 }): React.JSX.Element {
-  const fileUrl = useQuery(api.events.getAttachmentUrl, {
-    storageId: attachment.storageId,
-  });
+  const fileUrl = useQuery(
+    api.events.getEventAttachmentUrl,
+    eventId ? { eventId, storageId: attachment.storageId } : 'skip'
+  );
   const isImage = attachment.mimeType.startsWith('image/');
 
   const previewFile = (): void => {

@@ -274,14 +274,17 @@ type TaskAttachment = {
 
 function AttachmentThumbnail({
   attachment,
+  taskId,
   onImagePress,
 }: {
   attachment: TaskAttachment;
+  taskId: Id<'tasks'> | null;
   onImagePress: (url: string) => void;
 }): React.JSX.Element | null {
-  const url = useQuery(api.events.getAttachmentUrl, {
-    storageId: attachment.storageId,
-  });
+  const url = useQuery(
+    api.tasks.getTaskAttachmentUrl,
+    taskId ? { taskId, storageId: attachment.storageId } : 'skip'
+  );
   const isImage = attachment.mimeType.startsWith('image/');
 
   if (isImage) {
@@ -880,6 +883,7 @@ export function TaskDetailsBottomSheet({
                           <AttachmentThumbnail
                             key={att.storageId as string}
                             attachment={att}
+                            taskId={taskId as Id<'tasks'> | null}
                             onImagePress={(url) => setSelectedImageUrl(url)}
                           />
                         ))}

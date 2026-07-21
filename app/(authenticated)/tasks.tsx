@@ -1718,6 +1718,11 @@ function TaskCard({
                         </Text>
                         {getSubtaskAttachment(subtask) ? (
                           <SubtaskAttachmentButton
+                            taskId={
+                              task.kind === 'task'
+                                ? (task.id as Id<'tasks'>)
+                                : undefined
+                            }
                             attachment={getSubtaskAttachment(subtask)}
                             onOpenImagePreview={onOpenImagePreview}
                           />
@@ -1828,16 +1833,21 @@ function AssigneeAvatars({
 }
 
 function SubtaskAttachmentButton({
+  taskId,
   attachment,
   onOpenImagePreview,
 }: {
+  taskId?: Id<'tasks'>;
   attachment: SubtaskAttachmentPreviewData | undefined;
   onOpenImagePreview: (uri: string) => void;
 }) {
   const storageId = attachment?.storageId as Id<'_storage'> | undefined;
+  // Use task-scoped query when taskId is available so the server verifies the
+  // storageId reference. Falls back to skip (no URL) when taskId is absent —
+  // this path is only reached for eventTask subtasks which don't carry storage.
   const storageUrl = useQuery(
-    api.events.getAttachmentUrl,
-    storageId ? { storageId } : 'skip'
+    api.tasks.getTaskAttachmentUrl,
+    taskId && storageId ? { taskId, storageId } : 'skip'
   );
   const uri = attachment?.localUri ?? storageUrl ?? undefined;
   const isImage = (attachment?.mimeType ?? '').startsWith('image/');

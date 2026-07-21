@@ -1,4 +1,4 @@
-// FIXED: added generateUploadUrl, getAttachmentUrl, and attachment support to create + update
+// FIXED: added generateUploadUrl, getEventAttachmentUrl, and attachment support to create + update
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import { internal } from './_generated/api';
@@ -6,7 +6,6 @@ import type { Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
-import { createUserNotifications } from './userNotifications';
 import {
   computeIsSavedToMyCalendar,
   enrichEventsWithCalendarFlags,
@@ -16,6 +15,11 @@ import {
 } from './communityCalendarState';
 import { isActiveCommunityMember } from './communityMemberUtils';
 import { resolveMySpaceId } from './members';
+import {
+  isStorageReferencedByOtherDocument,
+  safeDeleteStorageIfUnreferenced,
+} from './taskUtils';
+import { createUserNotifications } from './userNotifications';
 
 // ─── Attachment arg validator ──────────────────────────────────────────────────
 // uploadedBy and uploadedAt are NOT accepted from the client — the handler
@@ -250,18 +254,82 @@ export const generateUploadUrl = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
-// שליפת URL לצפייה בקובץ מ-Convex Storage
 // ─────────────────────────────────────────────────────────────
-export const getAttachmentUrl = query({
-  args: { storageId: v.id('_storage') },
-  handler: async (ctx, { storageId }) => {
+// שליפת URL לצפייה בקובץ מצורף לאירוע — ממוקד ומאובטח
+//
+// The caller must supply both the eventId and the storageId. The handler:
+//   1. Authenticates the user.
+//   2. Loads the event.
+//   3. Applies the event's actual read-access rules (same as getById).
+//   4. Verifies the storageId is referenced by that exact event.
+//   5. Returns null when access is denied, the reference is absent, or the
+//      storage object is missing — without revealing whether the event exists.
+//   6. Only then calls ctx.storage.getUrl(storageId).
+// ─────────────────────────────────────────────────────────────
+export const getEventAttachmentUrl = query({
+  args: {
+    eventId: v.id('events'),
+    storageId: v.id('_storage'),
+  },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { eventId, storageId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const event = await ctx.db.get(eventId);
+    if (!event) return null;
+
+    // ── Apply the same read-access rules as getById ───────────────────────────
+    if (event.communityId) {
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) return null;
+    } else if (event.createdBy !== userId) {
+      // Check creator, space membership, and explicit sharing.
+      let canAccess = false;
+
+      if (event.spaceId) {
+        const memberRow = await ctx.db
+          .query('members')
+          .withIndex('by_user', (q) => q.eq('userId', userId))
+          .filter((q) => q.eq(q.field('spaceId'), event.spaceId))
+          .first();
+        if (memberRow) canAccess = true;
+      }
+
+      if (!canAccess) {
+        const viewerMemberRows = await ctx.db
+          .query('members')
+          .withIndex('by_user', (q) => q.eq('userId', userId))
+          .collect();
+        const viewerMemberIds = new Set(
+          viewerMemberRows.map((r) => r._id as string)
+        );
+        const sharedUserIds = (event.sharedWithUserIds ?? []) as string[];
+        const sharedMemberIds = event.sharedWithFamilyMemberIds ?? [];
+        if (
+          sharedUserIds.includes(userId as string) ||
+          sharedMemberIds.some((mid) => viewerMemberIds.has(mid))
+        ) {
+          canAccess = true;
+        }
+      }
+
+      if (!canAccess) return null;
+    }
+
+    // ── Verify the storageId is referenced by this exact event ────────────────
+    const isReferenced = (event.attachments ?? []).some(
+      (a) => (a.storageId as string) === (storageId as string)
+    );
+    if (!isReferenced) return null;
+
     return await ctx.storage.getUrl(storageId);
   },
 });
-
-// ─────────────────────────────────────────────────────────────
-// שליפת אירוע יחיד לפי מזהה
-// ─────────────────────────────────────────────────────────────
 export const getById = query({
   args: { eventId: v.id('events') },
   handler: async (ctx, { eventId }) => {
@@ -848,6 +916,14 @@ export const create = mutation({
       throw new Error('לא ניתן לצרף יותר מ-2 קבצים לאירוע');
     }
 
+    // Reject any submitted storageId that is already referenced by another
+    // task or event document — prevents cross-document attachment hijack.
+    for (const att of args.attachments ?? []) {
+      if (await isStorageReferencedByOtherDocument(ctx, att.storageId)) {
+        throw new Error('לא ניתן לצרף קובץ זה');
+      }
+    }
+
     const now = Date.now();
     // Stamp uploadedBy and uploadedAt server-side — not trusted from client
     const stamped = args.attachments?.map((a) => ({
@@ -1015,11 +1091,31 @@ export const update = mutation({
         throw new Error('לא ניתן לצרף יותר מ-2 קבצים לאירוע');
       }
 
-      // Delete from storage any file present in the old list but absent from the new list
+      // Replace removed attachments with a cross-document reference check before
+      // physically deleting — prevents destroying a file still referenced by a task.
       const newIds = new Set(attachments.map((a) => a.storageId));
       for (const old of existing.attachments ?? []) {
         if (!newIds.has(old.storageId)) {
-          await ctx.storage.delete(old.storageId);
+          await safeDeleteStorageIfUnreferenced(ctx, old.storageId, {
+            eventId: id,
+          });
+        }
+      }
+
+      // Reject any *newly introduced* storageId already referenced by another
+      // document — retained references from this exact event are excluded.
+      const existingIds = new Set(
+        (existing.attachments ?? []).map((a) => a.storageId as string)
+      );
+      for (const att of attachments) {
+        if (!existingIds.has(att.storageId as string)) {
+          if (
+            await isStorageReferencedByOtherDocument(ctx, att.storageId, {
+              eventId: id,
+            })
+          ) {
+            throw new Error('לא ניתן לצרף קובץ זה');
+          }
         }
       }
 

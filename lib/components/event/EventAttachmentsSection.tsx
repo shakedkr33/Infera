@@ -17,8 +17,8 @@ import {
 } from 'react-native';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
-import type { EventAttachmentDraft } from '@/lib/types/event';
 import { rtl } from '@/lib/rtl';
+import type { EventAttachmentDraft } from '@/lib/types/event';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -80,6 +80,8 @@ function formatBytes(bytes: number): string {
 
 interface SavedFileRowProps {
   attachment: EventAttachmentDraft & { storageId: Id<'_storage'> };
+  taskId?: Id<'tasks'>;
+  eventId?: Id<'events'>;
   onReplace: () => void;
   onRemove: () => void;
   onOpenImage: (url: string) => void;
@@ -87,13 +89,24 @@ interface SavedFileRowProps {
 
 function SavedFileRow({
   attachment,
+  taskId,
+  eventId,
   onReplace,
   onRemove,
   onOpenImage,
 }: SavedFileRowProps): React.JSX.Element {
-  const url = useQuery(api.events.getAttachmentUrl, {
-    storageId: attachment.storageId,
-  });
+  // Use document-scoped queries: task-scoped when editing a task attachment,
+  // event-scoped when editing an event attachment. If neither ID is available
+  // (e.g. event edit not yet implemented), skip to avoid auth-only exposure.
+  const taskUrl = useQuery(
+    api.tasks.getTaskAttachmentUrl,
+    taskId ? { taskId, storageId: attachment.storageId } : 'skip'
+  );
+  const eventUrl = useQuery(
+    api.events.getEventAttachmentUrl,
+    eventId ? { eventId, storageId: attachment.storageId } : 'skip'
+  );
+  const url = taskId ? taskUrl : eventId ? eventUrl : undefined;
   const isImage = attachment.mimeType.startsWith('image/');
 
   const handleTap = (): void => {
@@ -235,11 +248,24 @@ function DraftFileRow({
 interface EventAttachmentsSectionProps {
   attachments: EventAttachmentDraft[];
   onChange: (attachments: EventAttachmentDraft[]) => void;
+  /**
+   * When editing an existing task's attachments, pass the task's Convex ID so
+   * SavedFileRow can use the document-scoped getTaskAttachmentUrl query instead
+   * of the deprecated auth-only query.
+   */
+  taskId?: Id<'tasks'>;
+  /**
+   * When editing an existing event's attachments, pass the event's Convex ID so
+   * SavedFileRow can use the document-scoped getEventAttachmentUrl query.
+   */
+  eventId?: Id<'events'>;
 }
 
 export function EventAttachmentsSection({
   attachments,
   onChange,
+  taskId,
+  eventId,
 }: EventAttachmentsSectionProps): React.JSX.Element {
   const [imageModalUrl, setImageModalUrl] = useState<string | null>(null);
 
@@ -395,6 +421,8 @@ export function EventAttachmentsSection({
               attachment={
                 att as EventAttachmentDraft & { storageId: Id<'_storage'> }
               }
+              taskId={taskId}
+              eventId={eventId}
               onReplace={() => openPicker(idx)}
               onRemove={() => removeAt(idx)}
               onOpenImage={(url) => setImageModalUrl(url)}

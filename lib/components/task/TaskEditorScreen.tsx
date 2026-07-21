@@ -1821,6 +1821,7 @@ export default function TaskEditorScreen({
               onChange={(attachments: EventAttachmentDraft[]) =>
                 updateDraft({ attachments })
               }
+              taskId={taskId ? (taskId as Id<'tasks'>) : undefined}
             />
           </View>
 

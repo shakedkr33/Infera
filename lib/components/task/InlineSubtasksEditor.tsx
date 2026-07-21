@@ -26,8 +26,8 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { uploadAttachmentDraftsForConvex } from '@/lib/attachmentUpload';
 import { AttachmentSourceSheet } from '@/lib/components/attachments/AttachmentSourceSheet';
-import type { EventAttachmentDraft } from '@/lib/types/event';
 import { rtl } from '@/lib/rtl';
+import type { EventAttachmentDraft } from '@/lib/types/event';
 
 const PRIMARY = '#36a9e2';
 
@@ -58,6 +58,7 @@ interface InlineSubtasksEditorProps {
 
 // ─── Attachment thumbnail ──────────────────────────────────────
 function InlineAttachmentPreview({
+  taskId,
   storageId,
   localUri,
   mimeType,
@@ -65,6 +66,7 @@ function InlineAttachmentPreview({
   originalName,
   onPress,
 }: {
+  taskId?: Id<'tasks'>;
   storageId?: string;
   localUri?: string;
   mimeType?: string;
@@ -73,9 +75,13 @@ function InlineAttachmentPreview({
   onPress?: (uri: string) => void;
 }) {
   const storageIdTyped = storageId as Id<'_storage'> | undefined;
+  // Use the task-scoped query when taskId is available (saved attachment on an
+  // existing task) so the server verifies both task access and the reference.
+  // Fall back to the auth-only query only when taskId is absent (pre-save
+  // upload preview during task creation — no document reference exists yet).
   const storageUrl = useQuery(
-    api.events.getAttachmentUrl,
-    storageIdTyped ? { storageId: storageIdTyped } : 'skip'
+    api.tasks.getTaskAttachmentUrl,
+    taskId && storageIdTyped ? { taskId, storageId: storageIdTyped } : 'skip'
   );
   const uri = localUri ?? storageUrl ?? undefined;
   const isImage = (mimeType ?? '').startsWith('image/');
@@ -344,6 +350,7 @@ export function InlineSubtasksEditor({
           {/* Attachment indicator */}
           {(storageId ?? subtask.attachment?.localUri) ? (
             <InlineAttachmentPreview
+              taskId={taskIdTyped}
               storageId={storageId}
               localUri={subtask.attachment?.localUri}
               mimeType={mimeType}
