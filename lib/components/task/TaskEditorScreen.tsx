@@ -23,6 +23,8 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { uploadAttachmentDraftsForConvex } from '@/lib/attachmentUpload';
 import { EventAttachmentsSection } from '@/lib/components/event/EventAttachmentsSection';
+import { TimeWheelPicker } from '@/lib/components/time/TimeWheelPicker';
+import { APP_IS_RTL, rtl } from '@/lib/rtl';
 import type { EventAttachmentDraft } from '@/lib/types/event';
 import type {
   PersistedTaskReminderType,
@@ -36,9 +38,9 @@ import type {
   TaskReminderUnit,
 } from '@/lib/types/task';
 import { TASK_CATEGORIES } from '@/lib/types/task';
-import { APP_IS_RTL, rtl } from '@/lib/rtl';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
+
 import { getHebrewDateInfo } from '@/lib/utils/hebrewDate';
 import { SubtasksSection } from './SubtasksSection';
 
@@ -216,6 +218,27 @@ type AssigneeOption = {
 
 function fmt2(value: number): string {
   return String(value).padStart(2, '0');
+}
+
+/**
+ * Parse a "HH:MM" string safely.
+ * Returns { hour, minute } integers or the fallback { hour: 9, minute: 0 }
+ * when the string is absent, malformed, or out of range.
+ * No NaN can escape this function.
+ */
+function parseTimeString(time: string | undefined): {
+  hour: number;
+  minute: number;
+} {
+  const FALLBACK = { hour: 9, minute: 0 };
+  if (!time) return FALLBACK;
+  const parts = time.split(':');
+  if (parts.length !== 2) return FALLBACK;
+  const h = Number.parseInt(parts[0] ?? '', 10);
+  const m = Number.parseInt(parts[1] ?? '', 10);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return FALLBACK;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return FALLBACK;
+  return { hour: h, minute: m };
 }
 
 function midnightOf(date: Date): number {
@@ -598,6 +621,10 @@ export default function TaskEditorScreen({
   const [timeError, setTimeError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
+  // Local picker draft — isolated from draft.selectedTime while the modal is open.
+  // Only applied to the form when the user presses "בחר" and validation passes.
+  const [pickerHour, setPickerHour] = useState(9);
+  const [pickerMinute, setPickerMinute] = useState(0);
   const [customReminderOpen, setCustomReminderOpen] = useState(false);
   const [customAmount, setCustomAmount] = useState(30);
   const [customUnit, setCustomUnit] = useState<TaskReminderUnit>('minutes');
@@ -991,6 +1018,34 @@ export default function TaskEditorScreen({
       selectedTime: hasTime ? selectedTime : undefined,
       reminders: [],
     });
+  };
+
+  // ── Time picker local draft handlers ──────────────────────────────────────
+  // Opening initializes local hour/minute from the saved draft value.
+  const handleOpenTimePicker = (): void => {
+    const parsed = parseTimeString(draft.selectedTime);
+    setPickerHour(parsed.hour);
+    setPickerMinute(parsed.minute);
+    setTimeError(null);
+    setTimePickerOpen(true);
+  };
+
+  // "בחר" validates and commits the local draft to the form — once.
+  const handleApplyTime = (): void => {
+    const newTime = `${fmt2(pickerHour)}:${fmt2(pickerMinute)}`;
+    const newTimestamp = timestampFromDateAndTime(selectedDate, newTime);
+    if (isToday(selectedDate) && newTimestamp < Date.now()) {
+      setTimeError('אי אפשר לבחור שעה שכבר עברה');
+      return;
+    }
+    setTimeError(null);
+    updateDraft({ selectedTime: newTime });
+    setTimePickerOpen(false);
+  };
+
+  // Backdrop tap or Android Back — discards local picker state silently.
+  const handleCloseTimePicker = (): void => {
+    setTimePickerOpen(false);
   };
 
   const hasReminder = (type: PersistedTaskReminderType): boolean =>
@@ -1557,7 +1612,7 @@ export default function TaskEditorScreen({
             {shouldShowTimePicker ? (
               <Pressable
                 style={styles.selectionRow}
-                onPress={() => setTimePickerOpen(true)}
+                onPress={handleOpenTimePicker}
                 accessible={true}
                 accessibilityRole="button"
                 accessibilityLabel="בחירת שעה"
@@ -1946,40 +2001,26 @@ export default function TaskEditorScreen({
         visible={timePickerOpen}
         transparent
         animationType="slide"
-        onRequestClose={() => setTimePickerOpen(false)}
+        onRequestClose={handleCloseTimePicker}
       >
-        <PickerSheet onClose={() => setTimePickerOpen(false)}>
+        <PickerSheet
+          onClose={handleCloseTimePicker}
+          onConfirm={handleApplyTime}
+        >
           <Text style={styles.sheetTitle}>בחירת שעה</Text>
-          <DateTimePicker
-            value={
-              new Date(
-                timestampFromDateAndTime(
-                  selectedDate,
-                  draft.selectedTime ?? '09:00'
-                )
-              )
-            }
-            mode="time"
-            is24Hour={true}
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            themeVariant="light"
-            textColor="#111827"
-            onChange={(_, selected) => {
-              if (Platform.OS === 'android') setTimePickerOpen(false);
-              if (!selected) return;
-              const selectedTime = dateToTimeString(selected);
-              const selectedTimestamp = timestampFromDateAndTime(
-                selectedDate,
-                selectedTime
-              );
-              if (isToday(selectedDate) && selectedTimestamp < Date.now()) {
-                setTimeError('אי אפשר לבחור שעה שכבר עברה');
-                return;
-              }
-              setTimeError(null);
-              updateDraft({ selectedTime });
-            }}
+          <TimeWheelPicker
+            hour={pickerHour}
+            minute={pickerMinute}
+            onHourChange={setPickerHour}
+            onMinuteChange={setPickerMinute}
           />
+          {timeError ? (
+            <Text
+              style={[styles.errorText, { textAlign: 'center', marginTop: 8 }]}
+            >
+              {timeError}
+            </Text>
+          ) : null}
         </PickerSheet>
       </Modal>
 
@@ -2198,26 +2239,26 @@ function Chip({
 function PickerSheet({
   children,
   onClose,
+  onConfirm,
 }: {
   children: React.ReactNode;
   onClose: () => void;
+  onConfirm?: () => void;
 }): React.JSX.Element {
   return (
     <Pressable style={styles.modalOverlay} onPress={onClose}>
       <Pressable style={styles.sheet} onPress={() => undefined}>
         <View style={styles.sheetHandle} />
         {children}
-        {Platform.OS === 'ios' ? (
-          <Pressable
-            style={styles.sheetDoneButton}
-            onPress={onClose}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="אישור"
-          >
-            <Text style={styles.sheetDoneText}>בחר</Text>
-          </Pressable>
-        ) : null}
+        <Pressable
+          style={styles.sheetDoneButton}
+          onPress={onConfirm ?? onClose}
+          accessible={true}
+          accessibilityRole="button"
+          accessibilityLabel="בחר"
+        >
+          <Text style={styles.sheetDoneText}>בחר</Text>
+        </Pressable>
       </Pressable>
     </Pressable>
   );

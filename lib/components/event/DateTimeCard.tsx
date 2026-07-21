@@ -1,6 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Platform,
   Pressable,
@@ -9,6 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { TimeWheelPicker } from '@/lib/components/time/TimeWheelPicker';
 import { rtl } from '@/lib/rtl';
 import {
   getHebrewDateInfo,
@@ -304,6 +305,55 @@ export function applyDuration(
   };
 }
 
+/**
+ * Shift the end datetime to preserve the current event duration when the
+ * start changes.  Duration is computed from prevStart → prevEnd.
+ * Falls back to 60 minutes when the computed duration is zero or negative
+ * (e.g. a brand-new event whose end hasn't been set yet).
+ */
+export function shiftEndToPreserveDuration({
+  prevStartDate,
+  prevStartTime,
+  prevEndDate,
+  prevEndTime,
+  nextStartDate,
+  nextStartTime,
+}: {
+  prevStartDate: number;
+  prevStartTime: string;
+  prevEndDate: number;
+  prevEndTime: string;
+  nextStartDate: number;
+  nextStartTime: string;
+}): { endDate: number; endTime: string } {
+  const [psh, psm] = prevStartTime.split(':').map(Number);
+  const prevStartTs = new Date(prevStartDate);
+  prevStartTs.setHours(psh ?? 0, psm ?? 0, 0, 0);
+
+  const [peh, pem] = prevEndTime.split(':').map(Number);
+  const prevEndTs = new Date(prevEndDate);
+  prevEndTs.setHours(peh ?? 0, pem ?? 0, 0, 0);
+
+  const durationMs = prevEndTs.getTime() - prevStartTs.getTime();
+  // Fall back to 60 minutes for invalid/zero durations.
+  const safeDurationMs = durationMs > 0 ? durationMs : 60 * 60 * 1000;
+
+  const [nsh, nsm] = nextStartTime.split(':').map(Number);
+  const nextStartTs = new Date(nextStartDate);
+  nextStartTs.setHours(nsh ?? 0, nsm ?? 0, 0, 0);
+
+  const nextEndTs = new Date(nextStartTs.getTime() + safeDurationMs);
+
+  return {
+    endDate: new Date(
+      nextEndTs.getFullYear(),
+      nextEndTs.getMonth(),
+      nextEndTs.getDate()
+    ).getTime(),
+    endTime: `${fmt2(nextEndTs.getHours())}:${fmt2(nextEndTs.getMinutes())}`,
+  };
+}
+
 // ─── Local helpers ────────────────────────────────────────────────────────────
 
 function timeStrToDate(timeStr: string | undefined, baseDateMs: number): Date {
@@ -315,10 +365,6 @@ function timeStrToDate(timeStr: string | undefined, baseDateMs: number): Date {
     d.setHours(9, 0, 0, 0);
   }
   return d;
-}
-
-function dateToTimeStr(d: Date): string {
-  return `${fmt2(d.getHours())}:${fmt2(d.getMinutes())}`;
 }
 
 function midnightOf(d: Date): number {
@@ -365,6 +411,15 @@ export function DateTimeCard({
 }: DateTimeCardProps): React.JSX.Element {
   const [openPicker, setOpenPicker] = useState<OpenPicker>(null);
 
+  // Mutable refs track the most-recently-intended time strings so that
+  // rapid wheel callbacks (hour then minute, or vice versa) before a
+  // re-render can compose h+m correctly without reading stale props.
+  const startTimeRef = useRef(startTime ?? '09:00');
+  const endTimeRef = useRef(endTime ?? '10:00');
+  // Sync refs with props on every render (picks up parent state updates).
+  startTimeRef.current = startTime ?? startTimeRef.current;
+  endTimeRef.current = endTime ?? endTimeRef.current;
+
   const closePicker = (): void => setOpenPicker(null);
   const togglePicker = (picker: OpenPicker): void =>
     setOpenPicker((prev) => (prev === picker ? null : picker));
@@ -380,12 +435,12 @@ export function DateTimeCard({
   })();
 
   // ── Day chips ─────────────────────────────────────────────────────────────
-// Ordered so that היום is the first (physical RIGHT) chip in RTL layout.
-const DAY_CHIPS = [
-  { label: 'היום', daysFromNow: 0 },
-  { label: 'מחר', daysFromNow: 1 },
-  { label: 'מחרתיים', daysFromNow: 2 },
-] as const;
+  // Ordered so that היום is the first (physical RIGHT) chip in RTL layout.
+  const DAY_CHIPS = [
+    { label: 'היום', daysFromNow: 0 },
+    { label: 'מחר', daysFromNow: 1 },
+    { label: 'מחרתיים', daysFromNow: 2 },
+  ] as const;
 
   const chipMidnight = (daysFromNow: number): number => {
     const base = new Date();
@@ -407,17 +462,33 @@ const DAY_CHIPS = [
     if (Platform.OS === 'android') closePicker();
     onChange({ startDate: midnightOf(selected) });
   };
-  const handleStartTimeChange = (selected: Date): void => {
-    if (Platform.OS === 'android') closePicker();
-    onChange({ startTime: dateToTimeStr(selected) });
+  const handleStartHourChange = (h: number): void => {
+    const [, m] = startTimeRef.current.split(':').map(Number);
+    const newTime = `${fmt2(h)}:${fmt2(m ?? 0)}`;
+    startTimeRef.current = newTime;
+    onChange({ startTime: newTime });
+  };
+  const handleStartMinuteChange = (m: number): void => {
+    const [h] = startTimeRef.current.split(':').map(Number);
+    const newTime = `${fmt2(h ?? 9)}:${fmt2(m)}`;
+    startTimeRef.current = newTime;
+    onChange({ startTime: newTime });
   };
   const handleEndDateChange = (selected: Date): void => {
     if (Platform.OS === 'android') closePicker();
     onChange({ endDate: midnightOf(selected) });
   };
-  const handleEndTimeChange = (selected: Date): void => {
-    if (Platform.OS === 'android') closePicker();
-    onChange({ endTime: dateToTimeStr(selected) });
+  const handleEndHourChange = (h: number): void => {
+    const [, m] = endTimeRef.current.split(':').map(Number);
+    const newTime = `${fmt2(h)}:${fmt2(m ?? 0)}`;
+    endTimeRef.current = newTime;
+    onChange({ endTime: newTime });
+  };
+  const handleEndMinuteChange = (m: number): void => {
+    const [h] = endTimeRef.current.split(':').map(Number);
+    const newTime = `${fmt2(h ?? 10)}:${fmt2(m)}`;
+    endTimeRef.current = newTime;
+    onChange({ endTime: newTime });
   };
 
   // ── Shared "start date" row chips (reused in allDay and timed modes) ──────
@@ -693,31 +764,24 @@ const DAY_CHIPS = [
         </View>
       )}
 
-      {/* Spinner: start time — only meaningful in timed mode */}
+      {/* Wheel: start time — only meaningful in timed mode */}
       {openPicker === 'startTime' && !isAllDay && (
         <View style={s.spinnerWrapper}>
-          <DateTimePicker
-            value={timeStrToDate(startTime, startDate)}
-            mode="time"
-            is24Hour={true}
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            themeVariant="light"
-            textColor="#111827"
-            onChange={(_, selected) => {
-              if (selected) handleStartTimeChange(selected);
-            }}
+          <TimeWheelPicker
+            hour={timeStrToDate(startTime, startDate).getHours()}
+            minute={timeStrToDate(startTime, startDate).getMinutes()}
+            onHourChange={handleStartHourChange}
+            onMinuteChange={handleStartMinuteChange}
           />
-          {Platform.OS === 'ios' && (
-            <Pressable
-              style={s.pickerConfirmBtn}
-              onPress={closePicker}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="אישור"
-            >
-              <Text style={s.pickerConfirmText}>בחר</Text>
-            </Pressable>
-          )}
+          <Pressable
+            style={s.pickerConfirmBtn}
+            onPress={closePicker}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="אישור"
+          >
+            <Text style={s.pickerConfirmText}>בחר</Text>
+          </Pressable>
         </View>
       )}
 
@@ -765,31 +829,24 @@ const DAY_CHIPS = [
         </View>
       )}
 
-      {/* Spinner: end time — only in timed mode */}
+      {/* Wheel: end time — only in timed mode */}
       {openPicker === 'endTime' && !isAllDay && (
         <View style={s.spinnerWrapper}>
-          <DateTimePicker
-            value={timeStrToDate(endTime, endDate)}
-            mode="time"
-            is24Hour={true}
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            themeVariant="light"
-            textColor="#111827"
-            onChange={(_, selected) => {
-              if (selected) handleEndTimeChange(selected);
-            }}
+          <TimeWheelPicker
+            hour={timeStrToDate(endTime, endDate).getHours()}
+            minute={timeStrToDate(endTime, endDate).getMinutes()}
+            onHourChange={handleEndHourChange}
+            onMinuteChange={handleEndMinuteChange}
           />
-          {Platform.OS === 'ios' && (
-            <Pressable
-              style={s.pickerConfirmBtn}
-              onPress={closePicker}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="אישור"
-            >
-              <Text style={s.pickerConfirmText}>בחר</Text>
-            </Pressable>
-          )}
+          <Pressable
+            style={s.pickerConfirmBtn}
+            onPress={closePicker}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="אישור"
+          >
+            <Text style={s.pickerConfirmText}>בחר</Text>
+          </Pressable>
         </View>
       )}
     </View>

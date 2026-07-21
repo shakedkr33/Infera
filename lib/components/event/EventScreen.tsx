@@ -29,6 +29,7 @@ import {
   DateTimeCard,
   fmt2,
   roundToNextHour,
+  shiftEndToPreserveDuration,
 } from '@/lib/components/event/DateTimeCard';
 import { EventAttachmentsSection } from '@/lib/components/event/EventAttachmentsSection';
 // applyDuration is used in makeEmptyEvent to set a sensible default end time
@@ -70,15 +71,16 @@ function createImportantItemId(): string {
  */
 function makeEmptyEvent(selectedDateMs?: number): EventData {
   const now = new Date();
-  const startD = roundToNextHour(now); // e.g. 22:08 → 23:00
+  const startD = roundToNextHour(now); // e.g. 22:08 → 23:00, 23:30 → 00:00 next day
 
-  // Base date: use selectedDate if provided, otherwise today midnight
-  const baseMidnight = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate()
+  // Use startD's calendar date so midnight rollovers advance to the correct day.
+  // When selectedDate is provided (calendar day tap), honour it instead.
+  const startDMidnight = new Date(
+    startD.getFullYear(),
+    startD.getMonth(),
+    startD.getDate()
   ).getTime();
-  const startDate = selectedDateMs ?? baseMidnight;
+  const startDate = selectedDateMs ?? startDMidnight;
 
   const startTime = `${fmt2(startD.getHours())}:00`;
 
@@ -544,9 +546,7 @@ export default function EventScreen({
                 endTime={event.endTime}
                 isAllDay={event.isAllDay}
                 onChange={(updates) => {
-                  const patch: Partial<EventData> = {};
-
-                  // ── Track user intent on end fields ──────────────────────
+                  // ── Track user intent on end fields (write-only refs) ──
                   // Only mark as "manually edited" when the user explicitly
                   // changes the end date/time independently (not when a day-chip
                   // sets both startDate + endDate simultaneously).
@@ -563,65 +563,68 @@ export default function EventScreen({
                     endTimeUserEdited.current = true;
                   }
 
-                  // Apply explicit end values from the update
-                  if (updates.endDate !== undefined)
-                    patch.endDate = updates.endDate;
-                  if (updates.endTime !== undefined)
-                    patch.endTime = updates.endTime;
+                  // ── All calculations use `prev` (the latest committed state)
+                  // so that rapid wheel callbacks compose sequentially instead
+                  // of all reading the same render-captured `event` snapshot.
+                  setIsDirty(true);
+                  setEvent((prev) => {
+                    const patch: Partial<EventData> = {};
 
-                  // ── Auto-fill end time (+1 h) when start time changes ──
-                  if (updates.startTime !== undefined) {
-                    patch.startTime = updates.startTime;
-                    if (
-                      !endTimeUserEdited.current &&
-                      updates.endTime === undefined
-                    ) {
-                      const startDateForCalc = updates.startDate ?? event.date;
-                      const { endDate: autoEndDate, endTime: autoEndTime } =
-                        applyDuration(startDateForCalc, updates.startTime, 60);
-                      patch.endTime = autoEndTime;
-                      if (!endDateUserEdited.current) {
-                        patch.endDate = autoEndDate;
+                    // Apply explicit end values from the update
+                    if (updates.endDate !== undefined)
+                      patch.endDate = updates.endDate;
+                    if (updates.endTime !== undefined)
+                      patch.endTime = updates.endTime;
+
+                    // ── Preserve duration when start TIME changes ────────
+                    // Always shift end by the same delta.
+                    if (updates.startTime !== undefined) {
+                      patch.startTime = updates.startTime;
+                      if (updates.endTime === undefined) {
+                        const { endDate: newEndDate, endTime: newEndTime } =
+                          shiftEndToPreserveDuration({
+                            prevStartDate: prev.date,
+                            prevStartTime: prev.startTime ?? '09:00',
+                            prevEndDate: prev.endDate ?? prev.date,
+                            prevEndTime: prev.endTime ?? '10:00',
+                            nextStartDate: updates.startDate ?? prev.date,
+                            nextStartTime: updates.startTime,
+                          });
+                        patch.endTime = newEndTime;
+                        patch.endDate = newEndDate;
                       }
                     }
-                  }
 
-                  // ── Auto-fill end date when start date changes ─────────
-                  if (updates.startDate !== undefined) {
-                    patch.date = updates.startDate;
-                    if (
-                      !endDateUserEdited.current &&
-                      updates.endDate === undefined
-                    ) {
-                      if (!endTimeUserEdited.current && event.startTime) {
-                        // Both end date and end time are auto-generated →
-                        // recalculate fully so cross-midnight stays correct.
-                        const timeToUse = patch.startTime ?? event.startTime;
-                        const { endDate: autoEndDate, endTime: autoEndTime } =
-                          applyDuration(updates.startDate, timeToUse, 60);
-                        patch.endDate = autoEndDate;
-                        // Only set endTime if the startTime block didn't already
-                        if (patch.endTime === undefined)
-                          patch.endTime = autoEndTime;
+                    // ── Preserve duration when start DATE changes ────────
+                    // Slide end date by the same number of days as start moved,
+                    // keeping time strings unchanged (overnight events stay overnight).
+                    if (updates.startDate !== undefined) {
+                      patch.date = updates.startDate;
+                      if (
+                        updates.endDate === undefined &&
+                        patch.endDate === undefined
+                      ) {
+                        const prevEndDate = prev.endDate ?? prev.date;
+                        const dateDelta = updates.startDate - prev.date;
+                        patch.endDate = prevEndDate + dateDelta;
+                      }
+                    }
+
+                    if (updates.isAllDay !== undefined) {
+                      patch.isAllDay = updates.isAllDay;
+                      if (updates.isAllDay) {
+                        patch.remindersEnabled = false;
+                        patch.reminders = [];
                       } else {
-                        // End time was user-set → just slide end date to match
-                        patch.endDate = updates.startDate;
+                        patch.remindersEnabled = true;
+                        patch.reminders = [makeReminder('hour_before')];
                       }
                     }
-                  }
 
-                  if (updates.isAllDay !== undefined) {
-                    patch.isAllDay = updates.isAllDay;
-                    if (updates.isAllDay) {
-                      patch.remindersEnabled = false;
-                      patch.reminders = [];
-                    } else {
-                      patch.remindersEnabled = true;
-                      patch.reminders = [makeReminder('hour_before')];
-                    }
-                  }
-
-                  updateEvent(patch);
+                    const updated = { ...prev, ...patch };
+                    autosave(updated);
+                    return updated;
+                  });
                 }}
               />
 
