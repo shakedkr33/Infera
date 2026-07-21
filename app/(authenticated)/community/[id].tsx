@@ -16,6 +16,8 @@ import {
   Animated,
   FlatList,
   type GestureResponderEvent,
+  Image,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -47,6 +49,7 @@ import {
 import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
+
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -107,9 +110,34 @@ interface EventDoc {
 interface TaskDoc {
   _id: Id<'tasks'>;
   title: string;
+  description?: string;
   dueDate?: number;
+  dueAt?: number;
+  hasTime?: boolean;
   completed: boolean;
   completedAt?: number;
+  createdBy?: Id<'users'>;
+  communityId?: Id<'communities'>;
+  sourceType?: string;
+  reminderType?: string;
+  customReminderAt?: number;
+  reminders?: Array<{
+    id: string;
+    type: string;
+    customAmount?: number;
+    customUnit?: string;
+    customReminderAt?: number;
+    label?: string;
+  }>;
+  attachments?: Array<{
+    storageId: Id<'_storage'>;
+    originalName: string;
+    displayName: string;
+    mimeType: string;
+    sizeBytes: number;
+    uploadedAt: number;
+    uploadedBy: Id<'users'>;
+  }>;
 }
 
 type CommunityActivityType =
@@ -222,6 +250,54 @@ function formatDueDate(ts: number): string {
     day: 'numeric',
     month: 'short',
   });
+}
+
+function fmt2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+/** Format a dueAt timestamp as "HH:MM". Used only when hasTime is true. */
+function formatDueTime(dueAt: number): string {
+  const d = new Date(dueAt);
+  return `${fmt2(d.getHours())}:${fmt2(d.getMinutes())}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatReminderShortLabel(
+  reminderType: string | undefined,
+  customReminderAt: number | undefined
+): string | null {
+  if (!reminderType || reminderType === 'none') return null;
+  if (reminderType === 'morning') return 'בבוקר';
+  if (reminderType === 'evening') return 'בערב';
+  if (reminderType === 'at_time') return 'בזמן';
+  if (reminderType === 'hour_before') return 'שעה לפני';
+  if (reminderType === 'custom' && customReminderAt) {
+    const d = new Date(customReminderAt);
+    return `${d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })} ${d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })}`;
+  }
+  return null;
+}
+
+function formatReminderFullLabel(
+  reminderType: string | undefined,
+  customReminderAt: number | undefined
+): string | null {
+  if (!reminderType || reminderType === 'none') return null;
+  if (reminderType === 'morning') return 'התראה בבוקר';
+  if (reminderType === 'evening') return 'התראה בערב';
+  if (reminderType === 'at_time') return 'התראה בזמן';
+  if (reminderType === 'hour_before') return 'התראה שעה לפני';
+  if (reminderType === 'custom' && customReminderAt) {
+    const d = new Date(customReminderAt);
+    return `התראה ב-${d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })} ${d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })}`;
+  }
+  return null;
 }
 
 function getActivityIcon(type: CommunityActivityType): IoniconName {
@@ -1196,65 +1272,384 @@ function SearchModal({ visible, value, onChange, onClose }: SearchModalProps) {
   );
 }
 
-// ─── ReminderRowAll (כדאי לזכור section in הכל tab) ──────────────────────────
+// ─── ReminderAttachmentRow — isolates useQuery hook per attachment ─────────────
 
-interface ReminderRowAllProps {
+interface ReminderAttachmentRowProps {
+  taskId: Id<'tasks'>;
+  storageId: Id<'_storage'>;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+function ReminderAttachmentRow({
+  taskId,
+  storageId,
+  displayName,
+  mimeType,
+  sizeBytes,
+}: ReminderAttachmentRowProps): React.JSX.Element {
+  const url = useQuery(api.tasks.getTaskAttachmentUrl, { taskId, storageId });
+  const [imageError, setImageError] = useState(false);
+  const isImage = mimeType.startsWith('image/');
+
+  const handleTap = useCallback((): void => {
+    if (!url) return;
+    Linking.openURL(url).catch(() => {
+      Alert.alert('שגיאה', 'לא ניתן לפתוח את הקובץ');
+    });
+  }, [url]);
+
+  return (
+    <Pressable
+      style={styles.reminderAttachRow}
+      onPress={handleTap}
+      disabled={!url}
+      accessible
+      accessibilityRole={isImage ? 'imagebutton' : 'link'}
+      accessibilityLabel={`פתח ${isImage ? 'תמונה' : 'קובץ'}: ${displayName}`}
+    >
+      {isImage && url && !imageError ? (
+        <Image
+          source={{ uri: url }}
+          style={styles.reminderAttachThumb}
+          resizeMode="cover"
+          onError={() => setImageError(true)}
+          accessible={false}
+        />
+      ) : (
+        <View style={styles.reminderAttachIconBox}>
+          <Ionicons
+            name={isImage ? 'image-outline' : 'document-outline'}
+            size={20}
+            color="#6b7280"
+          />
+        </View>
+      )}
+      <View style={styles.reminderAttachMeta}>
+        <Text style={styles.reminderAttachName} numberOfLines={2}>
+          {displayName}
+        </Text>
+        {sizeBytes > 0 ? (
+          <Text style={styles.reminderAttachSize}>
+            {formatBytes(sizeBytes)}
+          </Text>
+        ) : null}
+      </View>
+      {url ? (
+        <Ionicons name="chevron-back" size={14} color="#9ca3af" />
+      ) : (
+        <ActivityIndicator size="small" color={PRIMARY} />
+      )}
+    </Pressable>
+  );
+}
+
+// ─── CommunityReminderRow — expandable reminder card ──────────────────────────
+
+interface CommunityReminderRowProps {
   task: TaskDoc;
   onToggle: (id: Id<'tasks'>) => void;
   onHide?: (id: string) => void;
+  isExpanded: boolean;
+  onToggleExpand: (id: string) => void;
+  currentUserId?: Id<'users'>;
+  myRole?: 'owner' | 'admin' | 'member';
 }
 
-function ReminderRowAll({ task, onToggle, onHide }: ReminderRowAllProps) {
+function CommunityReminderRow({
+  task,
+  onToggle,
+  onHide,
+  isExpanded,
+  onToggleExpand,
+  currentUserId,
+  myRole,
+}: CommunityReminderRowProps): React.JSX.Element {
+  const rowRouter = useRouter();
+  const removeTask = useMutation(api.tasks.remove);
+  const [deleteDialogVisible, setDeleteDialogVisible] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const hasDescription = !!task.description;
+  const hasAttachments = (task.attachments?.length ?? 0) > 0;
+  const hasReminderDetails =
+    (!!task.reminderType && task.reminderType !== 'none') ||
+    (task.reminders?.length ?? 0) > 0;
+
+  const canManage =
+    currentUserId !== undefined &&
+    (task.createdBy === currentUserId ||
+      myRole === 'owner' ||
+      myRole === 'admin');
+
+  const hasExpandableContent =
+    hasDescription || hasAttachments || hasReminderDetails || canManage;
+
+  const shortLabel = formatReminderShortLabel(
+    task.reminderType,
+    task.customReminderAt
+  );
+
+  const handleDeleteConfirm = useCallback(async () => {
+    setDeleteDialogVisible(false);
+    setDeleting(true);
+    try {
+      await removeTask({ id: task._id });
+    } catch (e) {
+      setDeleting(false);
+      const msg = e instanceof Error ? e.message : 'לא ניתן למחוק את התזכורת';
+      Alert.alert('שגיאה', msg);
+    }
+  }, [task._id, removeTask]);
+
   return (
-    <Pressable
-      style={styles.reminderRow}
-      onPress={() => onToggle(task._id)}
-      accessible
-      accessibilityRole="checkbox"
-      accessibilityLabel={task.title}
-      accessibilityState={{ checked: task.completed }}
-    >
-      {/* Checkbox — square, right side (first element in RTL row) */}
+    <>
       <View
         style={[
-          styles.reminderCheckbox,
-          task.completed && styles.reminderCheckboxDone,
+          styles.reminderRow,
+          isExpanded && styles.reminderRowExpanded,
+          deleting && { opacity: 0.5 },
         ]}
       >
-        {task.completed && <Ionicons name="checkmark" size={13} color="#fff" />}
+        {/* ── Main summary row (always visible) */}
+        <View style={styles.reminderMainRow}>
+          {/* Checkbox — own TouchableOpacity so it doesn't bubble to expand area */}
+          <TouchableOpacity
+            onPress={() => onToggle(task._id)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessible
+            accessibilityRole="checkbox"
+            accessibilityLabel={task.completed ? 'סמן כלא טופל' : 'סמן כטופל'}
+            accessibilityState={{ checked: task.completed }}
+          >
+            <View
+              style={[
+                styles.reminderCheckbox,
+                task.completed && styles.reminderCheckboxDone,
+              ]}
+            >
+              {task.completed && (
+                <Ionicons name="checkmark" size={13} color="#fff" />
+              )}
+            </View>
+          </TouchableOpacity>
+
+          {/* Title + Description — tap expands/collapses */}
+          <Pressable
+            style={styles.reminderTextBlock}
+            onPress={() =>
+              hasExpandableContent && onToggleExpand(task._id as string)
+            }
+            accessible={hasExpandableContent}
+            accessibilityRole={hasExpandableContent ? 'button' : 'text'}
+            accessibilityLabel={
+              isExpanded ? 'הסתרת פרטי התזכורת' : 'הצגת פרטי התזכורת'
+            }
+          >
+            <Text
+              style={[
+                styles.reminderTitle,
+                task.completed && styles.reminderTitleDone,
+              ]}
+              numberOfLines={isExpanded ? undefined : 2}
+            >
+              {task.title}
+            </Text>
+            {hasDescription && (
+              <Text
+                style={[
+                  styles.reminderDescriptionText,
+                  task.completed && styles.reminderTitleDone,
+                ]}
+                numberOfLines={isExpanded ? undefined : 2}
+              >
+                {task.description}
+              </Text>
+            )}
+            {/* Compact reminder label — collapsed only */}
+            {!isExpanded && shortLabel ? (
+              <Text style={styles.reminderShortLabel}>🔔 {shortLabel}</Text>
+            ) : null}
+          </Pressable>
+
+          {/* End column: date/completedAt/hide + chevron */}
+          <View style={styles.reminderEndCol}>
+            {task.completed && onHide ? (
+              <TouchableOpacity
+                onPress={() => onHide(task._id as string)}
+                style={styles.reminderHideBtn}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="הסתר"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={16} color="#9ca3af" />
+              </TouchableOpacity>
+            ) : task.completed && task.completedAt !== undefined ? (
+              <Text style={styles.reminderDue}>
+                {`טופל ב-${new Date(task.completedAt).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })}`}
+              </Text>
+            ) : task.dueDate !== undefined ? (
+              <Text style={styles.reminderDue}>
+                {formatDueDate(task.dueDate)}
+                {task.hasTime && task.dueAt !== undefined
+                  ? ` · ${formatDueTime(task.dueAt)}`
+                  : ''}
+              </Text>
+            ) : null}
+
+            {hasExpandableContent ? (
+              <TouchableOpacity
+                onPress={() => onToggleExpand(task._id as string)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isExpanded ? 'הסתרת פרטי התזכורת' : 'הצגת פרטי התזכורת'
+                }
+              >
+                <Ionicons
+                  name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={16}
+                  color="#9ca3af"
+                />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </View>
+
+        {/* ── Expanded content (conditionally mounted — attachment queries live here) */}
+        {isExpanded ? (
+          <View style={styles.reminderExpandedSection}>
+            <View style={styles.reminderExpandedDivider} />
+
+            {/* Due date + time row (expanded only) */}
+            {task.dueDate !== undefined ? (
+              <View style={styles.reminderExpandedMeta}>
+                <View style={styles.reminderExpandedMetaRow}>
+                  <Ionicons
+                    name="calendar-outline"
+                    size={14}
+                    color="#6b7280"
+                  />
+                  <Text style={styles.reminderExpandedMetaText}>
+                    {formatDueDate(task.dueDate)}
+                    {task.hasTime && task.dueAt !== undefined
+                      ? ` · ${formatDueTime(task.dueAt)}`
+                      : ''}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+
+            {/* Detailed reminder schedule */}
+            {hasReminderDetails ? (
+              <View style={styles.reminderExpandedMeta}>
+                {task.reminderType && task.reminderType !== 'none' ? (
+                  <View style={styles.reminderExpandedMetaRow}>
+                    <Ionicons
+                      name="notifications-outline"
+                      size={14}
+                      color="#6b7280"
+                    />
+                    <Text style={styles.reminderExpandedMetaText}>
+                      {formatReminderFullLabel(
+                        task.reminderType,
+                        task.customReminderAt
+                      )}
+                    </Text>
+                  </View>
+                ) : null}
+                {task.reminders && task.reminders.length > 0
+                  ? task.reminders.map((r) => {
+                      const label =
+                        r.label ??
+                        formatReminderFullLabel(r.type, r.customReminderAt) ??
+                        r.type;
+                      return (
+                        <View key={r.id} style={styles.reminderExpandedMetaRow}>
+                          <Ionicons
+                            name="alarm-outline"
+                            size={14}
+                            color="#6b7280"
+                          />
+                          <Text style={styles.reminderExpandedMetaText}>
+                            {label}
+                          </Text>
+                        </View>
+                      );
+                    })
+                  : null}
+              </View>
+            ) : null}
+
+            {/* Attachments */}
+            {hasAttachments
+              ? (task.attachments ?? []).map((a) => (
+                  <ReminderAttachmentRow
+                    key={a.storageId as string}
+                    taskId={task._id}
+                    storageId={a.storageId}
+                    displayName={a.displayName}
+                    mimeType={a.mimeType}
+                    sizeBytes={a.sizeBytes}
+                  />
+                ))
+              : null}
+
+            {/* Management actions */}
+            {canManage ? (
+              <View style={styles.reminderExpandedActions}>
+                <TouchableOpacity
+                  onPress={() =>
+                    rowRouter.push({
+                      pathname: '/(authenticated)/community-reminder/edit/[id]',
+                      params: {
+                        id: task._id as string,
+                        returnCommunityId: task.communityId as string,
+                      },
+                    } as Parameters<typeof rowRouter.push>[0])
+                  }
+                  style={styles.reminderActionBtn}
+                  accessible
+                  accessibilityRole="button"
+                  accessibilityLabel="עריכת תזכורת"
+                >
+                  <Ionicons name="create-outline" size={16} color={PRIMARY} />
+                  <Text style={styles.reminderActionText}>עריכה</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setDeleteDialogVisible(true)}
+                  style={styles.reminderActionBtn}
+                  accessible
+                  accessibilityRole="button"
+                  accessibilityLabel="מחיקת תזכורת"
+                >
+                  <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                  <Text
+                    style={[styles.reminderActionText, { color: '#ef4444' }]}
+                  >
+                    מחיקה
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
-      {/* Title */}
-      <Text
-        style={[
-          styles.reminderTitle,
-          task.completed && styles.reminderTitleDone,
-        ]}
-        numberOfLines={2}
-      >
-        {task.title}
-      </Text>
-
-      {/* Left side: X button (when completed + onHide provided), completedAt date, or dueDate */}
-      {task.completed && onHide ? (
-        <TouchableOpacity
-          onPress={() => onHide(task._id)}
-          style={styles.reminderHideBtn}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="הסתר"
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="close" size={16} color="#9ca3af" />
-        </TouchableOpacity>
-      ) : task.completed && task.completedAt !== undefined ? (
-        <Text style={styles.reminderDue}>
-          {`טופל ב-${new Date(task.completedAt).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })}`}
-        </Text>
-      ) : task.dueDate !== undefined ? (
-        <Text style={styles.reminderDue}>{formatDueDate(task.dueDate)}</Text>
-      ) : null}
-    </Pressable>
+      <AppConfirmationDialog
+        visible={deleteDialogVisible}
+        title="מחיקת תזכורת"
+        message="האם את בטוחה שתרצי למחוק את התזכורת? פעולה זו אינה ניתנת לביטול."
+        confirmLabel="מחיקה"
+        cancelLabel="ביטול"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteDialogVisible(false)}
+        confirmDestructive
+      />
+    </>
   );
 }
 
@@ -1366,17 +1761,20 @@ function ActivityList({
 interface TabAllProps {
   communityId: Id<'communities'>;
   rsvpMap: Record<string, RsvpStatus>;
-  onToggleTask: (id: Id<'tasks'>) => void;
   onSeeMoreEvents: () => void;
   onSeeMoreReminders: () => void;
   onOpenEventDetails: (eventId: Id<'events'>) => void;
   // Persisted state lifted to parent so it survives tab switches
   hiddenReminderIds: Set<string>;
   setHiddenReminderIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  localCompletedIds: Set<string>;
-  setLocalCompletedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  /** Bidirectional optimistic overrides: true = personally completed, false = personally open. */
+  completionOverrides: Map<string, boolean>;
+  setCompletionOverrides: React.Dispatch<
+    React.SetStateAction<Map<string, boolean>>
+  >;
   localTaskCache: Map<string, TaskDoc>;
   setLocalTaskCache: React.Dispatch<React.SetStateAction<Map<string, TaskDoc>>>;
+  onToggleTask: (id: Id<'tasks'>) => Promise<unknown>;
   isRemindersOpen: boolean;
   setIsRemindersOpen: React.Dispatch<React.SetStateAction<boolean>>;
   currentUserId?: Id<'users'>;
@@ -1392,8 +1790,8 @@ function TabAll({
   onOpenEventDetails,
   hiddenReminderIds,
   setHiddenReminderIds,
-  localCompletedIds,
-  setLocalCompletedIds,
+  completionOverrides,
+  setCompletionOverrides,
   localTaskCache,
   setLocalTaskCache,
   isRemindersOpen,
@@ -1455,7 +1853,7 @@ function TabAll({
   const isLoadingReminders = remindersPage === undefined;
   const isLoadingActivityPreview = activityPreview === undefined;
 
-  // hiddenReminderIds, localCompletedIds, localTaskCache come from parent props
+  // hiddenReminderIds, completionOverrides, localTaskCache come from parent props
   // so they survive tab switches
 
   // Pending move state: items in the 600ms visual transition (open → completed)
@@ -1463,6 +1861,11 @@ function TabAll({
   const [pendingSnapshots, setPendingSnapshots] = useState<
     Map<string, TaskDoc>
   >(new Map());
+
+  // Expand/collapse state for reminder rows — only one open at a time
+  const [expandedReminderId, setExpandedReminderId] = useState<string | null>(
+    null
+  );
 
   const activeEvents = events.filter((ev) => ev.status !== 'cancelled');
 
@@ -1570,20 +1973,24 @@ function TabAll({
   // Section 2: merge query results with locally-completed tasks + pending-transition tasks
   const allRemindersForSection = useMemo(() => {
     const queryIds = new Set(reminders.map((t) => t._id as string));
-    // Mark locally-completed items still in the query
-    const fromQuery = reminders.map((t) =>
-      localCompletedIds.has(t._id as string) ? { ...t, completed: true } : t
-    );
-    // Items that disappeared from the query (backend updated) but are cached locally
-    const fromLocalCache = [...localCompletedIds]
-      .filter((id) => !queryIds.has(id))
-      .flatMap((id) => {
+    // Apply completion overrides to items still in the query.
+    // override=true → show as completed; override=false → show as open.
+    const fromQuery = reminders.map((t) => {
+      const override = completionOverrides.get(t._id as string);
+      if (override === undefined) return t;
+      return { ...t, completed: override };
+    });
+    // Items not in the server query but with a local override (completed or open).
+    // Keeps tasks visible during the brief period before the server reacts.
+    const fromLocalCache = [...completionOverrides.entries()]
+      .filter(([id]) => !queryIds.has(id))
+      .flatMap(([id, isCompleted]) => {
         const cached = localTaskCache.get(id);
-        return cached ? [{ ...cached, completed: true }] : [];
+        return cached ? [{ ...cached, completed: isCompleted }] : [];
       });
     // Items in pending transition that disappeared from query before 600ms elapsed
     const fromPendingCache = [...pendingMoveIds]
-      .filter((id) => !queryIds.has(id) && !localCompletedIds.has(id))
+      .filter((id) => !queryIds.has(id) && !completionOverrides.has(id))
       .flatMap((id) => {
         const snap = pendingSnapshots.get(id);
         return snap ? [{ ...snap, completed: false }] : [];
@@ -1594,7 +2001,7 @@ function TabAll({
     );
   }, [
     reminders,
-    localCompletedIds,
+    completionOverrides,
     localTaskCache,
     pendingMoveIds,
     pendingSnapshots,
@@ -1625,6 +2032,9 @@ function TabAll({
       const isEffectivelyCompleted = task?.completed ?? false;
       const isPending = pendingMoveIds.has(id as string);
 
+      // Snapshot previous override so we can roll back on mutation failure.
+      const prevOverride = completionOverrides.get(id as string);
+
       if (!isEffectivelyCompleted && !isPending) {
         // Open → completing: 600ms visual delay before moving to completed group
         const taskSnapshot = task;
@@ -1646,14 +2056,18 @@ function TabAll({
             return m;
           });
           if (taskSnapshot) {
-            setLocalCompletedIds((prev) => new Set([...prev, id as string]));
+            setCompletionOverrides((prev) =>
+              new Map(prev).set(id as string, true)
+            );
             setLocalTaskCache((prev) =>
               new Map(prev).set(id as string, taskSnapshot)
             );
           }
         }, 600);
-      } else if (isEffectivelyCompleted || isPending) {
-        // Completed/pending → open
+      } else {
+        // Completed/pending → open: immediately show task as open.
+        // Keep the cached snapshot so it stays visible until the server adds
+        // it back to the open query (override=false keeps it in fromLocalCache).
         if (isPending) {
           setPendingMoveIds((prev) => {
             const s = new Set(prev);
@@ -1666,33 +2080,81 @@ function TabAll({
             return m;
           });
         }
-        setLocalCompletedIds((prev) => {
+        if (task) {
+          setLocalTaskCache((prev) =>
+            new Map(prev).set(id as string, { ...task, completed: false })
+          );
+        }
+        setCompletionOverrides((prev) =>
+          new Map(prev).set(id as string, false)
+        );
+      }
+
+      onToggleTask(id).catch(() => {
+        // Mutation failed — restore the previous visual state.
+        setCompletionOverrides((prev) => {
+          const m = new Map(prev);
+          if (prevOverride === undefined) {
+            m.delete(id as string);
+          } else {
+            m.set(id as string, prevOverride);
+          }
+          return m;
+        });
+        // Clear any pending transition that started for this item.
+        setPendingMoveIds((prev) => {
           const s = new Set(prev);
           s.delete(id as string);
           return s;
         });
-      }
-      onToggleTask(id);
+        setPendingSnapshots((prev) => {
+          const m = new Map(prev);
+          m.delete(id as string);
+          return m;
+        });
+        Alert.alert('שגיאה', 'לא ניתן לעדכן תזכורת');
+      });
     },
     [
       allRemindersForSection,
+      completionOverrides,
       pendingMoveIds,
       onToggleTask,
-      setLocalCompletedIds,
+      setCompletionOverrides,
       setLocalTaskCache,
     ]
   );
 
+  const handleToggleReminderExpand = useCallback((id: string) => {
+    setExpandedReminderId((prev) => (prev === id ? null : id));
+  }, []);
+
+  // Clear expandedReminderId when the expanded reminder leaves the visible list
+  const visibleReminderIds = useMemo(
+    () =>
+      new Set([
+        ...openReminderItems.map((t) => t._id as string),
+        ...pendingMoveItems.map((t) => t._id as string),
+        ...completedReminderItems.map((t) => t._id as string),
+      ]),
+    [openReminderItems, pendingMoveItems, completedReminderItems]
+  );
+  useEffect(() => {
+    if (expandedReminderId && !visibleReminderIds.has(expandedReminderId)) {
+      setExpandedReminderId(null);
+    }
+  }, [expandedReminderId, visibleReminderIds]);
+
   const handleHideReminder = useCallback(
     (id: string) => {
       setHiddenReminderIds((prev) => new Set([...prev, id]));
-      setLocalCompletedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
+      setCompletionOverrides((prev) => {
+        const m = new Map(prev);
+        m.delete(id);
+        return m;
       });
     },
-    [setHiddenReminderIds, setLocalCompletedIds]
+    [setHiddenReminderIds, setCompletionOverrides]
   );
 
   return (
@@ -1786,18 +2248,26 @@ function TabAll({
               <View style={{ gap: 8, marginTop: 4 }}>
                 {/* Group 1: open (not completed) */}
                 {openReminderItems.map((t) => (
-                  <ReminderRowAll
+                  <CommunityReminderRow
                     key={t._id}
                     task={t}
                     onToggle={handleToggleInSection}
+                    isExpanded={expandedReminderId === (t._id as string)}
+                    onToggleExpand={handleToggleReminderExpand}
+                    currentUserId={currentUserId}
+                    myRole={communityMyRole}
                   />
                 ))}
                 {/* Group 1: pending items (transitioning to completed — visually shown as completed) */}
                 {pendingMoveItems.map((t) => (
-                  <ReminderRowAll
+                  <CommunityReminderRow
                     key={t._id}
                     task={{ ...t, completed: true }}
                     onToggle={handleToggleInSection}
+                    isExpanded={expandedReminderId === (t._id as string)}
+                    onToggleExpand={handleToggleReminderExpand}
+                    currentUserId={currentUserId}
+                    myRole={communityMyRole}
                   />
                 ))}
                 {/* Group 2: completed */}
@@ -1805,11 +2275,15 @@ function TabAll({
                   <>
                     <Text style={styles.completedGroupTitle}>הושלמו</Text>
                     {completedReminderItems.map((t) => (
-                      <ReminderRowAll
+                      <CommunityReminderRow
                         key={t._id}
                         task={t}
                         onToggle={handleToggleInSection}
                         onHide={handleHideReminder}
+                        isExpanded={expandedReminderId === (t._id as string)}
+                        onToggleExpand={handleToggleReminderExpand}
+                        currentUserId={currentUserId}
+                        myRole={communityMyRole}
                       />
                     ))}
                   </>
@@ -2166,13 +2640,26 @@ function TabEvents({
 interface TabRemindersProps {
   communityId: Id<'communities'>;
   onToggle: (id: Id<'tasks'>) => void;
+  currentUserId?: Id<'users'>;
+  myRole?: 'owner' | 'admin' | 'member';
 }
 
-function TabReminders({ communityId, onToggle }: TabRemindersProps) {
+function TabReminders({
+  communityId,
+  onToggle,
+  currentUserId,
+  myRole,
+}: TabRemindersProps) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [accumulated, setAccumulated] = useState<TaskDoc[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [expandedReminderId, setExpandedReminderId] = useState<string | null>(
+    null
+  );
+  // Tracks every cursor we have already sent to useQuery. Prevents an impossible
+  // but defensive cursor loop if Convex somehow returns the same continueCursor twice.
+  const seenCursors = useRef<Set<string | null>>(new Set([null]));
 
   const since30Days = useMemo(() => Date.now() - 30 * 24 * 60 * 60 * 1000, []);
 
@@ -2188,18 +2675,34 @@ function TabReminders({ communityId, onToggle }: TabRemindersProps) {
   });
 
   useEffect(() => {
-    if (page?.page) {
-      setAccumulated((prev) => {
-        const ids = new Set(prev.map((t) => t._id));
-        const newItems = (page.page as TaskDoc[]).filter(
-          (t) => !ids.has(t._id)
-        );
-        return cursor === null
-          ? (page.page as TaskDoc[])
-          : [...prev, ...newItems];
-      });
-      setLoadingMore(false);
+    if (!page?.page) return;
+
+    setAccumulated((prev) => {
+      const ids = new Set(prev.map((t) => t._id));
+      const newItems = (page.page as TaskDoc[]).filter((t) => !ids.has(t._id));
+      return cursor === null
+        ? (page.page as TaskDoc[])
+        : [...prev, ...newItems];
+    });
+
+    // Sparse-page auto-advance: the backend page contained only personally
+    // completed reminders so the filtered result is empty, but more pages exist.
+    // Advance the cursor automatically so open reminders on later pages surface
+    // without requiring a user tap. A spinner replaces the premature empty state.
+    if (
+      page.page.length === 0 &&
+      page.isDone === false &&
+      page.continueCursor
+    ) {
+      const next = page.continueCursor;
+      if (!seenCursors.current.has(next)) {
+        seenCursors.current.add(next);
+        setLoadingMore(true);
+        setCursor(next);
+        return;
+      }
     }
+    setLoadingMore(false);
   }, [page, cursor]);
 
   const handleLoadMore = useCallback(() => {
@@ -2209,8 +2712,29 @@ function TabReminders({ communityId, onToggle }: TabRemindersProps) {
     }
   }, [page, loadingMore]);
 
+  const handleToggleExpand = useCallback((id: string) => {
+    setExpandedReminderId((prev) => (prev === id ? null : id));
+  }, []);
+
   const completedTasks = (completedPage ?? []) as TaskDoc[];
   const historyCount = completedTasks.length;
+
+  // Clear expandedReminderId when the expanded reminder is no longer in the open list
+  const accumulatedIds = useMemo(
+    () => new Set(accumulated.map((t) => t._id as string)),
+    [accumulated]
+  );
+  useEffect(() => {
+    if (expandedReminderId && !accumulatedIds.has(expandedReminderId)) {
+      // Also check completed tasks (visible when showHistory is true)
+      const inCompleted = completedTasks.some(
+        (t) => (t._id as string) === expandedReminderId
+      );
+      if (!inCompleted) {
+        setExpandedReminderId(null);
+      }
+    }
+  }, [expandedReminderId, accumulatedIds, completedTasks]);
 
   if (page === undefined) {
     return (
@@ -2230,20 +2754,35 @@ function TabReminders({ communityId, onToggle }: TabRemindersProps) {
       <View style={{ marginHorizontal: 16, marginTop: 16 }}>
         <SectionHeader title="תזכורות פתוחות" />
         {accumulated.length === 0 ? (
-          <View style={[styles.emptySmall, { alignItems: 'center', gap: 8 }]}>
-            <Ionicons
-              name="checkmark-circle-outline"
-              size={36}
-              color="#d1d5db"
-            />
-            <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
-              כל התזכורות טופלו 🎉
-            </Text>
-          </View>
+          // Show the true "all done" state only when all pages are exhausted.
+          // While auto-advancing through sparse pages, show a spinner instead
+          // so we never display a premature empty state.
+          loadingMore || page.isDone === false ? (
+            <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
+          ) : (
+            <View style={[styles.emptySmall, { alignItems: 'center', gap: 8 }]}>
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={36}
+                color="#d1d5db"
+              />
+              <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
+                כל התזכורות טופלו 🎉
+              </Text>
+            </View>
+          )
         ) : (
           <View style={{ gap: 8 }}>
             {accumulated.map((t) => (
-              <ReminderRowAll key={t._id} task={t} onToggle={onToggle} />
+              <CommunityReminderRow
+                key={t._id}
+                task={t}
+                onToggle={onToggle}
+                isExpanded={expandedReminderId === (t._id as string)}
+                onToggleExpand={handleToggleExpand}
+                currentUserId={currentUserId}
+                myRole={myRole}
+              />
             ))}
             {loadingMore ? (
               <ActivityIndicator
@@ -2295,7 +2834,15 @@ function TabReminders({ communityId, onToggle }: TabRemindersProps) {
           {showHistory ? (
             <View style={{ gap: 8 }}>
               {completedTasks.map((t) => (
-                <ReminderRowAll key={t._id} task={t} onToggle={onToggle} />
+                <CommunityReminderRow
+                  key={t._id}
+                  task={t}
+                  onToggle={onToggle}
+                  isExpanded={expandedReminderId === (t._id as string)}
+                  onToggleExpand={handleToggleExpand}
+                  currentUserId={currentUserId}
+                  myRole={myRole}
+                />
               ))}
             </View>
           ) : null}
@@ -2431,9 +2978,9 @@ export default function CommunityDetailScreen() {
   const [hiddenReminderIds, setHiddenReminderIds] = useState<Set<string>>(
     new Set()
   );
-  const [localCompletedIds, setLocalCompletedIds] = useState<Set<string>>(
-    new Set()
-  );
+  const [completionOverrides, setCompletionOverrides] = useState<
+    Map<string, boolean>
+  >(new Map());
   const [localTaskCache, setLocalTaskCache] = useState<Map<string, TaskDoc>>(
     new Map()
   );
@@ -2534,12 +3081,19 @@ export default function CommunityDetailScreen() {
 
   const handleToggleTask = useCallback(
     (taskId: Id<'tasks'>) => {
-      toggleCompleted({ id: taskId }).catch(() =>
-        Alert.alert('שגיאה', 'לא ניתן לעדכן תזכורת')
-      );
-      // TODO: add optimistic update
+      return toggleCompleted({ id: taskId });
     },
     [toggleCompleted]
+  );
+
+  // Wrapper used by TabReminders (no optimistic state, just fire-and-alert).
+  const handleToggleTaskWithAlert = useCallback(
+    (taskId: Id<'tasks'>) => {
+      handleToggleTask(taskId).catch(() =>
+        Alert.alert('שגיאה', 'לא ניתן לעדכן תזכורת')
+      );
+    },
+    [handleToggleTask]
   );
 
   const handleDeleteCommunity = useCallback(() => {
@@ -2771,7 +3325,13 @@ export default function CommunityDetailScreen() {
   const showDescription = !!descriptionTrimmed;
 
   return (
-    <SafeAreaView style={[styles.container, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]} edges={['top']}>
+    <SafeAreaView
+      style={[
+        styles.container,
+        ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,
+      ]}
+      edges={['top']}
+    >
       {/* ── Header */}
       <View style={styles.header}>
         {/* JSX order swapped to match rtl.flexDirection (row-reverse in Expo Go):
@@ -2909,8 +3469,8 @@ export default function CommunityDetailScreen() {
           onSeeMoreReminders={handleSeeMoreReminders}
           hiddenReminderIds={hiddenReminderIds}
           setHiddenReminderIds={setHiddenReminderIds}
-          localCompletedIds={localCompletedIds}
-          setLocalCompletedIds={setLocalCompletedIds}
+          completionOverrides={completionOverrides}
+          setCompletionOverrides={setCompletionOverrides}
           localTaskCache={localTaskCache}
           setLocalTaskCache={setLocalTaskCache}
           isRemindersOpen={isRemindersOpen}
@@ -2935,7 +3495,12 @@ export default function CommunityDetailScreen() {
         />
       )}
       {activeTab === 'תזכורות' && (
-        <TabReminders communityId={communityId} onToggle={handleToggleTask} />
+        <TabReminders
+          communityId={communityId}
+          onToggle={handleToggleTaskWithAlert}
+          currentUserId={currentUserId}
+          myRole={community?.myRole ?? undefined}
+        />
       )}
       {activeTab === 'פעילות' && (
         <TabActivity
@@ -3045,7 +3610,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerTextBlock: { alignItems: rtl.alignStart, flex: 1 },
-  headerLeft: { flexDirection: rtl.flexDirection, alignItems: 'center', gap: 4 },
+  headerLeft: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 4,
+  },
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
@@ -3144,8 +3713,14 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 10,
   },
-  sectionRight: { flex: 1, alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start' },
-  sectionLeft: { alignItems: needsExplicitRTL() ? 'flex-start' : 'flex-end', minWidth: 60 },
+  sectionRight: {
+    flex: 1,
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
+  },
+  sectionLeft: {
+    alignItems: needsExplicitRTL() ? 'flex-start' : 'flex-end',
+    minWidth: 60,
+  },
   sectionTitle: {
     fontSize: 20,
     fontWeight: '700',
@@ -3163,7 +3738,12 @@ const styles = StyleSheet.create({
   // ── Events grid
   // direction:'ltr' cancels the inherited direction:'rtl' (from ANDROID_MATCH_IOS_LAYOUT root)
   // so cards always flow physical left→right. Text inside cards is textAlign:'center' — unaffected.
-  eventsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, direction: 'ltr' },
+  eventsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    direction: 'ltr',
+  },
 
   flyerCard: {
     minHeight: 272,
@@ -3460,7 +4040,11 @@ const styles = StyleSheet.create({
   eventRowLeft: { alignItems: 'center', gap: 4, minWidth: 44 },
   eventDot: { width: 8, height: 8, borderRadius: 4 },
   eventRowDate: { fontSize: 11, color: '#9ca3af', textAlign: 'center' },
-  eventRowContent: { flex: 1, alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start', gap: 4 },
+  eventRowContent: {
+    flex: 1,
+    alignItems: needsExplicitRTL() ? 'flex-end' : 'flex-start',
+    gap: 4,
+  },
   eventRowTop: {
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
@@ -3475,7 +4059,11 @@ const styles = StyleSheet.create({
     textAlign: rtl.textAlign,
     flex: 1,
   },
-  eventRowLocation: { fontSize: 12, color: '#9ca3af', textAlign: rtl.textAlign },
+  eventRowLocation: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
+  },
   eventRowCancelReason: {
     fontSize: 12,
     color: '#9ca3af',
@@ -3546,7 +4134,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   checkboxChecked: { backgroundColor: PRIMARY, borderColor: PRIMARY },
-  taskTitle: { flex: 1, fontSize: 14, color: '#111827', textAlign: rtl.textAlign },
+  taskTitle: {
+    flex: 1,
+    fontSize: 14,
+    color: '#111827',
+    textAlign: rtl.textAlign,
+  },
   taskTitleDone: { textDecorationLine: 'line-through', color: '#9ca3af' },
   taskDue: { fontSize: 11, color: '#9ca3af', minWidth: 36, textAlign: 'left' },
 
@@ -3750,22 +4343,44 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f3f4f6',
   },
-  popoverLabel: { fontSize: 15, color: '#374151', textAlign: rtl.textAlign, flex: 1 },
+  popoverLabel: {
+    fontSize: 15,
+    color: '#374151',
+    textAlign: rtl.textAlign,
+    flex: 1,
+  },
   popoverDanger: { color: '#ef4444' },
 
-  // ── Reminder rows (כדאי לזכור section in הכל tab)
+  // ── Reminder rows (expandable cards)
   reminderRow: {
-    flexDirection: rtl.flexDirection,
-    alignItems: 'center',
     backgroundColor: '#fff',
     borderRadius: 16,
-    padding: 16,
-    gap: 10,
+    padding: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 1,
+  },
+  reminderRowExpanded: {
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  reminderMainRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  reminderTextBlock: {
+    flex: 1,
+    gap: 3,
+  },
+  reminderEndCol: {
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+    paddingTop: 2,
   },
   reminderCheckbox: {
     width: 22,
@@ -3776,22 +4391,115 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+    marginTop: 1,
   },
   reminderCheckboxDone: { backgroundColor: PRIMARY },
   reminderTitle: {
-    flex: 1,
     fontSize: 15,
     color: '#111827',
     textAlign: rtl.textAlign,
+    fontWeight: '500',
   },
   reminderTitleDone: { textDecorationLine: 'line-through', color: '#9ca3af' },
+  reminderDescriptionText: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: rtl.textAlign,
+    lineHeight: 18,
+  },
+  reminderShortLabel: {
+    fontSize: 11,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
+    marginTop: 2,
+  },
   reminderDue: {
     fontSize: 11,
     color: '#9ca3af',
-    minWidth: 36,
-    textAlign: 'left',
+    textAlign: 'center',
   },
-  reminderHideBtn: { padding: 4, flexShrink: 0 },
+  reminderHideBtn: { padding: 2, flexShrink: 0 },
+  // ── Expanded section
+  reminderExpandedSection: {
+    marginTop: 10,
+    gap: 8,
+  },
+  reminderExpandedDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#f3f4f6',
+    marginBottom: 2,
+  },
+  reminderExpandedMeta: {
+    gap: 4,
+  },
+  reminderExpandedMetaRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 6,
+  },
+  reminderExpandedMetaText: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: rtl.textAlign,
+    flex: 1,
+  },
+  reminderExpandedActions: {
+    flexDirection: rtl.flexDirection,
+    gap: 8,
+    justifyContent: 'flex-end',
+    marginTop: 4,
+  },
+  reminderActionBtn: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#f9fafb',
+  },
+  reminderActionText: {
+    fontSize: 13,
+    color: PRIMARY,
+    fontWeight: '600',
+  },
+  // ── Attachment rows inside expanded reminder
+  reminderAttachRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+  },
+  reminderAttachThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    flexShrink: 0,
+  },
+  reminderAttachIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  reminderAttachMeta: {
+    flex: 1,
+    gap: 2,
+  },
+  reminderAttachName: {
+    fontSize: 13,
+    color: '#374151',
+    textAlign: rtl.textAlign,
+  },
+  reminderAttachSize: {
+    fontSize: 11,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
+  },
 
   // ── Activity placeholder (Section 4 in הכל tab)
   activityPlaceholder: {
