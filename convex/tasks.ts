@@ -6,6 +6,20 @@ import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
 import { isActiveCommunityMember } from './communityMemberUtils';
+import {
+  cancelPendingJobsForTaskAndUserHelper,
+  cancelPendingJobsForTaskHelper,
+} from './reminderScheduler';
+import {
+  clearPersonalCompleted,
+  getPersonalCompletion,
+  hasExplicitAssigneeForCommunityActivity,
+  isDeletedOrArchivedGeneralCommunityReminder,
+  isGeneralCommunityReminder,
+  isStorageReferencedByOtherDocument,
+  safeDeleteStorageIfUnreferenced,
+  setPersonalCompleted,
+} from './taskUtils';
 import { createUserNotifications } from './userNotifications';
 
 const taskReminderTypeValidator = v.union(
@@ -578,22 +592,122 @@ function normalizeAssigneesForWrite(
   };
 }
 
-function hadExplicitAssigneeForCommunityActivity(args: {
-  assignedTo?: Id<'users'>;
-  assignedToMemberId?: Id<'members'>;
-  assignedToUserIds?: Id<'users'>[];
-  assignedToMemberIds?: Id<'members'>[];
-}): boolean {
-  return (
-    (args.assignedToUserIds ?? []).length > 0 ||
-    (args.assignedToMemberIds ?? []).length > 0 ||
-    args.assignedTo !== undefined ||
-    args.assignedToMemberId !== undefined
+// hadExplicitAssigneeForCommunityActivity was extracted to taskUtils.ts as
+// hasExplicitAssigneeForCommunityActivity so reminderScheduler.ts can share it.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// scheduleGeneralReminderJobsForRecipients
+//
+// Low-level scheduling helper — enqueues one scheduleUserReminder call per
+// (recipientUserId × future reminder). Past times are silently skipped.
+// The caller is responsible for providing the already-filtered recipient list.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function scheduleGeneralReminderJobsForRecipients(
+  ctx: MutationCtx,
+  taskId: Id<'tasks'>,
+  _communityId: Id<'communities'>,
+  reminders: TaskReminderInput[] | undefined,
+  schedule: TaskScheduleInput,
+  recipientUserIds: Id<'users'>[]
+): Promise<void> {
+  if (!reminders || reminders.length === 0) return;
+  if (recipientUserIds.length === 0) return;
+
+  const now = Date.now();
+  for (const reminder of reminders) {
+    const scheduledFor = resolveReminderTimestamp(reminder, schedule);
+    if (scheduledFor === undefined || scheduledFor <= now) continue;
+
+    for (const userId of recipientUserIds) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.reminderScheduler.scheduleUserReminder,
+        {
+          taskId,
+          userId,
+          reminderKey: reminder.id,
+          scheduledFor,
+        }
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// scheduleGeneralReminderJobsForTask
+//
+// High-level scheduling helper — queries current active community members
+// (regardless of mute state — mute is checked only at fire time) and delegates
+// to scheduleGeneralReminderJobsForRecipients.
+//
+// When options.excludePersonallyCompleted is true (used on shared reschedule),
+// members who have already personally completed the reminder are excluded so
+// they do not receive new scheduled rows after a manager changes the due date.
+// Uses a single by_task bulk read to build the completed-user set instead of
+// one by_task_user lookup per active member.
+//
+// MVP limitation: members who join after the reminder is created receive no
+// scheduling row for existing reminders. Backfill on join is not in scope.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function scheduleGeneralReminderJobsForTask(
+  ctx: MutationCtx,
+  taskId: Id<'tasks'>,
+  communityId: Id<'communities'>,
+  reminders: TaskReminderInput[] | undefined,
+  schedule: TaskScheduleInput,
+  options?: { excludePersonallyCompleted?: boolean }
+): Promise<void> {
+  if (!reminders || reminders.length === 0) return;
+
+  const allMembers = await ctx.db
+    .query('communityMembers')
+    .withIndex('by_community', (q) => q.eq('communityId', communityId))
+    .collect();
+
+  let recipientUserIds = allMembers
+    .filter((m) => isActiveCommunityMember(m))
+    .map((m) => m.userId);
+
+  if (recipientUserIds.length === 0) return;
+
+  if (options?.excludePersonallyCompleted) {
+    // Build the completed-user set with a single by_task query rather than
+    // one by_task_user lookup per active member. Former/removed members with
+    // a completedAt row are included in this set, ensuring we never
+    // re-schedule a user who completed before leaving the community.
+    const allSettings = await ctx.db
+      .query('taskParticipantSettings')
+      .withIndex('by_task', (q) => q.eq('taskId', taskId))
+      .collect();
+    const completedUserIds = new Set(
+      allSettings
+        .filter((s) => s.completedAt !== undefined)
+        .map((s) => s.userId as string)
+    );
+    recipientUserIds = recipientUserIds.filter(
+      (uid) => !completedUserIds.has(uid as string)
+    );
+  }
+
+  await scheduleGeneralReminderJobsForRecipients(
+    ctx,
+    taskId,
+    communityId,
+    reminders,
+    schedule,
+    recipientUserIds
   );
 }
 
 // ─────────────────────────────────────────────────────────────
 // שליפת תזכורות שהושלמו לאחרונה לקהילה (עד 30 יום)
+//
+// Returns general community reminders personally completed by the
+// authenticated user (personal completedAt >= since), sorted descending.
+// The shared tasks.completed / tasks.completedAt fields are ignored
+// for general community reminders — personal completedAt is authoritative.
 // ─────────────────────────────────────────────────────────────
 export const listCompletedCommunityReminders = query({
   args: {
@@ -601,23 +715,63 @@ export const listCompletedCommunityReminders = query({
     since: v.number(),
   },
   handler: async (ctx, { communityId, since }) => {
-    return await ctx.db
-      .query('tasks')
-      .withIndex('by_community', (q) => q.eq('communityId', communityId))
-      .filter((q) =>
-        q.and(
-          q.eq(q.field('completed'), true),
-          q.eq(q.field('assignedTo'), undefined),
-          q.gte(q.field('completedAt'), since)
-        )
-      )
-      .order('desc')
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    // Load all personal settings for this user (by_user index).
+    const allSettings = await ctx.db
+      .query('taskParticipantSettings')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
       .collect();
+
+    // Keep only rows with a completedAt >= since.
+    type SettingWithCompletion = (typeof allSettings)[number] & {
+      completedAt: number;
+    };
+    const recentlyCompleted = allSettings.filter(
+      (s): s is SettingWithCompletion =>
+        s.completedAt !== undefined && s.completedAt >= since
+    );
+
+    if (recentlyCompleted.length === 0) return [];
+
+    // Load the tasks, validate community membership and general-reminder category.
+    const results = await Promise.all(
+      recentlyCompleted.map(async (s) => {
+        const task = await ctx.db.get(s.taskId);
+        if (!task) return null;
+        if (task.communityId !== communityId) return null;
+        if (!isGeneralCommunityReminder(task)) return null;
+        // Overlay personal completion timestamps.
+        return {
+          ...task,
+          completed: true as const,
+          completedAt: s.completedAt,
+        };
+      })
+    );
+
+    return results
+      .filter(<T>(t: T | null): t is T => t !== null)
+      .sort((a, b) => b.completedAt - a.completedAt);
   },
 });
 
 // ─────────────────────────────────────────────────────────────
 // שליפת תזכורות קהילה עם cursor pagination (לביצועים)
+//
+// Returns only tasks that are OPEN for the authenticated user.
+// For general community reminders: "open" means personal completedAt is absent.
+// For other task types (event-linked items): "open" means tasks.completed = false.
+//
+// The tasks.completed DB-level filter is intentionally removed so that legacy
+// general reminders with tasks.completed = true (marked globally before per-user
+// completion was introduced) are still visible to users who have not personally
+// completed them (spec req #35).
+//
+// Pagination sparsity: each DB page may include personally-completed items that
+// are filtered out. For MVP communities with few completions this is negligible.
+// The cursor advances correctly and all open items are eventually returned.
 // ─────────────────────────────────────────────────────────────
 export const listCommunityRemindersPaged = query({
   args: {
@@ -626,18 +780,35 @@ export const listCommunityRemindersPaged = query({
     numItems: v.optional(v.number()),
   },
   handler: async (ctx, { communityId, cursor, numItems }) => {
+    const userId = await getAuthUserId(ctx);
+
     const result = await ctx.db
       .query('tasks')
       .withIndex('by_community', (q) => q.eq('communityId', communityId))
-      .filter((q) =>
-        q.and(
-          q.eq(q.field('completed'), false),
-          q.eq(q.field('assignedTo'), undefined)
-        )
-      )
+      .filter((q) => q.eq(q.field('assignedTo'), undefined))
       .paginate({ cursor, numItems: numItems ?? 20 });
+
     const resolvedPage = await Promise.all(
-      result.page.map((task) => resolveCurrentEventImportantItemTask(ctx, task))
+      result.page.map(async (task) => {
+        const resolved = await resolveCurrentEventImportantItemTask(ctx, task);
+        if (!resolved) return null;
+
+        // For general community reminders: filter by personal completion.
+        if (userId && isGeneralCommunityReminder(resolved)) {
+          const personal = await getPersonalCompletion(
+            ctx,
+            resolved._id,
+            userId
+          );
+          // Personally completed → exclude from open list.
+          if (personal.completed) return null;
+          return resolved;
+        }
+
+        // For other task types (event-linked items, etc.): use shared completed.
+        if (resolved.completed) return null;
+        return resolved;
+      })
     );
 
     return {
@@ -653,19 +824,33 @@ export const listCommunityRemindersPaged = query({
 export const listByCommunity = query({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
+    const userId = await getAuthUserId(ctx);
+
     const rows = await ctx.db
       .query('tasks')
       .withIndex('by_community', (q) => q.eq('communityId', communityId))
-      .filter((q) =>
-        q.and(
-          q.eq(q.field('completed'), false),
-          q.eq(q.field('assignedTo'), undefined)
-        )
-      )
+      .filter((q) => q.eq(q.field('assignedTo'), undefined))
       .order('asc')
       .collect();
+
     const resolvedRows = await Promise.all(
-      rows.map((task) => resolveCurrentEventImportantItemTask(ctx, task))
+      rows.map(async (task) => {
+        const resolved = await resolveCurrentEventImportantItemTask(ctx, task);
+        if (!resolved) return null;
+
+        if (userId && isGeneralCommunityReminder(resolved)) {
+          const personal = await getPersonalCompletion(
+            ctx,
+            resolved._id,
+            userId
+          );
+          if (personal.completed) return null;
+          return resolved;
+        }
+
+        if (resolved.completed) return null;
+        return resolved;
+      })
     );
 
     return resolvedRows.filter((task): task is Doc<'tasks'> => task !== null);
@@ -1007,6 +1192,26 @@ export const create = mutation({
       );
     }
 
+    // Reject any submitted storageId that is already referenced by another
+    // task or event document — prevents cross-document attachment hijack.
+    const newStorageIds = new Set<string>([
+      ...(args.attachments ?? []).map((a) => a.storageId as string),
+      ...(args.subtasks ?? []).flatMap((st) => {
+        const ids: string[] = [];
+        if (st.image?.storageId) ids.push(st.image.storageId as string);
+        if (st.attachment?.storageId)
+          ids.push(st.attachment.storageId as string);
+        return ids;
+      }),
+    ]);
+    for (const sid of newStorageIds) {
+      if (
+        await isStorageReferencedByOtherDocument(ctx, sid as Id<'_storage'>)
+      ) {
+        throw new Error('לא ניתן לצרף קובץ זה');
+      }
+    }
+
     const now = Date.now();
     const stampedAttachments =
       args.attachments && args.attachments.length > 0
@@ -1078,7 +1283,7 @@ export const create = mutation({
     // Personal tasks (no communityId) keep the creator-fallback assignment.
     const normalizedAssignees =
       args.communityId !== undefined &&
-      !hadExplicitAssigneeForCommunityActivity(explicitAssigneeArgs)
+      !hasExplicitAssigneeForCommunityActivity(explicitAssigneeArgs)
         ? {
             assignedTo: undefined as Id<'users'> | undefined,
             assignedToMemberId: undefined as Id<'members'> | undefined,
@@ -1113,7 +1318,7 @@ export const create = mutation({
       updatedAt: Date.now(),
     });
 
-    if (args.communityId && !hadExplicitAssigneeForCommunityActivity(args)) {
+    if (args.communityId && !hasExplicitAssigneeForCommunityActivity(args)) {
       const communityId = args.communityId;
       await insertCommunityActivity(ctx, {
         communityId,
@@ -1162,6 +1367,49 @@ export const create = mutation({
             channelId: 'communities',
           });
         }
+
+        // ── Schedule due reminders for all active community members.
+        //
+        // Separate recipient list from community_general_reminder_created:
+        // that list excludes the actor so the creator doesn't get a
+        // "someone created this" bell. The due-reminder list must include
+        // the creator — they want to be reminded too.
+        //
+        // notificationsEnabled is NOT filtered here; mute state is checked
+        // only when the reminder fires (fireReminder.D).
+        const allMembersForDue = await ctx.db
+          .query('communityMembers')
+          .withIndex('by_community', (q) => q.eq('communityId', communityId))
+          .collect();
+
+        const dueRecipientUserIds = allMembersForDue
+          .filter((m) => isActiveCommunityMember(m))
+          .map((m) => m.userId);
+
+        if (normalizedReminders && dueRecipientUserIds.length > 0) {
+          const scheduleNow = Date.now();
+          for (const reminder of normalizedReminders) {
+            const scheduledFor = resolveReminderTimestamp(
+              reminder,
+              normalizedScheduleArgs
+            );
+            if (scheduledFor === undefined || scheduledFor <= scheduleNow) {
+              continue;
+            }
+            for (const recipientUserId of dueRecipientUserIds) {
+              await ctx.scheduler.runAfter(
+                0,
+                internal.reminderScheduler.scheduleUserReminder,
+                {
+                  taskId,
+                  userId: recipientUserId,
+                  reminderKey: reminder.id,
+                  scheduledFor,
+                }
+              );
+            }
+          }
+        }
       }
     }
 
@@ -1171,6 +1419,17 @@ export const create = mutation({
 
 // ─────────────────────────────────────────────────────────────
 // החלפת מצב השלמה (toggle)
+//
+// PATH A — General community reminder:
+//   Authorization: any active community member (not just creator/assignee).
+//   Completion is personal per-user via taskParticipantSettings.completedAt.
+//   tasks.completed and tasks.completedAt are NEVER patched for this path.
+//   Scheduler: only this user's pending rows are canceled / rescheduled.
+//
+// PATH B — All other task types (personal, assigned, event-linked):
+//   Authorization: isUserParticipantInTask (unchanged).
+//   Completion is shared via tasks.completed / tasks.completedAt.
+//   Scheduler: existing whole-task behavior unchanged.
 // ─────────────────────────────────────────────────────────────
 export const toggleCompleted = mutation({
   args: { id: v.id('tasks') },
@@ -1181,6 +1440,43 @@ export const toggleCompleted = mutation({
     const task = await ctx.db.get(id);
     if (!task) throw new Error('משימה לא נמצאה');
 
+    // ── PATH A: General community reminder → per-user personal completion ──
+    if (isGeneralCommunityReminder(task)) {
+      const membership = await getCommunityMembership(
+        ctx,
+        task.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) {
+        throw new Error('אין הרשאה לעדכן משימה זו');
+      }
+
+      const personal = await getPersonalCompletion(ctx, id, userId);
+
+      if (!personal.completed) {
+        // Completing: record personal completedAt, cancel only this user's pending jobs.
+        await setPersonalCompleted(ctx, id, userId);
+        await cancelPendingJobsForTaskAndUserHelper(ctx, id, userId);
+      } else {
+        // Reopening: clear personal completedAt, reschedule only for this user.
+        await clearPersonalCompleted(ctx, id, userId);
+        await scheduleGeneralReminderJobsForRecipients(
+          ctx,
+          id,
+          task.communityId,
+          task.reminders,
+          {
+            dueDate: task.dueDate,
+            hasTime: task.hasTime,
+            dueAt: task.dueAt,
+          },
+          [userId]
+        );
+      }
+      return;
+    }
+
+    // ── PATH B: All other task types → existing shared completion ───────────
     if (!isUserParticipantInTask(task, userId)) {
       throw new Error('אין הרשאה לעדכן משימה זו');
     }
@@ -1215,6 +1511,45 @@ export const getTaskDetails = query({
 
     const task = await ctx.db.get(id);
     if (!task) return null;
+
+    // ── Authorization ────────────────────────────────────────────────────────
+    //
+    // A. General community reminder (communityId set, no sourceType, no assignee):
+    //    visible only to active members; former/removed/never-joined → null.
+    //
+    // B. All other task types (personal, assigned, community-assigned,
+    //    event-linked copies, soft-deleted personal tasks):
+    //    visible only to the creator or an explicit assignee
+    //    (isUserParticipantInTask). An unrelated authenticated user receives
+    //    null so the existence of the task is not revealed.
+    //
+    // Viewing permission does NOT grant edit/delete permission; those gates
+    // remain in tasks.update / tasks.remove / tasks.toggleCompleted.
+
+    // Explicit guard: a deleted or archived general community reminder must
+    // return null for EVERYONE — including the original creator. Without this
+    // guard, isGeneralCommunityReminder returns false (it excludes
+    // deleted/archived), causing the logic to fall through to
+    // isUserParticipantInTask whose creator check would grant access.
+    if (isDeletedOrArchivedGeneralCommunityReminder(task)) return null;
+
+    let canEdit = false;
+    if (isGeneralCommunityReminder(task)) {
+      const membership = await getCommunityMembership(
+        ctx,
+        task.communityId,
+        currentUserId
+      );
+      if (!isActiveCommunityMember(membership)) return null;
+      canEdit =
+        task.createdBy === currentUserId ||
+        membership.role === 'owner' ||
+        membership.role === 'admin';
+    } else if (!isUserParticipantInTask(task, currentUserId)) {
+      return null;
+    } else {
+      canEdit = true;
+    }
 
     // ── Creator profile ──────────────────────────────────────────────────────
     const creator = task.createdBy ? await ctx.db.get(task.createdBy) : null;
@@ -1306,15 +1641,91 @@ export const getTaskDetails = query({
 
     const currentUserIsCreator = task.createdBy === currentUserId;
 
+    // For general community reminders, overlay the authenticated user's personal
+    // completion state. The shared tasks.completed / tasks.completedAt fields
+    // are legacy-only for this task type.
+    let effectiveCompleted = task.completed;
+    let effectiveCompletedAt = task.completedAt;
+
+    if (isGeneralCommunityReminder(task)) {
+      const personal = await getPersonalCompletion(ctx, id, currentUserId);
+      effectiveCompleted = personal.completed;
+      effectiveCompletedAt = personal.completedAt;
+    }
+
     return {
       ...task,
+      completed: effectiveCompleted,
+      completedAt: effectiveCompletedAt,
       creatorProfile,
       assignees,
       currentUserId,
       currentUserIsCreator,
+      canEdit,
     };
   },
 });
+
+// ─────────────────────────────────────────────────────────────
+// שליפת URL לצפייה בקובץ מצורף למשימה — ממוקד ומאובטח
+//
+// The caller must supply both the taskId and the storageId. The handler:
+//   1. Authenticates the user.
+//   2. Loads the task.
+//   3. Applies the same authoritative read-access rules as getTaskDetails.
+//   4. Verifies the storageId is actually referenced by that exact task
+//      (task.attachments or subtask image/attachment fields).
+//   5. Returns null when the task is missing, the user lacks access, the
+//      storageId is not referenced by this task, or the storage object is gone.
+//   6. Only then calls ctx.storage.getUrl.
+//
+// This prevents a caller from obtaining a signed URL for a foreign storageId
+// by simply knowing the task ID and guessing an unrelated storage object ID.
+// ─────────────────────────────────────────────────────────────
+export const getTaskAttachmentUrl = query({
+  args: {
+    taskId: v.id('tasks'),
+    storageId: v.id('_storage'),
+  },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { taskId, storageId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const task = await ctx.db.get(taskId);
+    if (!task) return null;
+
+    // Same deleted/archived guard as getTaskDetails — see comment there.
+    if (isDeletedOrArchivedGeneralCommunityReminder(task)) return null;
+
+    if (isGeneralCommunityReminder(task)) {
+      const membership = await getCommunityMembership(
+        ctx,
+        task.communityId,
+        userId
+      );
+      if (!isActiveCommunityMember(membership)) return null;
+    } else if (!isUserParticipantInTask(task, userId)) {
+      return null;
+    }
+
+    // Verify the requested storageId is actually referenced by this task.
+    const taskStorageIds = new Set<string>([
+      ...storageIdsFromTaskAttachments(task.attachments),
+      ...storageIdsFromSubtaskImages(task.subtasks),
+    ]);
+    if (!taskStorageIds.has(storageId as string)) {
+      return null;
+    }
+
+    // ctx.storage.getUrl returns null if the object no longer exists.
+    return await ctx.storage.getUrl(storageId);
+  },
+});
+
+// getTaskDetailsByRouteId was removed — the community-reminder/[id] full-screen
+// details route no longer exists. Reminder details are now shown inline in the
+// expandable CommunityReminderRow in community/[id].tsx.
 
 // ─────────────────────────────────────────────────────────────
 // עדכון שדות משימה קיימת
@@ -1356,11 +1767,35 @@ export const update = mutation({
     const isCreator = existing.createdBy === userId;
     const isParticipant = isUserParticipantInTask(existing, userId);
 
-    if (!isParticipant) {
+    // Community owner/admin may edit any general community reminder,
+    // even if they are not the creator or an explicit participant.
+    let isCommunityManager = false;
+    if (
+      !isParticipant &&
+      existing.communityId !== undefined &&
+      existing.sourceType === undefined
+    ) {
+      const mgmtMembership = await getCommunityMembership(
+        ctx,
+        existing.communityId,
+        userId
+      );
+      if (
+        isActiveCommunityMember(mgmtMembership) &&
+        (mgmtMembership.role === 'owner' || mgmtMembership.role === 'admin')
+      ) {
+        isCommunityManager = true;
+      }
+    }
+
+    if (!isParticipant && !isCommunityManager) {
       throw new Error('אין הרשאה לעדכן משימה זו');
     }
 
-    if (!isCreator) {
+    // Community managers get full edit rights (same as creator).
+    const hasFullEditRight = isCreator || isCommunityManager;
+
+    if (!hasFullEditRight) {
       if (
         fields.title !== undefined &&
         fields.title.trim() !== existing.title
@@ -1501,9 +1936,26 @@ export const update = mutation({
       ...storageIdsFromTaskAttachments(nextAttachments),
       ...storageIdsFromSubtaskImages(nextSubtasks),
     ]);
+
+    // Reject any *newly introduced* storageId that is already referenced by
+    // another document — preserves retained references from the same task.
+    for (const sid of storageAfter) {
+      if (!storageBefore.has(sid)) {
+        if (
+          await isStorageReferencedByOtherDocument(ctx, sid as Id<'_storage'>, {
+            taskId: id,
+          })
+        ) {
+          throw new Error('לא ניתן לצרף קובץ זה');
+        }
+      }
+    }
+
     for (const sid of storageBefore) {
       if (!storageAfter.has(sid)) {
-        await ctx.storage.delete(sid as Id<'_storage'>);
+        await safeDeleteStorageIfUnreferenced(ctx, sid as Id<'_storage'>, {
+          taskId: id,
+        });
       }
     }
 
@@ -1550,12 +2002,20 @@ export const update = mutation({
         ? fields.assignedToMemberId
         : existing.assignedToMemberId;
 
-    if (
+    const noExplicitAssigneeIntended =
       nextUserIds.length === 0 &&
       nextMemberIds.length === 0 &&
       nextAssignedTo === undefined &&
-      nextAssignedToMemberId === undefined
-    ) {
+      nextAssignedToMemberId === undefined;
+
+    if (existing.communityId !== undefined && noExplicitAssigneeIntended) {
+      // Community task with no explicit assignee stays unassigned,
+      // mirroring the create mutation so query filters keep working.
+      patch.assignedTo = undefined;
+      patch.assignedToMemberId = undefined;
+      patch.assignedToUserIds = undefined;
+      patch.assignedToMemberIds = undefined;
+    } else if (noExplicitAssigneeIntended) {
       const fb = existing.createdBy;
       patch.assignedTo = fb;
       patch.assignedToMemberId = undefined;
@@ -1570,7 +2030,7 @@ export const update = mutation({
         nextMemberIds.length > 0 ? nextMemberIds : undefined;
     }
 
-    if (!isCreator) {
+    if (!hasFullEditRight) {
       // Participants cannot modify task-level reminders — they manage their own
       // via the separate updateMyTaskReminder mutation.
       patch.reminderType = existing.reminderType ?? 'none';
@@ -1584,6 +2044,87 @@ export const update = mutation({
     }
 
     await ctx.db.patch(id, patch);
+
+    // ── General community reminder scheduling lifecycle ──
+    const communityId = existing.communityId;
+    if (communityId !== undefined) {
+      // Pre-update eligibility: was this a general community reminder?
+      const wasGeneralReminder =
+        existing.sourceType === undefined &&
+        !existing.completed &&
+        existing.deletedAt === undefined &&
+        existing.archivedAt === undefined &&
+        !hasExplicitAssigneeForCommunityActivity(existing);
+
+      // effectiveArchivedAt: archivedAt can only be SET via update args
+      // (it's not in clearableTaskFieldValidator), so the effective value is
+      // the new arg if supplied, otherwise the persisted value.
+      const effectiveArchivedAt = fields.archivedAt ?? existing.archivedAt;
+
+      // Post-update eligibility: use pre-fallback assignment vars so the intent
+      // from args/existing (not the community-unassigned normalisation) is clear.
+      const isGeneralReminder =
+        existing.sourceType === undefined &&
+        !existing.completed &&
+        existing.deletedAt === undefined &&
+        effectiveArchivedAt === undefined &&
+        noExplicitAssigneeIntended;
+
+      if (wasGeneralReminder && !isGeneralReminder) {
+        // Case A: became ineligible (assignee added, completed, archived…).
+        await cancelPendingJobsForTaskHelper(ctx, id);
+      } else if (!wasGeneralReminder && isGeneralReminder) {
+        // Case B: became eligible (assignment removed, reopened…) — schedule
+        // only for active members who have NOT personally completed.
+        await scheduleGeneralReminderJobsForTask(
+          ctx,
+          id,
+          communityId,
+          patch.reminders,
+          { dueDate: nextDueDate, hasTime: nextHasTime, dueAt: nextDueAt },
+          { excludePersonallyCompleted: true }
+        );
+      } else if (wasGeneralReminder && isGeneralReminder) {
+        // Case C / D: remains eligible — reschedule only when schedule changed.
+        //
+        // reminders: guard on `fields.reminders` (user's explicit input), NOT
+        // on `patch.reminders` (which is the output of normalizeRemindersForSchedule).
+        // normalizeRemindersForSchedule filters out reminders whose resolved time
+        // is < now, so a title-only edit made after a reminder's due time has
+        // passed would make patch.reminders differ from existing.reminders even
+        // though the user changed nothing — a false positive.
+        // cleared.has('reminders') catches the explicit-clear path.
+        //
+        // dueDate/hasTime/dueAt: nextDueDate/nextHasTime/nextDueAt already fall
+        // back to existing.* for omitted fields, so those comparisons are
+        // already correct as-is (using patch.dueDate would regress clearFields).
+        const remindersChanged = cleared.has('reminders')
+          ? (existing.reminders?.length ?? 0) > 0
+          : fields.reminders !== undefined &&
+            JSON.stringify(existing.reminders ?? []) !==
+              JSON.stringify(fields.reminders ?? []);
+        const scheduleChanged =
+          remindersChanged ||
+          existing.dueDate !== nextDueDate ||
+          existing.hasTime !== nextHasTime ||
+          existing.dueAt !== nextDueAt;
+
+        if (scheduleChanged) {
+          // Cancel all old pending jobs (whole-task), then reschedule only
+          // for personally-incomplete active members (spec §8.2).
+          await cancelPendingJobsForTaskHelper(ctx, id);
+          await scheduleGeneralReminderJobsForTask(
+            ctx,
+            id,
+            communityId,
+            patch.reminders,
+            { dueDate: nextDueDate, hasTime: nextHasTime, dueAt: nextDueAt },
+            { excludePersonallyCompleted: true }
+          );
+        }
+        // Case D (no schedule change, e.g. title-only edit) → no-op.
+      }
+    }
   },
 });
 
@@ -1773,21 +2314,25 @@ export const remove = mutation({
     const existing = await ctx.db.get(id);
     if (!existing) throw new Error('משימה לא נמצאה');
 
-    // Community reminder (communityId set, no sourceType) — requires active
-    // owner/admin membership, mirroring the same gate used in tasks.create.
-    // softDeleteTask explicitly blocks this path for community reminders,
-    // confirming that hard-delete via remove() is their intended deletion route,
-    // managed at the community role level rather than individual ownership.
-    if (existing.communityId !== undefined && existing.sourceType === undefined) {
+    // Community reminder (communityId set, no sourceType) — creator, owner,
+    // or admin may delete.  A regular active member may not delete another
+    // person's reminder.
+    if (
+      existing.communityId !== undefined &&
+      existing.sourceType === undefined
+    ) {
+      const isCreator = existing.createdBy === userId;
       const membership = await getCommunityMembership(
         ctx,
         existing.communityId,
         userId
       );
-      if (
-        !isActiveCommunityMember(membership) ||
-        (membership.role !== 'owner' && membership.role !== 'admin')
-      ) {
+      if (!isActiveCommunityMember(membership)) {
+        throw new Error('אין לך הרשאה למחוק משימה זו');
+      }
+      const isManagerRole =
+        membership.role === 'owner' || membership.role === 'admin';
+      if (!isCreator && !isManagerRole) {
         throw new Error('אין לך הרשאה למחוק משימה זו');
       }
     } else {
@@ -1796,6 +2341,41 @@ export const remove = mutation({
       if (!isUserParticipantInTask(existing, userId)) {
         throw new Error('אין לך הרשאה למחוק משימה זו');
       }
+    }
+
+    // Cancel any pending scheduled reminders before the row is deleted so no
+    // orphaned scheduled functions fire after the task is gone.
+    await cancelPendingJobsForTaskHelper(ctx, id);
+
+    // Clean up all taskParticipantSettings rows for this task.
+    // Uses the by_task index so cleanup is exhaustive — it covers every row
+    // ever written for this task, including rows for users who left or were
+    // removed from the community after their completion was recorded.
+    // Iterating current communityMembers would miss those former members.
+    const allParticipantSettings = await ctx.db
+      .query('taskParticipantSettings')
+      .withIndex('by_task', (q) => q.eq('taskId', id))
+      .collect();
+
+    for (const row of allParticipantSettings) {
+      await ctx.db.delete(row._id);
+    }
+
+    // Delete storage objects referenced only by this task.
+    // Before physically deleting, deleteStorageIfUnreferenced checks that the
+    // storageId is not still referenced by any event attachment. This prevents
+    // a foreign storageId (introduced via create/update) from destroying an
+    // event's file when the task is deleted.
+    // Cross-task reference checking is omitted (no storageId index); see the
+    // deleteStorageIfUnreferenced JSDoc for the known MVP limitation.
+    const ownedStorageIds = new Set([
+      ...storageIdsFromTaskAttachments(existing.attachments),
+      ...storageIdsFromSubtaskImages(existing.subtasks),
+    ]);
+    for (const sid of ownedStorageIds) {
+      await safeDeleteStorageIfUnreferenced(ctx, sid as Id<'_storage'>, {
+        taskId: id,
+      });
     }
 
     await ctx.db.delete(id);

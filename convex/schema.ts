@@ -651,8 +651,14 @@ export default defineSchema({
       )
     ),
     leftAt: v.optional(v.number()),
+    // Personal completion timestamp for general community reminders.
+    // Present → this user has personally completed this reminder.
+    // Absent → this user considers it open.
+    // Never set for non-general-reminder tasks (personal/assigned tasks use tasks.completed).
+    completedAt: v.optional(v.number()),
   })
     .index('by_task_user', ['taskId', 'userId'])
+    .index('by_task', ['taskId'])
     .index('by_user', ['userId']),
 
   // ═══════════════════════════════════════════════════════
@@ -765,6 +771,7 @@ export default defineSchema({
   })
     .index('by_event', ['eventId'])
     .index('by_task', ['taskId'])
+    .index('by_task_user', ['taskId', 'userId'])
     .index('by_event_user', ['eventId', 'userId'])
     .index('by_status', ['status']),
 
