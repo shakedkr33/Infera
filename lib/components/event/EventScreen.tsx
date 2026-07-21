@@ -8,11 +8,11 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
-  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   Share,
   StyleSheet,
   Switch,
@@ -507,16 +507,12 @@ export default function EventScreen({
         style={s.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <FlatList
+        <ScrollView
           style={s.scroll}
           contentContainerStyle={s.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          nestedScrollEnabled={true}
-          data={[null]}
-          keyExtractor={() => 'form'}
-          renderItem={() => (
-            <>
+        >
               {/* Event Title — compact field */}
               <View style={s.titleSection}>
                 <TextInput
@@ -904,9 +900,7 @@ export default function EventScreen({
               ) : null}
 
               <View style={{ height: 20 }} />
-            </>
-          )}
-        />
+        </ScrollView>
 
         {/* ── Sticky footer — inside KAV so it rides above the keyboard ── */}
         {isCreate && (

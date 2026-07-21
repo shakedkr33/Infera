@@ -896,6 +896,7 @@ export default function CommunityReminderEditScreen() {
                           d.setMinutes(m);
                           setSelectedTime(d);
                         }}
+                        onClose={() => setShowTimePicker(false)}
                       />
                       <TouchableOpacity
                         style={styles.pickerConfirmBtn}

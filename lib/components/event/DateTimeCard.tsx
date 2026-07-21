@@ -772,6 +772,7 @@ export function DateTimeCard({
             minute={timeStrToDate(startTime, startDate).getMinutes()}
             onHourChange={handleStartHourChange}
             onMinuteChange={handleStartMinuteChange}
+            onClose={closePicker}
           />
           <Pressable
             style={s.pickerConfirmBtn}
@@ -837,6 +838,7 @@ export function DateTimeCard({
             minute={timeStrToDate(endTime, endDate).getMinutes()}
             onHourChange={handleEndHourChange}
             onMinuteChange={handleEndMinuteChange}
+            onClose={closePicker}
           />
           <Pressable
             style={s.pickerConfirmBtn}
