@@ -1,4 +1,5 @@
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { rtl } from '@/lib/rtl';
 
 interface AppConfirmationDialogProps {
   visible: boolean;
@@ -104,7 +105,7 @@ const styles = StyleSheet.create({
     color: '#374151',
     fontSize: 14,
     lineHeight: 20,
-    textAlign: 'right',
+    textAlign: rtl.textAlign,
     writingDirection: 'rtl',
   },
   divider: {
@@ -112,7 +113,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#e2e8f0',
   },
   buttons: {
-    flexDirection: 'row',
+    flexDirection: rtl.flexDirection,
   },
   button: {
     flex: 1,
