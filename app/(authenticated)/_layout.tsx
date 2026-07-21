@@ -24,6 +24,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { InYomiSplashScreen } from '@/components/InYomiSplashScreen';
 import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
 import { ActionSheetContext } from '@/contexts/ActionSheetContext';
@@ -235,6 +236,17 @@ export default function AuthenticatedLayout() {
   const savingRef = useRef(false);
 
   const { isExpiredFree } = useEffectiveAccess();
+
+  const insets = useSafeAreaInsets();
+  // On Android the system navigation bar (gesture or 3-button) overlaps the tab
+  // bar unless we push it up by the bottom inset. Use at least 16 px as a floor
+  // so the bar clears even on devices that report a 0 inset incorrectly.
+  const androidBottomPadding =
+    Platform.OS === 'android' ? Math.max(insets.bottom, 16) : 25;
+  // Keep the visual content area height (icon + label) constant across devices:
+  // original content height = 90 (total) − 25 (paddingBottom) = 65 px.
+  const tabBarHeight =
+    Platform.OS === 'android' ? 65 + androidBottomPadding : 90;
 
   const navigationState = useRootNavigationState();
   const router = useRouter();
@@ -557,8 +569,8 @@ export default function AuthenticatedLayout() {
             tabBarStyle: {
               backgroundColor: '#ffffff',
               borderTopColor: '#f0f0f0',
-              height: 90,
-              paddingBottom: 25,
+              height: tabBarHeight,
+              paddingBottom: androidBottomPadding,
               paddingTop: 10,
               overflow: 'visible',
               // Keep tab order physically LTR on every platform regardless of I18nManager.isRTL.
