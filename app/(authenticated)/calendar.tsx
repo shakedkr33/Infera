@@ -1,10 +1,10 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { FlashList } from '@shopify/flash-list';
 import { useQuery } from 'convex/react';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Minus, Plus } from 'lucide-react-native';
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -79,6 +79,33 @@ import {
  * (`direction: 'ltr'` on nested Views is unreliable on Android.)
  */
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
+
+// ===== Module-level date-format caches =====
+// toLocaleDateString('he-IL', …) is synchronous and slow on Hermes (~5-50 ms
+// per call). A module-level Map ensures each unique calendar day is formatted
+// at most once for the lifetime of the app session.
+const _dayLabelCache = new Map<string, string>();
+function getCachedDayLabel(date: Date): string {
+  const key = date.toDateString(); // e.g. "Mon Jul 21 2026" — locale-free, unique per day
+  const cached = _dayLabelCache.get(key);
+  if (cached !== undefined) return cached;
+  const label = date.toLocaleDateString('he-IL', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+  _dayLabelCache.set(key, label);
+  return label;
+}
+
+const _hebrewDateInfoCache = new Map<string, ReturnType<typeof getHebrewDateInfo>>();
+function getCachedHebrewDateInfo(dateStr: string): ReturnType<typeof getHebrewDateInfo> {
+  const cached = _hebrewDateInfoCache.get(dateStr);
+  if (cached !== undefined) return cached;
+  const info = getHebrewDateInfo(dateStr);
+  _hebrewDateInfoCache.set(dateStr, info);
+  return info;
+}
 
 // ===== Constants =====
 const PRIMARY_BLUE = '#36a9e2';
@@ -327,6 +354,15 @@ interface TimelineDayGroup {
   events: TimelineEventRow[];
   sortKey: number;
 }
+
+// ===== Flat list types for FlashList virtualization =====
+type MissingDay = { dateStr: string; dayLabel: string; dayNumber: string };
+
+type FlatTimelineRow =
+  | { type: 'dayGroup'; key: string; dayGroup: TimelineDayGroup; dateStr: string }
+  | { type: 'gapToggle'; key: string; dateStr: string; missingDays: MissingDay[]; isOpen: boolean }
+  | { type: 'missingDay'; key: string; day: MissingDay }
+  | { type: 'endIndicator'; key: string };
 
 // ===== Task filter (mirrors Home screen rule) =====
 function isEventDerivedImportantItemTask(task: {
@@ -1780,8 +1816,6 @@ export default function CalendarScreen(): React.JSX.Element {
     null
   );
   const longPressGuardRef = useRef<{ key: string; until: number } | null>(null);
-  const timelineScrollRef = useRef<ScrollView | null>(null);
-  const didAutoScrollTimelineRef = useRef(false);
 
   const isFiltered = !!communityId;
 
@@ -1848,6 +1882,12 @@ export default function CalendarScreen(): React.JSX.Element {
       from: timelineRange.from,
       to: timelineRange.to,
     }) ?? [];
+
+  // Lifted out of TimelineView so the subscription stays alive across tab
+  // switches — avoids a cold Convex round-trip every time the user returns
+  // to the Timeline tab on Android.
+  const myImportantItemChecks =
+    useQuery(api.tasks.getMyImportantItemChecks) ?? {};
 
   const timelineTasksByEventId = useMemo(() => {
     const map: Record<string, AssignedEventTask[]> = {};
@@ -2866,6 +2906,8 @@ export default function CalendarScreen(): React.JSX.Element {
     // Prevent switching to monthly view when community filter is active
     if (isFiltered && mode === 'monthly') return;
 
+    // TEMP PERF
+    console.log('[PERF] tab-switch to', mode, Date.now());
     setEventEditMenu(null);
     setDaySheetDay(null);
     setIsMonthPickerVisible(false);
@@ -3066,17 +3108,15 @@ export default function CalendarScreen(): React.JSX.Element {
 
   // ── Build timeline data: use real events when filtering by community
   const timelineData = useMemo(() => {
+    // TEMP PERF
+    console.log('[PERF] timelineData compute START', Date.now());
     const todayD = new Date(
       today.getFullYear(),
       today.getMonth(),
       today.getDate()
     );
     const todayKey = `${todayD.getFullYear()}-${todayD.getMonth()}-${todayD.getDate()}`;
-    const todayLabel = todayD.toLocaleDateString('he-IL', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-    });
+    const todayLabel = getCachedDayLabel(todayD);
 
     if (!isFiltered) {
       // Personal + community around today for independent timeline browsing
@@ -3108,11 +3148,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
         if (!grouped[key]) {
           grouped[key] = {
-            dayLabel: d.toLocaleDateString('he-IL', {
-              weekday: 'long',
-              day: 'numeric',
-              month: 'long',
-            }),
+            dayLabel: getCachedDayLabel(d),
             dayNumber: String(d.getDate()),
             isToday,
             events: [],
@@ -3282,11 +3318,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
         if (!grouped[key]) {
           grouped[key] = {
-            dayLabel: d.toLocaleDateString('he-IL', {
-              weekday: 'long',
-              day: 'numeric',
-              month: 'long',
-            }),
+            dayLabel: getCachedDayLabel(d),
             dayNumber: String(d.getDate()),
             isToday,
             events: [],
@@ -3353,11 +3385,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
         if (!grouped[key]) {
           grouped[key] = {
-            dayLabel: d.toLocaleDateString('he-IL', {
-              weekday: 'long',
-              day: 'numeric',
-              month: 'long',
-            }),
+            dayLabel: getCachedDayLabel(d),
             dayNumber: String(d.getDate()),
             isToday,
             events: [],
@@ -3428,7 +3456,10 @@ export default function CalendarScreen(): React.JSX.Element {
         };
       }
 
-      return Object.values(grouped).sort((a, b) => a.sortKey - b.sortKey);
+      // TEMP PERF
+      const _tdResult1 = Object.values(grouped).sort((a, b) => a.sortKey - b.sortKey);
+      console.log('[PERF] timelineData compute END', _tdResult1.length, 'groups', Date.now());
+      return _tdResult1;
     }
 
     // Community filter active — show community events only
@@ -3455,11 +3486,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
       if (!grouped[key]) {
         grouped[key] = {
-          dayLabel: d.toLocaleDateString('he-IL', {
-            weekday: 'long',
-            day: 'numeric',
-            month: 'long',
-          }),
+          dayLabel: getCachedDayLabel(d),
           dayNumber: String(d.getDate()),
           isToday,
           events: [],
@@ -3511,7 +3538,10 @@ export default function CalendarScreen(): React.JSX.Element {
     }
 
     // Sort ascending so the list can scroll to past and future around today.
-    return Object.values(grouped).sort((a, b) => a.sortKey - b.sortKey);
+    // TEMP PERF
+    const _tdResult2 = Object.values(grouped).sort((a, b) => a.sortKey - b.sortKey);
+    console.log('[PERF] timelineData compute END', _tdResult2.length, 'groups', Date.now());
+    return _tdResult2;
   }, [
     today,
     isFiltered,
@@ -3565,6 +3595,8 @@ export default function CalendarScreen(): React.JSX.Element {
   // the timeline when showHolidays is on. When showHolidays is off, holidaysByDay
   // is empty (hook receives [] categories), so no extra groups are added.
   const filteredTimelineDataWithHolidays = useMemo((): TimelineDayGroup[] => {
+    // TEMP PERF
+    console.log('[PERF] filteredTimelineDataWithHolidays START', Date.now());
     if (viewMode !== 'timeline') return filteredTimelineData;
     const holidayKeys = Object.keys(holidaysByDay);
     if (holidayKeys.length === 0) return filteredTimelineData;
@@ -3599,11 +3631,7 @@ export default function CalendarScreen(): React.JSX.Element {
         dateObj.getDate() === todayLocal.getDate();
 
       extra.push({
-        dayLabel: dateObj.toLocaleDateString('he-IL', {
-          weekday: 'long',
-          day: 'numeric',
-          month: 'long',
-        }),
+        dayLabel: getCachedDayLabel(dateObj),
         dayNumber: String(dateObj.getDate()),
         isToday: isHolidayToday,
         events: [],
@@ -3611,16 +3639,19 @@ export default function CalendarScreen(): React.JSX.Element {
       });
     }
 
-    if (extra.length === 0) return filteredTimelineData;
-    return [...filteredTimelineData, ...extra].sort(
+    if (extra.length === 0) {
+      // TEMP PERF
+      console.log('[PERF] filteredTimelineDataWithHolidays END (no extra)', Date.now());
+      return filteredTimelineData;
+    }
+    // TEMP PERF
+    const _ftwh = [...filteredTimelineData, ...extra].sort(
       (a, b) => a.sortKey - b.sortKey
     );
+    console.log('[PERF] filteredTimelineDataWithHolidays END', _ftwh.length, 'groups', Date.now());
+    return _ftwh;
   }, [filteredTimelineData, holidaysByDay, viewMode, timelineRange, today]);
 
-  useEffect(() => {
-    if (viewMode !== 'timeline') return;
-    didAutoScrollTimelineRef.current = false;
-  }, [viewMode]);
 
   return (
     <SafeAreaView
@@ -3759,31 +3790,17 @@ export default function CalendarScreen(): React.JSX.Element {
 
         {/* Content */}
         {viewMode === 'timeline' ? (
-          <ScrollView
-            ref={timelineScrollRef}
-            style={styles.content}
-            showsVerticalScrollIndicator={false}
-          >
-            <TimelineView
-              data={filteredTimelineDataWithHolidays}
-              holidaysByDay={holidaysByDay}
-              onTodayLayout={(y) => {
-                if (didAutoScrollTimelineRef.current) return;
-                didAutoScrollTimelineRef.current = true;
-                requestAnimationFrame(() => {
-                  timelineScrollRef.current?.scrollTo({
-                    y: Math.max(0, y - 12),
-                    animated: false,
-                  });
-                });
-              }}
-              onEventPress={handleOpenEventDetails}
-              onNavigate={handleNavigateToLocation}
-              onOpenTaskSheet={(id) => {
-                setTaskSheetTaskId(id);
-                setTaskSheetVisible(true);
-              }}
-              onAddPress={(dateStr) => {
+          <TimelineView
+            data={filteredTimelineDataWithHolidays}
+            holidaysByDay={holidaysByDay}
+            myImportantItemChecks={myImportantItemChecks}
+            onEventPress={handleOpenEventDetails}
+            onNavigate={handleNavigateToLocation}
+            onOpenTaskSheet={(id) => {
+              setTaskSheetTaskId(id);
+              setTaskSheetVisible(true);
+            }}
+            onAddPress={(dateStr) => {
                 handleGatedCreateAction(() => {
                   router.push({
                     pathname: '/(authenticated)/event/new',
@@ -3797,7 +3814,6 @@ export default function CalendarScreen(): React.JSX.Element {
                 });
               }}
             />
-          </ScrollView>
         ) : (
           <View
             style={styles.content}
@@ -4602,13 +4618,21 @@ function DayCell({
 interface CalendarTaskCardProps {
   task: CalendarDayTask;
   onOpenTaskSheet: (id: string) => void;
+  /** Lifted from TimelineView to survive FlashList recycling. Falls back to internal state when not provided (monthly-view call sites). */
+  subtasksExpanded?: boolean;
+  onToggleSubtasks?: () => void;
 }
 
 function CalendarTaskCard({
   task,
   onOpenTaskSheet,
+  subtasksExpanded: subtasksExpandedProp,
+  onToggleSubtasks,
 }: CalendarTaskCardProps): React.JSX.Element {
-  const [subtasksExpanded, setSubtasksExpanded] = useState(false);
+  const [subtasksExpandedLocal, setSubtasksExpandedLocal] = useState(false);
+  const subtasksExpanded = subtasksExpandedProp ?? subtasksExpandedLocal;
+  const toggleSubtasks =
+    onToggleSubtasks ?? (() => setSubtasksExpandedLocal((v) => !v));
   const subtasks = task.subtasks ?? [];
   const completedCount = subtasks.filter((s) => s.completed).length;
   // Strip the "task:" prefix that wraps the Convex _id in calendar rows.
@@ -4686,7 +4710,7 @@ function CalendarTaskCard({
               }}
               onPress={(e) => {
                 e.stopPropagation?.();
-                setSubtasksExpanded((v) => !v);
+                toggleSubtasks();
               }}
               accessible={true}
               accessibilityRole="button"
@@ -5214,11 +5238,7 @@ function buildMissingDays(
     const d = cursor.getDate();
     result.push({
       dateStr: `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
-      dayLabel: cursor.toLocaleDateString('he-IL', {
-        weekday: 'long',
-        day: 'numeric',
-        month: 'long',
-      }),
+      dayLabel: getCachedDayLabel(cursor),
       dayNumber: String(d),
     });
     cursor.setDate(cursor.getDate() + 1);
@@ -5230,7 +5250,7 @@ function buildMissingDays(
 function TimelineView({
   data,
   holidaysByDay,
-  onTodayLayout,
+  myImportantItemChecks,
   onEventPress,
   onNavigate,
   onAddPress,
@@ -5239,15 +5259,61 @@ function TimelineView({
   data: TimelineDayGroup[];
   /** Per-date holiday items. Empty record when showHolidays is off or no categories enabled. */
   holidaysByDay: Record<string, HolidayOverlayItem[]>;
-  onTodayLayout?: (y: number) => void;
+  /** Lifted to parent so the Convex subscription stays alive across tab switches. */
+  myImportantItemChecks: Record<string, Record<string, boolean>>;
   onEventPress: (event: CalendarEvent) => void;
   onNavigate: (location: string, locationUrl?: string) => void;
   onAddPress: (dateStr: string) => void;
   onOpenTaskSheet: (id: string) => void;
 }): React.JSX.Element {
   const [openGaps, setOpenGaps] = useState<Record<string, boolean>>({});
-  const myImportantItemChecks =
-    useQuery(api.tasks.getMyImportantItemChecks) ?? {};
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
+
+  // TEMP PERF
+  useEffect(() => {
+    console.log('[PERF] myImportantItemChecks resolved', Date.now());
+  }, [myImportantItemChecks]);
+
+  // TEMP PERF
+  useEffect(() => {
+    console.log('[PERF] TimelineView mounted (JS)', Date.now());
+    const raf = requestAnimationFrame(() => {
+      console.log('[PERF] TimelineView first frame after mount', Date.now());
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  // Build flat list: one item per day group, plus gap toggles, expanded missing days, and end indicator.
+  // Recomputes when data or openGaps changes so gap expand/collapse correctly inserts/removes rows.
+  const flattenedTimelineRows = useMemo((): FlatTimelineRow[] => {
+    const rows: FlatTimelineRow[] = [];
+    for (let idx = 0; idx < data.length; idx++) {
+      const dayGroup = data[idx];
+      const sk = new Date(dayGroup.sortKey);
+      const dateStr = `${sk.getFullYear()}-${String(sk.getMonth() + 1).padStart(2, '0')}-${String(sk.getDate()).padStart(2, '0')}`;
+      rows.push({ type: 'dayGroup', key: `group-${dayGroup.sortKey}`, dayGroup, dateStr });
+      const nextGroup = data[idx + 1];
+      const missingDays =
+        nextGroup != null ? buildMissingDays(sk, new Date(nextGroup.sortKey)) : [];
+      if (missingDays.length > 0) {
+        const isOpen = openGaps[dateStr] ?? false;
+        rows.push({ type: 'gapToggle', key: `gap-${dateStr}`, dateStr, missingDays, isOpen });
+        if (isOpen) {
+          for (const day of missingDays) {
+            rows.push({ type: 'missingDay', key: day.dateStr, day });
+          }
+        }
+      }
+    }
+    rows.push({ type: 'endIndicator', key: 'end-indicator' });
+    return rows;
+  }, [data, openGaps]);
+
+  // Index of the today dayGroup row — used as FlashList's initialScrollIndex.
+  const todayRowIndex = useMemo(
+    () => flattenedTimelineRows.findIndex((r) => r.type === 'dayGroup' && r.dayGroup.isToday),
+    [flattenedTimelineRows],
+  );
 
   if (data.length === 0) {
     return (
@@ -5269,389 +5335,380 @@ function TimelineView({
     );
   }
 
-  return (
-    <View style={styles.timelineContainer}>
-      {data.map((dayGroup, idx) => {
-        const sk = new Date(dayGroup.sortKey);
-        const dateStr = `${sk.getFullYear()}-${String(sk.getMonth() + 1).padStart(2, '0')}-${String(sk.getDate()).padStart(2, '0')}`;
-
-        const nextGroup = data[idx + 1];
-        const missingDays =
-          nextGroup != null
-            ? buildMissingDays(sk, new Date(nextGroup.sortKey))
-            : [];
-        const isGapOpen =
-          missingDays.length > 0 ? (openGaps[dateStr] ?? false) : false;
-
-        return (
-          <Fragment key={`group-${dayGroup.sortKey}`}>
-            {/* Day group */}
+  const renderFlatRow = ({ item }: { item: FlatTimelineRow }): React.JSX.Element | null => {
+    if (item.type === 'dayGroup') {
+      const { dayGroup, dateStr } = item;
+      return (
+        <View style={styles.dayGroup}>
+          {/* Day Header */}
+          <View style={[styles.dayHeader, { flexDirection: rtl.flexDirection }]}>
             <View
-              onLayout={(event) => {
-                if (!dayGroup.isToday || onTodayLayout == null) return;
-                onTodayLayout(event.nativeEvent.layout.y);
-              }}
-              style={styles.dayGroup}
+              style={[
+                styles.dayNumberCircle,
+                dayGroup.isToday && styles.dayNumberCircleToday,
+              ]}
             >
-              {/* Day Header */}
-              <View
-                style={[styles.dayHeader, { flexDirection: rtl.flexDirection }]}
+              <Text
+                style={[
+                  styles.dayNumberText,
+                  dayGroup.isToday && styles.dayNumberTextToday,
+                ]}
               >
-                <View
-                  style={[
-                    styles.dayNumberCircle,
-                    dayGroup.isToday && styles.dayNumberCircleToday,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.dayNumberText,
-                      dayGroup.isToday && styles.dayNumberTextToday,
-                    ]}
-                  >
-                    {dayGroup.dayNumber}
-                  </Text>
-                </View>
-                <View style={styles.dayLabelBlock}>
-                  <Text
-                    style={[
-                      styles.dayLabel,
-                      dayGroup.isToday && styles.dayLabelToday,
-                    ]}
-                  >
-                    {dayGroup.dayLabel}
-                  </Text>
-                  {getHebrewDateInfo(dateStr).fullHebrewDate ? (
-                    <Text style={styles.dayHebrewLabel}>
-                      {getHebrewDateInfo(dateStr).fullHebrewDate}
-                    </Text>
-                  ) : null}
-                </View>
-                <View style={styles.dayDivider} />
-                <Pressable
-                  onPress={() => onAddPress(dateStr)}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel={`הוסף אירוע בתאריך ${dayGroup.dayLabel}`}
-                  style={({ pressed }) => [
-                    styles.addEventPill,
-                    pressed && styles.addEventPillPressed,
-                  ]}
-                >
-                  <Text style={styles.addEventPillText}>הוסף</Text>
-                </Pressable>
-              </View>
+                {dayGroup.dayNumber}
+              </Text>
+            </View>
+            <View style={styles.dayLabelBlock}>
+              <Text
+                style={[
+                  styles.dayLabel,
+                  dayGroup.isToday && styles.dayLabelToday,
+                ]}
+              >
+                {dayGroup.dayLabel}
+              </Text>
+              {getCachedHebrewDateInfo(dateStr).fullHebrewDate ? (
+                <Text style={styles.dayHebrewLabel}>
+                  {getCachedHebrewDateInfo(dateStr).fullHebrewDate}
+                </Text>
+              ) : null}
+            </View>
+            <View style={styles.dayDivider} />
+            <Pressable
+              onPress={() => onAddPress(dateStr)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={`הוסף אירוע בתאריך ${dayGroup.dayLabel}`}
+              style={({ pressed }) => [
+                styles.addEventPill,
+                pressed && styles.addEventPillPressed,
+              ]}
+            >
+              <Text style={styles.addEventPillText}>הוסף</Text>
+            </Pressable>
+          </View>
 
-              {/* Timeline events */}
-              <View style={styles.timelineLineWrapper}>
-                {/* Holiday overlays + Events/Tasks */}
-                <View style={styles.eventsWrapper}>
-                  {(holidaysByDay[dateStr] ?? []).map((h) => (
-                    <TimelineHolidayRow key={`holiday-${h.id}`} holiday={h} />
-                  ))}
-                  {dayGroup.events.map((event: TimelineEventRow) => {
-                    const rsvpVisual = getPersonalRsvpVisualState({
-                      cancelled: event.cancelled,
-                      pendingPersonalInvite: event.pendingPersonalInvite,
-                      myPersonalRsvpStatus: event.myPersonalRsvpStatus,
-                    });
-                    const eventTitle = getCalendarEventTitle(event);
-                    return (
-                      <View key={event.id} style={styles.eventRow}>
-                        {/* Time column + Rail/Dot + Card (RTL right→left: time | rail | card) */}
-                        <View style={styles.eventRowInner}>
-                          {/* Time column — far RIGHT (first child in rtl layout) */}
-                          <View style={styles.eventTimeColumn}>
-                            {event.time ? (
-                              <>
-                                <Text style={styles.eventTimeText}>
-                                  {event.endTime
-                                    ? `${event.time}-`
-                                    : event.time}
-                                </Text>
-                                {event.endTime ? (
-                                  <Text style={styles.eventEndTimeText}>
-                                    {event.endTime}
-                                  </Text>
-                                ) : null}
-                              </>
+          {/* Timeline events */}
+          <View style={styles.timelineLineWrapper}>
+            {/* Holiday overlays + Events/Tasks */}
+            <View style={styles.eventsWrapper}>
+              {(holidaysByDay[dateStr] ?? []).map((h) => (
+                <TimelineHolidayRow key={`holiday-${h.id}`} holiday={h} />
+              ))}
+              {dayGroup.events.map((event: TimelineEventRow) => {
+                const rsvpVisual = getPersonalRsvpVisualState({
+                  cancelled: event.cancelled,
+                  pendingPersonalInvite: event.pendingPersonalInvite,
+                  myPersonalRsvpStatus: event.myPersonalRsvpStatus,
+                });
+                const eventTitle = getCalendarEventTitle(event);
+                return (
+                  <View key={event.id} style={styles.eventRow}>
+                    {/* Time column + Rail/Dot + Card (RTL right→left: time | rail | card) */}
+                    <View style={styles.eventRowInner}>
+                      {/* Time column — far RIGHT (first child in rtl layout) */}
+                      <View style={styles.eventTimeColumn}>
+                        {event.time ? (
+                          <>
+                            <Text style={styles.eventTimeText}>
+                              {event.endTime ? `${event.time}-` : event.time}
+                            </Text>
+                            {event.endTime ? (
+                              <Text style={styles.eventEndTimeText}>
+                                {event.endTime}
+                              </Text>
                             ) : null}
-                          </View>
+                          </>
+                        ) : null}
+                      </View>
 
-                          {/* Rail + Dot — MIDDLE between time and card */}
-                          <View style={styles.eventRailColumn}>
-                            <View style={styles.eventRailLine} />
+                      {/* Rail + Dot — MIDDLE between time and card */}
+                      <View style={styles.eventRailColumn}>
+                        <View style={styles.eventRailLine} />
+                        <View
+                          style={[
+                            styles.eventDot,
+                            { borderColor: event.categoryColor },
+                            event.cancelled && styles.eventDotCancelled,
+                          ]}
+                        />
+                      </View>
+
+                      {/* Event / Task Card — physical LEFT */}
+                      <View style={styles.timelineEventCardColumn}>
+                        {event.isPersonalTask ? (
+                          /* ── Personal task card — unified CalendarTaskCard ── */
+                          <CalendarTaskCard
+                            task={{
+                              id: event.id,
+                              title: event.title,
+                              time: event.time,
+                              isOverdue: event.isOverdue ?? false,
+                              assigneeInitials: event.assigneeInitials,
+                              assigneeColor: event.assigneeColor,
+                              assigneeDisplays: event.assigneeDisplays,
+                              subtasks: event.subtasks,
+                            }}
+                            subtasksExpanded={expandedTaskIds.has(event.id)}
+                            onToggleSubtasks={() => {
+                              setExpandedTaskIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(event.id)) {
+                                  next.delete(event.id);
+                                } else {
+                                  next.add(event.id);
+                                }
+                                return next;
+                              });
+                            }}
+                            onOpenTaskSheet={onOpenTaskSheet}
+                          />
+                        ) : (
+                          /* ── Regular event card ── */
+                          <Pressable
+                            key={`${event.id}-${rsvpVisual.kind}`}
+                            style={[
+                              styles.eventCard,
+                              event.cancelled && styles.eventCardCancelled,
+                              event.myAssignedTasks &&
+                                event.myAssignedTasks.length > 0 &&
+                                styles.eventCardWithTasks,
+                              !event.cancelled &&
+                                rsvpVisual.kind !== 'normal' &&
+                                styles.pendingPersonalInviteCard,
+                            ]}
+                            onPress={() => onEventPress(event)}
+                            accessible={true}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
+                          >
+                            {/* Color accent bar */}
                             <View
                               style={[
-                                styles.eventDot,
-                                { borderColor: event.categoryColor },
-                                event.cancelled && styles.eventDotCancelled,
+                                styles.eventAccentBar,
+                                {
+                                  backgroundColor: event.cancelled
+                                    ? '#9ca3af'
+                                    : event.categoryColor,
+                                },
                               ]}
                             />
-                          </View>
 
-                          {/* Event / Task Card — physical LEFT */}
-                          <View style={styles.timelineEventCardColumn}>
-                            {event.isPersonalTask ? (
-                              /* ── Personal task card — unified CalendarTaskCard ── */
-                              <CalendarTaskCard
-                                task={{
-                                  id: event.id,
-                                  title: event.title,
-                                  time: event.time,
-                                  isOverdue: event.isOverdue ?? false,
-                                  assigneeInitials: event.assigneeInitials,
-                                  assigneeColor: event.assigneeColor,
-                                  assigneeDisplays: event.assigneeDisplays,
-                                  subtasks: event.subtasks,
-                                }}
-                                onOpenTaskSheet={onOpenTaskSheet}
-                              />
-                            ) : (
-                              /* ── Regular event card ── */
-                              <Pressable
-                                key={`${event.id}-${rsvpVisual.kind}`}
-                                style={[
-                                  styles.eventCard,
-                                  event.cancelled && styles.eventCardCancelled,
-                                  event.myAssignedTasks &&
-                                    event.myAssignedTasks.length > 0 &&
-                                    styles.eventCardWithTasks,
-                                  !event.cancelled &&
-                                    rsvpVisual.kind !== 'normal' &&
-                                    styles.pendingPersonalInviteCard,
-                                ]}
-                                onPress={() => onEventPress(event)}
-                                accessible={true}
-                                accessibilityRole="button"
-                                accessibilityLabel={`${event.title}${event.time ? `, ${event.time}` : ''}`}
-                              >
-                                {/* Color accent bar */}
+                            {/* Card inner content */}
+                            <View style={styles.eventCardContent}>
+                              {/* Header: category tag + community name tag + profile circles */}
+                              <View style={styles.eventCardHeader}>
                                 <View
                                   style={[
-                                    styles.eventAccentBar,
+                                    styles.categoryTag,
                                     {
-                                      backgroundColor: event.cancelled
-                                        ? '#9ca3af'
-                                        : event.categoryColor,
+                                      backgroundColor: `${event.categoryColor}20`,
                                     },
                                   ]}
-                                />
-
-                                {/* Card inner content */}
-                                <View style={styles.eventCardContent}>
-                                  {/* Header: category tag + community name tag + profile circles */}
-                                  <View style={styles.eventCardHeader}>
-                                    <View
-                                      style={[
-                                        styles.categoryTag,
-                                        {
-                                          backgroundColor: `${event.categoryColor}20`,
-                                        },
-                                      ]}
-                                    >
-                                      <Text
-                                        style={[
-                                          styles.categoryTagText,
-                                          {
-                                            color: event.cancelled
-                                              ? '#9ca3af'
-                                              : event.categoryColor,
-                                          },
-                                        ]}
-                                      >
-                                        {event.category}
-                                      </Text>
-                                    </View>
-                                    {event.communityName ? (
-                                      <CommunityEventNameTag
-                                        name={event.communityName}
-                                      />
-                                    ) : null}
-                                    {(event.profileCircles?.length ?? 0) > 0 ||
-                                    (event.profileCirclesExtraCount ?? 0) >
-                                      0 ? (
-                                      <ProfileCircles
-                                        profiles={event.profileCircles ?? []}
-                                        extraCount={
-                                          event.profileCirclesExtraCount ?? 0
-                                        }
-                                        context={
-                                          event.profileCirclesContext ??
-                                          'sharedWith'
-                                        }
-                                        size={22}
-                                      />
-                                    ) : null}
-                                  </View>
-
-                                  {/* Event Title */}
+                                >
                                   <Text
                                     style={[
-                                      styles.eventTitle,
-                                      event.cancelled &&
-                                        styles.eventTitleCancelled,
+                                      styles.categoryTagText,
+                                      {
+                                        color: event.cancelled
+                                          ? '#9ca3af'
+                                          : event.categoryColor,
+                                      },
                                     ]}
                                   >
-                                    {eventTitle}
+                                    {event.category}
                                   </Text>
-                                  <PersonalRsvpBadge
-                                    badgeStyle={styles.pendingRsvpBadge}
-                                    textStyle={styles.pendingRsvpBadgeText}
-                                    visual={rsvpVisual}
-                                  />
-
-                                  {/* Location + nav button */}
-                                  {event.location ? (
-                                    <>
-                                      <View style={styles.locationRow}>
-                                        <MaterialIcons
-                                          name="location-on"
-                                          size={13}
-                                          color="#94a3b8"
-                                        />
-                                        <Text
-                                          style={styles.locationText}
-                                          numberOfLines={1}
-                                        >
-                                          {event.location}
-                                        </Text>
-                                      </View>
-                                      <Pressable
-                                        style={styles.eventNavBtn}
-                                        onPress={(e) => {
-                                          e.stopPropagation?.();
-                                          onNavigate(
-                                            event.location as string,
-                                            event.locationUrl
-                                          );
-                                        }}
-                                        accessible={true}
-                                        accessibilityRole="button"
-                                        accessibilityLabel="נווט"
-                                      >
-                                        <Text style={styles.eventNavBtnText}>
-                                          נווט
-                                        </Text>
-                                        <MaterialIcons
-                                          name="near-me"
-                                          size={13}
-                                          color="#8d6e63"
-                                        />
-                                      </Pressable>
-                                    </>
-                                  ) : null}
                                 </View>
-                              </Pressable>
-                            )}
-                            {!event.isPersonalTask &&
-                            event.myAssignedTasks &&
-                            event.myAssignedTasks.length > 0 ? (
-                              <View
-                                style={styles.calendarTaskExpansionContainer}
-                              >
-                                <InlineEventTasksSection
-                                  tasks={event.myAssignedTasks}
-                                />
+                                {event.communityName ? (
+                                  <CommunityEventNameTag
+                                    name={event.communityName}
+                                  />
+                                ) : null}
+                                {(event.profileCircles?.length ?? 0) > 0 ||
+                                (event.profileCirclesExtraCount ?? 0) > 0 ? (
+                                  <ProfileCircles
+                                    profiles={event.profileCircles ?? []}
+                                    extraCount={
+                                      event.profileCirclesExtraCount ?? 0
+                                    }
+                                    context={
+                                      event.profileCirclesContext ?? 'sharedWith'
+                                    }
+                                    size={22}
+                                  />
+                                ) : null}
                               </View>
-                            ) : null}
-                            {!event.isPersonalTask &&
-                            event.importantItems &&
-                            event.importantItems.length > 0 ? (
-                              <View
-                                style={styles.calendarTaskExpansionContainer}
+
+                              {/* Event Title */}
+                              <Text
+                                style={[
+                                  styles.eventTitle,
+                                  event.cancelled && styles.eventTitleCancelled,
+                                ]}
                               >
-                                <InlineImportantItemsSection
-                                  eventId={String(event.id)}
-                                  items={event.importantItems}
-                                  checks={
-                                    myImportantItemChecks[String(event.id)] ??
-                                    {}
-                                  }
-                                />
-                              </View>
-                            ) : null}
+                                {eventTitle}
+                              </Text>
+                              <PersonalRsvpBadge
+                                badgeStyle={styles.pendingRsvpBadge}
+                                textStyle={styles.pendingRsvpBadgeText}
+                                visual={rsvpVisual}
+                              />
+
+                              {/* Location + nav button */}
+                              {event.location ? (
+                                <>
+                                  <View style={styles.locationRow}>
+                                    <MaterialIcons
+                                      name="location-on"
+                                      size={13}
+                                      color="#94a3b8"
+                                    />
+                                    <Text
+                                      style={styles.locationText}
+                                      numberOfLines={1}
+                                    >
+                                      {event.location}
+                                    </Text>
+                                  </View>
+                                  <Pressable
+                                    style={styles.eventNavBtn}
+                                    onPress={(e) => {
+                                      e.stopPropagation?.();
+                                      onNavigate(
+                                        event.location as string,
+                                        event.locationUrl,
+                                      );
+                                    }}
+                                    accessible={true}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="נווט"
+                                  >
+                                    <Text style={styles.eventNavBtnText}>נווט</Text>
+                                    <MaterialIcons
+                                      name="near-me"
+                                      size={13}
+                                      color="#8d6e63"
+                                    />
+                                  </Pressable>
+                                </>
+                              ) : null}
+                            </View>
+                          </Pressable>
+                        )}
+                        {!event.isPersonalTask &&
+                        event.myAssignedTasks &&
+                        event.myAssignedTasks.length > 0 ? (
+                          <View style={styles.calendarTaskExpansionContainer}>
+                            <InlineEventTasksSection tasks={event.myAssignedTasks} />
                           </View>
-                        </View>
+                        ) : null}
+                        {!event.isPersonalTask &&
+                        event.importantItems &&
+                        event.importantItems.length > 0 ? (
+                          <View style={styles.calendarTaskExpansionContainer}>
+                            <InlineImportantItemsSection
+                              eventId={String(event.id)}
+                              items={event.importantItems}
+                              checks={myImportantItemChecks[String(event.id)] ?? {}}
+                            />
+                          </View>
+                        ) : null}
                       </View>
-                    );
-                  })}
-                </View>
-              </View>
-            </View>
-
-            {/* Gap toggle: shown between two groups when days are missing */}
-            {missingDays.length > 0 && (
-              <View style={styles.gapRow}>
-                <Pressable
-                  onPress={() =>
-                    setOpenGaps((prev) => ({
-                      ...prev,
-                      [dateStr]: !(prev[dateStr] ?? false),
-                    }))
-                  }
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    isGapOpen
-                      ? 'הסתר ימים ללא אירועים'
-                      : `הצג ${missingDays.length === 1 ? 'יום' : 'ימים'} ללא אירועים`
-                  }
-                  hitSlop={{ top: 13, bottom: 13, left: 13, right: 13 }}
-                  style={({ pressed }) => [
-                    styles.gapToggleButton,
-                    pressed && styles.gapToggleButtonPressed,
-                  ]}
-                >
-                  {isGapOpen ? (
-                    <Minus size={18} color={PRIMARY_BLUE} strokeWidth={2} />
-                  ) : (
-                    <Plus size={18} color={PRIMARY_BLUE} strokeWidth={2} />
-                  )}
-                </Pressable>
-              </View>
-            )}
-
-            {/* Empty day rows rendered when gap is open */}
-            {isGapOpen &&
-              missingDays.map((day) => (
-                <View key={day.dateStr} style={styles.dayGroup}>
-                  <View
-                    style={[
-                      styles.dayHeader,
-                      { flexDirection: rtl.flexDirection },
-                    ]}
-                  >
-                    <View style={styles.dayNumberCircle}>
-                      <Text style={styles.dayNumberText}>{day.dayNumber}</Text>
                     </View>
-                    <Text style={styles.dayLabel}>{day.dayLabel}</Text>
-                    <View style={styles.dayDivider} />
-                    <Pressable
-                      onPress={() => onAddPress(day.dateStr)}
-                      accessible={true}
-                      accessibilityRole="button"
-                      accessibilityLabel={`הוסף אירוע בתאריך ${day.dayLabel}`}
-                      style={({ pressed }) => [
-                        styles.addEventPill,
-                        pressed && styles.addEventPillPressed,
-                      ]}
-                    >
-                      <Text style={styles.addEventPillText}>הוסף</Text>
-                    </Pressable>
                   </View>
-                </View>
-              ))}
-          </Fragment>
-        );
-      })}
+                );
+              })}
+            </View>
+          </View>
+        </View>
+      );
+    }
 
-      {/* End indicator */}
+    if (item.type === 'gapToggle') {
+      const { dateStr, missingDays, isOpen } = item;
+      return (
+        <View style={styles.gapRow}>
+          <Pressable
+            onPress={() =>
+              setOpenGaps((prev) => ({
+                ...prev,
+                [dateStr]: !(prev[dateStr] ?? false),
+              }))
+            }
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel={
+              isOpen
+                ? 'הסתר ימים ללא אירועים'
+                : `הצג ${missingDays.length === 1 ? 'יום' : 'ימים'} ללא אירועים`
+            }
+            hitSlop={{ top: 13, bottom: 13, left: 13, right: 13 }}
+            style={({ pressed }) => [
+              styles.gapToggleButton,
+              pressed && styles.gapToggleButtonPressed,
+            ]}
+          >
+            {isOpen ? (
+              <Minus size={18} color={PRIMARY_BLUE} strokeWidth={2} />
+            ) : (
+              <Plus size={18} color={PRIMARY_BLUE} strokeWidth={2} />
+            )}
+          </Pressable>
+        </View>
+      );
+    }
+
+    if (item.type === 'missingDay') {
+      const { day } = item;
+      return (
+        <View style={styles.dayGroup}>
+          <View style={[styles.dayHeader, { flexDirection: rtl.flexDirection }]}>
+            <View style={styles.dayNumberCircle}>
+              <Text style={styles.dayNumberText}>{day.dayNumber}</Text>
+            </View>
+            <Text style={styles.dayLabel}>{day.dayLabel}</Text>
+            <View style={styles.dayDivider} />
+            <Pressable
+              onPress={() => onAddPress(day.dateStr)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={`הוסף אירוע בתאריך ${day.dayLabel}`}
+              style={({ pressed }) => [
+                styles.addEventPill,
+                pressed && styles.addEventPillPressed,
+              ]}
+            >
+              <Text style={styles.addEventPillText}>הוסף</Text>
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
+
+    // endIndicator
+    return (
       <View style={styles.endIndicator}>
         <MaterialIcons name="history" size={30} color="#d1d5db" />
         <Text style={styles.endText}>סוף ההיסטוריה המוצגת</Text>
       </View>
-    </View>
+    );
+  };
+
+  return (
+    <FlashList
+      data={flattenedTimelineRows}
+      keyExtractor={(row) => row.key}
+      getItemType={(row) => row.type}
+      renderItem={renderFlatRow}
+      initialScrollIndex={todayRowIndex >= 0 ? todayRowIndex : undefined}
+      initialScrollIndexParams={{ viewOffset: 12 }}
+      style={{ flex: 1, overflow: 'hidden' }}
+      contentContainerStyle={{
+        paddingTop: 16,
+        paddingHorizontal: 16,
+        paddingBottom: 120,
+      }}
+      showsVerticalScrollIndicator={false}
+    />
   );
 }
 
