@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Dimensions,
   Linking,
   Modal,
   Platform,
@@ -41,8 +40,6 @@ import { APP_IS_RTL, getTextAlign, position, rtl, spacing } from '@/lib/rtl';
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
-
-const { width: screenWidth } = Dimensions.get('window');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -459,7 +456,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const {
     openBirthdayCard,
-    openBirthdayCreate,
+    openBirthdayAddChoice,
     birthdays: contextBirthdays,
   } = useBirthdaySheets();
 
@@ -542,8 +539,8 @@ export default function HomeScreen() {
   const [showToast, setShowToast] = useState(true);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [calendarMode, setCalendarMode] = useState<'carousel' | 'month'>(
-    'carousel'
+  const [calendarMode, setCalendarMode] = useState<'segmented' | 'month'>(
+    'segmented'
   );
 
   // ── Insight card ───────────────────────────────────────────────────────────
@@ -597,8 +594,6 @@ export default function HomeScreen() {
     setSelectedEventId(null);
   };
 
-  const dateScrollRef = useRef<ScrollView>(null);
-
   const {
     unseenCount,
     markAllSeen,
@@ -615,27 +610,43 @@ export default function HomeScreen() {
   const homeGreeting = userFirstName
     ? `${greeting}, ${userFirstName}`
     : greeting;
-  const todayLabel = new Date().toLocaleDateString('he-IL', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
   const todayISO = new Date().toISOString().split('T')[0];
 
-  // Stable reference — creating a new Date() on every render would cause the
-  // scroll-to-today useEffect (which lists `today` in its deps) to re-fire on
-  // every render, jumping the carousel back to today after any state update.
+  // Stable reference — avoids re-renders caused by Date() identity changes.
   const today = useMemo(() => new Date(), []);
+
+  const yesterday = useMemo(() => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [today]);
+
+  const tomorrow = useMemo(() => {
+    const d = new Date(today);
+    d.setDate(d.getDate() + 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [today]);
+
+  const selectedDateLabel = useMemo(
+    () =>
+      selectedDate.toLocaleDateString('he-IL', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+      }),
+    [selectedDate]
+  );
+
   const isSelectedToday = isSameDay(selectedDate, today);
+  const isSelectedYesterday = isSameDay(selectedDate, yesterday);
+  const isSelectedTomorrow = isSameDay(selectedDate, tomorrow);
+  const isCustomDate = !isSelectedYesterday && !isSelectedToday && !isSelectedTomorrow;
   const emptyDayCopy = getEmptyStateCopy(selectedDate);
   const year = today.getFullYear();
   const month = today.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const calendarDays: Date[] = [];
-  for (let d = 1; d <= daysInMonth; d++)
-    calendarDays.push(new Date(year, month, d));
-  for (let d = 1; d <= 7; d++) calendarDays.push(new Date(year, month + 1, d));
-
   // FIXED: removed hardcoded mock items (id:'1','2','3') that caused
   // ArgumentValidationError when users tapped them and pressed "עריכה" —
   // the mock IDs were passed as Id<'events'> to Convex which rejected them.
@@ -826,7 +837,7 @@ export default function HomeScreen() {
   // Tasks with hasTime===true go into the timeline via todayTasks.
   // Tasks without a specific time (hasTime falsy) are rendered in a separate
   // section. Boundaries are based on selectedDate so the section updates when
-  // the user picks a different day in the date carousel.
+  // the user picks a different day.
   const selectedDayUntimedTasks: UndatedTask[] = useMemo(() => {
     const dayStart = new Date(selectedDate);
     dayStart.setHours(0, 0, 0, 0);
@@ -1560,25 +1571,6 @@ export default function HomeScreen() {
     }
   };
 
-  // Scroll date carousel to today on mount only.
-  // Empty deps = runs exactly once after first render. `today` is now stable
-  // (useMemo with []) so it can't accidentally re-trigger this anyway, but
-  // keeping deps empty makes the intent explicit and guards against future drift.
-  useEffect(() => {
-    const PILL_WIDTH = 50;
-    const todayIndex = today.getDate() - 1;
-    const totalDays = daysInMonth + 7;
-    const reversedIndex = totalDays - 1 - todayIndex;
-    const offset = Math.max(
-      0,
-      reversedIndex * PILL_WIDTH - (screenWidth - 32 - 38) / 2 + 21
-    );
-    setTimeout(() => {
-      dateScrollRef.current?.scrollTo({ x: offset, animated: false });
-    }, 80);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   useEffect(() => {
     const timer = setTimeout(() => setShowToast(false), 5000);
     return () => clearTimeout(timer);
@@ -1732,30 +1724,22 @@ export default function HomeScreen() {
       (a, b) => getNextOccurrence(a).getTime() - getNextOccurrence(b).getTime()
     );
 
-  // ── Helpers to scroll the date carousel to any date ───────────────────────
-  // The carousel renders current month (days 1–N) then the first 7 days of the
-  // next month, in a row-reverse ScrollView (RTL), so index 0 is rightmost.
-  const scrollToDate = (date: Date) => {
-    const PILL_WIDTH = 50;
-    const totalDays = daysInMonth + 7;
-    let dayIndex: number;
-    if (date.getMonth() === month && date.getFullYear() === year) {
-      dayIndex = date.getDate() - 1;
-    } else if (date.getDate() <= 7) {
-      // First 7 days of the following month that are included in the carousel.
-      dayIndex = daysInMonth + date.getDate() - 1;
-    } else {
-      return; // date outside the visible carousel range — nothing to scroll to
-    }
-    const reversedIndex = totalDays - 1 - dayIndex;
-    const offset = Math.max(
-      0,
-      reversedIndex * PILL_WIDTH - (screenWidth - 32 - 38) / 2 + 21
-    );
-    dateScrollRef.current?.scrollTo({ x: offset, animated: true });
-  };
+  // Rest-of-day items: timed items shown in the "המשך היום" timeline
+  const restOfDayItems = visibleItems.filter(
+    (i) => !i.allDay && i.id !== nextEvent?.id
+  );
 
-  const scrollToToday = () => scrollToDate(today);
+  // True when today is selected, there were timed events, and all their
+  // end-times have already passed → switch header to "היום שהיה"
+  const allTodayEventsEnded =
+    isSelectedToday &&
+    timedItemsForSelectedDay.length > 0 &&
+    timedItemsForSelectedDay.every((i) => {
+      if (!i.endTime) return false;
+      const [h, m] = i.endTime.split(':').map(Number);
+      if (Number.isNaN(h) || Number.isNaN(m)) return false;
+      return h * 60 + m < nowMinutes;
+    });
 
   // ══════════════════════════════════════════════════════════════════════════
   // RENDER
@@ -1767,7 +1751,7 @@ export default function HomeScreen() {
       <View style={stylesRtl.headerSurface}>
         <MainScreenHeader
           title={homeGreeting}
-          subtitle={todayLabel}
+          subtitle={selectedDateLabel}
           variant="home"
           onNotificationsPress={handleBellPress}
           notificationsCount={unseenCount}
@@ -1776,98 +1760,104 @@ export default function HomeScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
-        {/* ── Date section header (toggle + "היום" chip) ────────────────────── */}
+        {/* ── Date section: segmented day selector + calendar toggle ─────────── */}
         <View style={stylesRtl.dateSectionRow}>
-          {!isSameDay(selectedDate, today) && (
-            <Pressable
-              style={stylesRtl.todayChip}
-              onPress={() => {
-                setSelectedDate(today);
-                scrollToToday();
-                setCalendarMode('carousel');
-              }}
-              accessible={true}
-              accessibilityRole="button"
-              accessibilityLabel="חזרה להיום"
-            >
-              <Text style={stylesRtl.todayChipText}>היום</Text>
-            </Pressable>
+          {calendarMode === 'segmented' ? (
+            <View style={stylesRtl.segmentedContainer}>
+              {/* Declaration order right→left: אתמול | היום | מחר
+                  direction:'rtl' (inherited from SafeAreaView on Android, and
+                  matched by explicit direction:'rtl' on the container for iOS)
+                  reverses flex layout so the first child sits on the right. */}
+              <Pressable
+                onPress={() => setSelectedDate(yesterday)}
+                style={[
+                  stylesRtl.segmentedTab,
+                  isSelectedYesterday && stylesRtl.segmentedTabActive,
+                ]}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="אתמול"
+                accessibilityState={{ selected: isSelectedYesterday }}
+              >
+                <Text
+                  style={[
+                    stylesRtl.segmentedTabText,
+                    isSelectedYesterday && stylesRtl.segmentedTabTextActive,
+                  ]}
+                >
+                  אתמול
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setSelectedDate(today)}
+                style={[
+                  stylesRtl.segmentedTab,
+                  isSelectedToday && stylesRtl.segmentedTabActive,
+                ]}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="היום"
+                accessibilityState={{ selected: isSelectedToday }}
+              >
+                <Text
+                  style={[
+                    stylesRtl.segmentedTabText,
+                    isSelectedToday && stylesRtl.segmentedTabTextActive,
+                  ]}
+                >
+                  היום
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setSelectedDate(tomorrow)}
+                style={[
+                  stylesRtl.segmentedTab,
+                  isSelectedTomorrow && stylesRtl.segmentedTabActive,
+                ]}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="מחר"
+                accessibilityState={{ selected: isSelectedTomorrow }}
+              >
+                <Text
+                  style={[
+                    stylesRtl.segmentedTabText,
+                    isSelectedTomorrow && stylesRtl.segmentedTabTextActive,
+                  ]}
+                >
+                  מחר
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={{ flex: 1 }} />
           )}
           <Pressable
             onPress={() =>
-              setCalendarMode((m) => (m === 'carousel' ? 'month' : 'carousel'))
+              setCalendarMode((m) => (m === 'segmented' ? 'month' : 'segmented'))
             }
-            style={stylesRtl.calendarToggleBtn}
+            style={[
+              stylesRtl.calendarToggleBtn,
+              isCustomDate && stylesRtl.calendarToggleBtnActive,
+            ]}
             accessible={true}
             accessibilityRole="button"
             accessibilityLabel={
-              calendarMode === 'carousel' ? 'פתח לוח שנה חודשי' : 'חזרה לקרוסלה'
+              calendarMode === 'segmented' ? 'פתח לוח שנה חודשי' : 'חזרה לבחירת יום'
             }
           >
             <MaterialIcons
               name={
-                calendarMode === 'carousel' ? 'calendar-month' : 'view-week'
+                calendarMode === 'segmented' ? 'calendar-month' : 'view-week'
               }
               size={20}
-              color="#36a9e2"
+              color={isCustomDate ? '#fff' : '#36a9e2'}
             />
           </Pressable>
         </View>
 
-        {/* ── Carousel OR month calendar ─────────────────────────────────────── */}
-        {calendarMode === 'carousel' ? (
-          <View style={stylesRtl.carouselRow}>
-            <ScrollView
-              ref={dateScrollRef}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={{ flex: 1 }}
-              contentContainerStyle={{
-                paddingVertical: 4,
-                flexDirection: 'row-reverse',
-              }}
-            >
-              {calendarDays.map((day, i) => {
-                const isSelected = isSameDay(day, selectedDate);
-                const isToday = isSameDay(day, today);
-                const shortName = day.toLocaleDateString('he-IL', {
-                  weekday: 'short',
-                });
-                return (
-                  <Pressable
-                    key={i}
-                    onPress={() => {
-                      setSelectedDate(day);
-                      scrollToDate(day);
-                    }}
-                    style={[
-                      stylesRtl.dayPill,
-                      isSelected && stylesRtl.dayPillSelected,
-                      !isSelected && isToday && stylesRtl.dayPillToday,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        stylesRtl.dayPillWeekday,
-                        isSelected && stylesRtl.dayPillTextSelected,
-                      ]}
-                    >
-                      {shortName}
-                    </Text>
-                    <Text
-                      style={[
-                        stylesRtl.dayPillNumber,
-                        isSelected && stylesRtl.dayPillTextSelected,
-                      ]}
-                    >
-                      {day.getDate()}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-        ) : (
+        {/* ── Month calendar ──────────────────────────────────────────────────── */}
+        {calendarMode === 'month' && (
           <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
             {renderMonthCalendar()}
           </View>
@@ -2175,8 +2165,6 @@ export default function HomeScreen() {
               </Text>
               <Pressable
                 onPress={() => {
-                  const tomorrow = new Date(today);
-                  tomorrow.setDate(today.getDate() + 1);
                   setSelectedDate(tomorrow);
                 }}
                 accessible={true}
@@ -2274,7 +2262,7 @@ export default function HomeScreen() {
                   עוד לא הוספת ימי הולדת.
                 </Text>
                 <Pressable
-                  onPress={openBirthdayCreate}
+                  onPress={openBirthdayAddChoice}
                   accessible={true}
                   accessibilityRole="button"
                   accessibilityLabel="הוספת יום הולדת ראשון"
@@ -2351,7 +2339,9 @@ export default function HomeScreen() {
           <>
             {!isSummaryMode && !isEndOfDay && (
               <View style={stylesRtl.sectionHeader}>
-                <Text style={stylesRtl.timelineTitle}>המשך היום</Text>
+                <Text style={stylesRtl.timelineTitle}>
+                  {allTodayEventsEnded ? 'היום שהיה' : 'המשך היום'}
+                </Text>
               </View>
             )}
 
@@ -2753,8 +2743,62 @@ export default function HomeScreen() {
             ) : !isEndOfDay ? (
               /* ── Active-day timeline with time column + swipe ── */
               <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
-                {visibleItems
-                  .filter((i) => !i.allDay && i.id !== nextEvent?.id)
+                {restOfDayItems.length === 0 && (
+                  <View
+                    style={{
+                      paddingVertical: 16,
+                      alignItems: 'flex-end',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 14,
+                        color: '#6b7280',
+                        textAlign: getTextAlign(),
+                        marginBottom: 12,
+                      }}
+                    >
+                      אין אירועים נוספים בהמשך
+                    </Text>
+                    <View
+                      style={{
+                        flexDirection: rtl.flexDirection,
+                        gap: 16,
+                      }}
+                    >
+                      <Pressable
+                        onPress={() =>
+                          router.push({
+                            pathname: '/(authenticated)/event/new',
+                            params: {
+                              selectedDate: String(selectedDate.getTime()),
+                            },
+                          } as Parameters<typeof router.push>[0])
+                        }
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="הוספת אירוע"
+                      >
+                        <Text style={stylesRtl.emptyDayLink}>
+                          + הוספת אירוע
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() =>
+                          router.push('/(authenticated)/task/new' as never)
+                        }
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="הוספת משימה"
+                      >
+                        <Text style={stylesRtl.emptyDayLink}>
+                          + הוספת משימה
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )}
+                {restOfDayItems
                   .map((item) => (
                     <Swipeable
                       key={item.id}
@@ -3925,8 +3969,41 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  calendarToggleBtnActive: {
+    backgroundColor: '#36a9e2',
+  },
 
-  // ── Date carousel ───────────────────────────────────────────────────────────
+  // ── Segmented day selector ──────────────────────────────────────────────────
+  segmentedContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    direction: 'rtl',
+    backgroundColor: '#eef1f5',
+    borderRadius: 12,
+    padding: 4,
+  },
+  segmentedTab: {
+    flex: 1,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+  },
+  segmentedTabActive: {
+    backgroundColor: '#36a9e2',
+  },
+  segmentedTabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textAlign: 'center',
+  },
+  segmentedTabTextActive: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+
+  // ── Date carousel (kept for reference) ──────────────────────────────────────
   carouselRow: {
     flexDirection: 'row',
     alignItems: 'center',
