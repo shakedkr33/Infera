@@ -649,6 +649,10 @@ export default function AuthenticatedLayout() {
           <Tabs.Screen name="community-members/[id]" options={{ href: null }} />
           <Tabs.Screen name="community/[id]" options={{ href: null }} />
           <Tabs.Screen name="community-reminder/new" options={{ href: null }} />
+          <Tabs.Screen
+            name="community-reminder/edit/[id]"
+            options={{ href: null }}
+          />
           {/* FIXED: linked-event detail screen — hidden from tab bar */}
           <Tabs.Screen name="linked-event/[id]" options={{ href: null }} />
           {/* Subscription sales screen — accessible via CTAs, not a tab */}

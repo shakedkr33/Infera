@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useMutation, useQuery } from 'convex/react';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -40,7 +40,6 @@ const PRIMARY = '#36a9e2';
 
 type DateOption = 'today' | 'tomorrow' | 'other' | 'none';
 
-/** Reminder options shown when the task has a date but no specific time. */
 const DATE_REMINDERS: {
   key: 'none' | PersistedTaskReminderType;
   label: string;
@@ -51,7 +50,6 @@ const DATE_REMINDERS: {
   { key: 'custom', label: 'מותאם אישית' },
 ];
 
-/** Reminder options shown when the task has a specific due time. */
 const TIME_REMINDERS: {
   key: 'none' | PersistedTaskReminderType;
   label: string;
@@ -68,7 +66,7 @@ const UNIT_LABELS: Record<TaskReminderUnit, string> = {
   days: 'ימים',
 };
 
-// ─── Pure helpers (mirror TaskEditorScreen helpers exactly) ───────────────────
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
 
 function createId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -118,7 +116,6 @@ function resolveReminderTimestamp(
       ? schedule.dueAt - 60 * 60 * 1000
       : undefined;
   }
-  // custom — resolve from amount/unit, falling back to stored customReminderAt
   const baseTimestamp =
     schedule.dueAt ??
     (schedule.dueDate !== undefined
@@ -164,6 +161,15 @@ function normalizeTaskReminders({
   });
 }
 
+/** Derive DateOption from a midnight epoch timestamp. */
+function dueDateToOption(dueDate: number): DateOption {
+  const today = midnightOf(new Date());
+  const tomorrow = today + 86_400_000;
+  if (dueDate === today) return 'today';
+  if (dueDate === tomorrow) return 'tomorrow';
+  return 'other';
+}
+
 // ─── UI sub-components ────────────────────────────────────────────────────────
 
 function FieldLabel({ text, required }: { text: string; required?: boolean }) {
@@ -177,18 +183,37 @@ function FieldLabel({ text, required }: { text: string; required?: boolean }) {
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
-/** Build a fresh 09:00 Date for the default time picker state. */
-function makeDefaultTime(): Date {
-  const d = new Date();
-  d.setHours(9, 0, 0, 0);
-  return d;
-}
-
-export default function CommunityReminderNewScreen() {
+export default function CommunityReminderEditScreen() {
   const router = useRouter();
-  const { communityId } = useLocalSearchParams<{ communityId: string }>();
+  const { id, returnCommunityId } = useLocalSearchParams<{
+    id: string;
+    returnCommunityId?: string;
+  }>();
+  const taskId = id as Id<'tasks'>;
 
-  // ── Form state
+  const task = useQuery(api.tasks.getTaskDetails, { id: taskId });
+  const generateUploadUrl = useMutation(api.events.generateUploadUrl);
+  const updateReminder = useMutation(api.tasks.update);
+
+  // ── Close / dismiss — always returns to the originating community screen ──
+
+  const handleClose = useCallback(() => {
+    if (returnCommunityId) {
+      router.replace({
+        pathname: '/(authenticated)/community/[id]',
+        params: { id: returnCommunityId },
+      } as Parameters<typeof router.replace>[0]);
+    } else {
+      router.back();
+    }
+  }, [router, returnCommunityId]);
+
+  // ── Initialised flag — pre-fill form once task loads ──────────────────────
+
+  const [initialised, setInitialised] = useState(false);
+
+  // ── Form state ─────────────────────────────────────────────────────────────
+
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dateOption, setDateOption] = useState<DateOption>('today');
@@ -196,61 +221,106 @@ export default function CommunityReminderNewScreen() {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [calendarPickerOpen, setCalendarPickerOpen] = useState(false);
   const [timeEnabled, setTimeEnabled] = useState(false);
-  const [selectedTime, setSelectedTime] = useState<Date>(makeDefaultTime);
+  const [selectedTime, setSelectedTime] = useState<Date>(() => {
+    const d = new Date();
+    d.setHours(9, 0, 0, 0);
+    return d;
+  });
   const [showTimePicker, setShowTimePicker] = useState(false);
-
-  // ── Reminder state — same model as TaskEditorScreen (TaskReminder[])
   const [reminders, setReminders] = useState<TaskReminder[]>([]);
   const [customAmount, setCustomAmount] = useState(30);
   const [customUnit, setCustomUnit] = useState<TaskReminderUnit>('minutes');
   const [showCustomReminderModal, setShowCustomReminderModal] = useState(false);
+  const [attachments, setAttachments] = useState<EventAttachmentDraft[]>([]);
 
   const [titleError, setTitleError] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // ── Attachments state
-  const [attachments, setAttachments] = useState<EventAttachmentDraft[]>([]);
+  // ── Pre-fill from loaded task ──────────────────────────────────────────────
 
-  // ── Reset-on-focus flag — set after successful save or cancel so the next
-  // time the screen gains focus (Expo Router reuses the mounted component)
-  // all form state is returned to clean defaults.
-  // Not triggered by attachment picker or other temporary focus loss events.
-  const shouldResetOnFocus = useRef(false);
+  useEffect(() => {
+    if (initialised || !task) return;
 
-  const resetForm = useCallback(() => {
-    setTitle('');
-    setDescription('');
-    setDateOption('today');
-    setCustomDate(new Date());
-    setDatePickerOpen(false);
-    setCalendarPickerOpen(false);
-    setTimeEnabled(false);
-    setSelectedTime(makeDefaultTime());
-    setShowTimePicker(false);
-    setReminders([]);
-    setCustomAmount(30);
-    setCustomUnit('minutes');
-    setShowCustomReminderModal(false);
-    setAttachments([]);
-    setTitleError(false);
-  }, []);
+    setTitle(task.title ?? '');
+    setDescription(
+      typeof (task as { description?: string }).description === 'string'
+        ? ((task as { description?: string }).description as string)
+        : ''
+    );
 
-  useFocusEffect(
-    useCallback(() => {
-      if (shouldResetOnFocus.current) {
-        shouldResetOnFocus.current = false;
-        resetForm();
+    const dueDate = (task as { dueDate?: number }).dueDate;
+    if (dueDate !== undefined) {
+      const opt = dueDateToOption(dueDate);
+      setDateOption(opt);
+      if (opt === 'other') {
+        setCustomDate(new Date(dueDate));
       }
-    }, [resetForm])
+
+      const hasTime =
+        (task as { hasTime?: boolean }).hasTime === true &&
+        (task as { dueAt?: number }).dueAt !== undefined;
+      if (hasTime) {
+        setTimeEnabled(true);
+        setSelectedTime(new Date((task as { dueAt?: number }).dueAt as number));
+      }
+    } else {
+      setDateOption('none');
+    }
+
+    // Restore reminders
+    const existingReminders = (task as { reminders?: TaskReminder[] })
+      .reminders;
+    if (existingReminders && existingReminders.length > 0) {
+      setReminders(existingReminders);
+      const custom = existingReminders.find((r) => r.type === 'custom');
+      if (custom?.customAmount) setCustomAmount(custom.customAmount);
+      if (custom?.customUnit) setCustomUnit(custom.customUnit);
+    } else {
+      const reminderType = (task as { reminderType?: string }).reminderType;
+      if (reminderType && reminderType !== 'none') {
+        setReminders([
+          {
+            id: createId('reminder'),
+            type: reminderType as PersistedTaskReminderType,
+            label: reminderType,
+          },
+        ]);
+      }
+    }
+
+    // Restore attachments as saved drafts (storageId set, no localUri)
+    const savedAttachments = (
+      task as {
+        attachments?: {
+          storageId: Id<'_storage'>;
+          originalName: string;
+          displayName: string;
+          mimeType: string;
+          sizeBytes: number;
+        }[];
+      }
+    ).attachments;
+    if (savedAttachments && savedAttachments.length > 0) {
+      setAttachments(
+        savedAttachments.map((a) => ({
+          storageId: a.storageId,
+          originalName: a.originalName,
+          displayName: a.displayName,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+        }))
+      );
+    }
+
+    setInitialised(true);
+  }, [task, initialised]);
+
+  // ── Derived reminder state ──────────────────────────────────────────────────
+
+  const currentCustomReminder = useMemo(
+    () => reminders.find((r) => r.type === 'custom'),
+    [reminders]
   );
-
-  // ── Backend
-  const spaceId = useQuery(api.users.getMySpace);
-  const createReminder = useMutation(api.tasks.create);
-  const generateUploadUrl = useMutation(api.events.generateUploadUrl);
-
-  // ── Derived reminder state
-  const currentCustomReminder = reminders.find((r) => r.type === 'custom');
   const activeReminderOptions = timeEnabled ? TIME_REMINDERS : DATE_REMINDERS;
 
   const getReminderChipLabel = (
@@ -272,7 +342,8 @@ export default function CommunityReminderNewScreen() {
     return reminders.some((r) => r.type === key);
   };
 
-  // ── Resolve due date as midnight-epoch and dueAt as timestamped epoch
+  // ── Due date resolution ─────────────────────────────────────────────────────
+
   const resolveDueDate = useCallback((): number | undefined => {
     if (dateOption === 'none') return undefined;
     if (dateOption === 'today') return midnightOf(new Date());
@@ -294,14 +365,14 @@ export default function CommunityReminderNewScreen() {
     [selectedTime]
   );
 
-  // ── Toggle a reminder type (mirrors TaskEditorScreen.toggleReminder)
+  // ── Reminder toggles ────────────────────────────────────────────────────────
+
   const toggleReminder = (key: 'none' | PersistedTaskReminderType): void => {
     if (key === 'none') {
       setReminders([]);
       return;
     }
     if (key === 'custom') {
-      // Pre-fill modal from existing custom reminder, then open
       setCustomAmount(currentCustomReminder?.customAmount ?? 30);
       setCustomUnit(currentCustomReminder?.customUnit ?? 'minutes');
       setShowCustomReminderModal(true);
@@ -323,7 +394,6 @@ export default function CommunityReminderNewScreen() {
     setReminders(nextReminders);
   };
 
-  // ── Confirm custom reminder (mirrors TaskEditorScreen.confirmCustomReminder)
   const confirmCustomReminder = (): void => {
     const dueDateMs = resolveDueDate();
     if (dueDateMs === undefined) {
@@ -360,16 +430,11 @@ export default function CommunityReminderNewScreen() {
     setShowCustomReminderModal(false);
   };
 
-  // ── Save
+  // ── Save ────────────────────────────────────────────────────────────────────
+
   const handleSave = useCallback(async () => {
     if (!title.trim()) {
       setTitleError(true);
-      return;
-    }
-
-    // Only require spaceId when there's no communityId context
-    if (!spaceId && !communityId) {
-      Alert.alert('שגיאה', 'לא נמצא מרחב פעיל. נסה להתנתק ולהתחבר מחדש.');
       return;
     }
 
@@ -392,53 +457,70 @@ export default function CommunityReminderNewScreen() {
       });
       const firstReminder = normalizedReminders[0];
 
-      // Upload any attachment drafts (localUri-based) to Convex Storage
+      // Upload any new attachment drafts (existing ones pass through as-is)
       const uploadedAttachments = await uploadAttachmentDraftsForConvex(
         attachments,
         () => generateUploadUrl()
       );
 
-      // Payload — with reminder configured:
-      //   { ..., dueDate, hasTime: true, dueAt, reminderType, customReminderAt?, reminders }
-      // Payload — without reminder configured:
-      //   { ..., dueDate, reminderType: 'none' }
-      await createReminder({
+      // Build clearFields for fields that are being removed
+      const clearFields: (
+        | 'description'
+        | 'dueDate'
+        | 'hasTime'
+        | 'dueAt'
+        | 'reminderType'
+        | 'customReminderAt'
+        | 'reminders'
+        | 'attachments'
+      )[] = [];
+
+      if (!description.trim()) clearFields.push('description');
+      if (dueDateMs === undefined) {
+        clearFields.push('dueDate');
+        clearFields.push('hasTime');
+        clearFields.push('dueAt');
+        clearFields.push('reminderType');
+        clearFields.push('customReminderAt');
+        clearFields.push('reminders');
+      } else if (!hasTime) {
+        clearFields.push('hasTime');
+        clearFields.push('dueAt');
+      }
+      if (normalizedReminders.length === 0) {
+        clearFields.push('reminderType');
+        clearFields.push('customReminderAt');
+        clearFields.push('reminders');
+      }
+      if (uploadedAttachments.length === 0) {
+        clearFields.push('attachments');
+      }
+
+      await updateReminder({
+        id: taskId,
         title: title.trim(),
-        description: description.trim() || undefined,
-        dueDate: dueDateMs,
+        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(dueDateMs !== undefined ? { dueDate: dueDateMs } : {}),
         ...(hasTime ? { hasTime: true, dueAt: dueAtMs } : {}),
-        reminderType: firstReminder?.type ?? 'none',
-        ...(firstReminder?.type === 'custom'
-          ? { customReminderAt: firstReminder.customReminderAt }
-          : {}),
-        ...(normalizedReminders.length > 0
-          ? { reminders: normalizedReminders }
+        ...(firstReminder
+          ? {
+              reminderType: firstReminder.type as PersistedTaskReminderType,
+              ...(firstReminder.type === 'custom'
+                ? { customReminderAt: firstReminder.customReminderAt }
+                : {}),
+              reminders: normalizedReminders,
+            }
           : {}),
         ...(uploadedAttachments.length > 0
           ? { attachments: uploadedAttachments }
           : {}),
-        spaceId: spaceId ? (spaceId as Id<'spaces'>) : undefined,
-        communityId: communityId
-          ? (communityId as Id<'communities'>)
-          : undefined,
+        clearFields: clearFields.length > 0 ? clearFields : undefined,
       });
-      // Reset state immediately so the next create session starts clean.
-      // We reset before navigating so if Expo Router reuses this component
-      // instance on the next "Add reminder" tap, no stale data remains.
-      resetForm();
-      if (communityId) {
-        router.replace(
-          `/(authenticated)/community/${communityId}` as Parameters<
-            typeof router.replace
-          >[0]
-        );
-      } else {
-        router.back();
-      }
+
+      handleClose();
     } catch (e) {
-      console.error('createReminder error:', e);
       const message =
-        e instanceof Error ? e.message : 'לא ניתן לשמור את התזכורת. נסה שוב.';
+        e instanceof Error ? e.message : 'לא ניתן לשמור את השינויים. נסה שוב.';
       Alert.alert('שגיאה', message);
     } finally {
       setSaving(false);
@@ -446,95 +528,91 @@ export default function CommunityReminderNewScreen() {
   }, [
     title,
     description,
-    spaceId,
-    communityId,
     dateOption,
     timeEnabled,
     reminders,
     attachments,
-    createReminder,
+    taskId,
+    updateReminder,
     generateUploadUrl,
-    resetForm,
-    router,
+    handleClose,
     resolveDueDate,
     resolveDueAt,
   ]);
 
-  // ── Save disabled only while loading (undefined) or title is empty
-  const isSaveDisabled = !title.trim() || saving || spaceId === undefined;
+  // ── Loading states ──────────────────────────────────────────────────────────
 
-  const handleClose = () => {
-    // Mark that the form should be reset the next time this screen gains focus.
-    // This handles abandoned (cancelled) create flows — if the user presses ×
-    // and later opens "Add reminder" again, a fresh form is shown.
-    shouldResetOnFocus.current = true;
-    if (communityId) {
-      router.replace(
-        `/(authenticated)/community/${communityId}` as Parameters<
-          typeof router.replace
-        >[0]
-      );
-    } else {
-      router.back();
-    }
-  };
-
-  // ── Loading state
-  if (spaceId === undefined) {
+  if (task === undefined || !initialised) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView
+        style={[
+          styles.safe,
+          ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,
+        ]}
+        edges={['top']}
+      >
         <View style={styles.header}>
           <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
             <Ionicons name="close" size={22} color="#374151" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>תזכורת חדשה</Text>
+          <Text style={styles.headerTitle}>עריכת תזכורת</Text>
           <View style={{ width: 36 }} />
         </View>
-        <View
-          style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
-        >
+        <View style={styles.loadingCenter}>
           <ActivityIndicator size="large" color={PRIMARY} />
         </View>
       </SafeAreaView>
     );
   }
 
-  // ── No space error (only when there's no communityId context either)
-  if (!spaceId && !communityId) {
+  if (task === null) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView
+        style={[
+          styles.safe,
+          ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,
+        ]}
+        edges={['top']}
+      >
         <View style={styles.header}>
           <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
             <Ionicons name="close" size={22} color="#374151" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>תזכורת חדשה</Text>
+          <Text style={styles.headerTitle}>עריכת תזכורת</Text>
           <View style={{ width: 36 }} />
         </View>
-        <View
-          style={{
-            flex: 1,
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 32,
-          }}
-        >
-          <Ionicons name="warning-outline" size={48} color="#9ca3af" />
-          <Text style={styles.errorStateTitle}>לא נמצא מרחב פעיל</Text>
-          <TouchableOpacity
-            style={styles.errorStateBtn}
-            onPress={handleClose}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="חזור"
-          >
-            <Text style={styles.errorStateBtnText}>חזור</Text>
-          </TouchableOpacity>
+        <View style={styles.loadingCenter}>
+          <Text style={styles.errorText}>התזכורת לא נמצאה</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  // ── Date chip label for "other"
+  if (!task.canEdit) {
+    return (
+      <SafeAreaView
+        style={[
+          styles.safe,
+          ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,
+        ]}
+        edges={['top']}
+      >
+        <View style={styles.header}>
+          <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
+            <Ionicons name="close" size={22} color="#374151" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>עריכת תזכורת</Text>
+          <View style={{ width: 36 }} />
+        </View>
+        <View style={styles.loadingCenter}>
+          <Text style={styles.errorText}>התזכורת לא נמצאה</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const isSaveDisabled = !title.trim() || saving;
+
   const otherChipLabel =
     dateOption === 'other'
       ? customDate.toLocaleDateString('he-IL', {
@@ -562,7 +640,7 @@ export default function CommunityReminderNewScreen() {
         >
           <Ionicons name="close" size={22} color="#374151" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>תזכורת חדשה</Text>
+        <Text style={styles.headerTitle}>עריכת תזכורת</Text>
         <View style={{ width: 36 }} />
       </View>
 
@@ -597,7 +675,7 @@ export default function CommunityReminderNewScreen() {
               accessibilityLabel="נושא התזכורת"
             />
             {titleError ? (
-              <Text style={styles.errorText}>שדה זה נדרש</Text>
+              <Text style={styles.errorHint}>שדה זה נדרש</Text>
             ) : null}
           </View>
 
@@ -636,7 +714,6 @@ export default function CommunityReminderNewScreen() {
                   style={[styles.chip, dateOption === val && styles.chipActive]}
                   onPress={() => {
                     setDateOption(val);
-                    // Clear reminders and time when date is removed
                     if (val === 'none') {
                       setReminders([]);
                       setTimeEnabled(false);
@@ -663,7 +740,6 @@ export default function CommunityReminderNewScreen() {
               ))}
             </View>
 
-            {/* Date row + pickers — visible only when "other" is selected */}
             {dateOption === 'other' ? (
               <>
                 <View
@@ -674,7 +750,6 @@ export default function CommunityReminderNewScreen() {
                     marginTop: 10,
                   }}
                 >
-                  {/* Calendar icon — opens inline monthly grid */}
                   <TouchableOpacity
                     onPress={() => {
                       setCalendarPickerOpen(!calendarPickerOpen);
@@ -691,8 +766,6 @@ export default function CommunityReminderNewScreen() {
                       color="#36a9e2"
                     />
                   </TouchableOpacity>
-
-                  {/* Date value button — opens spinner */}
                   <TouchableOpacity
                     style={[styles.input, styles.dateValueBtn]}
                     onPress={() => {
@@ -712,8 +785,6 @@ export default function CommunityReminderNewScreen() {
                     </Text>
                   </TouchableOpacity>
                 </View>
-
-                {/* Date spinner picker */}
                 {datePickerOpen ? (
                   <View style={[styles.pickerWrapper, { width: '100%' }]}>
                     <DateTimePicker
@@ -744,8 +815,6 @@ export default function CommunityReminderNewScreen() {
                     </TouchableOpacity>
                   </View>
                 ) : null}
-
-                {/* Inline monthly calendar picker */}
                 {calendarPickerOpen ? (
                   <View
                     style={{
@@ -777,7 +846,7 @@ export default function CommunityReminderNewScreen() {
             ) : null}
           </View>
 
-          {/* ── שעה (רק אם יש תאריך) */}
+          {/* ── שעה */}
           {dateOption !== 'none' ? (
             <View style={styles.card}>
               <View style={styles.rowBetween}>
@@ -786,7 +855,6 @@ export default function CommunityReminderNewScreen() {
                   value={timeEnabled}
                   onValueChange={(val) => {
                     setTimeEnabled(val);
-                    // Clear reminders when toggling time — same as TaskEditorScreen
                     setReminders([]);
                   }}
                   trackColor={{ true: PRIMARY, false: '#d7e3ef' }}
@@ -813,7 +881,7 @@ export default function CommunityReminderNewScreen() {
                       })}
                     </Text>
                   </TouchableOpacity>
-                  {showTimePicker && (
+                  {showTimePicker ? (
                     <View style={[styles.pickerWrapper, { width: '100%' }]}>
                       <TimeWheelPicker
                         hour={selectedTime.getHours()}
@@ -839,7 +907,7 @@ export default function CommunityReminderNewScreen() {
                         <Text style={styles.pickerConfirmText}>בחר</Text>
                       </TouchableOpacity>
                     </View>
-                  )}
+                  ) : null}
                 </>
               ) : null}
             </View>
@@ -877,12 +945,13 @@ export default function CommunityReminderNewScreen() {
             </View>
           ) : null}
 
-          {/* ── צרף תמונה/קובץ */}
+          {/* ── Attachments */}
           <View style={styles.card}>
             <FieldLabel text="קבצים מצורפים" />
             <EventAttachmentsSection
               attachments={attachments}
               onChange={setAttachments}
+              taskId={taskId}
             />
           </View>
         </ScrollView>
@@ -895,7 +964,7 @@ export default function CommunityReminderNewScreen() {
             disabled={isSaveDisabled}
             accessible
             accessibilityRole="button"
-            accessibilityLabel="שמור תזכורת"
+            accessibilityLabel="שמור שינויים"
           >
             <Text
               style={[
@@ -903,7 +972,7 @@ export default function CommunityReminderNewScreen() {
                 isSaveDisabled && styles.saveBtnTextDisabled,
               ]}
             >
-              {saving ? 'שומר...' : 'שמור תזכורת'}
+              {saving ? 'שומר...' : 'שמור שינויים'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -985,9 +1054,7 @@ export default function CommunityReminderNewScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f8fafc' },
-  safeAreaRtl: {
-    direction: 'rtl',
-  },
+  safeAreaRtl: { direction: 'rtl' },
 
   header: {
     flexDirection: rtl.flexDirection,
@@ -1009,6 +1076,12 @@ const styles = StyleSheet.create({
   closeBtn: {
     width: 36,
     height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  loadingCenter: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1035,11 +1108,16 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   required: { color: '#ef4444' },
-  errorText: {
+  errorHint: {
     fontSize: 12,
     color: '#ef4444',
     textAlign: rtl.textAlign,
     marginTop: 4,
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#9ca3af',
+    textAlign: 'center',
   },
 
   input: {
@@ -1141,22 +1219,6 @@ const styles = StyleSheet.create({
   saveBtnDisabled: { backgroundColor: '#e5e7eb' },
   saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   saveBtnTextDisabled: { color: '#9ca3af' },
-
-  errorStateTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#374151',
-    marginTop: 16,
-    textAlign: 'center',
-  },
-  errorStateBtn: {
-    marginTop: 16,
-    backgroundColor: PRIMARY,
-    borderRadius: 999,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-  },
-  errorStateBtnText: { color: '#fff', fontWeight: '700' },
 
   customReminderSheet: {
     backgroundColor: '#fff',
