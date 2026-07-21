@@ -1,10 +1,5 @@
-import { useMutation, useQuery } from 'convex/react';
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-} from 'react';
+import { useConvexAuth, useMutation, useQuery } from 'convex/react';
+import { createContext, useCallback, useContext, useMemo } from 'react';
 import { api } from '@/convex/_generated/api';
 import type { Doc } from '@/convex/_generated/dataModel';
 
@@ -33,14 +28,29 @@ export function NotificationsProvider({
 }: {
   children: React.ReactNode;
 }): React.JSX.Element {
-  const rawNotifications = useQuery(api.userNotifications.list);
+  // Gate the query: skip while Convex auth is still loading or the user is
+  // unauthenticated. NotificationsProvider is mounted at the root layout level
+  // (outside the authenticated route group), so it is alive during cold start,
+  // logout, login transitions, and Expo hot reload. Calling the query without
+  // this guard causes the server to throw "Not authenticated", which propagates
+  // as an unhandled error and crashes the React tree on Android (and iOS).
+  const { isLoading: isAuthLoading, isAuthenticated } = useConvexAuth();
+  const shouldFetch = !isAuthLoading && isAuthenticated;
+
+  // useQuery is always called unconditionally (hook ordering rules).
+  // "skip" tells Convex to not subscribe at all, returning undefined safely.
+  const rawNotifications = useQuery(
+    api.userNotifications.list,
+    shouldFetch ? {} : 'skip'
+  );
   const markAllReadMutation = useMutation(api.userNotifications.markAllRead);
   const archiveAllMutation = useMutation(api.userNotifications.archiveAll);
 
-  // undefined while the query is in-flight; resolved to [] when unauthenticated
-  // (the server throws "Not authenticated" and Convex surfaces undefined).
+  // Safe empty state while unauthenticated or auth is still loading.
+  // isLoading is true only when authenticated and the query hasn't resolved yet,
+  // so logged-out consumers never see a permanent spinner.
   const notifications: UserNotification[] = rawNotifications ?? [];
-  const isLoading = rawNotifications === undefined;
+  const isLoading = shouldFetch && rawNotifications === undefined;
 
   const unseenCount = useMemo(
     () => notifications.filter((n) => n.readAt === undefined).length,
