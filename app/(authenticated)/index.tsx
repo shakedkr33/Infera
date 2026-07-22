@@ -35,7 +35,10 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
+import { SubtaskImagePreviewModal } from '@/lib/components/task/SubtaskImagePreviewModal';
+import { SubtaskAttachmentPreview } from '@/lib/components/task/SubtasksSection';
 import { getTextAlign } from '@/lib/rtl';
+import type { SubTaskAttachment } from '@/lib/types/task';
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 
@@ -191,11 +194,13 @@ type HomeSubtask = {
   id: string;
   title: string;
   completed: boolean;
+  attachment?: SubTaskAttachment;
 };
 
 // ─── Home subtask expand/collapse section ─────────────────────────────────────
 
 type HomeSubtaskSectionProps = {
+  taskId: string;
   subtasks: HomeSubtask[];
   isExpanded: boolean;
   onToggleExpansion: () => void;
@@ -203,11 +208,14 @@ type HomeSubtaskSectionProps = {
 };
 
 function HomeSubtaskSection({
+  taskId,
   subtasks,
   isExpanded,
   onToggleExpansion,
   onToggleSubtask,
 }: HomeSubtaskSectionProps): React.JSX.Element | null {
+  const [imagePreviewUri, setImagePreviewUri] = useState<string | null>(null);
+
   if (subtasks.length === 0) return null;
 
   const completedCount = subtasks.filter((s) => s.completed).length;
@@ -301,10 +309,22 @@ function HomeSubtaskSection({
               >
                 {subtask.title}
               </Text>
+              {subtask.attachment ? (
+                <SubtaskAttachmentPreview
+                  taskId={taskId as Id<'tasks'>}
+                  attachment={subtask.attachment}
+                  onImageThumbnailPress={(uri) => setImagePreviewUri(uri)}
+                />
+              ) : null}
             </Pressable>
           ))}
         </View>
       ) : null}
+
+      <SubtaskImagePreviewModal
+        uri={imagePreviewUri}
+        onClose={() => setImagePreviewUri(null)}
+      />
     </View>
   );
 }
@@ -767,6 +787,18 @@ export default function HomeScreen() {
               id: s.id,
               title: s.title,
               completed: s.completed,
+              attachment: s.attachment
+                ? {
+                    id: s.attachment.id,
+                    type: s.attachment.type,
+                    storageId: String(s.attachment.storageId),
+                    originalName: s.attachment.originalName ?? '',
+                    displayName: s.attachment.displayName ?? '',
+                    mimeType: s.attachment.mimeType,
+                    sizeBytes: s.attachment.sizeBytes,
+                    createdAt: s.attachment.createdAt,
+                  }
+                : undefined,
             })),
           };
         }),
@@ -810,6 +842,18 @@ export default function HomeScreen() {
             id: s.id,
             title: s.title,
             completed: s.completed,
+            attachment: s.attachment
+              ? {
+                  id: s.attachment.id,
+                  type: s.attachment.type,
+                  storageId: String(s.attachment.storageId),
+                  originalName: s.attachment.originalName ?? '',
+                  displayName: s.attachment.displayName ?? '',
+                  mimeType: s.attachment.mimeType,
+                  sizeBytes: s.attachment.sizeBytes,
+                  createdAt: s.attachment.createdAt,
+                }
+              : undefined,
           })),
         };
       });
@@ -857,6 +901,18 @@ export default function HomeScreen() {
             id: s.id,
             title: s.title,
             completed: s.completed,
+            attachment: s.attachment
+              ? {
+                  id: s.attachment.id,
+                  type: s.attachment.type,
+                  storageId: String(s.attachment.storageId),
+                  originalName: s.attachment.originalName ?? '',
+                  displayName: s.attachment.displayName ?? '',
+                  mimeType: s.attachment.mimeType,
+                  sizeBytes: s.attachment.sizeBytes,
+                  createdAt: s.attachment.createdAt,
+                }
+              : undefined,
           })),
         };
       });
@@ -1364,6 +1420,18 @@ export default function HomeScreen() {
               id: s.id,
               title: s.title,
               completed: s.completed,
+              attachment: s.attachment
+                ? {
+                    id: s.attachment.id,
+                    type: s.attachment.type,
+                    storageId: String(s.attachment.storageId),
+                    originalName: s.attachment.originalName ?? '',
+                    displayName: s.attachment.displayName ?? '',
+                    mimeType: s.attachment.mimeType,
+                    sizeBytes: s.attachment.sizeBytes,
+                    createdAt: s.attachment.createdAt,
+                  }
+                : undefined,
             })),
           };
         }),
@@ -2141,6 +2209,7 @@ export default function HomeScreen() {
             !nextEvent.completed ? (
               <View style={stylesRtl.nextEventTaskExpansionContainer}>
                 <HomeSubtaskSection
+                  taskId={nextEvent.id}
                   subtasks={nextEvent.subtasks ?? []}
                   isExpanded={expandedHomeTaskIds.has(nextEvent.id)}
                   onToggleExpansion={() =>
@@ -2731,6 +2800,7 @@ export default function HomeScreen() {
                       !item.completed ? (
                         <View style={stylesRtl.taskExpansionContainer}>
                           <HomeSubtaskSection
+                            taskId={item.id}
                             subtasks={item.subtasks ?? []}
                             isExpanded={expandedHomeTaskIds.has(item.id)}
                             onToggleExpansion={() =>
@@ -3299,6 +3369,7 @@ export default function HomeScreen() {
                           !item.completed ? (
                             <View style={stylesRtl.taskExpansionContainer}>
                               <HomeSubtaskSection
+                                taskId={item.id}
                                 subtasks={item.subtasks ?? []}
                                 isExpanded={expandedHomeTaskIds.has(item.id)}
                                 onToggleExpansion={() =>
@@ -3397,6 +3468,7 @@ export default function HomeScreen() {
                   {/* Subtask section */}
                   {(task.subtasks?.length ?? 0) > 0 && !task.completed ? (
                     <HomeSubtaskSection
+                      taskId={task.id}
                       subtasks={task.subtasks ?? []}
                       isExpanded={expandedHomeTaskIds.has(task.id)}
                       onToggleExpansion={() => toggleHomeTaskExpansion(task.id)}
@@ -3508,6 +3580,7 @@ export default function HomeScreen() {
                   {/* Subtask section */}
                   {(task.subtasks?.length ?? 0) > 0 && !task.completed ? (
                     <HomeSubtaskSection
+                      taskId={task.id}
                       subtasks={task.subtasks ?? []}
                       isExpanded={expandedHomeTaskIds.has(task.id)}
                       onToggleExpansion={() => toggleHomeTaskExpansion(task.id)}
@@ -3605,6 +3678,7 @@ export default function HomeScreen() {
                   </Pressable>
                   {(task.subtasks?.length ?? 0) > 0 && !task.completed ? (
                     <HomeSubtaskSection
+                      taskId={task.id}
                       subtasks={task.subtasks ?? []}
                       isExpanded={expandedHomeTaskIds.has(task.id)}
                       onToggleExpansion={() => toggleHomeTaskExpansion(task.id)}
@@ -3723,6 +3797,7 @@ export default function HomeScreen() {
                         </Pressable>
                         {(task.subtasks?.length ?? 0) > 0 && !task.completed ? (
                           <HomeSubtaskSection
+                            taskId={task.id}
                             subtasks={task.subtasks ?? []}
                             isExpanded={expandedHomeTaskIds.has(task.id)}
                             onToggleExpansion={() =>

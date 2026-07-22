@@ -5,14 +5,12 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Modal,
   Pressable,
   StyleSheet,
   Switch,
   Text,
   TextInput,
   TouchableOpacity,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import type { RenderItemParams } from 'react-native-draggable-flatlist';
@@ -22,6 +20,7 @@ import DraggableFlatList, {
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { AttachmentSourceSheet } from '@/lib/components/attachments/AttachmentSourceSheet';
+import { SubtaskImagePreviewModal } from '@/lib/components/task/SubtaskImagePreviewModal';
 import type { EventAttachmentDraft } from '@/lib/types/event';
 import type { SubTask, SubTaskAttachment } from '@/lib/types/task';
 
@@ -74,10 +73,12 @@ function draftToSubtaskAttachment(
   };
 }
 
-function SubtaskAttachmentPreview({
+export function SubtaskAttachmentPreview({
+  taskId,
   attachment,
   onImageThumbnailPress,
 }: {
+  taskId?: Id<'tasks'>;
   attachment: SubTaskAttachment | undefined;
   onImageThumbnailPress?: (uri: string) => void;
 }): React.JSX.Element | null {
@@ -145,10 +146,6 @@ export function SubtasksSection({
   const [sourceSheetOpen, setSourceSheetOpen] = useState(false);
   const pickSubtaskIdRef = useRef<string | null>(null);
   const [imagePreviewUri, setImagePreviewUri] = useState<string | null>(null);
-
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const previewMaxW = windowWidth * 0.9;
-  const previewMaxH = windowHeight * 0.78;
 
   useEffect(() => {
     if (focusDraftTick > 0) {
@@ -387,54 +384,10 @@ export function SubtasksSection({
         }}
       />
 
-      <Modal
-        visible={imagePreviewUri !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setImagePreviewUri(null)}
-      >
-        <View style={s.previewOverlay}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setImagePreviewUri(null)}
-            accessible={false}
-          />
-          {imagePreviewUri ? (
-            <View
-              style={[s.previewCard, { width: previewMaxW, zIndex: 1 }]}
-              accessibilityViewIsModal
-              pointerEvents="box-none"
-            >
-              <View style={s.previewTopBar}>
-                <Pressable
-                  style={s.previewCloseBtn}
-                  onPress={() => setImagePreviewUri(null)}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityLabel="סגור"
-                  hitSlop={12}
-                >
-                  <MaterialIcons name="close" size={24} color="#fff" />
-                </Pressable>
-              </View>
-              <View
-                style={[
-                  s.previewImageFrame,
-                  { width: previewMaxW, height: previewMaxH },
-                ]}
-              >
-                <Image
-                  source={{ uri: imagePreviewUri }}
-                  style={s.previewImage}
-                  resizeMode="contain"
-                  accessible={true}
-                  accessibilityLabel="תצוגה מקדימה של תמונה"
-                />
-              </View>
-            </View>
-          ) : null}
-        </View>
-      </Modal>
+      <SubtaskImagePreviewModal
+        uri={imagePreviewUri}
+        onClose={() => setImagePreviewUri(null)}
+      />
 
       <View style={s.header}>
         {canEditSubtasks ? (
@@ -684,41 +637,5 @@ const s = StyleSheet.create({
     color: '#94a3b8',
     textAlign: 'right',
     marginBottom: 8,
-  },
-  previewOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.82)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-  },
-  previewCard: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  previewTopBar: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginBottom: 8,
-  },
-  previewImageFrame: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  previewImage: {
-    width: '100%',
-    height: '100%',
-  },
-  previewCloseBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });
