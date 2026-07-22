@@ -10,6 +10,7 @@ import {
   Animated,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -65,6 +66,7 @@ export function AddPersonBottomSheet({
   const [disambigContact, setDisambigContact] =
     useState<Contacts.Contact | null>(null);
   const [selectedPhone, setSelectedPhone] = useState<string>('');
+  const [isLimitedAccess, setIsLimitedAccess] = useState(false);
 
   // ── Animation + state reset ────────────────────────────────────────────────
   useEffect(() => {
@@ -79,6 +81,7 @@ export function AddPersonBottomSheet({
       setSelectedKey(null);
       setDisambigContact(null);
       setSelectedPhone('');
+      setIsLimitedAccess(false);
       // no-mobile state resets automatically (shares disambigContact)
       Animated.spring(slideAnim, {
         toValue: 0,
@@ -109,24 +112,65 @@ export function AddPersonBottomSheet({
   const openContactsPicker = async () => {
     setLoadingContacts(true);
     try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
+      console.log('[CONTACTS_AUDIT] calling getPermissionsAsync (read-only check)…');
+      const existing = await Contacts.getPermissionsAsync();
+      console.log('[CONTACTS_AUDIT] existing perm', {
+        status: existing.status,
+        accessPrivileges: existing.accessPrivileges,
+        canAskAgain: existing.canAskAgain,
+      });
+
+      let permResult: Contacts.ContactsPermissionResponse;
+      if (existing.status === 'granted') {
+        // Already granted (full or limited) — use cached result, do NOT re-prompt
+        console.log('[CONTACTS_AUDIT] already granted — skipping requestPermissionsAsync');
+        permResult = existing;
+      } else {
+        // undetermined (first ask) or denied — call requestPermissionsAsync to prompt / surface denial
+        console.log('[CONTACTS_AUDIT] calling requestPermissionsAsync…');
+        permResult = await Contacts.requestPermissionsAsync();
+        console.log('[CONTACTS_AUDIT] permResult after request', {
+          status: permResult.status,
+          accessPrivileges: permResult.accessPrivileges,
+          canAskAgain: permResult.canAskAgain,
+        });
+      }
+
+      if (permResult.status !== 'granted') {
         Alert.alert(
           'גישה לאנשי קשר',
           'אנא אפשרי גישה לאנשי קשר בהגדרות הטלפון.',
           [{ text: 'הבנתי' }]
         );
+        console.log('[CONTACTS_AUDIT] permission not granted — setting loading false and returning');
         setLoadingContacts(false);
         return;
       }
-      const result = await Contacts.getContactsAsync({
-        fields: [
-          Contacts.Fields.Name,
-          Contacts.Fields.PhoneNumbers,
-          Contacts.Fields.Emails,
-        ],
-        sort: Contacts.SortTypes.FirstName,
-      });
+      console.log('[CONTACTS_AUDIT] calling getContactsAsync…');
+      let result: Contacts.ContactResponse;
+      try {
+        result = await Contacts.getContactsAsync({
+          fields: [
+            Contacts.Fields.Name,
+            Contacts.Fields.PhoneNumbers,
+            Contacts.Fields.Emails,
+          ],
+          sort: Contacts.SortTypes.FirstName,
+        });
+        console.log('[CONTACTS_AUDIT] getContactsAsync returned', {
+          total: result.data?.length ?? 0,
+          firstContact: result.data?.[0]
+            ? {
+                id: (result.data[0] as { id?: string }).id,
+                name: result.data[0].name,
+                phoneCount: result.data[0].phoneNumbers?.length ?? 0,
+              }
+            : 'empty',
+        });
+      } catch (fetchErr) {
+        console.log('[CONTACTS_AUDIT] getContactsAsync threw', fetchErr);
+        throw fetchErr;
+      }
       // FIXED: removed label filtering — show all contacts that have at least one phone number
       const withPhone = (result.data ?? []).filter(
         (c) => c.name && (c.phoneNumbers?.length ?? 0) > 0
@@ -134,10 +178,16 @@ export function AddPersonBottomSheet({
       setContacts(withPhone);
       setSearch('');
       setSelectedKey(null);
+      // Detect iOS limited-access: user allowed only a subset of contacts
+      setIsLimitedAccess(
+        Platform.OS === 'ios' && permResult.accessPrivileges === 'limited'
+      );
       setView('contacts');
-    } catch {
+    } catch (err) {
+      console.log('[CONTACTS_AUDIT] outer catch', err);
       Alert.alert('שגיאה', 'לא ניתן לטעון אנשי קשר.');
     } finally {
+      console.log('[CONTACTS_AUDIT] finally — setting loadingContacts to false');
       setLoadingContacts(false);
     }
   };
@@ -489,6 +539,54 @@ export function AddPersonBottomSheet({
                   )}
                 </View>
 
+                {/* Limited-access banner (iOS only, shown when user granted partial contacts access) */}
+                {isLimitedAccess && (
+                  <View style={s.limitedBanner}>
+                    <View style={s.limitedBannerContent}>
+                      <Ionicons
+                        name="information-circle-outline"
+                        size={18}
+                        color="#92400e"
+                        style={s.limitedBannerIcon}
+                      />
+                      <View style={s.limitedBannerTexts}>
+                        <Text style={s.limitedBannerTitle}>
+                          גישה מוגבלת לאנשי קשר
+                        </Text>
+                        <Text style={s.limitedBannerBody}>
+                          הגישה מוגבלת לחלק מאנשי הקשר בלבד. כדי לראות את
+                          כולם, אפשר/י גישה מלאה בהגדרות.
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={s.limitedBannerActions}>
+                      <Pressable
+                        style={s.limitedBannerSettings}
+                        onPress={() => void Linking.openSettings()}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="פתח הגדרות"
+                        accessibilityHint="פותח את הגדרות האפליקציה כדי לשנות הרשאות אנשי קשר"
+                        hitSlop={6}
+                      >
+                        <Text style={s.limitedBannerSettingsText}>
+                          פתח הגדרות
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={s.limitedBannerDismiss}
+                        onPress={() => setIsLimitedAccess(false)}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="לא כעת"
+                        hitSlop={6}
+                      >
+                        <Text style={s.limitedBannerDismissText}>לא כעת</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )}
+
                 {/* Search */}
                 <TextInput
                   style={s.searchInput}
@@ -800,5 +898,65 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#fff',
+  },
+  // ── Limited-access banner (iOS only) ──────────────────────────────────────
+  limitedBanner: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  limitedBannerContent: {
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  limitedBannerIcon: {
+    marginTop: 1,
+  },
+  limitedBannerTexts: {
+    flex: 1,
+  },
+  limitedBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400e',
+    textAlign: 'right',
+    marginBottom: 2,
+  },
+  limitedBannerBody: {
+    fontSize: 12,
+    color: '#78350f',
+    textAlign: 'right',
+    lineHeight: 17,
+  },
+  limitedBannerActions: {
+    flexDirection: 'row-reverse',
+    gap: 12,
+    marginTop: 10,
+    justifyContent: 'flex-start',
+  },
+  limitedBannerSettings: {
+    backgroundColor: '#f59e0b',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  limitedBannerSettingsText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  limitedBannerDismiss: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  limitedBannerDismissText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#92400e',
   },
 });
