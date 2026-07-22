@@ -10,25 +10,6 @@ const PRIMARY = '#36a9e2';
 const TINT = '#e8f5fd';
 const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY ?? '';
 
-// ─── [LOCATION_AUDIT] Diagnostic helpers ──────────────────────────────────────
-
-const _auditLog = (...args: unknown[]): void => {
-  // eslint-disable-next-line no-console
-  console.log('[LOCATION_AUDIT]', ...args);
-};
-
-/** Track last-seen query text so we can measure debounce inter-call gaps. */
-let _lastChangeText: string | null = null;
-let _lastChangeTs: number | null = null;
-
-// Log API-key status once at module load — never log the actual key value.
-_auditLog('API key check', {
-  present: PLACES_KEY.length > 0,
-  length: PLACES_KEY.length,
-  startsWithAI: PLACES_KEY.startsWith('AI'),
-  ts: new Date().toISOString(),
-});
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type LocMode = 'address' | 'link';
@@ -70,13 +51,11 @@ export function LocationCard({
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleOpen = (): void => {
-    _auditLog('card opened — address mode activated', { ts: new Date().toISOString() });
     setLocMode('address');
     setCardOpen(true);
   };
 
   const handleClose = (): void => {
-    _auditLog('card closed — location cleared', { ts: new Date().toISOString() });
     placesRef.current?.clear();
     setCardOpen(false);
     setLocMode('address');
@@ -85,7 +64,6 @@ export function LocationCard({
 
   const switchMode = (mode: LocMode): void => {
     if (mode === locMode) return;
-    _auditLog('mode switched', { from: locMode, to: mode, ts: new Date().toISOString() });
     placesRef.current?.clear();
     setLocMode(mode);
     onChange({ location: '', onlineUrl: '' });
@@ -154,61 +132,24 @@ export function LocationCard({
               const locationUrl = geo
                 ? buildGeoUri(geo.lat, geo.lng)
                 : undefined;
-              // [LOCATION_AUDIT] User selected a suggestion
-              _auditLog('suggestion selected', {
-                description: data.description,
-                placeId: data.place_id,
-                hasDetails: details !== null,
-                hasGeometry: !!geo,
-                locationUrl,
-                ts: new Date().toISOString(),
-              });
               onChange({
                 location: data.description,
                 onlineUrl: '',
                 locationUrl,
               });
             }}
-            onFail={(error: unknown) => {
-              // [LOCATION_AUDIT] API request failed — log full error (was silently swallowed before)
-              _auditLog('API request FAILED', {
-                error,
-                errorType: error instanceof Error ? error.constructor.name : typeof error,
-                errorMessage: error instanceof Error ? error.message : String(error),
-                errorStack: error instanceof Error ? error.stack : undefined,
-                lastQuery: _lastChangeText,
-                ts: new Date().toISOString(),
-              });
+            onFail={(_error: unknown) => {
               // Graceful degradation: user keeps whatever they typed
             }}
             onNotFound={() => {
-              // [LOCATION_AUDIT] Request succeeded but returned 0 results
-              _auditLog('no results found (ZERO_RESULTS)', {
-                query: _lastChangeText,
-                ts: new Date().toISOString(),
-              });
+              // Graceful degradation: user keeps whatever they typed
             }}
             onTimeout={() => {
-              // [LOCATION_AUDIT] Request timed out — network-level failure
-              _auditLog('request TIMED OUT', {
-                query: _lastChangeText,
-                ts: new Date().toISOString(),
-              });
+              // Graceful degradation: user keeps whatever they typed
             }}
             textInputProps={{
               value: location ?? '',
               onChangeText: (text: string) => {
-                // [LOCATION_AUDIT] Text changed — track debounce timing
-                const now = Date.now();
-                const msSinceLast = _lastChangeTs !== null ? now - _lastChangeTs : null;
-                _auditLog('onChangeText fired', {
-                  text,
-                  length: text.length,
-                  msSincePreviousChange: msSinceLast,
-                  ts: new Date().toISOString(),
-                });
-                _lastChangeText = text;
-                _lastChangeTs = now;
                 onChange({
                   location: text,
                   onlineUrl: '',
