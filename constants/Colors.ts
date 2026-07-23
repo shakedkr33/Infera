@@ -1,7 +1,7 @@
 // קבועי צבעים עבור האפליקציה
 // קובץ זה מרכז את פלטת הצבעים עבור מצב בהיר (Light) ומצב כהה (Dark)
 
-const tintColorLight = '#2f95dc'; // צבע הדגשה למצב בהיר
+const tintColorLight = '#00668E'; // צבע הדגשה למצב בהיר
 const tintColorDark = '#fff'; // צבע הדגשה למצב כהה
 
 export default {

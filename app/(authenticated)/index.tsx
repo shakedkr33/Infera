@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  AppState,
   Linking,
   Modal,
   Platform,
@@ -19,6 +20,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import {
+  HomeDailyCommandCenter,
+  type HomeDailyItem,
+} from '@/components/home/HomeDailyCommandCenter';
 import type { AssignedEventTask } from '@/components/InlineEventTasksSection';
 import { InlineEventTasksSection } from '@/components/InlineEventTasksSection';
 import type { ImportantItem } from '@/components/InlineImportantItemsSection';
@@ -29,6 +34,7 @@ import type { ProfileCircle } from '@/components/ProfileCircles';
 import { ProfileCircles } from '@/components/ProfileCircles';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
+import { colors } from '@/constants/theme';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -39,10 +45,10 @@ import { SubtaskImagePreviewModal } from '@/lib/components/task/SubtaskImagePrev
 import { SubtaskAttachmentPreview } from '@/lib/components/task/SubtasksSection';
 import { APP_IS_RTL, getTextAlign, position, rtl, spacing } from '@/lib/rtl';
 import type { SubTaskAttachment } from '@/lib/types/task';
-
-const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
+
+const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -109,6 +115,9 @@ type Item = {
   id: string;
   time: string;
   endTime?: string;
+  /** Exact timestamps support reliable active/up-next state without parsing display text. */
+  startAt?: number;
+  endAt?: number;
   title: string;
   location: string;
   /** geo:lat,lng URI — present when the event was saved with autocomplete coordinates */
@@ -556,11 +565,13 @@ export default function HomeScreen() {
   const toggleCompletedMutation = useMutation(api.tasks.toggleCompleted);
   const softDeleteTaskMutation = useMutation(api.tasks.softDeleteTask);
   const toggleSubtaskMutation = useMutation(api.tasks.toggleSubtaskCompleted);
+  const upsertHomeRsvpMutation = useMutation(api.eventRsvps.upsertRsvp);
   const [showToast, setShowToast] = useState(true);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [calendarMode, setCalendarMode] = useState<'segmented' | 'month'>(
-    'segmented'
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [calendarMode, setCalendarMode] = useState<'carousel' | 'month'>(
+    'carousel'
   );
 
   // ── Insight card ───────────────────────────────────────────────────────────
@@ -625,6 +636,27 @@ export default function HomeScreen() {
     if (!notifLoading) markAllSeen();
   };
 
+  // Refresh live event labels once per minute and immediately whenever the app
+  // returns to the foreground. A single screen-level timer avoids per-card work.
+  useEffect(() => {
+    const refreshNow = (): void => setNowMs(Date.now());
+    const firstDelay = 60_000 - (Date.now() % 60_000);
+    let minuteInterval: ReturnType<typeof setInterval> | undefined;
+    const minuteTimeout = setTimeout(() => {
+      refreshNow();
+      minuteInterval = setInterval(refreshNow, 60_000);
+    }, firstDelay);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshNow();
+    });
+
+    return () => {
+      clearTimeout(minuteTimeout);
+      if (minuteInterval) clearInterval(minuteInterval);
+      subscription.remove();
+    };
+  }, []);
+
   // ── Computed values ────────────────────────────────────────────────────────
   const greeting = getGreetingByHour(new Date().getHours());
   const homeGreeting = userFirstName
@@ -632,16 +664,9 @@ export default function HomeScreen() {
     : greeting;
   const todayISO = new Date().toISOString().split('T')[0];
 
-  // Stable reference — avoids re-renders caused by Date() identity changes.
-  const today = useMemo(() => new Date(), []);
-
-  const yesterday = useMemo(() => {
-    const d = new Date(today);
-    d.setDate(d.getDate() - 1);
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }, [today]);
-
+  // Refreshes with the single minute clock so an app left open across midnight
+  // moves live states and date labels forward without adding another timer.
+  const today = useMemo(() => new Date(nowMs), [nowMs]);
   const tomorrow = useMemo(() => {
     const d = new Date(today);
     d.setDate(d.getDate() + 1);
@@ -660,9 +685,6 @@ export default function HomeScreen() {
   );
 
   const isSelectedToday = isSameDay(selectedDate, today);
-  const isSelectedYesterday = isSameDay(selectedDate, yesterday);
-  const isSelectedTomorrow = isSameDay(selectedDate, tomorrow);
-  const isCustomDate = !isSelectedYesterday && !isSelectedToday && !isSelectedTomorrow;
   const emptyDayCopy = getEmptyStateCopy(selectedDate);
   const year = today.getFullYear();
   const month = today.getMonth();
@@ -789,6 +811,7 @@ export default function HomeScreen() {
           return {
             id: t._id,
             time: timeStr,
+            startAt: timeTs ?? undefined,
             title: t.title,
             location: '',
             type: 'task' as const,
@@ -969,6 +992,10 @@ export default function HomeScreen() {
           : count === 1
             ? 'יש לך משימה אחת באירוע הזה'
             : `יש לך ${count} משימות באירוע הזה`;
+      const rsvpStatus =
+        myRsvpByEventIdHome.get(String(ev._id)) ?? ('none' as const);
+      const requiresRsvp =
+        (ev as { requiresRsvp?: boolean }).requiresRsvp === true;
       return {
         id: ev._id,
         time: ev.allDay
@@ -985,15 +1012,20 @@ export default function HomeScreen() {
                 minute: '2-digit',
               })
             : undefined,
+        startAt: ev.startTime,
+        endAt: ev.endTime ?? undefined,
         title: ev.title,
         location: ev.location ?? '',
         locationUrl: (ev as { locationUrl?: string }).locationUrl,
+        remoteUrl: (ev as { onlineUrl?: string }).onlineUrl,
         type: 'event' as const,
         icon: 'event',
         iconBg: '#E8F5FD',
         iconColor: '#36a9e2',
         assigneeColor: '#36a9e2',
         completed: false,
+        pending: requiresRsvp && rsvpStatus === 'none',
+        rsvpStatus,
         allDay: ev.allDay,
         groupName: ev.communityName,
         communityId: ev.communityId as string | undefined,
@@ -1013,6 +1045,7 @@ export default function HomeScreen() {
     tasksByEvent,
     communityImportantItemsById,
     familyAlsoAdded,
+    myRsvpByEventIdHome,
   ]);
 
   // ── Assigned event task items mapped to Item shape ────────────────────────
@@ -1211,9 +1244,12 @@ export default function HomeScreen() {
                   minute: '2-digit',
                 })
               : undefined,
+          startAt: ev.startTime,
+          endAt: ev.endTime ?? undefined,
           title: ev.title,
           location: ev.location ?? '',
           locationUrl: (ev as { locationUrl?: string }).locationUrl,
+          remoteUrl: (ev as { onlineUrl?: string }).onlineUrl,
           type: 'event' as const,
           icon: 'event',
           // Muted visuals for cancelled personal events — mirrors linkedEventItems pattern.
@@ -1284,6 +1320,8 @@ export default function HomeScreen() {
                   minute: '2-digit',
                 })
               : undefined,
+          startAt: ev.startTime,
+          endAt: ev.endTime ?? undefined,
           title: ev.title,
           location: ev.location ?? '',
           type: 'event' as const,
@@ -1400,6 +1438,21 @@ export default function HomeScreen() {
     communityEventItems,
     assignedTaskItems,
   ]);
+
+  const allDayTimelineItems = useMemo(() => {
+    const seen = new Set<string>();
+    const result: Item[] = [];
+    for (const item of [
+      ...personalEventItems,
+      ...communityEventItems,
+      ...linkedEventItems,
+    ]) {
+      if (!item.allDay || seen.has(item.id)) continue;
+      seen.add(item.id);
+      result.push(item);
+    }
+    return result;
+  }, [personalEventItems, communityEventItems, linkedEventItems]);
 
   // ── Convex: undated tasks ──────────────────────────────────────────────────
   const convexUndatedTasks = useQuery(
@@ -1639,6 +1692,38 @@ export default function HomeScreen() {
     }
   };
 
+  const handleHomeItemPress = (homeItem: HomeDailyItem): void => {
+    const item = [...allItems, ...allDayTimelineItems].find(
+      (candidate) => candidate.id === homeItem.id
+    );
+    if (item) handleCardPress(item);
+  };
+
+  const handleHomeRsvp = async (
+    item: HomeDailyItem,
+    status: 'yes' | 'maybe' | 'no'
+  ): Promise<void> => {
+    try {
+      await upsertHomeRsvpMutation({
+        eventId: item.id as Id<'events'>,
+        status,
+      });
+    } catch {
+      Alert.alert(
+        'לא הצלחנו לשמור את התגובה',
+        status === 'no'
+          ? 'ייתכן שיש לך משימה פעילה באירוע. אפשר לפתוח את פרטי האירוע ולבדוק.'
+          : 'אפשר לנסות שוב בעוד רגע.'
+      );
+    }
+  };
+
+  const handleOpenRemoteUrl = (url: string): void => {
+    Linking.openURL(url).catch(() =>
+      Alert.alert('שגיאה', 'לא ניתן לפתוח את הקישור.')
+    );
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => setShowToast(false), 5000);
     return () => clearTimeout(timer);
@@ -1697,13 +1782,22 @@ export default function HomeScreen() {
           </View>
         ))}
         {calGridDays.map((day, i) => {
-          if (!day)
+          if (!day) {
+            // biome-ignore lint/suspicious/noArrayIndexKey: leading calendar placeholders are static and have no data identity.
             return <View key={`e-${i}`} style={stylesRtl.monthDayCell} />;
+          }
           const isSel = isSameDay(day, selectedDate);
           const isTod = isSameDay(day, today);
           return (
             <Pressable
-              key={i}
+              accessibilityLabel={`בחירת ${day.toLocaleDateString('he-IL', {
+                day: 'numeric',
+                month: 'long',
+              })}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isSel }}
+              accessible={true}
+              key={day.toISOString()}
               style={[
                 stylesRtl.monthDayCell,
                 isSel && stylesRtl.monthDayCellSelected,
@@ -1813,8 +1907,26 @@ export default function HomeScreen() {
   // RENDER
   // ══════════════════════════════════════════════════════════════════════════
 
+  const useDailyCommandCenter = true;
+  const showLegacyNextArea =
+    !useDailyCommandCenter && !isSummaryMode && hasEventsOrTasks;
+  const showLegacyEmptyDay =
+    !useDailyCommandCenter &&
+    hasEventsOrTasks &&
+    !hasDayData &&
+    selectedDayUntimedTasks.length === 0;
+  const showLegacyOverdue =
+    !useDailyCommandCenter && isSelectedToday && overdueTasks.length > 0;
+  const showLegacyUndated =
+    !useDailyCommandCenter && isSelectedToday && undatedTasks.length > 0;
+
   return (
-    <SafeAreaView style={[{ flex: 1, backgroundColor: '#f6f7f8' }, ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null]}>
+    <SafeAreaView
+      style={[
+        { flex: 1, backgroundColor: '#f6f7f8' },
+        ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,
+      ]}
+    >
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <View style={stylesRtl.headerSurface}>
         <MainScreenHeader
@@ -1828,110 +1940,74 @@ export default function HomeScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
-        {/* ── Date section: segmented day selector + calendar toggle ─────────── */}
-        <View style={stylesRtl.dateSectionRow}>
-          {calendarMode === 'segmented' ? (
-            <View style={stylesRtl.segmentedContainer}>
-              {/* Declaration order right→left: אתמול | היום | מחר
-                  direction:'rtl' (inherited from SafeAreaView on Android, and
-                  matched by explicit direction:'rtl' on the container for iOS)
-                  reverses flex layout so the first child sits on the right. */}
+        {/* ── Focused date selector ─────────────────────────────────────────── */}
+        <View style={stylesRtl.dateSelectorShell}>
+          {(
+            [
+              { label: 'אתמול', offset: -1 },
+              { label: 'היום', offset: 0 },
+              { label: 'מחר', offset: 1 },
+            ] as const
+          ).map(({ label, offset }) => {
+            const date = new Date(today);
+            date.setDate(today.getDate() + offset);
+            const isSelected = isSameDay(date, selectedDate);
+            return (
               <Pressable
-                onPress={() => setSelectedDate(yesterday)}
-                style={[
-                  stylesRtl.segmentedTab,
-                  isSelectedYesterday && stylesRtl.segmentedTabActive,
-                ]}
-                accessible={true}
+                accessibilityLabel={`בחירת ${label}`}
                 accessibilityRole="button"
-                accessibilityLabel="אתמול"
-                accessibilityState={{ selected: isSelectedYesterday }}
+                accessibilityState={{ selected: isSelected }}
+                accessible={true}
+                key={label}
+                onPress={() => {
+                  setSelectedDate(date);
+                  setCalendarMode('carousel');
+                }}
+                style={[
+                  stylesRtl.dateSegment,
+                  isSelected && stylesRtl.dateSegmentSelected,
+                ]}
               >
                 <Text
                   style={[
-                    stylesRtl.segmentedTabText,
-                    isSelectedYesterday && stylesRtl.segmentedTabTextActive,
+                    stylesRtl.dateSegmentText,
+                    isSelected && stylesRtl.dateSegmentTextSelected,
                   ]}
                 >
-                  אתמול
+                  {label}
                 </Text>
               </Pressable>
-              <Pressable
-                onPress={() => setSelectedDate(today)}
-                style={[
-                  stylesRtl.segmentedTab,
-                  isSelectedToday && stylesRtl.segmentedTabActive,
-                ]}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="היום"
-                accessibilityState={{ selected: isSelectedToday }}
-              >
-                <Text
-                  style={[
-                    stylesRtl.segmentedTabText,
-                    isSelectedToday && stylesRtl.segmentedTabTextActive,
-                  ]}
-                >
-                  היום
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setSelectedDate(tomorrow)}
-                style={[
-                  stylesRtl.segmentedTab,
-                  isSelectedTomorrow && stylesRtl.segmentedTabActive,
-                ]}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="מחר"
-                accessibilityState={{ selected: isSelectedTomorrow }}
-              >
-                <Text
-                  style={[
-                    stylesRtl.segmentedTabText,
-                    isSelectedTomorrow && stylesRtl.segmentedTabTextActive,
-                  ]}
-                >
-                  מחר
-                </Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View style={{ flex: 1 }} />
-          )}
+            );
+          })}
           <Pressable
-            onPress={() =>
-              setCalendarMode((m) => (m === 'segmented' ? 'month' : 'segmented'))
-            }
-            style={[
-              stylesRtl.calendarToggleBtn,
-              isCustomDate && stylesRtl.calendarToggleBtnActive,
-            ]}
-            accessible={true}
-            accessibilityRole="button"
             accessibilityLabel={
-              calendarMode === 'segmented' ? 'פתח לוח שנה חודשי' : 'חזרה לבחירת יום'
+              calendarMode === 'month' ? 'סגירת לוח שנה' : 'פתיחת לוח שנה'
             }
+            accessibilityRole="button"
+            accessible={true}
+            onPress={() =>
+              setCalendarMode((mode) =>
+                mode === 'month' ? 'carousel' : 'month'
+              )
+            }
+            style={stylesRtl.dateCalendarButton}
           >
             <MaterialIcons
-              name={
-                calendarMode === 'segmented' ? 'calendar-month' : 'view-week'
-              }
-              size={20}
-              color={isCustomDate ? '#fff' : '#36a9e2'}
+              color={colors.primaryDark}
+              name={calendarMode === 'month' ? 'close' : 'calendar-today'}
+              size={19}
             />
           </Pressable>
         </View>
 
-        {/* ── Month calendar ──────────────────────────────────────────────────── */}
-        {calendarMode === 'month' && (
+        {calendarMode === 'month' ? (
           <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
             {renderMonthCalendar()}
           </View>
-        )}
+        ) : null}
 
-        {hasEventsOrTasks && (
+        {(todayCount + selectedDayUntimedTasks.length > 0 ||
+          hasOverdueTasks) && (
           <Text style={stylesRtl.subtitleCount}>
             {isSummaryMode
               ? `${todayCount} פעילויות ביום זה`
@@ -1939,12 +2015,47 @@ export default function HomeScreen() {
                 ? overdueCount === 1
                   ? 'יש לך משימה אחת ממתינה'
                   : `יש לך ${overdueCount} משימות ממתינות`
-                : `יש לך ${todayCount} פעילויות היום`}
+                : `${todayCount + selectedDayUntimedTasks.length} דברים מתוכננים ${
+                    isSelectedToday
+                      ? 'להיום'
+                      : isSelectedPastDay
+                        ? 'ביום הזה'
+                        : 'לתאריך הזה'
+                  }`}
           </Text>
         )}
 
+        {useDailyCommandCenter && (
+          <HomeDailyCommandCenter
+            allDayItems={allDayTimelineItems}
+            birthdays={upcomingBirthdays}
+            nowMs={nowMs}
+            onNavigate={handleOpenNavPicker}
+            onOpenBirthday={openBirthdayCard}
+            onOpenBirthdays={() => router.push('/birthdays')}
+            onOpenItem={handleHomeItemPress}
+            onOpenRemoteUrl={handleOpenRemoteUrl}
+            onOpenTask={handleTaskPress}
+            onOpenTasks={() => router.push('/(authenticated)/tasks')}
+            onRsvp={handleHomeRsvp}
+            onToggleTask={(taskId) => {
+              void toggleCompletedMutation({
+                id: taskId as Id<'tasks'>,
+              }).catch(() =>
+                Alert.alert('שגיאה', 'לא הצלחנו לעדכן את המשימה.')
+              );
+            }}
+            overdueTasks={overdueTasks}
+            scheduledItems={allItems}
+            selectedDate={selectedDate}
+            undatedTaskCount={
+              undatedTasks.filter((task) => !task.completed).length
+            }
+            untimedTasks={selectedDayUntimedTasks}
+          />
+        )}
         {/* ── Empty state — no events or tasks ─────────────────────────────── */}
-        {shouldShowEventsEmptyState && (
+        {!useDailyCommandCenter && shouldShowEventsEmptyState && (
           <View style={stylesRtl.emptyStateContainer}>
             <View style={stylesRtl.emptyStateIconWrap}>
               <MaterialIcons name="calendar-today" size={36} color="#36a9e2" />
@@ -1986,7 +2097,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Summary mode: calm section label for past days ───────────────── */}
-        {isSummaryMode && hasDayData && (
+        {!useDailyCommandCenter && isSummaryMode && hasDayData && (
           <View
             style={{ paddingHorizontal: 24, marginBottom: 8, marginTop: 4 }}
           >
@@ -1997,7 +2108,7 @@ export default function HomeScreen() {
         {/* ── Next event area — state-aware ─────────────────────────────────── */}
 
         {/* Normal next-event card: today or future day with a valid next item */}
-        {!isSummaryMode && hasEventsOrTasks && nextEvent && (
+        {showLegacyNextArea && nextEvent && (
           <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
             <Pressable
               onPress={() => handleCardPress(nextEvent)}
@@ -2223,7 +2334,7 @@ export default function HomeScreen() {
         )}
 
         {/* End-of-day fallback: today, had timed items, none are future */}
-        {isEndOfDay && !nextEvent && (
+        {!useDailyCommandCenter && isEndOfDay && !nextEvent && (
           <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
             <View style={[stylesRtl.cardShadow, stylesRtl.endOfDayCard]}>
               <Text style={stylesRtl.endOfDayTitle}>
@@ -2247,7 +2358,8 @@ export default function HomeScreen() {
         )}
 
         {/* ── Empty day state (data exists but not for this day) ───────────── */}
-        {hasEventsOrTasks &&
+        {showLegacyEmptyDay &&
+          hasEventsOrTasks &&
           !hasDayData &&
           selectedDayUntimedTasks.length === 0 && (
             <View style={stylesRtl.emptyDayContainer}>
@@ -2288,7 +2400,7 @@ export default function HomeScreen() {
           )}
 
         {/* ── Birthdays — hidden in summary/past-day mode ───────────────────── */}
-        {!isSummaryMode && (
+        {!useDailyCommandCenter && !isSummaryMode && (
           <View style={{ marginBottom: 32 }}>
             <View style={stylesRtl.sectionHeader}>
               <Text style={stylesRtl.sectionTitle}>🎂 ימי הולדת קרובים</Text>
@@ -2404,7 +2516,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Timeline ───────────────────────────────────────────────────────── */}
-        {hasDayData && (
+        {!useDailyCommandCenter && hasDayData && (
           <>
             {!isSummaryMode && !isEndOfDay && (
               <View style={stylesRtl.sectionHeader}>
@@ -2868,8 +2980,7 @@ export default function HomeScreen() {
                     </View>
                   </View>
                 )}
-                {restOfDayItems
-                  .map((item) => (
+                {restOfDayItems.map((item) => (
                     <Swipeable
                       key={item.id}
                       renderRightActions={() => {
@@ -3440,7 +3551,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Untimed personal tasks for selected day ──────────────────────── */}
-        {selectedDayUntimedTasks.length > 0 && (
+        {!useDailyCommandCenter && selectedDayUntimedTasks.length > 0 && (
           <View style={{ marginBottom: 24 }}>
             <View style={stylesRtl.sectionHeader}>
               <Text style={stylesRtl.sectionTitle}>
@@ -3533,7 +3644,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Overdue incomplete tasks — only shown on the real current day ── */}
-        {isSelectedToday && overdueTasks.length > 0 && (
+        {showLegacyOverdue && (
           <View style={{ marginBottom: 24 }}>
             <View style={stylesRtl.sectionHeader}>
               <Text style={stylesRtl.sectionTitle}>עדיין מחכה לך</Text>
@@ -3645,7 +3756,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Undated tasks — only on real current day ─────────────────────── */}
-        {isSelectedToday && undatedTasks.length > 0 && (
+        {showLegacyUndated && (
           <View style={{ marginBottom: 32 }}>
             <View style={stylesRtl.sectionHeader}>
               <Text style={stylesRtl.sectionTitle}>משימות ללא תאריך</Text>
@@ -4017,6 +4128,49 @@ const styles = StyleSheet.create({
   },
 
   // ── Date section header ─────────────────────────────────────────────────────
+  dateSelectorShell: {
+    minHeight: 68,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    marginHorizontal: 24,
+    marginTop: 8,
+    marginBottom: 10,
+    borderRadius: 34,
+    padding: 6,
+    backgroundColor: '#EBEEF0',
+  },
+  dateSegment: {
+    minHeight: 48,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 24,
+  },
+  dateSegmentSelected: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#00668E',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 9,
+    elevation: 2,
+  },
+  dateSegmentText: {
+    color: '#5A6062',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  dateSegmentTextSelected: {
+    color: '#00668E',
+    fontWeight: '800',
+  },
+  dateCalendarButton: {
+    width: 46,
+    height: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 23,
+  },
   dateSectionRow: {
     flexDirection: 'row',
     alignItems: 'center',

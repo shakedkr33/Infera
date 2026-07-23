@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors } from '@/constants/theme';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { uploadAttachmentDraftsForConvex } from '@/lib/attachmentUpload';
@@ -44,7 +45,7 @@ const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getHebrewDateInfo } from '@/lib/utils/hebrewDate';
 import { SubtasksSection } from './SubtasksSection';
 
-const PRIMARY = '#36a9e2';
+const PRIMARY = colors.primaryDark;
 const TINT = '#e8f5fd';
 const DEFAULT_TASKS_ROUTE = '/(authenticated)/tasks';
 const NUMBERS = Array.from({ length: 100 }, (_, index) => index + 1);
