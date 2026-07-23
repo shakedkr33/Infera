@@ -1,5 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { colors } from '@/constants/theme';
 
 interface TaskCheckboxProps {
   checked: boolean;
@@ -29,13 +30,13 @@ const styles = StyleSheet.create({
     height: 28,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: 'rgba(54,169,226,0.5)',
+    borderColor: 'rgba(0,102,142,0.45)',
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
   },
   boxChecked: {
-    backgroundColor: '#36a9e2',
-    borderColor: '#36a9e2',
+    backgroundColor: colors.primaryDark,
+    borderColor: colors.primaryDark,
   },
 });

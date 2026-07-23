@@ -100,6 +100,13 @@ export default defineSchema({
     recurringPattern: v.optional(v.string()),
     isAiGenerated: v.boolean(),
     captureId: v.optional(v.id('captures')),
+    source: v.optional(
+      v.union(
+        v.literal('manual'),
+        v.literal('google_copy'),
+        v.literal('device_copy')
+      )
+    ),
     createdBy: v.id('users'),
     createdAt: v.number(),
     // MVP additions
@@ -623,6 +630,7 @@ export default defineSchema({
       )
     ),
     leftAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
   })
     .index('by_task_user', ['taskId', 'userId'])
     .index('by_user', ['userId']),

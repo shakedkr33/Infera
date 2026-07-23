@@ -1,6 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useConvexAuth, useMutation, useQuery } from 'convex/react';
+import { LinearGradient } from 'expo-linear-gradient';
 import {
   Tabs,
   useRootNavigationState,
@@ -25,6 +26,7 @@ import {
 } from 'react-native';
 import { InYomiSplashScreen } from '@/components/InYomiSplashScreen';
 import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
+import { colors } from '@/constants/theme';
 import { ActionSheetContext } from '@/contexts/ActionSheetContext';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
@@ -52,7 +54,7 @@ function RegularTabButton({
   'aria-selected': ariaSelected,
 }: TabBtnProps) {
   const focused = ariaSelected === true;
-  const color = focused ? '#36a9e2' : '#94a3b8';
+  const color = focused ? colors.primaryDark : '#687477';
   return (
     <Pressable
       onPress={onPress}
@@ -83,10 +85,16 @@ function PlusCenterButton() {
       accessible={true}
       accessibilityRole="button"
       accessibilityLabel="הוסף פריט חדש"
+      accessibilityHint="פותח תפריט ליצירת אירוע, משימה או יום הולדת"
     >
-      <View style={styles.plusBtn}>
-        <MaterialIcons name="add" size={32} color="white" />
-      </View>
+      <LinearGradient
+        colors={[colors.primaryDark, colors.primary]}
+        end={{ x: 1, y: 0.5 }}
+        start={{ x: 0, y: 0.5 }}
+        style={styles.plusBtn}
+      >
+        <MaterialIcons name="add" size={34} color="#002F43" />
+      </LinearGradient>
     </Pressable>
   );
 }
@@ -134,7 +142,11 @@ function ActionSheetModal({
         <View style={styles.sheetPanel}>
           <View style={styles.sheetHandle} />
           <View style={styles.sheetInput}>
-            <MaterialIcons name="auto-awesome" size={20} color="#36a9e2" />
+            <MaterialIcons
+              name="auto-awesome"
+              size={20}
+              color={colors.primaryDark}
+            />
             <TextInput
               style={styles.sheetTextInput}
               placeholder="על מה את חושבת? או הדביקי הודעה..."
@@ -195,7 +207,11 @@ function ActionButton({
   return (
     <Pressable onPress={onPress} style={{ alignItems: 'center', gap: 8 }}>
       <View style={styles.actionBtnCircle}>
-        <MaterialIcons name={icon as never} size={28} color="#36a9e2" />
+        <MaterialIcons
+          name={icon as never}
+          size={28}
+          color={colors.primaryDark}
+        />
       </View>
       <Text style={styles.actionBtnLabel}>{label}</Text>
     </Pressable>
@@ -467,7 +483,7 @@ export default function AuthenticatedLayout() {
         <Tabs
           screenOptions={{
             headerShown: false,
-            tabBarActiveTintColor: '#36a9e2',
+            tabBarActiveTintColor: colors.primaryDark,
             tabBarInactiveTintColor: '#94a3b8',
             tabBarStyle: {
               backgroundColor: '#ffffff',
@@ -600,7 +616,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   activeTabPill: {
-    backgroundColor: 'rgba(54,169,226,0.16)',
+    backgroundColor: 'rgba(85,192,251,0.22)',
     borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 5,
@@ -618,18 +634,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#94a3b8',
   },
-  tabLabelActive: { color: '#36a9e2', fontWeight: '700' },
+  tabLabelActive: { color: colors.primaryDark, fontWeight: '700' },
 
   // Central plus button — raised circle
   plusBtn: {
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#36a9e2',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: -20,
-    shadowColor: '#36a9e2',
+    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
     shadowRadius: 10,

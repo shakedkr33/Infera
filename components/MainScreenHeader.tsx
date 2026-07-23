@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { colors } from '@/constants/theme';
 import { api } from '@/convex/_generated/api';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 
@@ -93,7 +94,7 @@ export function MainScreenHeader({
             accessibilityLabel="הוספה"
             style={styles.headerAddButton}
           >
-            <Plus size={18} color="#36a9e2" strokeWidth={2.4} />
+            <Plus size={18} color={colors.primaryDark} strokeWidth={2.4} />
           </TouchableOpacity>
         ) : null}
       </View>
@@ -125,7 +126,11 @@ export function MainScreenHeader({
           {resolvedAvatarInitials ? (
             <Text style={styles.profileInitials}>{resolvedAvatarInitials}</Text>
           ) : (
-            <MaterialIcons name="person-outline" size={22} color="#36a9e2" />
+            <MaterialIcons
+              name="person-outline"
+              size={22}
+              color={colors.primaryDark}
+            />
           )}
         </TouchableOpacity>
       </View>
@@ -182,7 +187,7 @@ const styles = StyleSheet.create({
     minWidth: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: '#36a9e2',
+    backgroundColor: colors.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 3,

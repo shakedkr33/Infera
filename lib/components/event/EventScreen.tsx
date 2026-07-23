@@ -22,6 +22,7 @@ import {
 } from 'react-native';
 // Alert is still used for save errors
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors } from '@/constants/theme';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import {
@@ -51,7 +52,7 @@ import type {
 } from '@/lib/types/event';
 import { makeReminder } from '@/lib/types/event';
 
-const PRIMARY = '#36a9e2';
+const PRIMARY = colors.primaryDark;
 
 const IMPORTANT_ITEMS_SECTION_TITLE = 'חשוב לזכור';
 const IMPORTANT_ITEMS_PLACEHOLDER = 'למשל: חולצה לבנה, פרי חתוך, בקבוק מים...';
@@ -876,7 +877,7 @@ export default function EventScreen({
                       <MaterialIcons
                         name="how-to-reg"
                         size={20}
-                        color="#36a9e2"
+                        color={PRIMARY}
                       />
                     </View>
                   </View>
@@ -887,7 +888,7 @@ export default function EventScreen({
                         setIsDirty(true);
                         onRsvpRequiredChange?.(val);
                       }}
-                      trackColor={{ true: '#36a9e2', false: '#e2e8f0' }}
+                      trackColor={{ true: PRIMARY, false: '#e2e8f0' }}
                       thumbColor="#fff"
                       accessible={true}
                       accessibilityLabel="נדרש אישור הגעה"

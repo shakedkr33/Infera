@@ -22,6 +22,7 @@ import {
   JoinApprovalSettingsModal,
 } from '@/components/JoinApprovalSettingsModal';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
+import { colors } from '@/constants/theme';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -30,7 +31,7 @@ import { rtl } from '@/lib/rtl';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const PRIMARY = '#36a9e2';
+const PRIMARY = colors.primaryDark;
 const PILL_BG = '#EAF7FD';
 const DIVIDER_COLOR = '#E8EDF3';
 const MUTED_TEXT = '#8A94A6';

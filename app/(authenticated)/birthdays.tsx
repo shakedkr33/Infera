@@ -18,12 +18,13 @@ import {
   type SelectedContactData,
 } from '@/components/onboarding/AddPersonBottomSheet';
 import { UpgradeModal } from '@/components/UpgradeModal';
+import { colors } from '@/constants/theme';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
 
-const PRIMARY = '#36a9e2';
+const PRIMARY = colors.primaryDark;
 
 export default function BirthdaysScreen(): React.JSX.Element {
   const { openBirthdayCard, openBirthdayEdit, deleteBirthday, birthdays } =

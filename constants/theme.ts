@@ -22,11 +22,15 @@
 export const colors = {
   // ── Primary Brand Color ─────────────────────────────────────────────
   /** Blue — primary brand color: buttons, FAB, active tab */
-  primary: '#4A9FE2',
+  primary: '#55C0FB',
   /** Lighter blue — hover states, muted surfaces */
-  primaryLight: '#7AB8F5',
+  primaryLight: '#BCE8FF',
   /** Darker blue — pressed states, emphasis */
-  primaryDark: '#2E7FC4',
+  primaryDark: '#00668E',
+  /** Intermediate blue for pressed bright surfaces */
+  primaryPressed: '#44B3EC',
+  /** Dark pressed state for readable actions on light surfaces */
+  primaryPressedDark: '#00597D',
 
   // ── Neutrals ────────────────────────────────────────────────────────
   /** Default screen background */
@@ -56,7 +60,7 @@ export const colors = {
 
   // ── Legacy aliases (for backward compat, prefer primary/text/etc) ──
   /** @deprecated use `primary` instead */
-  sage: '#4A9FE2',
+  sage: '#55C0FB',
   /** @deprecated use `textSecondary` instead */
   slateLight: '#666666',
   /** @deprecated use `text` instead */
@@ -70,7 +74,7 @@ export const colors = {
   /** @deprecated */
   black: '#000000',
   /** @deprecated use `primary` instead */
-  brandBlue: '#4A9FE2',
+  brandBlue: '#55C0FB',
 } as const;
 
 /** TypeScript type representing any key from the color palette */
@@ -200,7 +204,7 @@ export const shadows: Record<string, ShadowPreset> = {
   },
   /** Blue-tinted glow for primary action buttons */
   primaryCta: {
-    shadowColor: '#4A9FE2',
+    shadowColor: '#55C0FB',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.3,
     shadowRadius: 14,

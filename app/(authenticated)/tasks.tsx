@@ -23,6 +23,7 @@ import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { UpgradeModal } from '@/components/UpgradeModal';
+import { colors } from '@/constants/theme';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -33,7 +34,7 @@ import { InlineSubtasksEditor } from '@/lib/components/task/InlineSubtasksEditor
 import { rtl } from '@/lib/rtl';
 import { getTaskCategoryLabel } from '@/lib/types/task';
 
-const PRIMARY_BLUE = '#36A9E2';
+const PRIMARY_BLUE = colors.primaryDark;
 const PRIMARY_BLUE_TINT = '#E8F5FD';
 const TEXT_DARK = '#111418';
 const TEXT_MUTED = '#637588';
@@ -2516,7 +2517,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   swipeOpenEventAction: {
-    backgroundColor: '#36a9e2',
+    backgroundColor: colors.primaryDark,
     justifyContent: 'center',
     alignItems: 'center',
     width: 90,
