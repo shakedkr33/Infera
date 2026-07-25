@@ -506,8 +506,13 @@ export default function EditEventScreen(): React.JSX.Element {
           pathname: '/(authenticated)/community/[id]',
           params: { id: returnCommunityId },
         });
-      } else {
+      } else if (router.canGoBack()) {
         router.back();
+      } else {
+        router.replace({
+          pathname: '/(authenticated)/event/[id]',
+          params: { id: eventId as string },
+        });
       }
       return eventId;
     },
