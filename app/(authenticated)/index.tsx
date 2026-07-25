@@ -1324,6 +1324,7 @@ export default function HomeScreen() {
           endAt: ev.endTime ?? undefined,
           title: ev.title,
           location: ev.location ?? '',
+          locationUrl: (ev as { locationUrl?: string }).locationUrl,
           type: 'event' as const,
           icon: 'link',
           iconBg: isCancelled || isDeleted ? '#f3f4f6' : '#eff8ff',
@@ -1733,6 +1734,7 @@ export default function HomeScreen() {
     location: string,
     locationUrl?: string
   ): void => {
+    if (!parseGeoUri(locationUrl)) return;
     setNavPickerLocation(location);
     setNavPickerLocationUrl(locationUrl ?? null);
   };
@@ -2250,26 +2252,28 @@ export default function HomeScreen() {
                           {nextEvent.location}
                         </Text>
                       </View>
-                      <Pressable
-                        style={stylesRtl.navBtn}
-                        onPress={(e) => {
-                          e.stopPropagation?.();
-                          handleOpenNavPicker(
-                            nextEvent.location,
-                            nextEvent.locationUrl
-                          );
-                        }}
-                        accessible={true}
-                        accessibilityRole="button"
-                        accessibilityLabel="נווט"
-                      >
-                        <MaterialIcons
-                          name="near-me"
-                          size={16}
-                          color="#8d6e63"
-                        />
-                        <Text style={stylesRtl.navBtnText}>נווט</Text>
-                      </Pressable>
+                      {parseGeoUri(nextEvent.locationUrl) ? (
+                        <Pressable
+                          style={stylesRtl.navBtn}
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            handleOpenNavPicker(
+                              nextEvent.location,
+                              nextEvent.locationUrl
+                            );
+                          }}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityLabel="נווט"
+                        >
+                          <MaterialIcons
+                            name="near-me"
+                            size={16}
+                            color="#8d6e63"
+                          />
+                          <Text style={stylesRtl.navBtnText}>נווט</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   ) : null}
                   {/* Profile circles — "משותף עם" for personal, "גם הוסיפו ליומן" for community */}
@@ -2840,7 +2844,7 @@ export default function HomeScreen() {
                               </View>
                             ) : null}
                             {/* Nav button — warm brown, same as active-day */}
-                            {item.location ? (
+                            {item.location && parseGeoUri(item.locationUrl) ? (
                               <Pressable
                                 onPress={(e) => {
                                   e.stopPropagation?.();
@@ -3438,7 +3442,9 @@ export default function HomeScreen() {
                                   )}
 
                                   {/* Navigate / Join button */}
-                                  {item.location || item.remoteUrl ? (
+                                  {item.remoteUrl ||
+                                  (item.location &&
+                                    parseGeoUri(item.locationUrl)) ? (
                                     <Pressable
                                       onPress={(e) => {
                                         e.stopPropagation?.();
