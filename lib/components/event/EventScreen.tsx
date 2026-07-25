@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -18,6 +19,7 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 // Alert is still used for save errors
@@ -36,6 +38,7 @@ import { EventAttachmentsSection } from '@/lib/components/event/EventAttachments
 // applyDuration is used in makeEmptyEvent to set a sensible default end time
 import {
   LocationCard,
+  type LocationOverlayAnchor,
   type LocationUpdate,
 } from '@/lib/components/event/LocationCard';
 import { NotesCard } from '@/lib/components/event/NotesCard';
@@ -236,6 +239,38 @@ export default function EventScreen({
   const isSavingRef = useRef(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [importantItemDraft, setImportantItemDraft] = useState('');
+  // Keyboard height tracking for the suggestion overlay positioning
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  // Anchor data from LocationCard for the screen-level suggestion overlay
+  const [locationOverlay, setLocationOverlay] =
+    useState<LocationOverlayAnchor | null>(null);
+  // Stable, deduplicating callback passed to LocationCard.
+  // Uses functional setState so we can compare previous and next values and
+  // bail out without a re-render when position and suggestion metadata are
+  // unchanged — breaking the measurement → setState → re-render → effect loop.
+  const handleOverlayUpdate = useCallback(
+    (anchor: LocationOverlayAnchor | null) => {
+      setLocationOverlay((prev) => {
+        if (!anchor) return null;
+        if (!prev) return anchor;
+        // Allow a 1 px tolerance for native layout-measurement jitter.
+        const EPS = 1;
+        const samePosition =
+          Math.abs(prev.inputX - anchor.inputX) < EPS &&
+          Math.abs(prev.inputY - anchor.inputY) < EPS &&
+          Math.abs(prev.inputWidth - anchor.inputWidth) < EPS &&
+          Math.abs(prev.inputHeight - anchor.inputHeight) < EPS;
+        // Use the first placeId as a lightweight proxy for suggestion content.
+        const sameSuggestions =
+          prev.suggestions.length === anchor.suggestions.length &&
+          (anchor.suggestions.length === 0 ||
+            prev.suggestions[0]?.placeId === anchor.suggestions[0]?.placeId);
+        if (samePosition && sameSuggestions) return prev;
+        return anchor;
+      });
+    },
+    []
+  );
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
@@ -429,6 +464,20 @@ export default function EventScreen({
     return () => sub.remove();
   }, []);
 
+  // Track keyboard height so the suggestion overlay can position itself above the keyboard.
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   const confirmDiscard = (): void => {
     setDiscardOpen(false);
     setTitleError(false);
@@ -514,393 +563,383 @@ export default function EventScreen({
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-              {/* Event Title — compact field */}
-              <View style={s.titleSection}>
+          {/* Event Title — compact field */}
+          <View style={s.titleSection}>
+            <TextInput
+              style={[s.titleInput, titleError && s.titleInputError]}
+              value={event.title}
+              onChangeText={(text) => {
+                setTitleError(false);
+                updateEvent({ title: text });
+              }}
+              placeholder="שם האירוע"
+              placeholderTextColor="#94a3b8"
+              textAlign={rtl.inputTextAlign}
+              autoFocus={false}
+              accessible={true}
+              accessibilityLabel="שם האירוע"
+            />
+            {titleError && (
+              <Text style={s.errorText}>שם האירוע הוא שדה חובה</Text>
+            )}
+          </View>
+
+          {/* Date & Time */}
+          <DateTimeCard
+            startDate={event.date}
+            startTime={event.startTime}
+            endDate={event.endDate ?? event.date}
+            endTime={event.endTime}
+            isAllDay={event.isAllDay}
+            onChange={(updates) => {
+              // ── Track user intent on end fields (write-only refs) ──
+              // Only mark as "manually edited" when the user explicitly
+              // changes the end date/time independently (not when a day-chip
+              // sets both startDate + endDate simultaneously).
+              if (
+                updates.endDate !== undefined &&
+                updates.startDate === undefined
+              ) {
+                endDateUserEdited.current = true;
+              }
+              if (
+                updates.endTime !== undefined &&
+                updates.startTime === undefined
+              ) {
+                endTimeUserEdited.current = true;
+              }
+
+              // ── All calculations use `prev` (the latest committed state)
+              // so that rapid wheel callbacks compose sequentially instead
+              // of all reading the same render-captured `event` snapshot.
+              setIsDirty(true);
+              setEvent((prev) => {
+                const patch: Partial<EventData> = {};
+
+                // Apply explicit end values from the update
+                if (updates.endDate !== undefined)
+                  patch.endDate = updates.endDate;
+                if (updates.endTime !== undefined)
+                  patch.endTime = updates.endTime;
+
+                // ── Preserve duration when start TIME changes ────────
+                // Always shift end by the same delta.
+                if (updates.startTime !== undefined) {
+                  patch.startTime = updates.startTime;
+                  if (updates.endTime === undefined) {
+                    const { endDate: newEndDate, endTime: newEndTime } =
+                      shiftEndToPreserveDuration({
+                        prevStartDate: prev.date,
+                        prevStartTime: prev.startTime ?? '09:00',
+                        prevEndDate: prev.endDate ?? prev.date,
+                        prevEndTime: prev.endTime ?? '10:00',
+                        nextStartDate: updates.startDate ?? prev.date,
+                        nextStartTime: updates.startTime,
+                      });
+                    patch.endTime = newEndTime;
+                    patch.endDate = newEndDate;
+                  }
+                }
+
+                // ── Preserve duration when start DATE changes ────────
+                // Slide end date by the same number of days as start moved,
+                // keeping time strings unchanged (overnight events stay overnight).
+                if (updates.startDate !== undefined) {
+                  patch.date = updates.startDate;
+                  if (
+                    updates.endDate === undefined &&
+                    patch.endDate === undefined
+                  ) {
+                    const prevEndDate = prev.endDate ?? prev.date;
+                    const dateDelta = updates.startDate - prev.date;
+                    patch.endDate = prevEndDate + dateDelta;
+                  }
+                }
+
+                if (updates.isAllDay !== undefined) {
+                  patch.isAllDay = updates.isAllDay;
+                  if (updates.isAllDay) {
+                    patch.remindersEnabled = false;
+                    patch.reminders = [];
+                  } else {
+                    patch.remindersEnabled = true;
+                    patch.reminders = [makeReminder('hour_before')];
+                  }
+                }
+
+                const updated = { ...prev, ...patch };
+                autosave(updated);
+                return updated;
+              });
+            }}
+          />
+
+          {/* Location */}
+          <LocationCard
+            location={event.location}
+            onlineUrl={event.onlineUrl}
+            onChange={(update: LocationUpdate) =>
+              updateEvent({
+                location: update.location || undefined,
+                onlineUrl: update.onlineUrl || undefined,
+                locationUrl: update.locationUrl,
+              })
+            }
+            onOverlayUpdate={handleOverlayUpdate}
+          />
+
+          {/* Notes */}
+          <NotesCard
+            notes={event.notes}
+            onChange={(notes) => updateEvent({ notes })}
+          />
+
+          {/* Attachments */}
+          <EventAttachmentsSection
+            attachments={event.attachments ?? []}
+            onChange={(attachments: EventAttachmentDraft[]) =>
+              updateEvent({ attachments })
+            }
+          />
+
+          {shouldShowRecurrence ? (
+            <RecurrenceRow
+              value={event.recurrence}
+              onChange={(val) => updateEvent({ recurrence: val })}
+            />
+          ) : null}
+
+          {shouldShowReminders ? (
+            <RemindersCard
+              enabled={event.remindersEnabled}
+              reminders={event.reminders}
+              isAllDay={event.isAllDay}
+              onChange={(enabled, reminders) =>
+                updateEvent({ remindersEnabled: enabled, reminders })
+              }
+            />
+          ) : null}
+
+          {/* Participants — personal events only */}
+          {showParticipants ? (
+            <ParticipantsCard
+              participants={event.participants}
+              onChange={(p) => {
+                const removedIds = new Set(
+                  event.participants
+                    .filter((prev) => !p.some((next) => next.id === prev.id))
+                    .map((prev) => prev.id)
+                );
+                const tasks =
+                  removedIds.size > 0
+                    ? event.tasks.map((t) => ({
+                        ...t,
+                        assignedParticipantIds: (
+                          t.assignedParticipantIds ?? []
+                        ).filter((id) => !removedIds.has(id)),
+                      }))
+                    : event.tasks;
+
+                // FIXED: removing a family member from participants also deselects them in family section
+                const removedFamilyIds = [...removedIds].filter((id) =>
+                  familyMembers.some((fm) => fm._id === id)
+                );
+
+                if (removedFamilyIds.length > 0) {
+                  const newFamilyIds = (
+                    event.sharedWithFamilyMemberIds ?? []
+                  ).filter((id) => !removedFamilyIds.includes(id));
+                  updateEvent({
+                    participants: p,
+                    tasks,
+                    // If "כולם" was on and a member is removed, turn it off
+                    allFamily: event.allFamily ? undefined : event.allFamily,
+                    sharedWithFamilyMemberIds:
+                      newFamilyIds.length > 0 ? newFamilyIds : undefined,
+                  });
+                } else {
+                  updateEvent({ participants: p, tasks });
+                }
+              }}
+              familyMembers={familyMembers}
+              allFamily={event.allFamily}
+              sharedWithFamilyMemberIds={event.sharedWithFamilyMemberIds}
+              onFamilyChange={(af, ids) => {
+                // FIXED: family member selection now syncs to event.participants for display
+                const patch: Partial<EventData> = {
+                  allFamily: af || undefined,
+                  sharedWithFamilyMemberIds: ids.length > 0 ? ids : undefined,
+                };
+
+                // Derive sharedWithUserIds — only real Convex user IDs from matchedUserId
+                if (af) {
+                  const userIds = familyMembers
+                    .map((fm) => fm.matchedUserId)
+                    .filter((id): id is string => Boolean(id));
+                  patch.sharedWithUserIds =
+                    userIds.length > 0 ? userIds : undefined;
+                } else if (ids.length > 0) {
+                  const userIds = familyMembers
+                    .filter((fm) => ids.includes(fm._id))
+                    .map((fm) => fm.matchedUserId)
+                    .filter((id): id is string => Boolean(id));
+                  patch.sharedWithUserIds =
+                    userIds.length > 0 ? userIds : undefined;
+                } else {
+                  patch.sharedWithUserIds = undefined;
+                }
+
+                // Keep participants that are NOT family members (external contacts/email)
+                const existingNonFamily = event.participants.filter(
+                  (p) => !familyMembers.some((fm) => fm._id === p.id)
+                );
+
+                if (af) {
+                  // "כולם" — add every family member as a participant
+                  patch.participants = [
+                    ...existingNonFamily,
+                    ...familyMembers.map((fm) => ({
+                      id: fm._id,
+                      name: fm.displayName ?? '',
+                      color: fm.color ?? '#36a9e2',
+                      avatarUrl: undefined,
+                    })),
+                  ];
+                } else if (ids.length > 0) {
+                  // Individual selection — only the selected family members
+                  patch.participants = [
+                    ...existingNonFamily,
+                    ...familyMembers
+                      .filter((fm) => ids.includes(fm._id))
+                      .map((fm) => ({
+                        id: fm._id,
+                        name: fm.displayName ?? '',
+                        color: fm.color ?? '#36a9e2',
+                        avatarUrl: undefined,
+                      })),
+                  ];
+                } else {
+                  // Nothing selected — strip all family members from participants
+                  patch.participants = existingNonFamily;
+                }
+
+                updateEvent(patch);
+              }}
+              onConfigureFamilyProfile={
+                isCommunityEvent ? undefined : openFamilyProfileSetup
+              }
+            />
+          ) : null}
+
+          {/* Related Tasks */}
+          <RelatedTasksSection
+            tasks={event.tasks}
+            participants={taskParticipants ?? event.participants}
+            completedCount={completedTasks}
+            tasksVisibleToParticipants={event.tasksVisibleToParticipants}
+            showToggle={true}
+            onChange={(tasks) => updateEvent({ tasks })}
+            onToggleVisibility={(val) =>
+              updateEvent({ tasksVisibleToParticipants: val })
+            }
+            visibilityOffHelperText={taskVisibilityOffHelperText}
+            onAddParticipants={() => {}}
+            assignmentTitle={
+              isCommunityEvent ? 'הקצאת משימה לחבר קהילה' : 'הקצאת משימה'
+            }
+            assignmentEmptyText={
+              isCommunityEvent
+                ? 'אין עדיין חברים פעילים בקהילה'
+                : 'לא צורפו משתתפים לצורך הקצאת המשימה'
+            }
+            assignmentSectionLabel={isCommunityEvent ? 'חברי קהילה' : 'משתתפים'}
+            showAddParticipantsEmptyAction={!isCommunityEvent}
+          />
+
+          {isCommunityEvent ? (
+            <View style={s.importantItemsSection}>
+              <Text style={s.importantItemsTitle}>
+                {IMPORTANT_ITEMS_SECTION_TITLE}
+              </Text>
+              <View style={s.importantItemsInputRow}>
                 <TextInput
-                  style={[s.titleInput, titleError && s.titleInputError]}
-                  value={event.title}
-                  onChangeText={(text) => {
-                    setTitleError(false);
-                    updateEvent({ title: text });
-                  }}
-                  placeholder="שם האירוע"
+                  style={s.importantItemsInput}
+                  value={importantItemDraft}
+                  onChangeText={setImportantItemDraft}
+                  placeholder={IMPORTANT_ITEMS_PLACEHOLDER}
                   placeholderTextColor="#94a3b8"
                   textAlign={rtl.inputTextAlign}
-                  autoFocus={false}
+                  returnKeyType="done"
+                  onSubmitEditing={handleAddImportantItem}
                   accessible={true}
-                  accessibilityLabel="שם האירוע"
+                  accessibilityLabel={IMPORTANT_ITEMS_SECTION_TITLE}
                 />
-                {titleError && (
-                  <Text style={s.errorText}>שם האירוע הוא שדה חובה</Text>
-                )}
-              </View>
-
-              {/* Date & Time */}
-              <DateTimeCard
-                startDate={event.date}
-                startTime={event.startTime}
-                endDate={event.endDate ?? event.date}
-                endTime={event.endTime}
-                isAllDay={event.isAllDay}
-                onChange={(updates) => {
-                  // ── Track user intent on end fields (write-only refs) ──
-                  // Only mark as "manually edited" when the user explicitly
-                  // changes the end date/time independently (not when a day-chip
-                  // sets both startDate + endDate simultaneously).
-                  if (
-                    updates.endDate !== undefined &&
-                    updates.startDate === undefined
-                  ) {
-                    endDateUserEdited.current = true;
-                  }
-                  if (
-                    updates.endTime !== undefined &&
-                    updates.startTime === undefined
-                  ) {
-                    endTimeUserEdited.current = true;
-                  }
-
-                  // ── All calculations use `prev` (the latest committed state)
-                  // so that rapid wheel callbacks compose sequentially instead
-                  // of all reading the same render-captured `event` snapshot.
-                  setIsDirty(true);
-                  setEvent((prev) => {
-                    const patch: Partial<EventData> = {};
-
-                    // Apply explicit end values from the update
-                    if (updates.endDate !== undefined)
-                      patch.endDate = updates.endDate;
-                    if (updates.endTime !== undefined)
-                      patch.endTime = updates.endTime;
-
-                    // ── Preserve duration when start TIME changes ────────
-                    // Always shift end by the same delta.
-                    if (updates.startTime !== undefined) {
-                      patch.startTime = updates.startTime;
-                      if (updates.endTime === undefined) {
-                        const { endDate: newEndDate, endTime: newEndTime } =
-                          shiftEndToPreserveDuration({
-                            prevStartDate: prev.date,
-                            prevStartTime: prev.startTime ?? '09:00',
-                            prevEndDate: prev.endDate ?? prev.date,
-                            prevEndTime: prev.endTime ?? '10:00',
-                            nextStartDate: updates.startDate ?? prev.date,
-                            nextStartTime: updates.startTime,
-                          });
-                        patch.endTime = newEndTime;
-                        patch.endDate = newEndDate;
-                      }
-                    }
-
-                    // ── Preserve duration when start DATE changes ────────
-                    // Slide end date by the same number of days as start moved,
-                    // keeping time strings unchanged (overnight events stay overnight).
-                    if (updates.startDate !== undefined) {
-                      patch.date = updates.startDate;
-                      if (
-                        updates.endDate === undefined &&
-                        patch.endDate === undefined
-                      ) {
-                        const prevEndDate = prev.endDate ?? prev.date;
-                        const dateDelta = updates.startDate - prev.date;
-                        patch.endDate = prevEndDate + dateDelta;
-                      }
-                    }
-
-                    if (updates.isAllDay !== undefined) {
-                      patch.isAllDay = updates.isAllDay;
-                      if (updates.isAllDay) {
-                        patch.remindersEnabled = false;
-                        patch.reminders = [];
-                      } else {
-                        patch.remindersEnabled = true;
-                        patch.reminders = [makeReminder('hour_before')];
-                      }
-                    }
-
-                    const updated = { ...prev, ...patch };
-                    autosave(updated);
-                    return updated;
-                  });
-                }}
-              />
-
-              {/* Location */}
-              <LocationCard
-                location={event.location}
-                onlineUrl={event.onlineUrl}
-                onChange={(update: LocationUpdate) =>
-                  updateEvent({
-                    location: update.location || undefined,
-                    onlineUrl: update.onlineUrl || undefined,
-                    locationUrl: update.locationUrl,
-                  })
-                }
-              />
-
-              {/* Notes */}
-              <NotesCard
-                notes={event.notes}
-                onChange={(notes) => updateEvent({ notes })}
-              />
-
-              {/* Attachments */}
-              <EventAttachmentsSection
-                attachments={event.attachments ?? []}
-                onChange={(attachments: EventAttachmentDraft[]) =>
-                  updateEvent({ attachments })
-                }
-              />
-
-              {shouldShowRecurrence ? (
-                <RecurrenceRow
-                  value={event.recurrence}
-                  onChange={(val) => updateEvent({ recurrence: val })}
-                />
-              ) : null}
-
-              {shouldShowReminders ? (
-                <RemindersCard
-                  enabled={event.remindersEnabled}
-                  reminders={event.reminders}
-                  isAllDay={event.isAllDay}
-                  onChange={(enabled, reminders) =>
-                    updateEvent({ remindersEnabled: enabled, reminders })
-                  }
-                />
-              ) : null}
-
-              {/* Participants — personal events only */}
-              {showParticipants ? (
-                <ParticipantsCard
-                  participants={event.participants}
-                  onChange={(p) => {
-                    const removedIds = new Set(
-                      event.participants
-                        .filter(
-                          (prev) => !p.some((next) => next.id === prev.id)
-                        )
-                        .map((prev) => prev.id)
-                    );
-                    const tasks =
-                      removedIds.size > 0
-                        ? event.tasks.map((t) => ({
-                            ...t,
-                            assignedParticipantIds: (
-                              t.assignedParticipantIds ?? []
-                            ).filter((id) => !removedIds.has(id)),
-                          }))
-                        : event.tasks;
-
-                    // FIXED: removing a family member from participants also deselects them in family section
-                    const removedFamilyIds = [...removedIds].filter((id) =>
-                      familyMembers.some((fm) => fm._id === id)
-                    );
-
-                    if (removedFamilyIds.length > 0) {
-                      const newFamilyIds = (
-                        event.sharedWithFamilyMemberIds ?? []
-                      ).filter((id) => !removedFamilyIds.includes(id));
-                      updateEvent({
-                        participants: p,
-                        tasks,
-                        // If "כולם" was on and a member is removed, turn it off
-                        allFamily: event.allFamily
-                          ? undefined
-                          : event.allFamily,
-                        sharedWithFamilyMemberIds:
-                          newFamilyIds.length > 0 ? newFamilyIds : undefined,
-                      });
-                    } else {
-                      updateEvent({ participants: p, tasks });
-                    }
-                  }}
-                  familyMembers={familyMembers}
-                  allFamily={event.allFamily}
-                  sharedWithFamilyMemberIds={event.sharedWithFamilyMemberIds}
-                  onFamilyChange={(af, ids) => {
-                    // FIXED: family member selection now syncs to event.participants for display
-                    const patch: Partial<EventData> = {
-                      allFamily: af || undefined,
-                      sharedWithFamilyMemberIds:
-                        ids.length > 0 ? ids : undefined,
-                    };
-
-                    // Derive sharedWithUserIds — only real Convex user IDs from matchedUserId
-                    if (af) {
-                      const userIds = familyMembers
-                        .map((fm) => fm.matchedUserId)
-                        .filter((id): id is string => Boolean(id));
-                      patch.sharedWithUserIds =
-                        userIds.length > 0 ? userIds : undefined;
-                    } else if (ids.length > 0) {
-                      const userIds = familyMembers
-                        .filter((fm) => ids.includes(fm._id))
-                        .map((fm) => fm.matchedUserId)
-                        .filter((id): id is string => Boolean(id));
-                      patch.sharedWithUserIds =
-                        userIds.length > 0 ? userIds : undefined;
-                    } else {
-                      patch.sharedWithUserIds = undefined;
-                    }
-
-                    // Keep participants that are NOT family members (external contacts/email)
-                    const existingNonFamily = event.participants.filter(
-                      (p) => !familyMembers.some((fm) => fm._id === p.id)
-                    );
-
-                    if (af) {
-                      // "כולם" — add every family member as a participant
-                      patch.participants = [
-                        ...existingNonFamily,
-                        ...familyMembers.map((fm) => ({
-                          id: fm._id,
-                          name: fm.displayName ?? '',
-                          color: fm.color ?? '#36a9e2',
-                          avatarUrl: undefined,
-                        })),
-                      ];
-                    } else if (ids.length > 0) {
-                      // Individual selection — only the selected family members
-                      patch.participants = [
-                        ...existingNonFamily,
-                        ...familyMembers
-                          .filter((fm) => ids.includes(fm._id))
-                          .map((fm) => ({
-                            id: fm._id,
-                            name: fm.displayName ?? '',
-                            color: fm.color ?? '#36a9e2',
-                            avatarUrl: undefined,
-                          })),
-                      ];
-                    } else {
-                      // Nothing selected — strip all family members from participants
-                      patch.participants = existingNonFamily;
-                    }
-
-                    updateEvent(patch);
-                  }}
-                  onConfigureFamilyProfile={
-                    isCommunityEvent ? undefined : openFamilyProfileSetup
-                  }
-                />
-              ) : null}
-
-              {/* Related Tasks */}
-              <RelatedTasksSection
-                tasks={event.tasks}
-                participants={taskParticipants ?? event.participants}
-                completedCount={completedTasks}
-                tasksVisibleToParticipants={event.tasksVisibleToParticipants}
-                showToggle={true}
-                onChange={(tasks) => updateEvent({ tasks })}
-                onToggleVisibility={(val) =>
-                  updateEvent({ tasksVisibleToParticipants: val })
-                }
-                visibilityOffHelperText={taskVisibilityOffHelperText}
-                onAddParticipants={() => {}}
-                assignmentTitle={
-                  isCommunityEvent ? 'הקצאת משימה לחבר קהילה' : 'הקצאת משימה'
-                }
-                assignmentEmptyText={
-                  isCommunityEvent
-                    ? 'אין עדיין חברים פעילים בקהילה'
-                    : 'לא צורפו משתתפים לצורך הקצאת המשימה'
-                }
-                assignmentSectionLabel={
-                  isCommunityEvent ? 'חברי קהילה' : 'משתתפים'
-                }
-                showAddParticipantsEmptyAction={!isCommunityEvent}
-              />
-
-              {isCommunityEvent ? (
-                <View style={s.importantItemsSection}>
-                  <Text style={s.importantItemsTitle}>
-                    {IMPORTANT_ITEMS_SECTION_TITLE}
+                <Pressable
+                  style={s.importantItemsAddBtn}
+                  onPress={handleAddImportantItem}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel={IMPORTANT_ITEMS_ADD_LABEL}
+                >
+                  <Text style={s.importantItemsAddText}>
+                    {IMPORTANT_ITEMS_ADD_LABEL}
                   </Text>
-                  <View style={s.importantItemsInputRow}>
-                    <TextInput
-                      style={s.importantItemsInput}
-                      value={importantItemDraft}
-                      onChangeText={setImportantItemDraft}
-                      placeholder={IMPORTANT_ITEMS_PLACEHOLDER}
-                      placeholderTextColor="#94a3b8"
-                      textAlign={rtl.inputTextAlign}
-                      returnKeyType="done"
-                      onSubmitEditing={handleAddImportantItem}
-                      accessible={true}
-                      accessibilityLabel={IMPORTANT_ITEMS_SECTION_TITLE}
-                    />
-                    <Pressable
-                      style={s.importantItemsAddBtn}
-                      onPress={handleAddImportantItem}
-                      accessible={true}
-                      accessibilityRole="button"
-                      accessibilityLabel={IMPORTANT_ITEMS_ADD_LABEL}
-                    >
-                      <Text style={s.importantItemsAddText}>
-                        {IMPORTANT_ITEMS_ADD_LABEL}
+                </Pressable>
+              </View>
+              {(event.importantItems ?? []).length > 0 ? (
+                <View style={s.importantItemsList}>
+                  {(event.importantItems ?? []).map((item) => (
+                    <View key={item.id} style={s.importantItemsRow}>
+                      <Text style={s.importantItemsBulletText}>
+                        {item.title}
                       </Text>
-                    </Pressable>
-                  </View>
-                  {(event.importantItems ?? []).length > 0 ? (
-                    <View style={s.importantItemsList}>
-                      {(event.importantItems ?? []).map((item) => (
-                        <View key={item.id} style={s.importantItemsRow}>
-                          <Text style={s.importantItemsBulletText}>
-                            {item.title}
-                          </Text>
-                          <Pressable
-                            style={s.importantItemsRemoveBtn}
-                            onPress={() => handleRemoveImportantItem(item.id)}
-                            accessible={true}
-                            accessibilityRole="button"
-                            accessibilityLabel="הסר"
-                          >
-                            <Text style={s.importantItemsRemoveText}>×</Text>
-                          </Pressable>
-                        </View>
-                      ))}
+                      <Pressable
+                        style={s.importantItemsRemoveBtn}
+                        onPress={() => handleRemoveImportantItem(item.id)}
+                        accessible={true}
+                        accessibilityRole="button"
+                        accessibilityLabel="הסר"
+                      >
+                        <Text style={s.importantItemsRemoveText}>×</Text>
+                      </Pressable>
                     </View>
-                  ) : null}
+                  ))}
                 </View>
               ) : null}
+            </View>
+          ) : null}
 
-              {showRsvpSection ? (
-                <View style={s.rsvpSection}>
-                  <View style={s.rsvpHeaderRow}>
-                    <View style={s.rsvpTextBlock}>
-                      <Text style={s.rsvpTitle}>נדרש אישור הגעה</Text>
-                      <Text style={s.rsvpDescription}>
-                        לבקש מחברי הקהילה לאשר הגעה לאירוע?
-                      </Text>
-                    </View>
-                    <View style={s.rsvpIconCircle}>
-                      <MaterialIcons
-                        name="how-to-reg"
-                        size={20}
-                        color={PRIMARY}
-                      />
-                    </View>
-                  </View>
-                  <View style={s.rsvpToggleRow}>
-                    <Text style={s.rsvpToggleText}>נדרש אישור הגעה</Text>
-                    <Switch
-                      value={rsvpRequired}
-                      onValueChange={(val) => {
-                        setIsDirty(true);
-                        onRsvpRequiredChange?.(val);
-                      }}
-                      trackColor={{ true: PRIMARY, false: '#e2e8f0' }}
-                      thumbColor="#fff"
-                      accessible={true}
-                      accessibilityLabel="נדרש אישור הגעה"
-                    />
-                  </View>
+          {showRsvpSection ? (
+            <View style={s.rsvpSection}>
+              <View style={s.rsvpHeaderRow}>
+                <View style={s.rsvpTextBlock}>
+                  <Text style={s.rsvpTitle}>נדרש אישור הגעה</Text>
+                  <Text style={s.rsvpDescription}>
+                    לבקש מחברי הקהילה לאשר הגעה לאירוע?
+                  </Text>
                 </View>
-              ) : null}
+                <View style={s.rsvpIconCircle}>
+                  <MaterialIcons name="how-to-reg" size={20} color={PRIMARY} />
+                </View>
+              </View>
+              <View style={s.rsvpToggleRow}>
+                <Text style={s.rsvpToggleText}>נדרש אישור הגעה</Text>
+                <Switch
+                  value={rsvpRequired}
+                  onValueChange={(val) => {
+                    setIsDirty(true);
+                    onRsvpRequiredChange?.(val);
+                  }}
+                  trackColor={{ true: PRIMARY, false: '#e2e8f0' }}
+                  thumbColor="#fff"
+                  accessible={true}
+                  accessibilityLabel="נדרש אישור הגעה"
+                />
+              </View>
+            </View>
+          ) : null}
 
-              <View style={{ height: 20 }} />
+          <View style={{ height: 20 }} />
         </ScrollView>
 
         {/* ── Sticky footer — inside KAV so it rides above the keyboard ── */}
@@ -997,6 +1036,12 @@ export default function EventScreen({
       </Modal>
 
       {/* FIXED: success/share sheet — shown after personal event is saved */}
+      {locationOverlay ? (
+        <LocationSuggestionOverlay
+          anchor={locationOverlay}
+          keyboardHeight={keyboardHeight}
+        />
+      ) : null}
       <Modal
         visible={savedEvent !== null}
         transparent
@@ -1604,5 +1649,137 @@ const s = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#6b7280',
+  },
+});
+
+// ─── LocationSuggestionOverlay ─────────────────────────────────────────────────
+//
+// Renders the autocomplete suggestion list at the SafeAreaView root level so it
+// is never clipped by the inner ScrollView or hidden behind the sticky save footer.
+// Positioning: below the input when there is enough room, above it otherwise.
+
+const SUGGESTION_ROW_H = 50;
+const MIN_VISIBLE_ROWS = 3;
+
+function LocationSuggestionOverlay({
+  anchor,
+  keyboardHeight,
+}: {
+  anchor: LocationOverlayAnchor;
+  keyboardHeight: number;
+}): React.JSX.Element {
+  const { height: screenHeight } = useWindowDimensions();
+
+  const inputBottom = anchor.inputY + anchor.inputHeight;
+  // 8 px gap between input edge and suggestion list
+  const GAP = 8;
+  // Reserve a small bottom margin so the list doesn't touch the keyboard edge
+  const BOTTOM_MARGIN = 8;
+
+  const spaceBelow =
+    screenHeight - keyboardHeight - inputBottom - GAP - BOTTOM_MARGIN;
+  const spaceAbove = anchor.inputY - GAP - BOTTOM_MARGIN;
+
+  const showBelow = spaceBelow >= SUGGESTION_ROW_H * MIN_VISIBLE_ROWS;
+
+  const maxHeight = Math.max(
+    SUGGESTION_ROW_H,
+    Math.min(
+      SUGGESTION_ROW_H * anchor.suggestions.length,
+      showBelow ? spaceBelow : spaceAbove
+    )
+  );
+
+  const overlayTop = showBelow ? inputBottom + GAP : undefined;
+  const overlayBottom = showBelow
+    ? undefined
+    : screenHeight - anchor.inputY + GAP;
+
+  return (
+    // Transparent fill layer — `pointerEvents="box-none"` so taps on empty
+    // areas fall through to the form underneath.
+    <View style={overlay.fill} pointerEvents="box-none">
+      <View
+        style={[
+          overlay.list,
+          {
+            left: anchor.inputX,
+            width: anchor.inputWidth,
+            maxHeight,
+            ...(overlayTop !== undefined ? { top: overlayTop } : {}),
+            ...(overlayBottom !== undefined ? { bottom: overlayBottom } : {}),
+          },
+        ]}
+        pointerEvents="auto"
+      >
+        <ScrollView
+          keyboardShouldPersistTaps="always"
+          showsVerticalScrollIndicator={
+            anchor.suggestions.length > MIN_VISIBLE_ROWS
+          }
+          bounces={false}
+        >
+          {anchor.suggestions.map((suggestion, index) => (
+            <Pressable
+              key={suggestion.placeId}
+              style={[
+                overlay.row,
+                index < anchor.suggestions.length - 1 && overlay.rowSep,
+              ]}
+              onPressIn={anchor.onPressIn}
+              onPress={() => anchor.onSelect(suggestion)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={`בחרי כתובת: ${suggestion.description}`}
+            >
+              <Text style={overlay.rowText} numberOfLines={2}>
+                {suggestion.description}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+const overlay = StyleSheet.create({
+  fill: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    // must sit above the sticky footer (zIndex 1) and card headers
+    zIndex: 9999,
+    elevation: 20,
+  },
+  list: {
+    position: 'absolute',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    overflow: 'hidden',
+  },
+  row: {
+    minHeight: SUGGESTION_ROW_H,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  rowSep: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f1f5f9',
+  },
+  rowText: {
+    fontSize: 14,
+    color: '#111827',
+    textAlign: rtl.textAlign,
   },
 });
