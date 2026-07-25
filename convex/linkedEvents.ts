@@ -53,6 +53,7 @@ async function resolveLinkedEventData(
     startTime: source.startTime as number,
     endTime: source.endTime as number,
     location: source.location as string | undefined,
+    locationUrl: source.locationUrl as string | undefined,
     allDay: (source.allDay as boolean | undefined) ?? false,
     resolvedStatus: (source.status === 'cancelled' ? 'cancelled' : 'active') as
       | 'active'
@@ -207,6 +208,7 @@ export const getLinkedEventsForSpace = query({
         endTime: resolved.endTime,
         allDay: resolved.allDay,
         location: resolved.location,
+        locationUrl: resolved.locationUrl,
         isLinked: true as const,
         savedAt: linked.savedAt,
       });
