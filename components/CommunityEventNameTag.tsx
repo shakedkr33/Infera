@@ -2,8 +2,8 @@ import type { ReactElement } from 'react';
 import { Text, View } from 'react-native';
 import { rtl } from '@/lib/rtl';
 
-const TAG_BG = '#E8F5FD';
-const TAG_TEXT = '#36a9e2';
+const TAG_BG = '#EAF7FD';
+const TAG_TEXT = '#00668E';
 
 type CommunityEventNameTagProps = {
   name: string;

@@ -29,6 +29,7 @@ import type { ProfileCircle } from '@/components/ProfileCircles';
 import { ProfileCircles } from '@/components/ProfileCircles';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
+import { colors } from '@/constants/theme';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -1846,6 +1847,7 @@ export default function HomeScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="אתמול"
                 accessibilityState={{ selected: isSelectedYesterday }}
+                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
               >
                 <Text
                   style={[
@@ -1866,6 +1868,7 @@ export default function HomeScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="היום"
                 accessibilityState={{ selected: isSelectedToday }}
+                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
               >
                 <Text
                   style={[
@@ -1886,6 +1889,7 @@ export default function HomeScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="מחר"
                 accessibilityState={{ selected: isSelectedTomorrow }}
+                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
               >
                 <Text
                   style={[
@@ -1913,13 +1917,14 @@ export default function HomeScreen() {
             accessibilityLabel={
               calendarMode === 'segmented' ? 'פתח לוח שנה חודשי' : 'חזרה לבחירת יום'
             }
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
           >
             <MaterialIcons
               name={
                 calendarMode === 'segmented' ? 'calendar-month' : 'view-week'
               }
               size={20}
-              color={isCustomDate ? '#fff' : '#36a9e2'}
+              color={isCustomDate ? '#fff' : colors.primaryDark}
             />
           </Pressable>
         </View>
@@ -4037,9 +4042,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   calendarToggleBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: 'rgba(54,169,226,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -4054,15 +4059,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     direction: 'rtl',
     backgroundColor: '#eef1f5',
-    borderRadius: 12,
-    padding: 4,
+    borderRadius: 10,
+    padding: 2,
   },
   segmentedTab: {
     flex: 1,
-    minHeight: 44,
+    minHeight: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 9,
+    borderRadius: 7,
   },
   segmentedTabActive: {
     backgroundColor: '#36a9e2',

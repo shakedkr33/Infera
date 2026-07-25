@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { colors } from '@/constants/theme';
 import { api } from '@/convex/_generated/api';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 
@@ -93,21 +94,39 @@ export function MainScreenHeader({
             accessibilityLabel="הוספה"
             style={styles.headerAddButton}
           >
-            <Plus size={18} color="#36a9e2" strokeWidth={2.4} />
+            <Plus size={18} color={colors.primaryDark} strokeWidth={2.4} />
           </TouchableOpacity>
         ) : null}
       </View>
 
       <View pointerEvents="none" style={styles.centerZone}>
-        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-        <Text
-          numberOfLines={1}
-          adjustsFontSizeToFit={true}
-          minimumFontScale={isHome ? 0.72 : 0.9}
-          style={[styles.title, isHome && styles.homeTitle]}
-        >
-          {title}
-        </Text>
+        {isHome ? (
+          <>
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit={true}
+              minimumFontScale={0.72}
+              style={[styles.title, styles.homeTitle]}
+            >
+              {title}
+            </Text>
+            {subtitle ? (
+              <Text style={[styles.subtitle, styles.homeSubtitle]}>{subtitle}</Text>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit={true}
+              minimumFontScale={0.9}
+              style={styles.title}
+            >
+              {title}
+            </Text>
+          </>
+        )}
       </View>
 
       <View style={styles.rightZone}>
@@ -125,7 +144,11 @@ export function MainScreenHeader({
           {resolvedAvatarInitials ? (
             <Text style={styles.profileInitials}>{resolvedAvatarInitials}</Text>
           ) : (
-            <MaterialIcons name="person-outline" size={22} color="#36a9e2" />
+            <MaterialIcons
+              name="person-outline"
+              size={22}
+              color={colors.primaryDark}
+            />
           )}
         </TouchableOpacity>
       </View>
@@ -182,7 +205,7 @@ const styles = StyleSheet.create({
     minWidth: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: '#36a9e2',
+    backgroundColor: colors.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 3,
@@ -235,5 +258,8 @@ const styles = StyleSheet.create({
   homeTitle: {
     fontSize: 24,
     lineHeight: 30,
+  },
+  homeSubtitle: {
+    color: '#5A6062',
   },
 });

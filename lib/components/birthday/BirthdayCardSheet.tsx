@@ -7,6 +7,7 @@ import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { UpgradeModal } from '@/components/UpgradeModal';
+import { colors } from '@/constants/theme';
 import { api } from '@/convex/_generated/api';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import type { Birthday } from '@/lib/types/birthday';
@@ -29,7 +30,7 @@ function formatEventDate(startTime: number): string {
   });
 }
 
-const PRIMARY = '#36a9e2';
+const PRIMARY = colors.primaryDark;
 
 interface BirthdayCardSheetProps {
   birthday: Birthday | null;

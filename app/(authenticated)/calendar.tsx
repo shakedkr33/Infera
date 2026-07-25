@@ -47,6 +47,7 @@ import type { ProfileCircle } from '@/components/ProfileCircles';
 import { ProfileCircles } from '@/components/ProfileCircles';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { UpgradeModal } from '@/components/UpgradeModal';
+import { colors } from '@/constants/theme';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -108,7 +109,7 @@ function getCachedHebrewDateInfo(dateStr: string): ReturnType<typeof getHebrewDa
 }
 
 // ===== Constants =====
-const PRIMARY_BLUE = '#36a9e2';
+const PRIMARY_BLUE = colors.primaryDark;
 const BG_COLOR = '#f6f7f8';
 const COMPACT_CELL_HEIGHT = 54;
 
@@ -5733,7 +5734,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: 6,
-    backgroundColor: '#36a9e2',
+    backgroundColor: colors.primaryDark,
     paddingHorizontal: 16,
     paddingVertical: 8,
   },
@@ -5767,7 +5768,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#36a9e2',
+    backgroundColor: colors.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -5872,7 +5873,7 @@ const styles = StyleSheet.create({
     minWidth: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: '#36a9e2',
+    backgroundColor: colors.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 3,
