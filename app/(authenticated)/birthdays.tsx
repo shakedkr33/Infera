@@ -14,6 +14,7 @@ import {
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
+import { colors } from '@/constants/theme';
 import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvider';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
@@ -21,7 +22,7 @@ import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
-const PRIMARY = '#36a9e2';
+const PRIMARY = colors.primaryDark;
 
 export default function BirthdaysScreen(): React.JSX.Element {
   const { openBirthdayCard, openBirthdayAddChoice, deleteBirthday, birthdays } =
