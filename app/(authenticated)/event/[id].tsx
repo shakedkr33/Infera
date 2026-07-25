@@ -457,12 +457,15 @@ export default function EventDetailScreen() {
 
   const handleOpenNavigationChooser = useCallback(() => {
     const location = event?.location?.trim();
-    if (!location) return;
+    const locationUrl = (event as { locationUrl?: string } | null | undefined)
+      ?.locationUrl;
+    if (!location || !parseGeoUri(locationUrl)) return;
     setNavPickerLocation(location);
-  }, [event?.location]);
+  }, [event]);
 
   const navPickerLocationUrl =
     (event as { locationUrl?: string } | null | undefined)?.locationUrl ?? null;
+  const hasNavigableLocation = parseGeoUri(navPickerLocationUrl) !== null;
 
   const handleGatedAction = useCallback(
     (action: () => void): void => {
@@ -784,26 +787,22 @@ export default function EventDetailScreen() {
           {/* Location — address text */}
           {event.location ? (
             <View style={styles.locationDetailRow}>
-              <TouchableOpacity
-                style={styles.locationTextPressable}
-                onPress={handleOpenNavigationChooser}
-                accessible
-                accessibilityRole="link"
-                accessibilityLabel="פתח מיקום במפות"
-              >
+              <View style={styles.locationTextPressable}>
                 <Ionicons name="location-outline" size={18} color={PRIMARY} />
                 <Text style={styles.linkText}>{event.location}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.navigateInlineBtn}
-                onPress={handleOpenNavigationChooser}
-                accessible
-                accessibilityRole="button"
-                accessibilityLabel="נווט למיקום האירוע"
-              >
-                <Ionicons name="navigate-outline" size={14} color="#8d6e63" />
-                <Text style={styles.navigateInlineBtnText}>נווט</Text>
-              </TouchableOpacity>
+              </View>
+              {hasNavigableLocation ? (
+                <TouchableOpacity
+                  style={styles.navigateInlineBtn}
+                  onPress={handleOpenNavigationChooser}
+                  accessible
+                  accessibilityRole="button"
+                  accessibilityLabel="נווט למיקום האירוע"
+                >
+                  <Ionicons name="navigate-outline" size={14} color="#8d6e63" />
+                  <Text style={styles.navigateInlineBtnText}>נווט</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           ) : null}
 
