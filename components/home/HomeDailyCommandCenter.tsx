@@ -15,6 +15,7 @@ import { colors } from '@/constants/theme';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
+import { parseGeoUri } from '@/lib/utils/geoUri';
 
 export type HomeDailyItem = {
   id: string;
@@ -172,7 +173,8 @@ const ExpandedScheduleCard = ({
   onOpenRemoteUrl: () => void;
   onToggleTask: () => void;
 }): React.JSX.Element => {
-  const hasNavigation = item.location.trim().length > 0;
+  const hasNavigation =
+    item.location.trim().length > 0 && parseGeoUri(item.locationUrl) !== null;
   const hasRemoteAction = Boolean(item.remoteUrl);
   const hasPrimaryAction = hasNavigation || hasRemoteAction;
 
@@ -309,7 +311,7 @@ const CompactScheduleRow = ({
         ) : null}
       </View>
     </View>
-    {item.location ? (
+    {item.location && parseGeoUri(item.locationUrl) ? (
       <Pressable
         accessibilityLabel={`ניווט אל ${item.title}`}
         accessibilityRole="button"
