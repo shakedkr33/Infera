@@ -1,7 +1,7 @@
 // FIXED: added dimmed backdrop, strengthened sheet elevation, clearer grabber
 import { Ionicons } from '@expo/vector-icons';
 import * as Contacts from 'expo-contacts';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -27,6 +27,10 @@ import {
   getPrimaryPhone,
   normalizePhone,
 } from '@/lib/utils/contactPhone';
+import {
+  ensureContactsAccess,
+  presentContactsAccessDeniedAlert,
+} from '@/lib/utils/contactsPermission';
 
 // ─── Family member type (from listMyFamilyContacts) ───────────────────────────
 export interface FamilyMemberChip {
@@ -117,11 +121,16 @@ export function ParticipantsCard({
   // "הצג הכל" list modal
   const [listOpen, setListOpen] = useState(false);
 
-  // Tracks whether an async contacts operation is in progress.
-  // Used to guard onRequestClose from closing the sheet while permissions
-  // dialog is shown or contacts are loading (Android fires onRequestClose
-  // when system dialogs appear/disappear over a React Native Modal).
-  const isContactsLoadingRef = useRef(false);
+  // Guard: prevents acting after unmount and blocks double-tap from firing two
+  // concurrent permission requests.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+  const [isContactsIntentPending, setIsContactsIntentPending] = useState(false);
 
   const openSheet = useCallback((): void => {
     setSheetView('main');
@@ -160,40 +169,44 @@ export function ParticipantsCard({
     closeSheet();
   };
 
-  // ── Load device contacts (filtered by phone, not email) ───────────────────
-  const openContactsPicker = useCallback(async (): Promise<void> => {
-    isContactsLoadingRef.current = true;
+  // ── Reopen sheet directly in contacts view (after permission + fetch) ────────
+  const reopenSheetToContacts = useCallback((): void => {
+    setSheetView('contacts');
+    setSheetOpen(true);
+  }, []);
+
+  // Requests contacts access and, if granted, fetches contacts and reopens the
+  // sheet directly in the contacts view. Called either:
+  //   - Android: immediately after closeSheet() (no Modal is visible)
+  //   - iOS:     from onDismiss (after the slide-down animation fully completes)
+  const handleContactsAccessIntent = async (): Promise<void> => {
+    const { granted, canAskAgain } = await ensureContactsAccess();
+    setIsContactsIntentPending(false);
+    if (!isMountedRef.current) return;
+    if (!granted) {
+      presentContactsAccessDeniedAlert(canAskAgain);
+      return;
+    }
     setLoadingContacts(true);
     try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(
-          'גישה לאנשי קשר',
-          'אנא אפשרי גישה לאנשי קשר בהגדרות הטלפון.',
-          [{ text: 'הבנתי' }]
-        );
-        return;
-      }
       const result = await Contacts.getContactsAsync({
         fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
         sort: Contacts.SortTypes.FirstName,
       });
       // FIXED: updated phone label filter to mobile-capable labels only
-      // Only contacts that have a name AND at least one mobile-capable number
       const withPhone = (result.data ?? []).filter(
         (c) => c.name && getMobilePhones(c).length > 0
       );
       setContacts(withPhone);
       setContactSearch('');
       setDraftContactIds([]);
-      setSheetView('contacts');
+      reopenSheetToContacts();
     } catch {
       Alert.alert('שגיאה', 'לא ניתן לטעון אנשי קשר.');
     } finally {
-      isContactsLoadingRef.current = false;
       setLoadingContacts(false);
     }
-  }, []);
+  };
 
   // ── Already-added guard (normalised phone dedupe) ─────────────────────────
   const addedPhones = new Set(
@@ -387,9 +400,17 @@ export function ParticipantsCard({
         transparent
         animationType="slide"
         onRequestClose={() => {
-          // Guard against Android firing onRequestClose when the system
-          // permissions dialog appears/disappears over this Modal.
-          if (!isContactsLoadingRef.current) closeSheet();
+          // Guard: don't close while contacts are still loading (user may have
+          // pressed back on Android before the list appeared).
+          if (!loadingContacts) closeSheet();
+        }}
+        onDismiss={() => {
+          // iOS only: fires after the slide-down animation fully completes.
+          // If the user requested contacts access, run the handler now — no
+          // Modal is visible at this point.
+          if (Platform.OS === 'ios' && isContactsIntentPending) {
+            void handleContactsAccessIntent();
+          }
         }}
       >
         <KeyboardAvoidingView
@@ -402,7 +423,7 @@ export function ParticipantsCard({
             <Pressable
               style={[StyleSheet.absoluteFill, s.backdropDim]}
               onPress={() => {
-                if (!isContactsLoadingRef.current) closeSheet();
+                if (!loadingContacts) closeSheet();
               }}
             />
             <View style={s.modalSheetWrapper}>
@@ -891,7 +912,16 @@ export function ParticipantsCard({
 
                     <Pressable
                       style={s.contactsBtn}
-                      onPress={openContactsPicker}
+                      onPress={() => {
+                        if (isContactsIntentPending) return;
+                        setIsContactsIntentPending(true);
+                        closeSheet();
+                        if (Platform.OS === 'android') {
+                          void handleContactsAccessIntent();
+                        }
+                        // iOS: handled by onDismiss on the Modal above, which
+                        // fires after the slide-down animation fully completes.
+                      }}
                       accessible={true}
                       accessibilityRole="button"
                       accessibilityLabel="בחירה מאנשי קשר"

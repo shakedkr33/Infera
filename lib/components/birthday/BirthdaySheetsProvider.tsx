@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { Platform } from 'react-native';
 import type { SelectedContactData } from '@/components/onboarding/AddPersonBottomSheet';
 import { AddPersonBottomSheet } from '@/components/onboarding/AddPersonBottomSheet';
 import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
@@ -19,6 +20,10 @@ import {
   runBirthdayLegacySeedMigration,
 } from '@/lib/birthdayStorage';
 import type { Birthday } from '@/lib/types/birthday';
+import {
+  ensureContactsAccess,
+  presentContactsAccessDeniedAlert,
+} from '@/lib/utils/contactsPermission';
 import { BirthdayAddChoiceSheet } from './BirthdayAddChoiceSheet';
 import { BirthdayCardSheet } from './BirthdayCardSheet';
 import { BirthdayEditSheet } from './BirthdayEditSheet';
@@ -80,6 +85,28 @@ export function BirthdaySheetsProvider({
   const [contactPickerVisible, setContactPickerVisible] = useState(false);
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>('personal');
+
+  // Guard: prevents acting after unmount and blocks double-tap from firing two
+  // concurrent permission requests.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+  const [isContactsIntentPending, setIsContactsIntentPending] = useState(false);
+
+  const handleContactsAccessIntent = async (): Promise<void> => {
+    const { granted, canAskAgain } = await ensureContactsAccess();
+    setIsContactsIntentPending(false);
+    if (!isMountedRef.current) return;
+    if (granted) {
+      setContactPickerVisible(true);
+    } else {
+      presentContactsAccessDeniedAlert(canAskAgain);
+    }
+  };
 
   useEffect(() => {
     birthdaysRef.current = birthdays;
@@ -320,8 +347,19 @@ export function BirthdaySheetsProvider({
           }, 300);
         }}
         onFromContacts={() => {
+          if (isContactsIntentPending) return;
+          setIsContactsIntentPending(true);
           setAddChoiceVisible(false);
-          setTimeout(() => setContactPickerVisible(true), 300);
+          if (Platform.OS === 'android') {
+            void handleContactsAccessIntent();
+          }
+          // iOS: handled by onDismiss below, which fires after the close
+          // animation fully completes — no artificial delay needed.
+        }}
+        onDismiss={() => {
+          if (Platform.OS === 'ios' && isContactsIntentPending) {
+            void handleContactsAccessIntent();
+          }
         }}
       />
       <AddPersonBottomSheet

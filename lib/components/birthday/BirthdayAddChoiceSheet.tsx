@@ -12,6 +12,8 @@ interface BirthdayAddChoiceSheetProps {
   onClose: () => void;
   onManual: () => void;
   onFromContacts: () => void;
+  /** iOS-only: called after the sheet's dismiss animation fully completes. */
+  onDismiss?: () => void;
 }
 
 export function BirthdayAddChoiceSheet({
@@ -19,6 +21,7 @@ export function BirthdayAddChoiceSheet({
   onClose,
   onManual,
   onFromContacts,
+  onDismiss,
 }: BirthdayAddChoiceSheetProps): React.JSX.Element {
   const insets = useSafeAreaInsets();
 
@@ -28,6 +31,7 @@ export function BirthdayAddChoiceSheet({
       transparent
       animationType="slide"
       onRequestClose={onClose}
+      onDismiss={onDismiss}
       statusBarTranslucent
     >
       <View style={s.overlay}>

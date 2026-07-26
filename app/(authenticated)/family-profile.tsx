@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ensureContactsAccess, presentContactsAccessDeniedAlert } from '@/lib/utils/contactsPermission';
 import { AddPersonBottomSheet } from '../../components/onboarding/AddPersonBottomSheet';
 import {
   ColorPicker,
@@ -584,8 +585,16 @@ export default function FamilyProfileScreen() {
               <Pressable
                 onPress={() => {
                   handleGatedFamilyExpansionAction(() => {
-                    setOpenSheetToContacts(true);
-                    openAddPersonSheet();
+                    void (async () => {
+                      const { granted, canAskAgain } =
+                        await ensureContactsAccess();
+                      if (!granted) {
+                        presentContactsAccessDeniedAlert(canAskAgain);
+                        return;
+                      }
+                      setOpenSheetToContacts(true);
+                      openAddPersonSheet();
+                    })();
                   });
                 }}
                 accessible={true}
@@ -659,8 +668,16 @@ export default function FamilyProfileScreen() {
                       onRemove={() => handleDeleteMember(member)}
                       onSendInvite={() => handleSendInvite(member)}
                       onConvertToContact={() => {
-                        setOpenSheetToContacts(true);
-                        startConvertToContact(member);
+                        void (async () => {
+                          const { granted, canAskAgain } =
+                            await ensureContactsAccess();
+                          if (!granted) {
+                            presentContactsAccessDeniedAlert(canAskAgain);
+                            return;
+                          }
+                          setOpenSheetToContacts(true);
+                          startConvertToContact(member);
+                        })();
                       }}
                     />
                   )

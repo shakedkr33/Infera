@@ -43,6 +43,14 @@ interface AddPersonBottomSheetProps {
   onManual: () => void;
   // FIXED: "הוספה מאנשי קשר" now opens contact picker directly, skipping intermediate sheet
   openContactsDirectly?: boolean;
+  /**
+   * Called when the user taps "בחירה מאנשי קשר" from the main view.
+   * The caller is responsible for ensuring contacts permission is granted
+   * BEFORE this callback fires, then re-opening the sheet with
+   * openContactsDirectly={true} so loadContacts runs via the useEffect.
+   * If omitted, the button is a no-op (defensive fallback).
+   */
+  onContactsRequested?: () => void;
 }
 
 export function AddPersonBottomSheet({
@@ -51,6 +59,7 @@ export function AddPersonBottomSheet({
   onContactSelected,
   onManual,
   openContactsDirectly = false,
+  onContactsRequested,
 }: AddPersonBottomSheetProps) {
   const slideAnim = useRef(new Animated.Value(300)).current;
 
@@ -98,99 +107,60 @@ export function AddPersonBottomSheet({
     }
   }, [visible, slideAnim, openContactsDirectly]);
 
-  // FIXED: "הוספה מאנשי קשר" now opens contact picker directly, skipping intermediate sheet
-  // When openContactsDirectly is true, skip the 'main' view and go straight to contacts.
-  useEffect(() => {
-    if (visible && openContactsDirectly) {
-      openContactsPicker();
-    }
-    // openContactsPicker is defined below but stable in behaviour; visible/openContactsDirectly drive this
-    // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — openContactsPicker is stable
-  }, [visible, openContactsDirectly]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Load contacts ──────────────────────────────────────────────────────────
-  const openContactsPicker = async () => {
+  // ── Load contacts (permission must already be granted by caller) ───────────
+  const loadContacts = async (): Promise<void> => {
     setLoadingContacts(true);
     try {
-      console.log('[CONTACTS_AUDIT] calling getPermissionsAsync (read-only check)…');
-      const existing = await Contacts.getPermissionsAsync();
-      console.log('[CONTACTS_AUDIT] existing perm', {
-        status: existing.status,
-        accessPrivileges: existing.accessPrivileges,
-        canAskAgain: existing.canAskAgain,
-      });
+      // Read-only check — does NOT show a system dialog, safe to call while
+      // this Modal is visible. Only used to detect iOS Limited Access for the
+      // banner below; actual access was already ensured by the caller before
+      // this component became visible with openContactsDirectly=true.
+      const permission = await Contacts.getPermissionsAsync();
+      setIsLimitedAccess(
+        Platform.OS === 'ios' &&
+          permission.status === 'granted' &&
+          permission.accessPrivileges === 'limited'
+      );
 
-      let permResult: Contacts.ContactsPermissionResponse;
-      if (existing.status === 'granted') {
-        // Already granted (full or limited) — use cached result, do NOT re-prompt
-        console.log('[CONTACTS_AUDIT] already granted — skipping requestPermissionsAsync');
-        permResult = existing;
-      } else {
-        // undetermined (first ask) or denied — call requestPermissionsAsync to prompt / surface denial
-        console.log('[CONTACTS_AUDIT] calling requestPermissionsAsync…');
-        permResult = await Contacts.requestPermissionsAsync();
-        console.log('[CONTACTS_AUDIT] permResult after request', {
-          status: permResult.status,
-          accessPrivileges: permResult.accessPrivileges,
-          canAskAgain: permResult.canAskAgain,
-        });
-      }
-
-      if (permResult.status !== 'granted') {
-        Alert.alert(
-          'גישה לאנשי קשר',
-          'אנא אפשרי גישה לאנשי קשר בהגדרות הטלפון.',
-          [{ text: 'הבנתי' }]
-        );
-        console.log('[CONTACTS_AUDIT] permission not granted — setting loading false and returning');
-        setLoadingContacts(false);
+      if (permission.status !== 'granted') {
+        // Defensive only — should not normally happen, since the caller
+        // guarantees granted access before this component is shown with
+        // openContactsDirectly=true. Do not request permission here.
+        setContacts([]);
         return;
       }
-      console.log('[CONTACTS_AUDIT] calling getContactsAsync…');
-      let result: Contacts.ContactResponse;
-      try {
-        result = await Contacts.getContactsAsync({
-          fields: [
-            Contacts.Fields.Name,
-            Contacts.Fields.PhoneNumbers,
-            Contacts.Fields.Emails,
-          ],
-          sort: Contacts.SortTypes.FirstName,
-        });
-        console.log('[CONTACTS_AUDIT] getContactsAsync returned', {
-          total: result.data?.length ?? 0,
-          firstContact: result.data?.[0]
-            ? {
-                id: (result.data[0] as { id?: string }).id,
-                name: result.data[0].name,
-                phoneCount: result.data[0].phoneNumbers?.length ?? 0,
-              }
-            : 'empty',
-        });
-      } catch (fetchErr) {
-        console.log('[CONTACTS_AUDIT] getContactsAsync threw', fetchErr);
-        throw fetchErr;
-      }
-      // FIXED: removed label filtering — show all contacts that have at least one phone number
+
+      const result = await Contacts.getContactsAsync({
+        fields: [
+          Contacts.Fields.Name,
+          Contacts.Fields.PhoneNumbers,
+          Contacts.Fields.Emails,
+        ],
+        sort: Contacts.SortTypes.FirstName,
+      });
       const withPhone = (result.data ?? []).filter(
         (c) => c.name && (c.phoneNumbers?.length ?? 0) > 0
       );
       setContacts(withPhone);
-      setSearch('');
-      setSelectedKey(null);
-      // Detect iOS limited-access: user allowed only a subset of contacts
-      setIsLimitedAccess(
-        Platform.OS === 'ios' && permResult.accessPrivileges === 'limited'
-      );
       setView('contacts');
-    } catch (err) {
-      console.log('[CONTACTS_AUDIT] outer catch', err);
+    } catch {
       Alert.alert('שגיאה', 'לא ניתן לטעון אנשי קשר.');
     } finally {
-      console.log('[CONTACTS_AUDIT] finally — setting loadingContacts to false');
       setLoadingContacts(false);
     }
   };
+
+  // FIXED: "הוספה מאנשי קשר" now opens contact picker directly, skipping intermediate sheet
+  // Caller must call ensureContactsAccess() BEFORE setting visible=true with
+  // openContactsDirectly=true — permission is never requested inside this component.
+  // When openContactsDirectly is true, skip the 'main' view and go straight to contacts.
+  useEffect(() => {
+    if (visible && openContactsDirectly) {
+      void loadContacts();
+    }
+    // loadContacts is stable (no deps captured by value); visible/openContactsDirectly drive this
+    // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — loadContacts is stable
+  }, [visible, openContactsDirectly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Helpers shared by both confirmation paths ──────────────────────────────
   const resolveContactFields = (contact: Contacts.Contact) => ({
@@ -298,7 +268,16 @@ export function AddPersonBottomSheet({
 
                 {/* From Contacts */}
                 <Pressable
-                  onPress={openContactsPicker}
+                  onPress={() => {
+                    if (onContactsRequested) {
+                      onContactsRequested();
+                      return;
+                    }
+                    // No caller currently uses 'main' view with contacts (family-profile
+                    // always opens with openContactsDirectly=true, per audit). Defensive
+                    // no-op fallback — do not call loadContacts here without a granted
+                    // permission check, to avoid reintroducing the Modal-open bug.
+                  }}
                   accessible={true}
                   accessibilityRole="button"
                   accessibilityLabel="בחירה מאנשי קשר"
