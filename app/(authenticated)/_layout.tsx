@@ -190,12 +190,10 @@ function ActionSheetModal({
             <ActionButton
               icon="cake"
               label="יום הולדת"
-              onPress={() =>
-                handleGatedCreateAction(() => {
-                  onClose();
-                  router.push('/birthdays');
-                }, 'personal')
-              }
+              onPress={() => {
+                onClose();
+                router.push('/birthdays');
+              }}
             />
           </View>
         </View>
