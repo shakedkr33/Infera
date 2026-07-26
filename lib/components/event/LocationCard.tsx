@@ -166,6 +166,7 @@ export function LocationCard({
             listViewDisplayed="auto"
             keyboardShouldPersistTaps="handled"
             isRowScrollable={false}
+            disableScroll={true}
             styles={{
               container: s.placesContainer,
               textInputContainer: s.placesTextInputContainer,
