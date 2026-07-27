@@ -684,7 +684,7 @@ export function EventDetailsBottomSheet({
 
   const handleNavigate = (): void => {
     const location = displayEvent?.location?.trim();
-    if (!location) return;
+    if (!location || !parseGeoUri(displayEvent?.locationUrl)) return;
     setNavPickerOpen(true);
   };
 
@@ -744,6 +744,7 @@ export function EventDetailsBottomSheet({
   const isLoading = convexEventId && eventDoc === undefined;
   const isNotFound = convexEventId && eventDoc === null;
   const hasLocation = Boolean(displayEvent?.location?.trim());
+  const hasNavigableLocation = parseGeoUri(displayEvent?.locationUrl) !== null;
   const recurrenceLabel =
     displayEvent?.isRecurring === true
       ? formatRecurrenceLabel(displayEvent.recurringPattern)
@@ -1083,20 +1084,22 @@ export function EventDetailsBottomSheet({
                 {hasLocation ? (
                   <View style={styles.locationRowLtrShell}>
                     <View style={styles.locationRow}>
-                      <Pressable
-                        accessibilityLabel={`נווט אל ${displayEvent.location}`}
-                        accessibilityRole="button"
-                        accessible={true}
-                        onPress={handleNavigate}
-                        style={styles.navigateBtn}
-                      >
-                        <MaterialIcons
-                          color="#8d6e63"
-                          name="near-me"
-                          size={14}
-                        />
-                        <Text style={styles.navigateBtnText}>נווט</Text>
-                      </Pressable>
+                      {hasNavigableLocation ? (
+                        <Pressable
+                          accessibilityLabel={`נווט אל ${displayEvent.location}`}
+                          accessibilityRole="button"
+                          accessible={true}
+                          onPress={handleNavigate}
+                          style={styles.navigateBtn}
+                        >
+                          <MaterialIcons
+                            color="#8d6e63"
+                            name="near-me"
+                            size={14}
+                          />
+                          <Text style={styles.navigateBtnText}>נווט</Text>
+                        </Pressable>
+                      ) : null}
                       <View style={styles.locationTextBlock}>
                         <MaterialIcons
                           color="#94a3b8"

@@ -1797,6 +1797,7 @@ export default function CalendarScreen(): React.JSX.Element {
     location: string,
     locationUrl?: string
   ): void => {
+    if (!parseGeoUri(locationUrl)) return;
     setNavPickerLocation(location);
     setNavPickerLocationUrl(locationUrl ?? null);
   };
@@ -5570,26 +5571,30 @@ function TimelineView({
                                       {event.location}
                                     </Text>
                                   </View>
-                                  <Pressable
-                                    style={styles.eventNavBtn}
-                                    onPress={(e) => {
-                                      e.stopPropagation?.();
-                                      onNavigate(
-                                        event.location as string,
-                                        event.locationUrl,
-                                      );
-                                    }}
-                                    accessible={true}
-                                    accessibilityRole="button"
-                                    accessibilityLabel="נווט"
-                                  >
-                                    <Text style={styles.eventNavBtnText}>נווט</Text>
-                                    <MaterialIcons
-                                      name="near-me"
-                                      size={13}
-                                      color="#8d6e63"
-                                    />
-                                  </Pressable>
+                                  {parseGeoUri(event.locationUrl) ? (
+                                    <Pressable
+                                      style={styles.eventNavBtn}
+                                      onPress={(e) => {
+                                        e.stopPropagation?.();
+                                        onNavigate(
+                                          event.location as string,
+                                          event.locationUrl
+                                        );
+                                      }}
+                                      accessible={true}
+                                      accessibilityRole="button"
+                                      accessibilityLabel="נווט"
+                                    >
+                                      <Text style={styles.eventNavBtnText}>
+                                        נווט
+                                      </Text>
+                                      <MaterialIcons
+                                        name="near-me"
+                                        size={13}
+                                        color="#8d6e63"
+                                      />
+                                    </Pressable>
+                                  ) : null}
                                 </>
                               ) : null}
                             </View>
