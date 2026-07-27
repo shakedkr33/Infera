@@ -673,6 +673,12 @@ export default function HomeScreen() {
     d.setHours(0, 0, 0, 0);
     return d;
   }, [today]);
+  const yesterday = useMemo(() => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [today]);
 
   const selectedDateLabel = useMemo(
     () =>
@@ -685,6 +691,8 @@ export default function HomeScreen() {
   );
 
   const isSelectedToday = isSameDay(selectedDate, today);
+  const isSelectedTomorrow = isSameDay(selectedDate, tomorrow);
+  const isSelectedYesterday = isSameDay(selectedDate, yesterday);
   const emptyDayCopy = getEmptyStateCopy(selectedDate);
   const year = today.getFullYear();
   const month = today.getMonth();
