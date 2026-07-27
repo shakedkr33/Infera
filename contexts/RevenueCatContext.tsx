@@ -331,7 +331,9 @@ export function RevenueCatProvider({
         const Purchases = (await import('react-native-purchases')).default;
 
         // הגדרת רמת לוג - VERBOSE בפיתוח, INFO בייצור
-        await Purchases.setLogLevel(Purchases.LOG_LEVEL.VERBOSE);
+        await Purchases.setLogLevel(
+          __DEV__ ? Purchases.LOG_LEVEL.VERBOSE : Purchases.LOG_LEVEL.ERROR
+        );
 
         // קונפיגורציית SDK - Modern API
         Purchases.configure({
