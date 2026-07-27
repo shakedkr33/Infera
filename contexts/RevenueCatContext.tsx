@@ -300,6 +300,13 @@ export function RevenueCatProvider({
 
       // אם אין מפתחות מוגדרים - עובדים במצב תצוגה מקדימה
       if (!isConfigured) {
+        if (!__DEV__) {
+          console.error(
+            '[RevenueCat] CRITICAL: API key missing in non-DEV build. ' +
+            'Payments will not work. Check EAS Environment Variables for ' +
+            'EXPO_PUBLIC_REVENUECAT_IOS_API_KEY / EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY.'
+          );
+        }
         setPackages(PREVIEW_PACKAGES);
         setIsLoading(false);
         setIsInitialized(true);
