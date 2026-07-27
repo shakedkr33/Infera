@@ -35,6 +35,7 @@ import { ProfileCircles } from '@/components/ProfileCircles';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { colors } from '@/constants/theme';
+import { colors as tc } from '@/theme/colors';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -1951,104 +1952,105 @@ export default function HomeScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
-        {/* ── Date section: segmented day selector + calendar toggle ─────────── */}
+        {/* ── Date section: pill-style day selector ──────────────────────────── */}
         <View style={stylesRtl.dateSectionRow}>
-          {calendarMode === 'segmented' ? (
-            <View style={stylesRtl.segmentedContainer}>
-              {/* Declaration order right→left: אתמול | היום | מחר
-                  direction:'rtl' (inherited from SafeAreaView on Android, and
-                  matched by explicit direction:'rtl' on the container for iOS)
-                  reverses flex layout so the first child sits on the right. */}
-              <Pressable
-                onPress={() => setSelectedDate(yesterday)}
-                style={[
-                  stylesRtl.segmentedTab,
-                  isSelectedYesterday && stylesRtl.segmentedTabActive,
-                ]}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="אתמול"
-                accessibilityState={{ selected: isSelectedYesterday }}
-                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-              >
-                <Text
-                  style={[
-                    stylesRtl.segmentedTabText,
-                    isSelectedYesterday && stylesRtl.segmentedTabTextActive,
+          {/* Single white pill strip — RTL order: אתמול (right) → מחר (left) → 📅 (far left) */}
+          <View style={stylesRtl.pillStrip}>
+            {calendarMode === 'segmented' ? (
+              <>
+                <Pressable
+                  onPress={() => setSelectedDate(yesterday)}
+                  style={({ pressed }) => [
+                    stylesRtl.dayPillTab,
+                    isSelectedYesterday && stylesRtl.dayPillTabActive,
+                    pressed && { opacity: 0.7 },
                   ]}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="אתמול"
+                  accessibilityState={{ selected: isSelectedYesterday }}
+                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
                 >
-                  אתמול
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setSelectedDate(today)}
-                style={[
-                  stylesRtl.segmentedTab,
-                  isSelectedToday && stylesRtl.segmentedTabActive,
-                ]}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="היום"
-                accessibilityState={{ selected: isSelectedToday }}
-                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-              >
-                <Text
-                  style={[
-                    stylesRtl.segmentedTabText,
-                    isSelectedToday && stylesRtl.segmentedTabTextActive,
+                  <Text
+                    style={[
+                      stylesRtl.dayPillText,
+                      isSelectedYesterday && stylesRtl.dayPillTextActive,
+                    ]}
+                  >
+                    אתמול
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setSelectedDate(today)}
+                  style={({ pressed }) => [
+                    stylesRtl.dayPillTab,
+                    isSelectedToday && stylesRtl.dayPillTabActive,
+                    pressed && { opacity: 0.7 },
                   ]}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="היום"
+                  accessibilityState={{ selected: isSelectedToday }}
+                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
                 >
-                  היום
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setSelectedDate(tomorrow)}
-                style={[
-                  stylesRtl.segmentedTab,
-                  isSelectedTomorrow && stylesRtl.segmentedTabActive,
-                ]}
-                accessible={true}
-                accessibilityRole="button"
-                accessibilityLabel="מחר"
-                accessibilityState={{ selected: isSelectedTomorrow }}
-                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-              >
-                <Text
-                  style={[
-                    stylesRtl.segmentedTabText,
-                    isSelectedTomorrow && stylesRtl.segmentedTabTextActive,
+                  <Text
+                    style={[
+                      stylesRtl.dayPillText,
+                      isSelectedToday && stylesRtl.dayPillTextActive,
+                    ]}
+                  >
+                    היום
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setSelectedDate(tomorrow)}
+                  style={({ pressed }) => [
+                    stylesRtl.dayPillTab,
+                    isSelectedTomorrow && stylesRtl.dayPillTabActive,
+                    pressed && { opacity: 0.7 },
                   ]}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="מחר"
+                  accessibilityState={{ selected: isSelectedTomorrow }}
+                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
                 >
-                  מחר
-                </Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View style={{ flex: 1 }} />
-          )}
-          <Pressable
-            onPress={() =>
-              setCalendarMode((m) => (m === 'segmented' ? 'month' : 'segmented'))
-            }
-            style={[
-              stylesRtl.calendarToggleBtn,
-              isCustomDate && stylesRtl.calendarToggleBtnActive,
-            ]}
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel={
-              calendarMode === 'segmented' ? 'פתח לוח שנה חודשי' : 'חזרה לבחירת יום'
-            }
-            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-          >
-            <MaterialIcons
-              name={
-                calendarMode === 'segmented' ? 'calendar-month' : 'view-week'
+                  <Text
+                    style={[
+                      stylesRtl.dayPillText,
+                      isSelectedTomorrow && stylesRtl.dayPillTextActive,
+                    ]}
+                  >
+                    מחר
+                  </Text>
+                </Pressable>
+              </>
+            ) : (
+              <View style={{ flex: 1 }} />
+            )}
+            <Pressable
+              onPress={() =>
+                setCalendarMode((m) => (m === 'segmented' ? 'month' : 'segmented'))
               }
-              size={20}
-              color={isCustomDate ? '#fff' : colors.primaryDark}
-            />
-          </Pressable>
+              style={({ pressed }) => [
+                stylesRtl.calendarIconBtn,
+                isCustomDate && stylesRtl.calendarIconBtnActive,
+                pressed && { opacity: 0.7 },
+              ]}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel={
+                calendarMode === 'segmented' ? 'פתח לוח שנה חודשי' : 'חזרה לבחירת יום'
+              }
+              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            >
+              <MaterialIcons
+                name={calendarMode === 'segmented' ? 'calendar-month' : 'view-week'}
+                size={20}
+                color={isCustomDate ? tc.primary : tc.textSecondary}
+              />
+            </Pressable>
+          </View>
         </View>
 
         {calendarMode === 'month' ? (
@@ -4245,46 +4247,52 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
-  calendarToggleBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(54,169,226,0.10)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  calendarToggleBtnActive: {
-    backgroundColor: '#36a9e2',
-  },
-
-  // ── Segmented day selector ──────────────────────────────────────────────────
-  segmentedContainer: {
+  // ── Pill day selector ───────────────────────────────────────────────────────
+  pillStrip: {
     flex: 1,
-    flexDirection: 'row',
-    direction: 'rtl',
-    backgroundColor: '#eef1f5',
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    backgroundColor: tc.surface,
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  dayPillTab: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
     borderRadius: 10,
-    padding: 2,
-  },
-  segmentedTab: {
-    flex: 1,
-    minHeight: 36,
+    minWidth: 64,
     alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 7,
   },
-  segmentedTabActive: {
-    backgroundColor: '#36a9e2',
+  dayPillTabActive: {
+    backgroundColor: tc.primary,
   },
-  segmentedTabText: {
+  dayPillText: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#94a3b8',
+    fontWeight: '500',
+    color: tc.textSecondary,
     textAlign: 'center',
   },
-  segmentedTabTextActive: {
-    color: '#fff',
-    fontWeight: '700',
+  dayPillTextActive: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: tc.textOnPrimary,
+  },
+  calendarIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  calendarIconBtnActive: {
+    backgroundColor: tc.primaryLight,
   },
 
   // ── Date carousel (kept for reference) ──────────────────────────────────────
@@ -4320,11 +4328,13 @@ const styles = StyleSheet.create({
   },
   dayPillTextSelected: { color: '#fff', fontWeight: '900' },
   subtitleCount: {
-    color: '#94a3b8',
-    fontSize: 14,
+    color: tc.textSecondary,
+    fontSize: 13,
+    fontWeight: '400',
     textAlign: 'right',
     paddingHorizontal: 24,
     marginBottom: 16,
+    marginTop: 8,
   },
 
   // ── Month calendar ──────────────────────────────────────────────────────────

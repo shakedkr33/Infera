@@ -527,7 +527,7 @@ export function HomeDailyCommandCenter({
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
-          {isPast ? 'סיכום היום' : 'ציר הזמן'}
+          {isPast ? 'היום שהיה' : 'הלו״ז שלי'}
         </Text>
 
         {allDayItems.length > 0 ? (
