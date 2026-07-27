@@ -30,6 +30,8 @@ export type HomeDailyItem = {
   remoteUrl?: string;
   type: 'event' | 'task';
   completed: boolean;
+  /** Timestamp (ms) when the task was completed — used for "בוצעו היום" grouping. */
+  completedAt?: number;
   groupName?: string;
   communityId?: string;
   linkedEventId?: string;
@@ -49,8 +51,28 @@ export type HomeDailyTask = {
   dueDate?: number;
   hasTime?: boolean;
   dueAt?: number;
+  /** Timestamp (ms) when the task was completed — used for "בוצעו היום" grouping. */
+  completedAt?: number;
   assigneeDisplays?: { initials: string; color: string }[];
 };
+
+// ─── Temporal state ───────────────────────────────────────────────────────────
+
+type TemporalState = 'active' | 'ended' | 'upcoming' | 'overdue' | 'completed';
+type DisplayMode = 'featured' | 'compact';
+
+interface UnifiedTimelineCardProps {
+  item: HomeDailyItem;
+  temporalState: TemporalState;
+  displayMode: DisplayMode;
+  /** Badge label override for non-today featured items. */
+  featuredBadgeLabel?: string;
+  nowMs: number;
+  onOpen: () => void;
+  onNavigate?: () => void;
+  onToggleComplete?: () => void;
+  onOpenRemoteUrl?: () => void;
+}
 
 type HomeDailyCommandCenterProps = {
   selectedDate: Date;
@@ -58,9 +80,13 @@ type HomeDailyCommandCenterProps = {
   scheduledItems: HomeDailyItem[];
   allDayItems: HomeDailyItem[];
   overdueTasks: HomeDailyTask[];
+  /** Untimed tasks for the selected day (complete + incomplete). */
   untimedTasks: HomeDailyTask[];
   undatedTaskCount: number;
+  /** All undated tasks — complete and incomplete. Collapsed section filters to incomplete. */
+  undatedTasks: HomeDailyTask[];
   birthdays: Birthday[];
+  hasAnyBirthdays: boolean;
   onOpenItem: (item: HomeDailyItem) => void;
   onOpenTask: (taskId: string) => void;
   onToggleTask: (taskId: string) => void;
@@ -70,7 +96,10 @@ type HomeDailyCommandCenterProps = {
   onOpenTasks: () => void;
   onOpenBirthday: (birthday: Birthday) => void;
   onOpenBirthdays: () => void;
+  onAddBirthday: () => void;
 };
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const isSameCalendarDay = (a: Date, b: Date): boolean =>
   a.getFullYear() === b.getFullYear() &&
@@ -85,7 +114,6 @@ const formatElapsed = (startAt: number, nowMs: number): string => {
   if (minutes < 60) {
     return minutes === 1 ? 'התחיל לפני דקה' : `התחיל לפני ${minutes} דקות`;
   }
-
   const hours = Math.floor(minutes / 60);
   if (hours === 1) return 'התחיל לפני שעה';
   if (hours === 2) return 'התחיל לפני שעתיים';
@@ -108,10 +136,23 @@ const formatUntilStart = (startAt: number, nowMs: number): string | null => {
   return null;
 };
 
+const formatEnded = (endAt: number, nowMs: number): string => {
+  const minutes = Math.max(1, Math.floor((nowMs - endAt) / 60_000));
+  if (minutes < 60) {
+    return minutes === 1 ? 'הסתיים לפני דקה' : `הסתיים לפני ${minutes} דקות`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours === 1) return 'הסתיים לפני שעה';
+  if (hours === 2) return 'הסתיים לפני שעתיים';
+  return `הסתיים לפני ${hours} שעות`;
+};
+
 const isPendingInvitation = (item: HomeDailyItem): boolean =>
   (item.pendingPersonalInvite === true &&
     (item.myPersonalRsvpStatus ?? 'none') === 'none') ||
   (item.pending === true && (item.rsvpStatus ?? 'none') === 'none');
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 const BirthdayAvatar = ({
   birthday,
@@ -157,195 +198,286 @@ const SourceLabel = ({ item }: { item: HomeDailyItem }): React.JSX.Element => {
   return <Text style={styles.sourceLabel}>אירוע אישי</Text>;
 };
 
-const ExpandedScheduleCard = ({
+// ─── UnifiedTimelineCard ─────────────────────────────────────────────────────
+
+const UnifiedTimelineCard = ({
   item,
-  status,
-  context,
+  temporalState,
+  displayMode,
+  featuredBadgeLabel,
+  nowMs,
   onOpen,
   onNavigate,
+  onToggleComplete,
   onOpenRemoteUrl,
-  onToggleTask,
-}: {
-  item: HomeDailyItem;
-  status: string;
-  context?: string | null;
-  onOpen: () => void;
-  onNavigate: () => void;
-  onOpenRemoteUrl: () => void;
-  onToggleTask: () => void;
-}): React.JSX.Element => {
+}: UnifiedTimelineCardProps): React.JSX.Element => {
   const hasNavigation =
     item.location.trim().length > 0 && parseGeoUri(item.locationUrl) !== null;
   const hasRemoteAction = Boolean(item.remoteUrl);
   const hasPrimaryAction = hasNavigation || hasRemoteAction;
-  const isNow = status.includes('עכשיו');
 
-  return (
-    <View style={styles.expandedCard}>
-      <Pressable
-        accessibilityLabel={`פתיחת פרטים: ${item.title}`}
-        accessibilityRole="button"
-        accessible={true}
-        onPress={onOpen}
-        style={({ pressed }) => [
-          styles.expandedContent,
-          pressed && styles.pressed,
-        ]}
-      >
-        <View style={styles.expandedTopRow}>
-          <View
-            style={[
-              styles.statusPill,
-              { backgroundColor: isNow ? tc.primaryLight : tc.accentLight },
-            ]}
-          >
-            <View
-              style={[
-                styles.statusDot,
-                { backgroundColor: isNow ? tc.primary : tc.accent },
-              ]}
-            />
-            <Text
-              style={[
-                styles.statusText,
-                { color: isNow ? tc.primary : tc.accent },
-              ]}
-            >
-              {status}
-            </Text>
-          </View>
-          <Text style={styles.timeRange}>{formatTimeRange(item)}</Text>
-        </View>
+  // Badge config by temporal state
+  const badgeConfig = ((): { label: string; bg: string; color: string } | null => {
+    switch (temporalState) {
+      case 'active':
+        return { label: 'מתקיים עכשיו', bg: tc.primaryLight, color: tc.primary };
+      case 'upcoming':
+        if (displayMode !== 'featured') return null;
+        return {
+          label: featuredBadgeLabel ?? 'הבא בתור',
+          bg: tc.accentLight,
+          color: tc.accent,
+        };
+      case 'ended':
+        return { label: 'הסתיים', bg: '#F1F4F5', color: '#767C7E' };
+      case 'overdue':
+        return { label: 'באיחור', bg: '#FFF8EC', color: tc.warning };
+      case 'completed':
+        return { label: 'בוצע', bg: '#F1F4F5', color: '#92999C' };
+    }
+  })();
 
-        <View style={styles.sourceRow}>
-          <SourceLabel item={item} />
-        </View>
+  // Context text (live time line)
+  const contextText = ((): string | null => {
+    if (temporalState === 'active' && item.startAt !== undefined) {
+      return formatElapsed(item.startAt, nowMs);
+    }
+    if (temporalState === 'upcoming' && item.startAt !== undefined) {
+      return formatUntilStart(item.startAt, nowMs);
+    }
+    if (temporalState === 'ended' && item.endAt !== undefined) {
+      return formatEnded(item.endAt, nowMs);
+    }
+    return null;
+  })();
 
-        <View style={styles.titleRow}>
-          {item.type === 'task' ? (
-            <TaskCheckbox checked={item.completed} onToggle={onToggleTask} />
-          ) : null}
-          <Text numberOfLines={3} style={styles.expandedTitle}>
-            {item.title}
-          </Text>
-        </View>
+  const isCompleted = temporalState === 'completed';
+  const isEnded = temporalState === 'ended';
+  const isOverdue = temporalState === 'overdue';
 
-        {item.location ? (
-          <View style={styles.metadataRow}>
-            <MaterialIcons name="location-on" size={17} color="#767C7E" />
-            <Text numberOfLines={2} style={styles.metadataText}>
-              {item.location}
-            </Text>
-          </View>
-        ) : null}
+  // ─── FEATURED card ───────────────────────────────────────────────────────────
+  if (displayMode === 'featured') {
+    const cardBorderStyle =
+      isOverdue ? styles.overdueCardBorder : undefined;
 
-        {context ? <Text style={styles.contextText}>{context}</Text> : null}
-
-        {(item.myAssignedTasks?.length ?? 0) > 0 ? (
-          <Text style={styles.assignedTasksText}>
-            {item.myAssignedTasks?.length === 1
-              ? 'יש לך משימה אחת באירוע'
-              : `יש לך ${item.myAssignedTasks?.length} משימות באירוע`}
-          </Text>
-        ) : null}
-      </Pressable>
-
-      <View style={styles.actionRow}>
-        {hasPrimaryAction ? (
-          <Pressable
-            accessibilityLabel={hasRemoteAction ? 'הצטרפות לאירוע' : 'ניווט'}
-            accessibilityRole="button"
-            accessible={true}
-            onPress={hasRemoteAction ? onOpenRemoteUrl : onNavigate}
-            style={({ pressed }) => [
-              styles.primaryAction,
-              pressed && styles.primaryActionPressed,
-            ]}
-          >
-            <MaterialIcons
-              color="#FFFFFF"
-              name={hasRemoteAction ? 'videocam' : 'near-me'}
-              size={18}
-            />
-            <Text style={styles.primaryActionText}>
-              {hasRemoteAction ? 'הצטרפות' : 'ניווט'}
-            </Text>
-          </Pressable>
-        ) : null}
+    return (
+      <View style={[styles.expandedCard, cardBorderStyle]}>
         <Pressable
-          accessibilityLabel={`פרטים על ${item.title}`}
-          accessibilityRole="button"
           accessible={true}
+          accessibilityLabel={`פתיחת פרטים: ${item.title}`}
+          accessibilityRole="button"
           onPress={onOpen}
           style={({ pressed }) => [
-            styles.secondaryAction,
-            !hasPrimaryAction && styles.secondaryActionFull,
+            styles.expandedContent,
             pressed && styles.pressed,
           ]}
         >
-          <Text style={styles.secondaryActionText}>פרטים</Text>
+          <View style={styles.expandedTopRow}>
+            {badgeConfig ? (
+              <View
+                style={[
+                  styles.statusPill,
+                  { backgroundColor: badgeConfig.bg },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.statusDot,
+                    { backgroundColor: badgeConfig.color },
+                  ]}
+                />
+                <Text
+                  style={[styles.statusText, { color: badgeConfig.color }]}
+                >
+                  {badgeConfig.label}
+                </Text>
+              </View>
+            ) : null}
+            <Text style={styles.timeRange}>{formatTimeRange(item)}</Text>
+          </View>
+
+          <View style={styles.sourceRow}>
+            <SourceLabel item={item} />
+          </View>
+
+          <View style={styles.titleRow}>
+            {item.type === 'task' ? (
+              <TaskCheckbox
+                checked={item.completed}
+                onToggle={onToggleComplete ?? (() => {})}
+              />
+            ) : null}
+            <Text
+              numberOfLines={3}
+              style={[
+                styles.expandedTitle,
+                isCompleted && styles.completedText,
+              ]}
+            >
+              {item.title}
+            </Text>
+          </View>
+
+          {item.location ? (
+            <View style={styles.metadataRow}>
+              <MaterialIcons name="location-on" size={17} color="#767C7E" />
+              <Text numberOfLines={2} style={styles.metadataText}>
+                {item.location}
+              </Text>
+            </View>
+          ) : null}
+
+          {contextText ? (
+            <Text style={styles.contextText}>{contextText}</Text>
+          ) : null}
+
+          {(item.myAssignedTasks?.length ?? 0) > 0 ? (
+            <Text style={styles.assignedTasksText}>
+              {item.myAssignedTasks?.length === 1
+                ? 'יש לך משימה אחת באירוע'
+                : `יש לך ${item.myAssignedTasks?.length} משימות באירוע`}
+            </Text>
+          ) : null}
         </Pressable>
+
+        <View style={styles.actionRow}>
+          {hasPrimaryAction ? (
+            <Pressable
+              accessible={true}
+              accessibilityLabel={hasRemoteAction ? 'הצטרפות לאירוע' : 'ניווט'}
+              accessibilityRole="button"
+              onPress={hasRemoteAction ? onOpenRemoteUrl : onNavigate}
+              style={({ pressed }) => [
+                styles.primaryAction,
+                pressed && styles.primaryActionPressed,
+              ]}
+            >
+              <MaterialIcons
+                color="#FFFFFF"
+                name={hasRemoteAction ? 'videocam' : 'near-me'}
+                size={18}
+              />
+              <Text style={styles.primaryActionText}>
+                {hasRemoteAction ? 'הצטרפות' : 'ניווט'}
+              </Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessible={true}
+            accessibilityLabel={`פרטים על ${item.title}`}
+            accessibilityRole="button"
+            onPress={onOpen}
+            style={({ pressed }) => [
+              styles.secondaryAction,
+              !hasPrimaryAction && styles.secondaryActionFull,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.secondaryActionText}>פרטים</Text>
+          </Pressable>
+        </View>
       </View>
-    </View>
+    );
+  }
+
+  // ─── COMPACT card ────────────────────────────────────────────────────────────
+  const showNavIcon = !isEnded && !isCompleted && hasNavigation;
+  const showCheckbox = item.type === 'task' && !isEnded;
+
+  const compactCardStyles = [
+    styles.compactRow,
+    isEnded && styles.endedCompactRow,
+    isOverdue && styles.overdueCompactRow,
+    isCompleted && styles.completedCompactRow,
+  ];
+
+  return (
+    <Pressable
+      accessible={true}
+      accessibilityLabel={`פתיחת ${item.title}`}
+      accessibilityRole="button"
+      onPress={onOpen}
+      style={compactCardStyles}
+    >
+      {item.time ? (
+        <Text
+          style={[
+            styles.compactTime,
+            (isCompleted || isEnded) && styles.compactTimeMuted,
+          ]}
+        >
+          {formatTimeRange(item)}
+        </Text>
+      ) : (
+        <View style={styles.compactTimePlaceholder} />
+      )}
+      <View style={styles.compactBody}>
+        {badgeConfig ? (
+          <View
+            style={[
+              styles.compactBadge,
+              { backgroundColor: badgeConfig.bg },
+            ]}
+          >
+            <Text
+              style={[
+                styles.compactBadgeText,
+                { color: badgeConfig.color },
+              ]}
+            >
+              {badgeConfig.label}
+            </Text>
+          </View>
+        ) : null}
+        <View style={styles.compactTitleRow}>
+          {showCheckbox ? (
+            <TaskCheckbox
+              checked={item.completed}
+              onToggle={onToggleComplete ?? (() => {})}
+            />
+          ) : null}
+          <Text
+            numberOfLines={2}
+            style={[
+              styles.compactTitle,
+              isEnded && styles.endedText,
+              isCompleted && styles.completedText,
+            ]}
+          >
+            {item.title}
+          </Text>
+        </View>
+        <View style={styles.compactMetaRow}>
+          <SourceLabel item={item} />
+          {item.location ? (
+            <Text numberOfLines={1} style={styles.compactLocation}>
+              · {item.location}
+            </Text>
+          ) : null}
+        </View>
+        {contextText ? (
+          <Text style={styles.compactContextText}>{contextText}</Text>
+        ) : null}
+      </View>
+      {showNavIcon ? (
+        <Pressable
+          accessible={true}
+          accessibilityLabel={`ניווט אל ${item.title}`}
+          accessibilityRole="button"
+          hitSlop={10}
+          onPress={onNavigate}
+          style={styles.compactNav}
+        >
+          <MaterialIcons color={tc.primary} name="near-me" size={18} />
+        </Pressable>
+      ) : (
+        <MaterialIcons color="#ADB3B5" name="chevron-left" size={22} />
+      )}
+    </Pressable>
   );
 };
 
-const CompactScheduleRow = ({
-  item,
-  onOpen,
-  onNavigate,
-  onToggleTask,
-}: {
-  item: HomeDailyItem;
-  onOpen: () => void;
-  onNavigate: () => void;
-  onToggleTask: () => void;
-}): React.JSX.Element => (
-  <Pressable
-    accessibilityLabel={`פתיחת ${item.title}`}
-    accessibilityRole="button"
-    accessible={true}
-    onPress={onOpen}
-    style={({ pressed }) => [styles.compactRow, pressed && styles.pressed]}
-  >
-    <Text style={styles.compactTime}>{formatTimeRange(item)}</Text>
-    <View style={styles.compactBody}>
-      <View style={styles.compactTitleRow}>
-        {item.type === 'task' ? (
-          <TaskCheckbox checked={item.completed} onToggle={onToggleTask} />
-        ) : null}
-        <Text
-          numberOfLines={2}
-          style={[styles.compactTitle, item.completed && styles.completedText]}
-        >
-          {item.title}
-        </Text>
-      </View>
-      <View style={styles.compactMetaRow}>
-        <SourceLabel item={item} />
-        {item.location ? (
-          <Text numberOfLines={1} style={styles.compactLocation}>
-            · {item.location}
-          </Text>
-        ) : null}
-      </View>
-    </View>
-    {item.location && parseGeoUri(item.locationUrl) ? (
-      <Pressable
-        accessibilityLabel={`ניווט אל ${item.title}`}
-        accessibilityRole="button"
-        accessible={true}
-        hitSlop={10}
-        onPress={onNavigate}
-        style={styles.compactNav}
-      >
-        <MaterialIcons color={tc.primary} name="near-me" size={18} />
-      </Pressable>
-    ) : (
-      <MaterialIcons color="#ADB3B5" name="chevron-left" size={22} />
-    )}
-  </Pressable>
-);
+// ─── Main component ───────────────────────────────────────────────────────────
 
 export function HomeDailyCommandCenter({
   selectedDate,
@@ -355,7 +487,9 @@ export function HomeDailyCommandCenter({
   overdueTasks,
   untimedTasks,
   undatedTaskCount,
+  undatedTasks,
   birthdays,
+  hasAnyBirthdays,
   onOpenItem,
   onOpenTask,
   onToggleTask,
@@ -365,7 +499,12 @@ export function HomeDailyCommandCenter({
   onOpenTasks,
   onOpenBirthday,
   onOpenBirthdays,
+  onAddBirthday,
 }: HomeDailyCommandCenterProps): React.JSX.Element {
+  const [undatedExpanded, setUndatedExpanded] = useState(false);
+  const [endedExpanded, setEndedExpanded] = useState(false);
+  const [completedExpanded, setCompletedExpanded] = useState(true);
+
   const today = new Date(nowMs);
   const isToday = isSameCalendarDay(selectedDate, today);
   const selectedMidnight = new Date(
@@ -381,28 +520,87 @@ export function HomeDailyCommandCenter({
   const isPast = selectedMidnight < todayMidnight;
   const isFuture = selectedMidnight > todayMidnight;
 
+  // ─── Today boundary for "בוצעו היום" ─────────────────────────────────────
+  const todayStartMs = todayMidnight;
+  const todayEndMs = todayStartMs + 86_400_000;
+  const isCompletedToday = (completedAt?: number): boolean =>
+    completedAt !== undefined &&
+    completedAt >= todayStartMs &&
+    completedAt < todayEndMs;
+
+  // ─── Invitations ─────────────────────────────────────────────────────────
   const invitations = scheduledItems.filter(isPendingInvitation);
   const attentionCount =
     (isToday ? overdueTasks.length : 0) + invitations.length;
   const invitationIds = new Set(invitations.map((item) => item.id));
-  const timelineItems = scheduledItems.filter((item) => {
+
+  // ─── Timeline items (invitations + RSVP 'no' excluded; ended events kept) ─
+  const timelineItemsAll = scheduledItems.filter((item) => {
     if (invitationIds.has(item.id)) return false;
-    if (item.rsvpStatus === 'no' || item.myPersonalRsvpStatus === 'no') {
+    if (item.rsvpStatus === 'no' || item.myPersonalRsvpStatus === 'no')
       return false;
-    }
-    // Today's command center focuses on what is still actionable. Past days
-    // retain their full history, while events that already ended today recede.
-    if (
-      isToday &&
-      item.type === 'event' &&
-      item.endAt !== undefined &&
-      item.endAt <= nowMs
-    ) {
-      return false;
-    }
     return true;
   });
-  const activeItems = isToday
+
+  // ─── Today: ended events → "מוקדם יותר" ─────────────────────────────────
+  const endedItems: HomeDailyItem[] = isToday
+    ? timelineItemsAll.filter(
+        (item) =>
+          item.type === 'event' &&
+          item.endAt !== undefined &&
+          item.endAt <= nowMs
+      )
+    : [];
+
+  // ─── Today: completed tasks → "בוצעו היום" ───────────────────────────────
+  const completedScheduledTasks: HomeDailyItem[] = isToday
+    ? timelineItemsAll.filter(
+        (item) => item.type === 'task' && item.completed
+      )
+    : [];
+
+  // Untimed + undated tasks completed today
+  const taskToItem = (task: HomeDailyTask): HomeDailyItem => ({
+    id: task.id,
+    title: task.title,
+    time: '',
+    location: '',
+    type: 'task',
+    completed: true,
+    completedAt: task.completedAt,
+    assigneeDisplays: task.assigneeDisplays,
+  });
+
+  const completedTodayItems: HomeDailyItem[] = isToday
+    ? [
+        ...completedScheduledTasks,
+        ...untimedTasks
+          .filter((t) => t.completed && isCompletedToday(t.completedAt))
+          .map(taskToItem),
+        ...undatedTasks
+          .filter((t) => t.completed && isCompletedToday(t.completedAt))
+          .map(taskToItem),
+      ]
+    : [];
+
+  // ─── Main timeline: active + upcoming + overdue (Today: minus ended + minus completed) ─
+  const timelineItems: HomeDailyItem[] = isToday
+    ? timelineItemsAll.filter((item) => {
+        // exclude ended events
+        if (
+          item.type === 'event' &&
+          item.endAt !== undefined &&
+          item.endAt <= nowMs
+        )
+          return false;
+        // exclude completed tasks (they go to "בוצעו היום")
+        if (item.type === 'task' && item.completed) return false;
+        return true;
+      })
+    : timelineItemsAll;
+
+  // ─── Active events (Today only) ───────────────────────────────────────────
+  const activeItems: HomeDailyItem[] = isToday
     ? timelineItems.filter(
         (item) =>
           item.type === 'event' &&
@@ -413,25 +611,59 @@ export function HomeDailyCommandCenter({
       )
     : [];
   const activeIds = new Set(activeItems.map((item) => item.id));
-  const nextItem =
+
+  // ─── Featured item: first upcoming, non-completed, non-overdue ───────────
+  const featuredItem =
     isPast || activeItems.length > 0
       ? null
       : (timelineItems.find(
           (item) =>
             !item.completed &&
-            (isFuture || item.startAt === undefined || item.startAt > nowMs)
+            (isFuture || item.startAt === undefined || item.startAt > nowMs) &&
+            // Defensive: never feature an event whose endAt has already passed.
+            // Normally endedItems filtering removes these, but guards against any
+            // edge case where endAt is stale or the filter ran with stale nowMs.
+            !(item.type === 'event' && item.endAt !== undefined && item.endAt <= nowMs)
         ) ?? null);
-  const primaryItem = activeItems[0] ?? nextItem;
-  const primaryId = primaryItem?.id;
-  const remainingItems = timelineItems.filter(
-    (item) => item.id !== primaryId && !activeIds.has(item.id)
-  );
-  const overlappingItems = activeItems.slice(1);
+  const featuredItemId = featuredItem?.id;
 
+  // ─── Remaining (non-active, non-featured) items ───────────────────────────
+  const remainingItems = timelineItems.filter(
+    (item) => item.id !== featuredItemId && !activeIds.has(item.id)
+  );
+
+  // ─── Temporal state helper ────────────────────────────────────────────────
+  const getTemporalState = (item: HomeDailyItem): TemporalState => {
+    if (item.type === 'task') {
+      if (item.completed) return 'completed';
+      if (item.startAt !== undefined && item.startAt <= nowMs) return 'overdue';
+      return 'upcoming';
+    }
+    if (item.endAt !== undefined && item.endAt <= nowMs) return 'ended';
+    if (
+      item.startAt !== undefined &&
+      item.endAt !== undefined &&
+      item.startAt <= nowMs &&
+      nowMs < item.endAt
+    )
+      return 'active';
+    return 'upcoming';
+  };
+
+  // ─── Misc ─────────────────────────────────────────────────────────────────
   const emptySuffix = isToday ? 'להיום' : isPast ? 'ביום הזה' : 'לתאריך הזה';
+
+  // Untimed tasks for the selected day section (incomplete only on Today)
+  const visibleUntimedTasks = isToday
+    ? untimedTasks.filter((t) => !t.completed)
+    : untimedTasks;
+
+  // Undated tasks — incomplete only (always)
+  const visibleUndatedTasks = undatedTasks.filter((t) => !t.completed);
 
   return (
     <View style={styles.root}>
+      {/* ── Attention section (overdue + invitations) ────────────────────────── */}
       {attentionCount > 0 ? (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
@@ -543,11 +775,13 @@ export function HomeDailyCommandCenter({
         </View>
       ) : null}
 
+      {/* ── Schedule section ─────────────────────────────────────────────────── */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           {isPast ? 'היום שהיה' : 'הלו״ז שלי'}
         </Text>
 
+        {/* All-day events */}
         {allDayItems.length > 0 ? (
           <View style={styles.allDayGroup}>
             {allDayItems.map((item) => (
@@ -569,76 +803,115 @@ export function HomeDailyCommandCenter({
           </View>
         ) : null}
 
-        {primaryItem && !isPast ? (
-          <>
-            <ExpandedScheduleCard
-              context={
-                activeItems.length > 0 && primaryItem.startAt
-                  ? formatElapsed(primaryItem.startAt, nowMs)
-                  : primaryItem.startAt
-                    ? formatUntilStart(primaryItem.startAt, nowMs)
-                    : null
-              }
-              item={primaryItem}
-              onNavigate={() =>
-                onNavigate(primaryItem.location, primaryItem.locationUrl)
-              }
-              onOpen={() => onOpenItem(primaryItem)}
-              onOpenRemoteUrl={() => {
-                if (primaryItem.remoteUrl)
-                  onOpenRemoteUrl(primaryItem.remoteUrl);
-              }}
-              onToggleTask={() => onToggleTask(primaryItem.id)}
-              status={
-                activeItems.length > 1
-                  ? `${activeItems.length} אירועים מתקיימים עכשיו`
-                  : activeItems.length === 1
-                    ? 'מתקיים עכשיו'
-                    : isToday
-                      ? 'הבא בתור'
-                      : 'הראשון בלו״ז'
-              }
-            />
-
-            {overlappingItems.length > 0 ? (
-              <View style={styles.overlapGroup}>
-                <Text style={styles.overlapTitle}>מתקיימים במקביל</Text>
-                {overlappingItems.map((item) => (
-                  <CompactScheduleRow
+        {/* ── Today: "מוקדם יותר" (ended events) ─────────────────────────────── */}
+        {isToday && endedItems.length > 0 ? (
+          <View style={styles.collapsibleSection}>
+            <Pressable
+              accessible={true}
+              accessibilityLabel={`מוקדם יותר, ${endedItems.length} אירועים, ${endedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
+              accessibilityRole="button"
+              onPress={() => setEndedExpanded((prev) => !prev)}
+              style={styles.collapsibleHeader}
+            >
+              <Text style={styles.collapsibleHeaderText}>
+                מוקדם יותר · {endedItems.length}
+              </Text>
+              <MaterialIcons
+                color={tc.textSecondary}
+                name={endedExpanded ? 'expand-less' : 'expand-more'}
+                size={22}
+              />
+            </Pressable>
+            {endedExpanded ? (
+              <View style={styles.collapsibleContent}>
+                {endedItems.map((item) => (
+                  <UnifiedTimelineCard
+                    displayMode="compact"
                     item={item}
                     key={item.id}
-                    onNavigate={() =>
-                      onNavigate(item.location, item.locationUrl)
-                    }
+                    nowMs={nowMs}
+                    onNavigate={() => onNavigate(item.location, item.locationUrl)}
                     onOpen={() => onOpenItem(item)}
-                    onToggleTask={() => onToggleTask(item.id)}
+                    onOpenRemoteUrl={() => {
+                      if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
+                    }}
+                    onToggleComplete={() => onToggleTask(item.id)}
+                    temporalState="ended"
                   />
                 ))}
               </View>
             ) : null}
-          </>
-        ) : null}
-
-        {remainingItems.length > 0 ? (
-          <View style={styles.compactGroup}>
-            {primaryItem && !isPast ? (
-              <Text style={styles.compactGroupTitle}>אחר כך</Text>
-            ) : null}
-            {remainingItems.map((item) => (
-              <CompactScheduleRow
-                item={item}
-                key={item.id}
-                onNavigate={() => onNavigate(item.location, item.locationUrl)}
-                onOpen={() => onOpenItem(item)}
-                onToggleTask={() => onToggleTask(item.id)}
-              />
-            ))}
           </View>
         ) : null}
 
+        {/* ── Active events — all featured ──────────────────────────────────── */}
+        {activeItems.map((item) => (
+          <UnifiedTimelineCard
+            displayMode="featured"
+            item={item}
+            key={item.id}
+            nowMs={nowMs}
+            onNavigate={() => onNavigate(item.location, item.locationUrl)}
+            onOpen={() => onOpenItem(item)}
+            onOpenRemoteUrl={() => {
+              if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
+            }}
+            onToggleComplete={() => onToggleTask(item.id)}
+            temporalState="active"
+          />
+        ))}
+
+        {/* ── Featured (first upcoming) item ───────────────────────────────── */}
+        {featuredItem && !isPast ? (
+          <UnifiedTimelineCard
+            displayMode="featured"
+            featuredBadgeLabel={isToday ? 'הבא בתור' : 'הראשון בלו״ז'}
+            item={featuredItem}
+            nowMs={nowMs}
+            onNavigate={() =>
+              onNavigate(featuredItem.location, featuredItem.locationUrl)
+            }
+            onOpen={() => onOpenItem(featuredItem)}
+            onOpenRemoteUrl={() => {
+              if (featuredItem.remoteUrl) onOpenRemoteUrl(featuredItem.remoteUrl);
+            }}
+            onToggleComplete={() => onToggleTask(featuredItem.id)}
+            temporalState={getTemporalState(featuredItem)}
+          />
+        ) : null}
+
+        {/* ── Remaining items (compact) ─────────────────────────────────────── */}
+        {remainingItems.length > 0 ? (
+          <View style={styles.compactGroup}>
+            {remainingItems.map((item) => {
+              const tState = getTemporalState(item);
+              return (
+                <UnifiedTimelineCard
+                  displayMode="compact"
+                  item={item}
+                  key={item.id}
+                  nowMs={nowMs}
+                  onNavigate={() =>
+                    onNavigate(item.location, item.locationUrl)
+                  }
+                  onOpen={() => onOpenItem(item)}
+                  onOpenRemoteUrl={() => {
+                    if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
+                  }}
+                  onToggleComplete={() => onToggleTask(item.id)}
+                  temporalState={tState}
+                />
+              );
+            })}
+          </View>
+        ) : null}
+
+        {/* Empty state */}
         {allDayItems.length === 0 &&
-        !primaryItem &&
-        remainingItems.length === 0 ? (
+        activeItems.length === 0 &&
+        !featuredItem &&
+        remainingItems.length === 0 &&
+        endedItems.length === 0 ? (
           <View style={styles.calmEmpty}>
             <MaterialIcons
               color={tc.primary}
@@ -652,7 +925,8 @@ export function HomeDailyCommandCenter({
         ) : null}
       </View>
 
-      {untimedTasks.length > 0 ? (
+      {/* ── Untimed tasks for selected day ───────────────────────────────────── */}
+      {visibleUntimedTasks.length > 0 ? (
         <View style={styles.section}>
           <View style={styles.sectionHeadingRow}>
             <Text style={styles.sectionTitle}>
@@ -668,7 +942,7 @@ export function HomeDailyCommandCenter({
             </Pressable>
           </View>
           <View style={styles.taskList}>
-            {untimedTasks.map((task, index) => (
+            {visibleUntimedTasks.map((task, index) => (
               <Pressable
                 accessibilityLabel={`פתיחת משימה: ${task.title}`}
                 accessibilityRole="button"
@@ -697,13 +971,51 @@ export function HomeDailyCommandCenter({
         </View>
       ) : null}
 
+      {/* ── Today: "בוצעו היום" (completed tasks) ────────────────────────────── */}
+      {isToday && completedTodayItems.length > 0 ? (
+        <View style={styles.section}>
+          <Pressable
+            accessible={true}
+            accessibilityLabel={`בוצעו היום, ${completedTodayItems.length} משימות, ${completedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
+            accessibilityRole="button"
+            onPress={() => setCompletedExpanded((prev) => !prev)}
+            style={styles.collapsibleHeaderCard}
+          >
+            <Text style={styles.collapsibleHeaderText}>
+              בוצעו היום · {completedTodayItems.length}
+            </Text>
+            <MaterialIcons
+              color={tc.textSecondary}
+              name={completedExpanded ? 'expand-less' : 'expand-more'}
+              size={22}
+            />
+          </Pressable>
+          {completedExpanded ? (
+            <View style={styles.collapsibleContent}>
+              {completedTodayItems.map((item) => (
+                <UnifiedTimelineCard
+                  displayMode="compact"
+                  item={item}
+                  key={item.id}
+                  nowMs={nowMs}
+                  onOpen={() => onOpenItem(item)}
+                  onToggleComplete={() => onToggleTask(item.id)}
+                  temporalState="completed"
+                />
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {/* ── Today: undated tasks (incomplete only) ────────────────────────────── */}
       {isToday && undatedTaskCount > 0 ? (
         <View style={styles.section}>
           <Pressable
-            accessibilityLabel={`${undatedTaskCount} משימות פתוחות ללא תאריך`}
+            accessibilityLabel={`${undatedTaskCount} משימות פתוחות ללא תאריך, ${undatedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
             accessibilityRole="button"
             accessible={true}
-            onPress={onOpenTasks}
+            onPress={() => setUndatedExpanded((prev) => !prev)}
             style={styles.undatedRow}
           >
             <Text style={styles.undatedText}>
@@ -713,25 +1025,55 @@ export function HomeDailyCommandCenter({
             </Text>
             <MaterialIcons
               color={tc.primary}
-              name="expand-more"
+              name={undatedExpanded ? 'expand-less' : 'expand-more'}
               size={23}
             />
           </Pressable>
+          {undatedExpanded ? (
+            <View style={styles.taskList}>
+              {visibleUndatedTasks.map((task, index) => (
+                <Pressable
+                  accessibilityLabel={`פתיחת משימה: ${task.title}`}
+                  accessibilityRole="button"
+                  accessible={true}
+                  key={task.id}
+                  onPress={() => onOpenTask(task.id)}
+                  style={[styles.taskRow, index > 0 && styles.dividedRow]}
+                >
+                  <TaskCheckbox
+                    checked={task.completed}
+                    onToggle={() => onToggleTask(task.id)}
+                  />
+                  <Text
+                    numberOfLines={2}
+                    style={[
+                      styles.taskTitle,
+                      task.completed && styles.completedText,
+                    ]}
+                  >
+                    {task.title}
+                  </Text>
+                  <MaterialIcons color="#ADB3B5" name="chevron-left" size={21} />
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
         </View>
       ) : null}
 
+      {/* ── Birthdays ─────────────────────────────────────────────────────────── */}
       {!isPast ? (
         <View style={styles.section}>
           <View style={styles.sectionHeadingRow}>
             <Text style={styles.sectionTitle}>ימי הולדת קרובים</Text>
-            {birthdays.length > 0 ? (
+            {hasAnyBirthdays ? (
               <Pressable
                 accessibilityLabel="פתיחת כל ימי ההולדת"
                 accessibilityRole="button"
                 accessible={true}
                 onPress={onOpenBirthdays}
               >
-                <Text style={styles.sectionLink}>הכל</Text>
+                <Text style={styles.sectionLink}>הצג הכל</Text>
               </Pressable>
             ) : null}
           </View>
@@ -765,10 +1107,30 @@ export function HomeDailyCommandCenter({
                 </Pressable>
               ))}
             </ScrollView>
-          ) : (
+          ) : hasAnyBirthdays ? (
             <Text style={styles.noBirthdays}>
               אין ימי הולדת ב־30 הימים הקרובים
             </Text>
+          ) : (
+            <View style={styles.birthdayEmptyState}>
+              <Text style={styles.birthdayEmptyText}>
+                עדיין לא הוספת ימי הולדת
+              </Text>
+              <Pressable
+                accessibilityLabel="הוספת יום הולדת ראשון"
+                accessibilityRole="button"
+                accessible={true}
+                onPress={onAddBirthday}
+                style={({ pressed }) => [
+                  styles.birthdayAddButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.birthdayAddButtonText}>
+                  + הוספת יום הולדת ראשון
+                </Text>
+              </Pressable>
+            </View>
           )}
         </View>
       ) : null}
@@ -895,6 +1257,7 @@ const styles = StyleSheet.create({
   rsvpButtonTextPrimary: {
     color: tc.textOnPrimary,
   },
+  // ── Expanded (featured) card ───────────────────────────────────────────────
   expandedCard: {
     overflow: 'hidden',
     borderRadius: 26,
@@ -906,6 +1269,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 22,
     elevation: 3,
+  },
+  overdueCardBorder: {
+    borderColor: '#F5DFA0',
   },
   expandedContent: {
     paddingHorizontal: 18,
@@ -1035,35 +1401,40 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-  overlapGroup: {
-    gap: 8,
-    marginTop: 4,
-  },
-  overlapTitle: {
-    color: '#5A6062',
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: getTextAlign(),
-  },
+  // ── Compact card ───────────────────────────────────────────────────────────
   compactGroup: {
     gap: 8,
   },
-  compactGroupTitle: {
-    color: '#5A6062',
-    fontSize: 13,
-    fontWeight: '700',
-    marginTop: 2,
-    textAlign: getTextAlign(),
-  },
   compactRow: {
-    minHeight: 74,
+    width: '100%',
+    alignSelf: 'stretch',
+    minHeight: 82,
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
-    gap: 11,
+    gap: 12,
     borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    backgroundColor: '#F1F4F5',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E3E8EA',
+    shadowColor: '#22343C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  overdueCompactRow: {
+    backgroundColor: '#FFF8EC',
+    borderColor: '#F5DFA0',
+  },
+  completedCompactRow: {
+    backgroundColor: '#F8F9FA',
+    borderColor: '#E5E7EB',
+  },
+  endedCompactRow: {
+    backgroundColor: '#F8FAFB',
+    borderColor: '#E5E7EB',
   },
   compactTime: {
     width: 82,
@@ -1073,10 +1444,28 @@ const styles = StyleSheet.create({
     textAlign: getTextAlign(),
     writingDirection: 'ltr',
   },
+  compactTimeMuted: {
+    color: '#ADB3B5',
+    fontWeight: '600',
+  },
+  compactTimePlaceholder: {
+    width: 82,
+  },
   compactBody: {
     flex: 1,
     minWidth: 0,
-    gap: 4,
+    gap: 3,
+  },
+  compactBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    marginBottom: 2,
+  },
+  compactBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
   },
   compactTitleRow: {
     flexDirection: rtl.flexDirection,
@@ -1102,12 +1491,51 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: getTextAlign(),
   },
+  compactContextText: {
+    color: '#767C7E',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+    textAlign: getTextAlign(),
+  },
   compactNav: {
     width: 44,
     height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // ── Collapsible sections ───────────────────────────────────────────────────
+  collapsibleSection: {
+    gap: 8,
+  },
+  collapsibleHeader: {
+    minHeight: 48,
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+  },
+  collapsibleHeaderCard: {
+    minHeight: 52,
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E5E9EB',
+    paddingHorizontal: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  collapsibleHeaderText: {
+    color: '#334E6F',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: getTextAlign(),
+  },
+  collapsibleContent: {
+    gap: 8,
+  },
+  // ── All-day events ─────────────────────────────────────────────────────────
   allDayGroup: {
     gap: 7,
   },
@@ -1146,6 +1574,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  // ── Task list ──────────────────────────────────────────────────────────────
   taskList: {
     overflow: 'hidden',
     borderRadius: 20,
@@ -1173,6 +1602,10 @@ const styles = StyleSheet.create({
     color: '#92999C',
     textDecorationLine: 'line-through',
   },
+  endedText: {
+    color: '#92999C',
+  },
+  // ── Undated tasks row ──────────────────────────────────────────────────────
   undatedRow: {
     minHeight: 58,
     flexDirection: rtl.flexDirection,
@@ -1189,6 +1622,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
+  // ── Birthdays ──────────────────────────────────────────────────────────────
   birthdayRow: {
     flexDirection: rtl.flexDirection,
     gap: 10,
@@ -1242,6 +1676,29 @@ const styles = StyleSheet.create({
     color: '#767C7E',
     fontSize: 13,
     textAlign: getTextAlign(),
+  },
+  birthdayEmptyState: {
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  birthdayEmptyText: {
+    color: '#767C7E',
+    fontSize: 13,
+    textAlign: getTextAlign(),
+  },
+  birthdayAddButton: {
+    minHeight: 44,
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    backgroundColor: tc.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  birthdayAddButtonText: {
+    color: tc.textOnPrimary,
+    fontSize: 14,
+    fontWeight: '700',
   },
   pressed: {
     opacity: 0.72,

@@ -172,12 +172,16 @@ type Item = {
   pendingPersonalInvite?: boolean;
   /** RSVP status of the current user for personal invited events (undefined = not an invite or creator) */
   myPersonalRsvpStatus?: 'yes' | 'maybe' | 'no' | 'none';
+  /** Timestamp (ms) when the task was completed — used for "בוצעו היום" grouping. */
+  completedAt?: number;
 };
 
 type UndatedTask = {
   id: string;
   title: string;
   completed: boolean;
+  /** Timestamp (ms) when the task was completed — used for "בוצעו היום" grouping. */
+  completedAt?: number;
   /** Resolved initials for the primary assignee (if any and not self). */
   assigneeInitials?: string;
   /** Background color for the assignee circle. */
@@ -571,6 +575,10 @@ export default function HomeScreen() {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  // true while the user has not explicitly navigated away from Today.
+  // Set to false whenever the user taps Yesterday / Tomorrow / a calendar cell.
+  // Set back to true when the user taps Today.
+  const pinnedToToday = useRef(true);
   const [calendarMode, setCalendarMode] = useState<'segmented' | 'month'>(
     'segmented'
   );
@@ -680,6 +688,36 @@ export default function HomeScreen() {
     d.setHours(0, 0, 0, 0);
     return d;
   }, [today]);
+
+  // Tracks the calendar-day midnight we last saw so the rollover effect can
+  // detect when the real date changes without firing every minute.
+  const lastMidnightRef = useRef<number>(
+    new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+  );
+
+  // Midnight rollover: fires every minute (whenever `today` changes), but only
+  // advances selectedDate when the calendar day has actually changed AND the
+  // user was pinned to Today. Explicit Yesterday / Tomorrow / calendar-cell
+  // selections set pinnedToToday to false and are left untouched.
+  useEffect(() => {
+    const currentMidnight = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    ).getTime();
+    if (currentMidnight !== lastMidnightRef.current) {
+      lastMidnightRef.current = currentMidnight;
+      if (pinnedToToday.current) {
+        setSelectedDate(new Date());
+      }
+    }
+  }, [today]);
+
+  // Wrapper that keeps pinnedToToday in sync with every explicit date selection.
+  const selectDate = (date: Date): void => {
+    pinnedToToday.current = isSameDay(date, today);
+    setSelectedDate(date);
+  };
 
   const selectedDateLabel = useMemo(
     () =>
@@ -833,6 +871,7 @@ export default function HomeScreen() {
             assigneeDisplays:
               assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
             completed: t.completed,
+            completedAt: t.completedAt ?? undefined,
             taskSource: 'personal_task' as const,
             subtasks: (t.subtasks ?? []).map((s) => ({
               id: s.id,
@@ -944,6 +983,7 @@ export default function HomeScreen() {
           id: t._id,
           title: t.title,
           completed: t.completed,
+          completedAt: t.completedAt ?? undefined,
           assigneeInitials: assigneeDisplays[0]?.initials,
           assigneeColor: assigneeDisplays[0]?.color,
           assigneeDisplays:
@@ -1495,6 +1535,7 @@ export default function HomeScreen() {
             id: t._id,
             title: t.title,
             completed: t.completed,
+            completedAt: t.completedAt ?? undefined,
             assigneeInitials: assigneeDisplays[0]?.initials,
             assigneeColor: assigneeDisplays[0]?.color,
             assigneeDisplays:
@@ -1815,7 +1856,7 @@ export default function HomeScreen() {
                 isSel && stylesRtl.monthDayCellSelected,
                 !isSel && isTod && stylesRtl.monthDayCellToday,
               ]}
-              onPress={() => setSelectedDate(day)}
+              onPress={() => selectDate(day)}
             >
               <Text
                 style={[
@@ -1961,7 +2002,7 @@ export default function HomeScreen() {
               accessibilityLabel="אתמול"
               accessibilityRole="button"
               accessibilityState={{ selected: isSelectedYesterday }}
-              onPress={() => setSelectedDate(yesterday)}
+              onPress={() => selectDate(yesterday)}
               style={[
                 stylesRtl.dayPillTab,
                 isSelectedYesterday ? stylesRtl.dayPillTabActive : null,
@@ -1981,7 +2022,7 @@ export default function HomeScreen() {
               accessibilityLabel="היום"
               accessibilityRole="button"
               accessibilityState={{ selected: isSelectedToday }}
-              onPress={() => setSelectedDate(today)}
+              onPress={() => selectDate(today)}
               style={[
                 stylesRtl.dayPillTab,
                 isSelectedToday ? stylesRtl.dayPillTabActive : null,
@@ -2001,7 +2042,7 @@ export default function HomeScreen() {
               accessibilityLabel="מחר"
               accessibilityRole="button"
               accessibilityState={{ selected: isSelectedTomorrow }}
-              onPress={() => setSelectedDate(tomorrow)}
+              onPress={() => selectDate(tomorrow)}
               style={[
                 stylesRtl.dayPillTab,
                 isSelectedTomorrow ? stylesRtl.dayPillTabActive : null,
@@ -2069,7 +2110,9 @@ export default function HomeScreen() {
           <HomeDailyCommandCenter
             allDayItems={allDayTimelineItems}
             birthdays={upcomingBirthdays}
+            hasAnyBirthdays={hasBirthdays}
             nowMs={nowMs}
+            onAddBirthday={openBirthdayAddChoice}
             onNavigate={handleOpenNavPicker}
             onOpenBirthday={openBirthdayCard}
             onOpenBirthdays={() => router.push('/birthdays')}
@@ -2091,6 +2134,7 @@ export default function HomeScreen() {
             undatedTaskCount={
               undatedTasks.filter((task) => !task.completed).length
             }
+            undatedTasks={undatedTasks}
             untimedTasks={selectedDayUntimedTasks}
           />
         )}
@@ -2387,7 +2431,7 @@ export default function HomeScreen() {
               </Text>
               <Pressable
                 onPress={() => {
-                  setSelectedDate(tomorrow);
+                  selectDate(tomorrow);
                 }}
                 accessible={true}
                 accessibilityRole="button"
