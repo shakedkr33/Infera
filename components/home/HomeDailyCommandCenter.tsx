@@ -16,6 +16,7 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
+import { APP_IS_RTL, getTextAlign, rtl } from '@/lib/rtl';
 
 export type HomeDailyItem = {
   id: string;
@@ -767,7 +768,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   sectionHeadingRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
   },
@@ -775,7 +776,7 @@ const styles = StyleSheet.create({
     color: '#2D3335',
     fontSize: 17,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: getTextAlign(),
     writingDirection: 'rtl',
   },
   sectionLink: {
@@ -792,7 +793,7 @@ const styles = StyleSheet.create({
   },
   attentionRow: {
     minHeight: 68,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 14,
@@ -826,7 +827,7 @@ const styles = StyleSheet.create({
     color: '#2D3335',
     fontSize: 15,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: getTextAlign(),
     writingDirection: 'rtl',
   },
   overdueLabel: {
@@ -834,7 +835,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     marginTop: 2,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   invitationBlock: {
     paddingHorizontal: 14,
@@ -842,7 +843,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   invitationHeader: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 12,
   },
@@ -850,11 +851,11 @@ const styles = StyleSheet.create({
     color: '#5A6062',
     fontSize: 13,
     marginTop: 2,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
     writingDirection: 'rtl',
   },
   rsvpRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 8,
   },
   rsvpButton: {
@@ -894,13 +895,13 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
   },
   expandedTopRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
   },
   statusPill: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
     borderRadius: 999,
@@ -935,7 +936,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   titleRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     marginTop: 8,
@@ -946,11 +947,11 @@ const styles = StyleSheet.create({
     fontSize: 21,
     fontWeight: '800',
     lineHeight: 28,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
     writingDirection: 'rtl',
   },
   metadataRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'flex-start',
     gap: 5,
     marginTop: 7,
@@ -960,7 +961,7 @@ const styles = StyleSheet.create({
     color: '#5A6062',
     fontSize: 13,
     lineHeight: 19,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
     writingDirection: 'rtl',
   },
   contextText: {
@@ -968,17 +969,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     marginTop: 12,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   assignedTasksText: {
     color: colors.primaryDark,
     fontSize: 12,
     fontWeight: '600',
     marginTop: 7,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   actionRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 10,
     paddingHorizontal: 18,
     paddingBottom: 18,
@@ -986,7 +987,7 @@ const styles = StyleSheet.create({
   primaryAction: {
     minHeight: 48,
     flex: 1,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
@@ -1027,7 +1028,7 @@ const styles = StyleSheet.create({
     color: '#5A6062',
     fontSize: 12,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   compactGroup: {
     gap: 8,
@@ -1037,11 +1038,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     marginTop: 2,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   compactRow: {
     minHeight: 74,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 11,
     borderRadius: 20,
@@ -1054,7 +1055,7 @@ const styles = StyleSheet.create({
     color: '#44525A',
     fontSize: 13,
     fontWeight: '800',
-    textAlign: 'right',
+    textAlign: getTextAlign(),
     writingDirection: 'ltr',
   },
   compactBody: {
@@ -1063,7 +1064,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   compactTitleRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 8,
   },
@@ -1072,11 +1073,11 @@ const styles = StyleSheet.create({
     color: '#252A2C',
     fontSize: 15,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: getTextAlign(),
     writingDirection: 'rtl',
   },
   compactMetaRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 3,
   },
@@ -1084,7 +1085,7 @@ const styles = StyleSheet.create({
     flex: 1,
     color: '#767C7E',
     fontSize: 11,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   compactNav: {
     width: 44,
@@ -1097,7 +1098,7 @@ const styles = StyleSheet.create({
   },
   allDayRow: {
     minHeight: 54,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     borderRadius: 17,
@@ -1114,11 +1115,11 @@ const styles = StyleSheet.create({
     color: '#252A2C',
     fontSize: 14,
     fontWeight: '700',
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   calmEmpty: {
     minHeight: 62,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
@@ -1139,7 +1140,7 @@ const styles = StyleSheet.create({
   },
   taskRow: {
     minHeight: 60,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 11,
     paddingHorizontal: 14,
@@ -1150,7 +1151,7 @@ const styles = StyleSheet.create({
     color: '#252A2C',
     fontSize: 14,
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: getTextAlign(),
     writingDirection: 'rtl',
   },
   completedText: {
@@ -1159,7 +1160,7 @@ const styles = StyleSheet.create({
   },
   undatedRow: {
     minHeight: 58,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     borderRadius: 20,
@@ -1174,14 +1175,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   birthdayRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     gap: 10,
     paddingLeft: 4,
   },
   birthdayCard: {
     width: 154,
     minHeight: 66,
-    flexDirection: 'row-reverse',
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 10,
     borderRadius: 20,
@@ -1213,19 +1214,19 @@ const styles = StyleSheet.create({
     color: '#252A2C',
     fontSize: 14,
     fontWeight: '800',
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   birthdayCountdown: {
     color: colors.primaryDark,
     fontSize: 10,
     fontWeight: '700',
     marginTop: 2,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   noBirthdays: {
     color: '#767C7E',
     fontSize: 13,
-    textAlign: 'right',
+    textAlign: getTextAlign(),
   },
   pressed: {
     opacity: 0.72,
