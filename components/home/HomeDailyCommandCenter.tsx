@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
-import { colors } from '@/constants/theme';
+import { colors as tc } from '@/theme/colors';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
@@ -178,6 +178,7 @@ const ExpandedScheduleCard = ({
     item.location.trim().length > 0 && parseGeoUri(item.locationUrl) !== null;
   const hasRemoteAction = Boolean(item.remoteUrl);
   const hasPrimaryAction = hasNavigation || hasRemoteAction;
+  const isNow = status.includes('עכשיו');
 
   return (
     <View style={styles.expandedCard}>
@@ -192,9 +193,26 @@ const ExpandedScheduleCard = ({
         ]}
       >
         <View style={styles.expandedTopRow}>
-          <View style={styles.statusPill}>
-            <View style={styles.statusDot} />
-            <Text style={styles.statusText}>{status}</Text>
+          <View
+            style={[
+              styles.statusPill,
+              { backgroundColor: isNow ? tc.primaryLight : tc.accentLight },
+            ]}
+          >
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: isNow ? tc.primary : tc.accent },
+              ]}
+            />
+            <Text
+              style={[
+                styles.statusText,
+                { color: isNow ? tc.primary : tc.accent },
+              ]}
+            >
+              {status}
+            </Text>
           </View>
           <Text style={styles.timeRange}>{formatTimeRange(item)}</Text>
         </View>
@@ -321,7 +339,7 @@ const CompactScheduleRow = ({
         onPress={onNavigate}
         style={styles.compactNav}
       >
-        <MaterialIcons color={colors.primaryDark} name="near-me" size={18} />
+        <MaterialIcons color={tc.primary} name="near-me" size={18} />
       </Pressable>
     ) : (
       <MaterialIcons color="#ADB3B5" name="chevron-left" size={22} />
@@ -474,7 +492,7 @@ export function HomeDailyCommandCenter({
                 >
                   <View style={styles.inviteIcon}>
                     <MaterialIcons
-                      color={colors.primaryDark}
+                      color={tc.primary}
                       name="mail-outline"
                       size={20}
                     />
@@ -623,7 +641,7 @@ export function HomeDailyCommandCenter({
         remainingItems.length === 0 ? (
           <View style={styles.calmEmpty}>
             <MaterialIcons
-              color={colors.primaryDark}
+              color={tc.primary}
               name="event-available"
               size={22}
             />
@@ -694,7 +712,7 @@ export function HomeDailyCommandCenter({
                 : `${undatedTaskCount} משימות פתוחות ללא תאריך`}
             </Text>
             <MaterialIcons
-              color={colors.primaryDark}
+              color={tc.primary}
               name="expand-more"
               size={23}
             />
@@ -780,7 +798,7 @@ const styles = StyleSheet.create({
     writingDirection: 'rtl',
   },
   sectionLink: {
-    color: colors.primaryDark,
+    color: tc.primary,
     fontSize: 13,
     fontWeight: '700',
   },
@@ -824,14 +842,14 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   attentionTitle: {
-    color: '#2D3335',
+    color: tc.textPrimary,
     fontSize: 15,
     fontWeight: '700',
     textAlign: getTextAlign(),
     writingDirection: 'rtl',
   },
   overdueLabel: {
-    color: '#A75B20',
+    color: tc.warning,
     fontSize: 12,
     fontWeight: '600',
     marginTop: 2,
@@ -864,18 +882,18 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#E5E9EB',
+    backgroundColor: tc.warmGray,
   },
   rsvpButtonPrimary: {
-    backgroundColor: colors.primaryDark,
+    backgroundColor: tc.primary,
   },
   rsvpButtonText: {
-    color: '#5A6062',
+    color: tc.textSecondary,
     fontSize: 14,
     fontWeight: '700',
   },
   rsvpButtonTextPrimary: {
-    color: '#FFFFFF',
+    color: tc.textOnPrimary,
   },
   expandedCard: {
     overflow: 'hidden',
@@ -907,16 +925,13 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    backgroundColor: '#FFF0EF',
   },
   statusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#9A302F',
   },
   statusText: {
-    color: '#7E2525',
     fontSize: 11,
     fontWeight: '800',
   },
@@ -931,7 +946,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   sourceLabel: {
-    color: colors.primaryDark,
+    color: tc.accent,
     fontSize: 11,
     fontWeight: '700',
   },
@@ -972,7 +987,7 @@ const styles = StyleSheet.create({
     textAlign: getTextAlign(),
   },
   assignedTasksText: {
-    color: colors.primaryDark,
+    color: tc.primary,
     fontSize: 12,
     fontWeight: '600',
     marginTop: 7,
@@ -992,10 +1007,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 7,
     borderRadius: 24,
-    backgroundColor: colors.primaryDark,
+    backgroundColor: tc.primary,
   },
   primaryActionPressed: {
-    backgroundColor: colors.primaryPressedDark,
+    backgroundColor: '#00597D',
   },
   primaryActionText: {
     color: '#FFFFFF',
@@ -1016,7 +1031,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   secondaryActionText: {
-    color: colors.primaryDark,
+    color: tc.primary,
     fontSize: 14,
     fontWeight: '800',
   },
@@ -1106,7 +1121,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F4F5',
   },
   allDayLabel: {
-    color: colors.primaryDark,
+    color: tc.primary,
     fontSize: 11,
     fontWeight: '800',
   },
@@ -1217,7 +1232,7 @@ const styles = StyleSheet.create({
     textAlign: getTextAlign(),
   },
   birthdayCountdown: {
-    color: colors.primaryDark,
+    color: tc.primary,
     fontSize: 10,
     fontWeight: '700',
     marginTop: 2,
