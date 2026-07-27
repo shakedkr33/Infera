@@ -693,6 +693,7 @@ export default function HomeScreen() {
   const isSelectedToday = isSameDay(selectedDate, today);
   const isSelectedTomorrow = isSameDay(selectedDate, tomorrow);
   const isSelectedYesterday = isSameDay(selectedDate, yesterday);
+  const isCustomDate = !isSelectedToday && !isSelectedYesterday && !isSelectedTomorrow;
   const emptyDayCopy = getEmptyStateCopy(selectedDate);
   const year = today.getFullYear();
   const month = today.getMonth();
