@@ -23,6 +23,7 @@ import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import {
   HomeDailyCommandCenter,
   type HomeDailyItem,
+  type HomeDailyTask,
 } from '@/components/home/HomeDailyCommandCenter';
 import type { AssignedEventTask } from '@/components/InlineEventTasksSection';
 import { InlineEventTasksSection } from '@/components/InlineEventTasksSection';
@@ -104,10 +105,7 @@ function getEmptyStateCopy(selectedDate: Date): {
 function isEventDerivedImportantItemTask(task: {
   sourceType?: string;
 }): boolean {
-  return (
-    task.sourceType === 'community_event_important_item' ||
-    task.sourceType === 'community_event_important_items_bundle'
-  );
+  return task.sourceType === 'community_event_important_item';
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -897,7 +895,7 @@ export default function HomeScreen() {
 
   // ── Overdue incomplete tasks — due before today, not yet completed ─────────
   const overdueTasks: OverdueTask[] = useMemo(() => {
-    const startOfToday = new Date();
+    const startOfToday = new Date(nowMs);
     startOfToday.setHours(0, 0, 0, 0);
     const startOfTodayMs = startOfToday.getTime();
     return (convexTasks ?? [])
@@ -947,7 +945,7 @@ export default function HomeScreen() {
           })),
         };
       });
-  }, [convexTasks, memberMaps, currentUser?._id]);
+  }, [convexTasks, nowMs, memberMaps, currentUser?._id]);
 
   // ── Untimed personal tasks for the selected day ───────────────────────────
   // Tasks with hasTime===true go into the timeline via todayTasks.
@@ -1562,6 +1560,91 @@ export default function HomeScreen() {
     [convexUndatedTasks, memberMaps, currentUser?._id]
   );
 
+  // ── All tasks completed today — single authoritative source for "בוצעו היום" ─
+  // Covers timed, dated-untimed, overdue, and undated tasks. Day boundaries are
+  // derived from nowMs so this memo recomputes on the existing clock rollover,
+  // not from an independent new Date() call.
+  const completedTodayTasksAllSources: HomeDailyTask[] = useMemo(() => {
+    const startOfToday = new Date(nowMs);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const startOfTomorrow = new Date(startOfToday);
+    startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+    startOfTomorrow.setHours(0, 0, 0, 0);
+
+    const todayStartMs = startOfToday.getTime();
+    const todayEndMs = startOfTomorrow.getTime();
+
+    const currentUserId = currentUser?._id as string | undefined;
+
+    const isCompletedToday = (t: {
+      completedAt?: number | null;
+    }): boolean =>
+      t.completedAt != null &&
+      t.completedAt >= todayStartMs &&
+      t.completedAt < todayEndMs;
+
+    const fromDated: HomeDailyTask[] = (convexTasks ?? [])
+      .filter(
+        (t) =>
+          t.completed &&
+          isCompletedToday(t) &&
+          !isEventDerivedImportantItemTask(t)
+      )
+      .map((t) => {
+        const assigneeDisplays = resolveAllNonSelfAssignees(
+          t,
+          currentUserId,
+          memberMaps.byUserId,
+          memberMaps.byMemberId,
+          memberMaps.selfEntityId
+        );
+        return {
+          id: t._id,
+          title: t.title,
+          completed: true as const,
+          completedAt: t.completedAt ?? undefined,
+          dueDate: t.dueDate ?? undefined,
+          hasTime: t.hasTime ?? undefined,
+          dueAt: t.dueAt ?? undefined,
+          assigneeDisplays:
+            assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
+        };
+      });
+
+    const fromUndated: HomeDailyTask[] = (convexUndatedTasks ?? [])
+      .filter(
+        (t) =>
+          t.completed &&
+          isCompletedToday(t) &&
+          !isEventDerivedImportantItemTask(t)
+      )
+      .map((t) => {
+        const assigneeDisplays = resolveAllNonSelfAssignees(
+          t,
+          currentUserId,
+          memberMaps.byUserId,
+          memberMaps.byMemberId,
+          memberMaps.selfEntityId
+        );
+        return {
+          id: t._id,
+          title: t.title,
+          completed: true as const,
+          completedAt: t.completedAt ?? undefined,
+          assigneeDisplays:
+            assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
+        };
+      });
+
+    const seen = new Set<string>();
+    return [...fromDated, ...fromUndated].filter((t) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return true;
+    });
+  }, [convexTasks, convexUndatedTasks, nowMs, memberMaps, currentUser?._id]);
+
   const toggleUndatedTask = async (id: string) => {
     try {
       await toggleCompletedMutation({ id: id as Id<'tasks'> });
@@ -2110,6 +2193,7 @@ export default function HomeScreen() {
           <HomeDailyCommandCenter
             allDayItems={allDayTimelineItems}
             birthdays={upcomingBirthdays}
+            completedTodayTasksAllSources={completedTodayTasksAllSources}
             hasAnyBirthdays={hasBirthdays}
             nowMs={nowMs}
             onAddBirthday={openBirthdayAddChoice}
@@ -4284,7 +4368,7 @@ const styles = StyleSheet.create({
     flexDirection: rtl.flexDirection,
     alignItems: 'stretch',
     backgroundColor: tc.warmGray,
-    borderRadius: 16,
+    borderRadius: 26,
     padding: 4,
     minHeight: 48,
   },
@@ -4293,7 +4377,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
+    borderRadius: 22,
     backgroundColor: 'transparent',
   },
   dayPillTabActive: {
