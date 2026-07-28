@@ -2452,6 +2452,7 @@ export const addEventImportantItemsToMyTasks = mutation({
       assignedTo: userId,
       communityId: event.communityId,
       dueDate,
+      ...(dueDate !== undefined && { hasTime: true }),
       isAiGenerated: false,
       createdBy: userId,
       createdAt: Date.now(),
