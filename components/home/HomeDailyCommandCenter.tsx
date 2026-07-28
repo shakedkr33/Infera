@@ -72,6 +72,8 @@ interface UnifiedTimelineCardProps {
   onNavigate?: () => void;
   onToggleComplete?: () => void;
   onOpenRemoteUrl?: () => void;
+  /** Called when the user taps כן/אולי/לא on the card's inline RSVP row. */
+  onRsvp?: (item: HomeDailyItem, status: 'yes' | 'maybe' | 'no') => void;
 }
 
 type HomeDailyCommandCenterProps = {
@@ -85,6 +87,13 @@ type HomeDailyCommandCenterProps = {
   undatedTaskCount: number;
   /** All undated tasks — complete and incomplete. Collapsed section filters to incomplete. */
   undatedTasks: HomeDailyTask[];
+  /**
+   * Single authoritative source for "בוצעו היום": every task the user completed
+   * today across all categories (timed, dated-untimed, overdue, undated).
+   * Derived in index.tsx from convexTasks + convexUndatedTasks using nowMs
+   * boundaries so it reacts to the existing clock rollover.
+   */
+  completedTodayTasksAllSources: HomeDailyTask[];
   birthdays: Birthday[];
   hasAnyBirthdays: boolean;
   onOpenItem: (item: HomeDailyItem) => void;
@@ -152,6 +161,51 @@ const isPendingInvitation = (item: HomeDailyItem): boolean =>
     (item.myPersonalRsvpStatus ?? 'none') === 'none') ||
   (item.pending === true && (item.rsvpStatus ?? 'none') === 'none');
 
+// Formats the original due date/time of an overdue task for display.
+// NOTE: dueDate midnight must not use +86_400_000; calendar operations are used
+// instead so DST transitions are handled correctly.
+// When hasTime===true but dueAt is undefined, only the date label is returned
+// (data inconsistency — dueAt is the authoritative time source).
+const formatDueLabel = (
+  dueDate: number,
+  hasTime: boolean,
+  dueAt: number | undefined,
+  nowMs: number
+): string => {
+  const todayStart = new Date(nowMs);
+  todayStart.setHours(0, 0, 0, 0);
+
+  const yesterdayStart = new Date(todayStart);
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+  const yesterdayStartMs = yesterdayStart.getTime();
+
+  const dueDateDay = new Date(dueDate);
+  dueDateDay.setHours(0, 0, 0, 0);
+  const dueDateDayMs = dueDateDay.getTime();
+
+  if (dueDateDayMs === yesterdayStartMs) {
+    if (!hasTime) return 'אתמול';
+    if (dueAt === undefined) return 'אתמול';
+    const timeStr = new Date(dueAt).toLocaleTimeString('he-IL', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return `אתמול, ${timeStr}`;
+  }
+
+  const datePart = new Date(dueDate).toLocaleDateString('he-IL', {
+    day: 'numeric',
+    month: 'long',
+  });
+  if (!hasTime) return datePart;
+  if (dueAt === undefined) return datePart;
+  const timeStr = new Date(dueAt).toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `${datePart}, ${timeStr}`;
+};
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 const BirthdayAvatar = ({
@@ -210,6 +264,7 @@ const UnifiedTimelineCard = ({
   onNavigate,
   onToggleComplete,
   onOpenRemoteUrl,
+  onRsvp,
 }: UnifiedTimelineCardProps): React.JSX.Element => {
   const hasNavigation =
     item.location.trim().length > 0 && parseGeoUri(item.locationUrl) !== null;
@@ -254,6 +309,18 @@ const UnifiedTimelineCard = ({
   const isCompleted = temporalState === 'completed';
   const isEnded = temporalState === 'ended';
   const isOverdue = temporalState === 'overdue';
+
+  const currentRsvpStatus = item.myPersonalRsvpStatus ?? item.rsvpStatus;
+  // Show the inline כן/אולי/לא row only for unanswered-but-soft-committed events.
+  // 'none': item stays in invitations (existing path, not this row).
+  // 'maybe': item is on the timeline but needs a nudge — show the row.
+  // 'yes': no row; answer is final. 'no': item excluded from timeline entirely.
+  // Ended events don't benefit from re-RSVP nudging.
+  const showMaybeRsvpRow =
+    item.type === 'event' &&
+    currentRsvpStatus === 'maybe' &&
+    temporalState !== 'ended' &&
+    onRsvp !== undefined;
 
   // ─── FEATURED card ───────────────────────────────────────────────────────────
   if (displayMode === 'featured') {
@@ -340,6 +407,39 @@ const UnifiedTimelineCard = ({
           ) : null}
         </Pressable>
 
+        {showMaybeRsvpRow ? (
+          <View style={styles.rsvpRowFeatured}>
+            {(
+              [
+                ['yes', 'כן'],
+                ['maybe', 'אולי'],
+                ['no', 'לא'],
+              ] as const
+            ).map(([status, label]) => (
+              <Pressable
+                accessibilityLabel={`${label}, ${item.title}`}
+                accessibilityRole="button"
+                accessible={true}
+                key={status}
+                onPress={() => onRsvp?.(item, status)}
+                style={[
+                  styles.rsvpButton,
+                  status === currentRsvpStatus && styles.rsvpButtonPrimary,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.rsvpButtonText,
+                    status === currentRsvpStatus && styles.rsvpButtonTextPrimary,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+
         <View style={styles.actionRow}>
           {hasPrimaryAction ? (
             <Pressable
@@ -391,14 +491,9 @@ const UnifiedTimelineCard = ({
     isCompleted && styles.completedCompactRow,
   ];
 
-  return (
-    <Pressable
-      accessible={true}
-      accessibilityLabel={`פתיחת ${item.title}`}
-      accessibilityRole="button"
-      onPress={onOpen}
-      style={compactCardStyles}
-    >
+  // Horizontal row content — shared between default and RSVP-row render paths.
+  const compactInner = (
+    <>
       {item.time ? (
         <Text
           style={[
@@ -473,6 +568,64 @@ const UnifiedTimelineCard = ({
       ) : (
         <MaterialIcons color="#ADB3B5" name="chevron-left" size={22} />
       )}
+    </>
+  );
+
+  if (showMaybeRsvpRow) {
+    return (
+      <View style={[...compactCardStyles, styles.compactCardWithRsvp]}>
+        <Pressable
+          accessible={true}
+          accessibilityLabel={`פתיחת ${item.title}`}
+          accessibilityRole="button"
+          onPress={onOpen}
+          style={styles.compactRowInner}
+        >
+          {compactInner}
+        </Pressable>
+        <View style={styles.rsvpRowCardSection}>
+          {(
+            [
+              ['yes', 'כן'],
+              ['maybe', 'אולי'],
+              ['no', 'לא'],
+            ] as const
+          ).map(([status, label]) => (
+            <Pressable
+              accessibilityLabel={`${label}, ${item.title}`}
+              accessibilityRole="button"
+              accessible={true}
+              key={status}
+              onPress={() => onRsvp?.(item, status)}
+              style={[
+                styles.rsvpButton,
+                status === currentRsvpStatus && styles.rsvpButtonPrimary,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.rsvpButtonText,
+                  status === currentRsvpStatus && styles.rsvpButtonTextPrimary,
+                ]}
+              >
+                {label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <Pressable
+      accessible={true}
+      accessibilityLabel={`פתיחת ${item.title}`}
+      accessibilityRole="button"
+      onPress={onOpen}
+      style={compactCardStyles}
+    >
+      {compactInner}
     </Pressable>
   );
 };
@@ -488,6 +641,7 @@ export function HomeDailyCommandCenter({
   untimedTasks,
   undatedTaskCount,
   undatedTasks,
+  completedTodayTasksAllSources,
   birthdays,
   hasAnyBirthdays,
   onOpenItem,
@@ -520,14 +674,6 @@ export function HomeDailyCommandCenter({
   const isPast = selectedMidnight < todayMidnight;
   const isFuture = selectedMidnight > todayMidnight;
 
-  // ─── Today boundary for "בוצעו היום" ─────────────────────────────────────
-  const todayStartMs = todayMidnight;
-  const todayEndMs = todayStartMs + 86_400_000;
-  const isCompletedToday = (completedAt?: number): boolean =>
-    completedAt !== undefined &&
-    completedAt >= todayStartMs &&
-    completedAt < todayEndMs;
-
   // ─── Invitations ─────────────────────────────────────────────────────────
   const invitations = scheduledItems.filter(isPendingInvitation);
   const attentionCount =
@@ -553,13 +699,9 @@ export function HomeDailyCommandCenter({
     : [];
 
   // ─── Today: completed tasks → "בוצעו היום" ───────────────────────────────
-  const completedScheduledTasks: HomeDailyItem[] = isToday
-    ? timelineItemsAll.filter(
-        (item) => item.type === 'task' && item.completed
-      )
-    : [];
-
-  // Untimed + undated tasks completed today
+  // Single source of truth: completedTodayTasksAllSources (from index.tsx) covers
+  // timed, dated-untimed, overdue, and undated tasks completed today.
+  // Defensive dedup guards against any theoretical duplicates in the source array.
   const taskToItem = (task: HomeDailyTask): HomeDailyItem => ({
     id: task.id,
     title: task.title,
@@ -571,17 +713,17 @@ export function HomeDailyCommandCenter({
     assigneeDisplays: task.assigneeDisplays,
   });
 
-  const completedTodayItems: HomeDailyItem[] = isToday
-    ? [
-        ...completedScheduledTasks,
-        ...untimedTasks
-          .filter((t) => t.completed && isCompletedToday(t.completedAt))
-          .map(taskToItem),
-        ...undatedTasks
-          .filter((t) => t.completed && isCompletedToday(t.completedAt))
-          .map(taskToItem),
-      ]
-    : [];
+  const completedTodayItems: HomeDailyItem[] = (() => {
+    if (!isToday) return [];
+    const seenIds = new Set<string>();
+    return completedTodayTasksAllSources
+      .filter((t) => {
+        if (seenIds.has(t.id)) return false;
+        seenIds.add(t.id);
+        return true;
+      })
+      .map(taskToItem);
+  })();
 
   // ─── Main timeline: active + upcoming + overdue (Today: minus ended + minus completed) ─
   const timelineItems: HomeDailyItem[] = isToday
@@ -698,6 +840,16 @@ export function HomeDailyCommandCenter({
                         {task.title}
                       </Text>
                       <Text style={styles.overdueLabel}>ממתינה להשלמה</Text>
+                      {task.dueDate !== undefined ? (
+                        <Text style={styles.overdueDueLabel}>
+                          {formatDueLabel(
+                            task.dueDate,
+                            task.hasTime ?? false,
+                            task.dueAt,
+                            nowMs
+                          )}
+                        </Text>
+                      ) : null}
                     </Pressable>
                     <TaskCheckbox
                       checked={task.completed}
@@ -754,14 +906,18 @@ export function HomeDailyCommandCenter({
                       onPress={() => onRsvp(item, status)}
                       style={({ pressed }) => [
                         styles.rsvpButton,
-                        status === 'yes' && styles.rsvpButtonPrimary,
+                        status ===
+                          (item.myPersonalRsvpStatus ?? item.rsvpStatus) &&
+                          styles.rsvpButtonPrimary,
                         pressed && styles.pressed,
                       ]}
                     >
                       <Text
                         style={[
                           styles.rsvpButtonText,
-                          status === 'yes' && styles.rsvpButtonTextPrimary,
+                          status ===
+                            (item.myPersonalRsvpStatus ?? item.rsvpStatus) &&
+                            styles.rsvpButtonTextPrimary,
                         ]}
                       >
                         {label}
@@ -856,6 +1012,7 @@ export function HomeDailyCommandCenter({
             onOpenRemoteUrl={() => {
               if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
             }}
+            onRsvp={onRsvp}
             onToggleComplete={() => onToggleTask(item.id)}
             temporalState="active"
           />
@@ -875,6 +1032,7 @@ export function HomeDailyCommandCenter({
             onOpenRemoteUrl={() => {
               if (featuredItem.remoteUrl) onOpenRemoteUrl(featuredItem.remoteUrl);
             }}
+            onRsvp={onRsvp}
             onToggleComplete={() => onToggleTask(featuredItem.id)}
             temporalState={getTemporalState(featuredItem)}
           />
@@ -898,6 +1056,7 @@ export function HomeDailyCommandCenter({
                   onOpenRemoteUrl={() => {
                     if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
                   }}
+                  onRsvp={onRsvp}
                   onToggleComplete={() => onToggleTask(item.id)}
                   temporalState={tState}
                 />
@@ -1217,6 +1376,14 @@ const styles = StyleSheet.create({
     marginTop: 2,
     textAlign: getTextAlign(),
   },
+  overdueDueLabel: {
+    color: '#767C7E',
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 1,
+    textAlign: getTextAlign(),
+    writingDirection: 'rtl',
+  },
   invitationBlock: {
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -1256,6 +1423,38 @@ const styles = StyleSheet.create({
   },
   rsvpButtonTextPrimary: {
     color: tc.textOnPrimary,
+  },
+  // ── Inline RSVP row — featured card (between content and actionRow) ─────────
+  rsvpRowFeatured: {
+    flexDirection: rtl.flexDirection,
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingBottom: 14,
+  },
+  // ── Inline RSVP row — compact card ───────────────────────────────────────────
+  // Overrides compactRow's horizontal flex to a column so the RSVP row can
+  // sit below the main row content. Clears padding so each child controls its own.
+  compactCardWithRsvp: {
+    flexDirection: 'column' as const,
+    alignItems: 'stretch' as const,
+    gap: 0,
+    padding: 0,
+  },
+  // Restores the original compactRow horizontal layout + padding for the inner row.
+  compactRowInner: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center' as const,
+    gap: 12,
+    minHeight: 82,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  // RSVP button strip at the bottom of a compact card.
+  rsvpRowCardSection: {
+    flexDirection: rtl.flexDirection,
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 14,
   },
   // ── Expanded (featured) card ───────────────────────────────────────────────
   expandedCard: {
