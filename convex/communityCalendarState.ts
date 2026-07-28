@@ -39,10 +39,10 @@ export function shouldIncludeInPersonalHomeCalendar(args: {
   if (args.privileged) return true;
   if (args.requiresRsvp === false) {
     if (args.hasActiveSave) return true;
-    if (args.rsvpStatus === 'yes') return true;
+    if (args.rsvpStatus === 'yes' || args.rsvpStatus === 'maybe') return true;
     return false;
   }
-  return args.rsvpStatus === 'yes';
+  return args.rsvpStatus === 'yes' || args.rsvpStatus === 'maybe';
 }
 
 export async function loadActiveSavedEventIds(
