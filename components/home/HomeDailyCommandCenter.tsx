@@ -16,7 +16,7 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 import type { Birthday } from '@/lib/types/birthday';
 import { getCountdownLabel } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
-import { APP_IS_RTL, getTextAlign, rtl } from '@/lib/rtl';
+import { getTextAlign, rtl } from '@/lib/rtl';
 
 export type HomeDailyItem = {
   id: string;
@@ -327,6 +327,30 @@ const UnifiedTimelineCard = ({
     const cardBorderStyle =
       isOverdue ? styles.overdueCardBorder : undefined;
 
+    // Progress bar element — active events only, derived from nowMs timestamps
+    let progressElement: React.JSX.Element | null = null;
+    if (
+      item.type === 'event' &&
+      temporalState === 'active' &&
+      item.startAt !== undefined &&
+      item.endAt !== undefined &&
+      item.endAt > item.startAt
+    ) {
+      const durationMs = item.endAt - item.startAt;
+      const elapsedMs = Math.min(Math.max(nowMs - item.startAt, 0), durationMs);
+      const progress = elapsedMs / durationMs;
+      progressElement = (
+        <View
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityValue={{ min: 0, max: 100, now: Math.round(progress * 100) }}
+          style={styles.progressTrack}
+        >
+          <View style={[styles.progressFill, { width: `${progress * 100}%` as `${number}%` }]} />
+        </View>
+      );
+    }
+
     return (
       <View style={[styles.expandedCard, cardBorderStyle]}>
         <Pressable
@@ -334,12 +358,10 @@ const UnifiedTimelineCard = ({
           accessibilityLabel={`פתיחת פרטים: ${item.title}`}
           accessibilityRole="button"
           onPress={onOpen}
-          style={({ pressed }) => [
-            styles.expandedContent,
-            pressed && styles.pressed,
-          ]}
+          style={styles.expandedContent}
         >
-          <View style={styles.expandedTopRow}>
+          <View style={styles.cardTopRow}>
+            <Text style={styles.timeRange}>{formatTimeRange(item)}</Text>
             {badgeConfig ? (
               <View
                 style={[
@@ -360,7 +382,6 @@ const UnifiedTimelineCard = ({
                 </Text>
               </View>
             ) : null}
-            <Text style={styles.timeRange}>{formatTimeRange(item)}</Text>
           </View>
 
           <View style={styles.sourceRow}>
@@ -397,6 +418,8 @@ const UnifiedTimelineCard = ({
           {contextText ? (
             <Text style={styles.contextText}>{contextText}</Text>
           ) : null}
+
+          {progressElement}
 
           {(item.myAssignedTasks?.length ?? 0) > 0 ? (
             <Text style={styles.assignedTasksText}>
@@ -440,17 +463,14 @@ const UnifiedTimelineCard = ({
           </View>
         ) : null}
 
-        <View style={styles.actionRow}>
-          {hasPrimaryAction ? (
+        {hasPrimaryAction ? (
+          <View style={styles.actionRow}>
             <Pressable
               accessible={true}
               accessibilityLabel={hasRemoteAction ? 'הצטרפות לאירוע' : 'ניווט'}
               accessibilityRole="button"
               onPress={hasRemoteAction ? onOpenRemoteUrl : onNavigate}
-              style={({ pressed }) => [
-                styles.primaryAction,
-                pressed && styles.primaryActionPressed,
-              ]}
+              style={styles.primaryAction}
             >
               <MaterialIcons
                 color="#FFFFFF"
@@ -461,70 +481,122 @@ const UnifiedTimelineCard = ({
                 {hasRemoteAction ? 'הצטרפות' : 'ניווט'}
               </Text>
             </Pressable>
-          ) : null}
-          <Pressable
-            accessible={true}
-            accessibilityLabel={`פרטים על ${item.title}`}
-            accessibilityRole="button"
-            onPress={onOpen}
-            style={({ pressed }) => [
-              styles.secondaryAction,
-              !hasPrimaryAction && styles.secondaryActionFull,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text style={styles.secondaryActionText}>פרטים</Text>
-          </Pressable>
-        </View>
+          </View>
+        ) : null}
       </View>
     );
   }
 
   // ─── COMPACT card ────────────────────────────────────────────────────────────
-  const showNavIcon = !isEnded && !isCompleted && hasNavigation;
   const showCheckbox = item.type === 'task' && !isEnded;
 
-  const compactCardStyles = [
-    styles.compactRow,
-    isEnded && styles.endedCompactRow,
-    isOverdue && styles.overdueCompactRow,
-    isCompleted && styles.completedCompactRow,
-  ];
+  // ── Compact EVENT card content — vertical hierarchy matching featured ─────────
+  const compactEventContent: React.JSX.Element | null =
+    item.type === 'event' ? (
+      <>
+        {/* Top row: time range + temporal badge */}
+        <View style={styles.cardTopRow}>
+          <Text numberOfLines={1} style={styles.timeRange}>
+            {formatTimeRange(item)}
+          </Text>
+          {badgeConfig ? (
+            <View
+              style={[
+                styles.compactStatusPill,
+                { backgroundColor: badgeConfig.bg },
+              ]}
+            >
+              <Text
+                style={[styles.compactStatusText, { color: badgeConfig.color }]}
+              >
+                {badgeConfig.label}
+              </Text>
+            </View>
+          ) : null}
+        </View>
 
-  // Horizontal row content — shared between default and RSVP-row render paths.
-  const compactInner = (
-    <>
-      {item.time ? (
+        {/* Source label */}
+        <View style={styles.compactSourceRow}>
+          <SourceLabel item={item} />
+        </View>
+
+        {/* Event title */}
         <Text
-          style={[
-            styles.compactTime,
-            (isCompleted || isEnded) && styles.compactTimeMuted,
-          ]}
+          numberOfLines={2}
+          style={[styles.compactEventTitle, isEnded && styles.endedText]}
         >
-          {formatTimeRange(item)}
+          {item.title}
         </Text>
-      ) : (
-        <View style={styles.compactTimePlaceholder} />
-      )}
-      <View style={styles.compactBody}>
-        {badgeConfig ? (
+
+        {/* Location */}
+        {item.location ? (
+          <View style={styles.compactMetaRow}>
+            <MaterialIcons name="location-on" size={14} color="#767C7E" />
+            <Text numberOfLines={1} style={styles.compactMetaText}>
+              {item.location}
+            </Text>
+          </View>
+        ) : null}
+
+        {/* Relative time context */}
+        {contextText ? (
+          <Text style={styles.compactContextText}>{contextText}</Text>
+        ) : null}
+      </>
+    ) : null;
+
+  // ── Compact TASK card content — preserves checkbox behavior ──────────────────
+  const compactTaskContent: React.JSX.Element | null =
+    item.type === 'task' ? (
+      <>
+        {/* Time + badge top row — only when the task has a time value */}
+        {item.time ? (
+          <View style={styles.cardTopRow}>
+            <Text numberOfLines={1} style={styles.timeRange}>
+              {formatTimeRange(item)}
+            </Text>
+            {badgeConfig ? (
+              <View
+                style={[
+                  styles.compactStatusPill,
+                  { backgroundColor: badgeConfig.bg },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.compactStatusText,
+                    { color: badgeConfig.color },
+                  ]}
+                >
+                  {badgeConfig.label}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : badgeConfig ? (
+          /* No time but has a badge — show badge aligned to card start */
           <View
             style={[
-              styles.compactBadge,
+              styles.compactStatusPill,
+              styles.compactBadgeSelfStart,
               { backgroundColor: badgeConfig.bg },
             ]}
           >
             <Text
-              style={[
-                styles.compactBadgeText,
-                { color: badgeConfig.color },
-              ]}
+              style={[styles.compactStatusText, { color: badgeConfig.color }]}
             >
               {badgeConfig.label}
             </Text>
           </View>
         ) : null}
-        <View style={styles.compactTitleRow}>
+
+        {/* Source label */}
+        <View style={styles.compactSourceRow}>
+          <SourceLabel item={item} />
+        </View>
+
+        {/* Title row — checkbox for incomplete tasks */}
+        <View style={styles.compactTaskTitleRow}>
           {showCheckbox ? (
             <TaskCheckbox
               checked={item.completed}
@@ -534,54 +606,48 @@ const UnifiedTimelineCard = ({
           <Text
             numberOfLines={2}
             style={[
-              styles.compactTitle,
-              isEnded && styles.endedText,
+              styles.compactEventTitle,
               isCompleted && styles.completedText,
             ]}
           >
             {item.title}
           </Text>
         </View>
-        <View style={styles.compactMetaRow}>
-          <SourceLabel item={item} />
-          {item.location ? (
-            <Text numberOfLines={1} style={styles.compactLocation}>
-              · {item.location}
-            </Text>
-          ) : null}
-        </View>
+
+        {/* Context text */}
         {contextText ? (
           <Text style={styles.compactContextText}>{contextText}</Text>
         ) : null}
-      </View>
-      {showNavIcon ? (
-        <Pressable
-          accessible={true}
-          accessibilityLabel={`ניווט אל ${item.title}`}
-          accessibilityRole="button"
-          hitSlop={10}
-          onPress={onNavigate}
-          style={styles.compactNav}
-        >
-          <MaterialIcons color={tc.primary} name="near-me" size={18} />
-        </Pressable>
-      ) : (
-        <MaterialIcons color="#ADB3B5" name="chevron-left" size={22} />
-      )}
-    </>
-  );
+      </>
+    ) : null;
+
+  const compactContent = compactEventContent ?? compactTaskContent;
+
+  // Show compact "ניווט" pill on upcoming events with a valid navigation destination.
+  // Only applies to compact display — featured events keep the full-width button.
+  const showCompactNavButton =
+    item.type === 'event' &&
+    temporalState === 'upcoming' &&
+    hasNavigation;
 
   if (showMaybeRsvpRow) {
     return (
-      <View style={[...compactCardStyles, styles.compactCardWithRsvp]}>
+      <View
+        style={[
+          styles.compactCardShell,
+          isEnded && styles.endedCompactCard,
+          isOverdue && styles.overdueCompactCard,
+          isCompleted && styles.completedCompactCard,
+        ]}
+      >
         <Pressable
           accessible={true}
           accessibilityLabel={`פתיחת ${item.title}`}
           accessibilityRole="button"
           onPress={onOpen}
-          style={styles.compactRowInner}
+          style={styles.compactCardPadding}
         >
-          {compactInner}
+          {compactContent}
         </Pressable>
         <View style={styles.rsvpRowCardSection}>
           {(
@@ -617,15 +683,56 @@ const UnifiedTimelineCard = ({
     );
   }
 
+  if (showCompactNavButton) {
+    return (
+      <View
+        style={[
+          styles.compactCardShell,
+          isEnded && styles.endedCompactCard,
+          isOverdue && styles.overdueCompactCard,
+          isCompleted && styles.completedCompactCard,
+        ]}
+      >
+        <Pressable
+          accessible={true}
+          accessibilityLabel={`פתיחת ${item.title}`}
+          accessibilityRole="button"
+          onPress={onOpen}
+          style={styles.compactCardPadding}
+        >
+          {compactContent}
+        </Pressable>
+        <View style={styles.compactNavActionRow}>
+          <Pressable
+            accessible={true}
+            accessibilityLabel={`ניווט אל ${item.title}`}
+            accessibilityRole="button"
+            onPress={onNavigate}
+            style={styles.compactNavigateButton}
+          >
+            <MaterialIcons color={tc.primary} name="near-me" size={17} />
+            <Text style={styles.compactNavigateButtonText}>ניווט</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <Pressable
       accessible={true}
       accessibilityLabel={`פתיחת ${item.title}`}
       accessibilityRole="button"
       onPress={onOpen}
-      style={compactCardStyles}
+      style={[
+        styles.compactCardShell,
+        styles.compactCardPadding,
+        isEnded && styles.endedCompactCard,
+        isOverdue && styles.overdueCompactCard,
+        isCompleted && styles.completedCompactCard,
+      ]}
     >
-      {compactInner}
+      {compactContent}
     </Pressable>
   );
 };
@@ -822,13 +929,10 @@ export function HomeDailyCommandCenter({
                         styles.dividedRow,
                     ]}
                   >
-                    <View style={styles.warmIcon}>
-                      <MaterialIcons
-                        color="#A75B20"
-                        name="schedule"
-                        size={19}
-                      />
-                    </View>
+                    <TaskCheckbox
+                      checked={task.completed}
+                      onToggle={() => onToggleTask(task.id)}
+                    />
                     <Pressable
                       accessibilityLabel={`פתיחת משימה באיחור: ${task.title}`}
                       accessibilityRole="button"
@@ -851,10 +955,6 @@ export function HomeDailyCommandCenter({
                         </Text>
                       ) : null}
                     </Pressable>
-                    <TaskCheckbox
-                      checked={task.completed}
-                      onToggle={() => onToggleTask(task.id)}
-                    />
                   </View>
                 ))
               : null}
@@ -1170,53 +1270,55 @@ export function HomeDailyCommandCenter({
       {/* ── Today: undated tasks (incomplete only) ────────────────────────────── */}
       {isToday && undatedTaskCount > 0 ? (
         <View style={styles.section}>
-          <Pressable
-            accessibilityLabel={`${undatedTaskCount} משימות פתוחות ללא תאריך, ${undatedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
-            accessibilityRole="button"
-            accessible={true}
-            onPress={() => setUndatedExpanded((prev) => !prev)}
-            style={styles.undatedRow}
-          >
-            <Text style={styles.undatedText}>
-              {undatedTaskCount === 1
-                ? 'משימה פתוחה אחת ללא תאריך'
-                : `${undatedTaskCount} משימות פתוחות ללא תאריך`}
-            </Text>
-            <MaterialIcons
-              color={tc.primary}
-              name={undatedExpanded ? 'expand-less' : 'expand-more'}
-              size={23}
-            />
-          </Pressable>
-          {undatedExpanded ? (
-            <View style={styles.taskList}>
-              {visibleUndatedTasks.map((task, index) => (
-                <Pressable
-                  accessibilityLabel={`פתיחת משימה: ${task.title}`}
-                  accessibilityRole="button"
-                  accessible={true}
-                  key={task.id}
-                  onPress={() => onOpenTask(task.id)}
-                  style={[styles.taskRow, index > 0 && styles.dividedRow]}
-                >
-                  <TaskCheckbox
-                    checked={task.completed}
-                    onToggle={() => onToggleTask(task.id)}
-                  />
-                  <Text
-                    numberOfLines={2}
-                    style={[
-                      styles.taskTitle,
-                      task.completed && styles.completedText,
-                    ]}
+          <View style={styles.undatedAccordion}>
+            <Pressable
+              accessibilityLabel={`${undatedTaskCount} משימות פתוחות ללא תאריך, ${undatedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
+              accessibilityRole="button"
+              accessible={true}
+              onPress={() => setUndatedExpanded((prev) => !prev)}
+              style={styles.undatedAccordionHeader}
+            >
+              <Text style={styles.undatedText}>
+                {undatedTaskCount === 1
+                  ? 'משימה פתוחה אחת ללא תאריך'
+                  : `${undatedTaskCount} משימות פתוחות ללא תאריך`}
+              </Text>
+              <MaterialIcons
+                color={tc.primary}
+                name={undatedExpanded ? 'expand-less' : 'expand-more'}
+                size={23}
+              />
+            </Pressable>
+            {undatedExpanded ? (
+              <View style={styles.undatedAccordionContent}>
+                {visibleUndatedTasks.map((task, index) => (
+                  <Pressable
+                    accessibilityLabel={`פתיחת משימה: ${task.title}`}
+                    accessibilityRole="button"
+                    accessible={true}
+                    key={task.id}
+                    onPress={() => onOpenTask(task.id)}
+                    style={[styles.taskRow, index > 0 && styles.dividedRow]}
                   >
-                    {task.title}
-                  </Text>
-                  <MaterialIcons color="#ADB3B5" name="chevron-left" size={21} />
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
+                    <TaskCheckbox
+                      checked={task.completed}
+                      onToggle={() => onToggleTask(task.id)}
+                    />
+                    <Text
+                      numberOfLines={2}
+                      style={[
+                        styles.taskTitle,
+                        task.completed && styles.completedText,
+                      ]}
+                    >
+                      {task.title}
+                    </Text>
+                    <MaterialIcons color="#ADB3B5" name="chevron-left" size={21} />
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </View>
         </View>
       ) : null}
 
@@ -1276,18 +1378,13 @@ export function HomeDailyCommandCenter({
                 עדיין לא הוספת ימי הולדת
               </Text>
               <Pressable
-                accessibilityLabel="הוספת יום הולדת ראשון"
+                accessibilityLabel="הוספת יום הולדת"
                 accessibilityRole="button"
                 accessible={true}
                 onPress={onAddBirthday}
-                style={({ pressed }) => [
-                  styles.birthdayAddButton,
-                  pressed && styles.pressed,
-                ]}
+                style={styles.birthdayAddButton}
               >
-                <Text style={styles.birthdayAddButtonText}>
-                  + הוספת יום הולדת ראשון
-                </Text>
+                <Text style={styles.birthdayAddButtonText}>הוספה</Text>
               </Pressable>
             </View>
           )}
@@ -1341,14 +1438,6 @@ const styles = StyleSheet.create({
   dividedRow: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#E5E9EB',
-  },
-  warmIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFF1E7',
   },
   inviteIcon: {
     width: 40,
@@ -1431,25 +1520,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingBottom: 14,
   },
-  // ── Inline RSVP row — compact card ───────────────────────────────────────────
-  // Overrides compactRow's horizontal flex to a column so the RSVP row can
-  // sit below the main row content. Clears padding so each child controls its own.
-  compactCardWithRsvp: {
-    flexDirection: 'column' as const,
-    alignItems: 'stretch' as const,
-    gap: 0,
-    padding: 0,
-  },
-  // Restores the original compactRow horizontal layout + padding for the inner row.
-  compactRowInner: {
-    flexDirection: rtl.flexDirection,
-    alignItems: 'center' as const,
-    gap: 12,
-    minHeight: 82,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  // RSVP button strip at the bottom of a compact card.
+  // ── Inline RSVP row — compact card (sits below the pressable content area) ──
   rsvpRowCardSection: {
     flexDirection: rtl.flexDirection,
     gap: 8,
@@ -1477,13 +1548,15 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     paddingBottom: 14,
   },
-  expandedTopRow: {
+  // Shared top row — used by both featured and compact event cards
+  cardTopRow: {
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
   },
   statusPill: {
+    flexShrink: 1,
     flexDirection: rtl.flexDirection,
     alignItems: 'center',
     gap: 6,
@@ -1501,10 +1574,13 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   timeRange: {
+    flexShrink: 0,
+    minWidth: 70,
     color: '#334E6F',
     fontSize: 15,
     fontWeight: '700',
     writingDirection: 'ltr',
+    textAlign: getTextAlign(),
   },
   sourceRow: {
     alignItems: 'flex-start',
@@ -1548,7 +1624,7 @@ const styles = StyleSheet.create({
     color: '#334E6F',
     fontSize: 12,
     fontWeight: '700',
-    marginTop: 12,
+    marginTop: 8,
     textAlign: getTextAlign(),
   },
   assignedTasksText: {
@@ -1557,6 +1633,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 7,
     textAlign: getTextAlign(),
+  },
+  // ── Active-event progress bar ──────────────────────────────────────────────
+  progressTrack: {
+    width: '100%',
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: tc.primaryLight,
+    overflow: 'hidden',
+    // RTL: row-reverse so fill starts from the right and progresses left
+    flexDirection: rtl.flexDirection,
+    marginTop: 10,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: tc.primary,
   },
   actionRow: {
     flexDirection: rtl.flexDirection,
@@ -1574,29 +1666,8 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     backgroundColor: tc.primary,
   },
-  primaryActionPressed: {
-    backgroundColor: '#00597D',
-  },
   primaryActionText: {
     color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  secondaryAction: {
-    minHeight: 48,
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#D7DDDF',
-    backgroundColor: '#FFFFFF',
-  },
-  secondaryActionFull: {
-    flex: 1,
-  },
-  secondaryActionText: {
-    color: tc.primary,
     fontSize: 14,
     fontWeight: '800',
   },
@@ -1604,104 +1675,121 @@ const styles = StyleSheet.create({
   compactGroup: {
     gap: 8,
   },
-  compactRow: {
+  // Card shell — border, background, shadow (no padding so RSVP variant can control it)
+  compactCardShell: {
     width: '100%',
-    alignSelf: 'stretch',
-    minHeight: 82,
-    flexDirection: rtl.flexDirection,
-    alignItems: 'center',
-    gap: 12,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    borderRadius: 22,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E3E8EA',
+    overflow: 'hidden',
     shadowColor: '#22343C',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 1,
   },
-  overdueCompactRow: {
-    backgroundColor: '#FFF8EC',
-    borderColor: '#F5DFA0',
+  // Inner content padding (applied to Pressable shell or inner Pressable in RSVP variant)
+  compactCardPadding: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  completedCompactRow: {
-    backgroundColor: '#F8F9FA',
-    borderColor: '#E5E7EB',
-  },
-  endedCompactRow: {
+  endedCompactCard: {
     backgroundColor: '#F8FAFB',
     borderColor: '#E5E7EB',
   },
-  compactTime: {
-    width: 82,
-    color: '#44525A',
-    fontSize: 13,
-    fontWeight: '800',
-    textAlign: getTextAlign(),
-    writingDirection: 'ltr',
+  overdueCompactCard: {
+    backgroundColor: '#FFF8EC',
+    borderColor: '#F5DFA0',
   },
-  compactTimeMuted: {
-    color: '#ADB3B5',
-    fontWeight: '600',
+  completedCompactCard: {
+    backgroundColor: '#F8F9FA',
+    borderColor: '#E5E7EB',
   },
-  compactTimePlaceholder: {
-    width: 82,
-  },
-  compactBody: {
-    flex: 1,
-    minWidth: 0,
-    gap: 3,
-  },
-  compactBadge: {
-    alignSelf: 'flex-start',
+  // Status pill for compact cards (no dot, slightly smaller than featured statusPill)
+  compactStatusPill: {
+    flexShrink: 0,
     borderRadius: 999,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    marginBottom: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
   },
-  compactBadgeText: {
+  // Used when a task has no time — aligns badge to the card start (RTL: right)
+  compactBadgeSelfStart: {
+    alignSelf: 'flex-start',
+    marginBottom: 8,
+  },
+  compactStatusText: {
     fontSize: 10,
     fontWeight: '800',
   },
-  compactTitleRow: {
-    flexDirection: rtl.flexDirection,
-    alignItems: 'center',
-    gap: 8,
+  // Source label row — shared margin for compact cards
+  compactSourceRow: {
+    alignItems: 'flex-start',
+    marginTop: 8,
   },
-  compactTitle: {
-    flex: 1,
-    color: '#252A2C',
-    fontSize: 15,
+  // Event title for compact cards — slightly smaller than featured expandedTitle
+  compactEventTitle: {
+    color: '#15191A',
+    fontSize: 16,
     fontWeight: '700',
+    lineHeight: 22,
     textAlign: getTextAlign(),
     writingDirection: 'rtl',
+    minWidth: 0,
+    flexShrink: 1,
+    marginTop: 4,
   },
+  // Location row for compact event cards
   compactMetaRow: {
     flexDirection: rtl.flexDirection,
-    alignItems: 'center',
-    gap: 3,
+    alignItems: 'flex-start',
+    gap: 4,
+    marginTop: 5,
   },
-  compactLocation: {
+  compactMetaText: {
     flex: 1,
-    color: '#767C7E',
-    fontSize: 11,
+    color: '#5A6062',
+    fontSize: 12,
+    lineHeight: 17,
     textAlign: getTextAlign(),
+    writingDirection: 'rtl',
   },
   compactContextText: {
     color: '#767C7E',
     fontSize: 11,
     fontWeight: '600',
-    marginTop: 2,
+    marginTop: 4,
     textAlign: getTextAlign(),
   },
-  compactNav: {
-    width: 44,
-    height: 44,
+  // Title row for compact task cards — reserves space for the checkbox
+  compactTaskTitleRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 6,
+  },
+  // ── Compact upcoming-event navigation action ───────────────────────────────
+  compactNavActionRow: {
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+  },
+  compactNavigateButton: {
+    minHeight: 38,
+    borderRadius: 19,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    flexDirection: rtl.flexDirection,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
+    backgroundColor: tc.primaryLight,
+    flexShrink: 0,
+    alignSelf: 'flex-start',
+  },
+  compactNavigateButtonText: {
+    color: tc.primary,
+    fontSize: 14,
+    fontWeight: '700',
   },
   // ── Collapsible sections ───────────────────────────────────────────────────
   collapsibleSection: {
@@ -1821,6 +1909,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
+  // ── Undated accordion — unified shell for header + expanded tasks ──────────
+  undatedAccordion: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E9EDEE',
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  undatedAccordionHeader: {
+    minHeight: 58,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'transparent',
+  },
+  undatedAccordionContent: {
+    borderTopWidth: 1,
+    borderTopColor: '#E5E9EB',
+    backgroundColor: '#FFFFFF',
+  },
   // ── Birthdays ──────────────────────────────────────────────────────────────
   birthdayRow: {
     flexDirection: rtl.flexDirection,
@@ -1877,22 +1988,30 @@ const styles = StyleSheet.create({
     textAlign: getTextAlign(),
   },
   birthdayEmptyState: {
-    gap: 12,
-    alignItems: 'flex-start',
+    width: '100%',
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    columnGap: 10,
+    rowGap: 8,
   },
   birthdayEmptyText: {
     color: '#767C7E',
     fontSize: 13,
     textAlign: getTextAlign(),
+    flexShrink: 1,
+    minWidth: 0,
   },
   birthdayAddButton: {
-    minHeight: 44,
-    borderRadius: 22,
-    paddingHorizontal: 18,
-    paddingVertical: 11,
+    minHeight: 40,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     backgroundColor: tc.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
   birthdayAddButtonText: {
     color: tc.textOnPrimary,
