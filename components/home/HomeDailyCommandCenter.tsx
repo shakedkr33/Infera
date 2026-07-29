@@ -1,5 +1,6 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useMutation } from 'convex/react';
+import { useCallback, useRef, useState } from 'react';
 import {
   Image,
   type ImageErrorEventData,
@@ -11,12 +12,25 @@ import {
 } from 'react-native';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
-import { colors as tc } from '@/theme/colors';
+import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
 import { getAvatarInitials } from '@/lib/avatarInitials';
+import { SubtaskImagePreviewModal } from '@/lib/components/task/SubtaskImagePreviewModal';
+import { SubtaskAttachmentPreview } from '@/lib/components/task/SubtasksSection';
+import { getTextAlign, rtl } from '@/lib/rtl';
 import type { Birthday } from '@/lib/types/birthday';
+import type { SubTaskAttachment } from '@/lib/types/task';
 import { getCountdownLabel } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
-import { getTextAlign, rtl } from '@/lib/rtl';
+import { colors as tc } from '@/theme/colors';
+
+/** Focused read-only subtask preview item for Home screen display. */
+export type HomeSubtaskPreviewItem = {
+  id: string;
+  title: string;
+  completed: boolean;
+  attachment?: SubTaskAttachment;
+};
 
 export type HomeDailyItem = {
   id: string;
@@ -42,6 +56,8 @@ export type HomeDailyItem = {
   assigneeDisplays?: { initials: string; color: string }[];
   profileCircles?: unknown[];
   myAssignedTasks?: { id: string; title: string; completed: boolean }[];
+  /** Read-only subtask preview items — populated only for task-type items. */
+  subtasks?: HomeSubtaskPreviewItem[];
 };
 
 export type HomeDailyTask = {
@@ -54,6 +70,8 @@ export type HomeDailyTask = {
   /** Timestamp (ms) when the task was completed — used for "בוצעו היום" grouping. */
   completedAt?: number;
   assigneeDisplays?: { initials: string; color: string }[];
+  /** Read-only subtask preview items for compact summary display on Home. */
+  subtasks?: HomeSubtaskPreviewItem[];
 };
 
 // ─── Temporal state ───────────────────────────────────────────────────────────
@@ -74,6 +92,14 @@ interface UnifiedTimelineCardProps {
   onOpenRemoteUrl?: () => void;
   /** Called when the user taps כן/אולי/לא on the card's inline RSVP row. */
   onRsvp?: (item: HomeDailyItem, status: 'yes' | 'maybe' | 'no') => void;
+  /** Whether the task items accordion is currently expanded for this card. */
+  itemsExpanded?: boolean;
+  /** Toggle the task items accordion for this card — must not trigger onOpen. */
+  onToggleItems?: () => void;
+  /** Called when the user taps an item checkbox — receives the subtask id. */
+  onToggleSubtask?: (subtaskId: string) => void;
+  /** Called when the user taps an item thumbnail — receives the resolved URI. */
+  onImagePress?: (uri: string) => void;
 }
 
 type HomeDailyCommandCenterProps = {
@@ -206,6 +232,112 @@ const formatDueLabel = (
   return `${datePart}, ${timeStr}`;
 };
 
+// ─── Interactive task items accordion ────────────────────────────────────────
+
+/**
+ * Expandable interactive items accordion for Home task cards.
+ * Collapsed: one summary line + chevron. Expanded: every item in stored order.
+ * Item checkboxes call the existing Convex toggleSubtaskCompleted mutation.
+ * Image thumbnails open SubtaskImagePreviewModal via onImagePress callback.
+ * Attachment queries are skipped while collapsed (no thumbnail rendered).
+ */
+const HomeTaskItemsAccordion = ({
+  taskId,
+  subtasks,
+  expanded,
+  onToggle,
+  onToggleSubtask,
+  onImagePress,
+}: {
+  taskId: string;
+  subtasks: HomeSubtaskPreviewItem[];
+  expanded: boolean;
+  onToggle: () => void;
+  /** Called with the subtask id when the user taps an item checkbox. */
+  onToggleSubtask?: (subtaskId: string) => void;
+  /** Called with the resolved image URI when the user taps a thumbnail. */
+  onImagePress?: (uri: string) => void;
+}): React.JSX.Element | null => {
+  if (subtasks.length === 0) return null;
+  const totalCount = subtasks.length;
+  const completedCount = subtasks.reduce(
+    (n, s) => n + (s.completed ? 1 : 0),
+    0
+  );
+  const summaryLabel = `${completedCount} מתוך ${totalCount} פריטים הושלמו`;
+  return (
+    <>
+      {/* Summary row — sits directly below task content without a top divider */}
+      <Pressable
+        accessible={true}
+        accessibilityLabel={`${summaryLabel}, ${expanded ? 'סגירת רשימת הפריטים' : 'פתיחת רשימת הפריטים'}`}
+        accessibilityRole="button"
+        onPress={onToggle}
+        style={styles.itemsSummaryRow}
+      >
+        <Text style={styles.itemsSummaryText}>{summaryLabel}</Text>
+        <MaterialIcons
+          color={tc.textSecondary}
+          name={expanded ? 'expand-less' : 'expand-more'}
+          size={20}
+        />
+      </Pressable>
+      {expanded ? (
+        <>
+          {/* One divider between summary and first item */}
+          <View style={styles.itemsAccordionDivider} />
+          {subtasks.map((subtask, index) => (
+            <View
+              key={subtask.id}
+              style={[styles.itemRow, index > 0 && styles.itemRowDivider]}
+            >
+              {/* Interactive checkbox — ~40pt touch target via hitSlop */}
+              <Pressable
+                accessible={true}
+                accessibilityLabel={subtask.title || 'פריט'}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: subtask.completed }}
+                hitSlop={11}
+                onPress={() => onToggleSubtask?.(subtask.id)}
+                style={styles.itemCheckboxTouch}
+              >
+                <View
+                  style={[
+                    styles.itemIndicator,
+                    subtask.completed && styles.itemIndicatorDone,
+                  ]}
+                >
+                  {subtask.completed ? (
+                    <MaterialIcons color="#FFFFFF" name="check" size={10} />
+                  ) : null}
+                </View>
+              </Pressable>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.itemTitle,
+                  subtask.completed && styles.itemTitleDone,
+                ]}
+              >
+                {subtask.title}
+              </Text>
+              {subtask.attachment ? (
+                <View style={styles.itemThumbWrap}>
+                  <SubtaskAttachmentPreview
+                    attachment={subtask.attachment}
+                    onImageThumbnailPress={onImagePress}
+                    taskId={taskId as Id<'tasks'>}
+                  />
+                </View>
+              ) : null}
+            </View>
+          ))}
+        </>
+      ) : null}
+    </>
+  );
+};
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 const BirthdayAvatar = ({
@@ -265,17 +397,31 @@ const UnifiedTimelineCard = ({
   onToggleComplete,
   onOpenRemoteUrl,
   onRsvp,
+  itemsExpanded,
+  onToggleItems,
+  onToggleSubtask,
+  onImagePress,
 }: UnifiedTimelineCardProps): React.JSX.Element => {
+  const hasTaskSubtasks =
+    item.type === 'task' && (item.subtasks?.length ?? 0) > 0;
   const hasNavigation =
     item.location.trim().length > 0 && parseGeoUri(item.locationUrl) !== null;
   const hasRemoteAction = Boolean(item.remoteUrl);
   const hasPrimaryAction = hasNavigation || hasRemoteAction;
 
   // Badge config by temporal state
-  const badgeConfig = ((): { label: string; bg: string; color: string } | null => {
+  const badgeConfig = ((): {
+    label: string;
+    bg: string;
+    color: string;
+  } | null => {
     switch (temporalState) {
       case 'active':
-        return { label: 'מתקיים עכשיו', bg: tc.primaryLight, color: tc.primary };
+        return {
+          label: 'מתקיים עכשיו',
+          bg: tc.primaryLight,
+          color: tc.primary,
+        };
       case 'upcoming':
         if (displayMode !== 'featured') return null;
         return {
@@ -324,8 +470,7 @@ const UnifiedTimelineCard = ({
 
   // ─── FEATURED card ───────────────────────────────────────────────────────────
   if (displayMode === 'featured') {
-    const cardBorderStyle =
-      isOverdue ? styles.overdueCardBorder : undefined;
+    const cardBorderStyle = isOverdue ? styles.overdueCardBorder : undefined;
 
     // Progress bar element — active events only, derived from nowMs timestamps
     let progressElement: React.JSX.Element | null = null;
@@ -343,10 +488,19 @@ const UnifiedTimelineCard = ({
         <View
           accessible
           accessibilityRole="progressbar"
-          accessibilityValue={{ min: 0, max: 100, now: Math.round(progress * 100) }}
+          accessibilityValue={{
+            min: 0,
+            max: 100,
+            now: Math.round(progress * 100),
+          }}
           style={styles.progressTrack}
         >
-          <View style={[styles.progressFill, { width: `${progress * 100}%` as `${number}%` }]} />
+          <View
+            style={[
+              styles.progressFill,
+              { width: `${progress * 100}%` as `${number}%` },
+            ]}
+          />
         </View>
       );
     }
@@ -364,10 +518,7 @@ const UnifiedTimelineCard = ({
             <Text style={styles.timeRange}>{formatTimeRange(item)}</Text>
             {badgeConfig ? (
               <View
-                style={[
-                  styles.statusPill,
-                  { backgroundColor: badgeConfig.bg },
-                ]}
+                style={[styles.statusPill, { backgroundColor: badgeConfig.bg }]}
               >
                 <View
                   style={[
@@ -375,9 +526,7 @@ const UnifiedTimelineCard = ({
                     { backgroundColor: badgeConfig.color },
                   ]}
                 />
-                <Text
-                  style={[styles.statusText, { color: badgeConfig.color }]}
-                >
+                <Text style={[styles.statusText, { color: badgeConfig.color }]}>
                   {badgeConfig.label}
                 </Text>
               </View>
@@ -430,6 +579,17 @@ const UnifiedTimelineCard = ({
           ) : null}
         </Pressable>
 
+        {hasTaskSubtasks ? (
+          <HomeTaskItemsAccordion
+            expanded={itemsExpanded ?? false}
+            onToggle={onToggleItems ?? (() => {})}
+            onToggleSubtask={onToggleSubtask}
+            onImagePress={onImagePress}
+            subtasks={item.subtasks ?? []}
+            taskId={item.id}
+          />
+        ) : null}
+
         {showMaybeRsvpRow ? (
           <View style={styles.rsvpRowFeatured}>
             {(
@@ -453,7 +613,8 @@ const UnifiedTimelineCard = ({
                 <Text
                   style={[
                     styles.rsvpButtonText,
-                    status === currentRsvpStatus && styles.rsvpButtonTextPrimary,
+                    status === currentRsvpStatus &&
+                      styles.rsvpButtonTextPrimary,
                   ]}
                 >
                   {label}
@@ -626,9 +787,7 @@ const UnifiedTimelineCard = ({
   // Show compact "ניווט" pill on upcoming events with a valid navigation destination.
   // Only applies to compact display — featured events keep the full-width button.
   const showCompactNavButton =
-    item.type === 'event' &&
-    temporalState === 'upcoming' &&
-    hasNavigation;
+    item.type === 'event' && temporalState === 'upcoming' && hasNavigation;
 
   if (showMaybeRsvpRow) {
     return (
@@ -649,6 +808,16 @@ const UnifiedTimelineCard = ({
         >
           {compactContent}
         </Pressable>
+        {hasTaskSubtasks ? (
+          <HomeTaskItemsAccordion
+            expanded={itemsExpanded ?? false}
+            onToggle={onToggleItems ?? (() => {})}
+            onToggleSubtask={onToggleSubtask}
+            onImagePress={onImagePress}
+            subtasks={item.subtasks ?? []}
+            taskId={item.id}
+          />
+        ) : null}
         <View style={styles.rsvpRowCardSection}>
           {(
             [
@@ -702,6 +871,16 @@ const UnifiedTimelineCard = ({
         >
           {compactContent}
         </Pressable>
+        {hasTaskSubtasks ? (
+          <HomeTaskItemsAccordion
+            expanded={itemsExpanded ?? false}
+            onToggle={onToggleItems ?? (() => {})}
+            onToggleSubtask={onToggleSubtask}
+            onImagePress={onImagePress}
+            subtasks={item.subtasks ?? []}
+            taskId={item.id}
+          />
+        ) : null}
         <View style={styles.compactNavActionRow}>
           <Pressable
             accessible={true}
@@ -714,6 +893,107 @@ const UnifiedTimelineCard = ({
             <Text style={styles.compactNavigateButtonText}>ניווט</Text>
           </Pressable>
         </View>
+      </View>
+    );
+  }
+
+  // For tasks with subtask items: restructure so the task checkbox is a sibling
+  // of the task-open Pressable — prevents nested-Pressable conflicts.
+  // The accordion summary Pressable is also a sibling (rendered inside the accordion).
+  if (hasTaskSubtasks) {
+    return (
+      <View
+        style={[
+          styles.compactCardShell,
+          isEnded && styles.endedCompactCard,
+          isOverdue && styles.overdueCompactCard,
+          isCompleted && styles.completedCompactCard,
+        ]}
+      >
+        {/* Main task row: checkbox (sibling) + content Pressable */}
+        <View style={styles.taskMainRowCompact}>
+          {showCheckbox ? (
+            <TaskCheckbox
+              checked={item.completed}
+              onToggle={onToggleComplete ?? (() => {})}
+            />
+          ) : null}
+          <Pressable
+            accessible={true}
+            accessibilityLabel={`פתיחת ${item.title}`}
+            accessibilityRole="button"
+            onPress={onOpen}
+            style={styles.compactCardOpenContent}
+          >
+            {/* Time + badge */}
+            {item.time ? (
+              <View style={styles.cardTopRow}>
+                <Text numberOfLines={1} style={styles.timeRange}>
+                  {formatTimeRange(item)}
+                </Text>
+                {badgeConfig ? (
+                  <View
+                    style={[
+                      styles.compactStatusPill,
+                      { backgroundColor: badgeConfig.bg },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.compactStatusText,
+                        { color: badgeConfig.color },
+                      ]}
+                    >
+                      {badgeConfig.label}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : badgeConfig ? (
+              <View
+                style={[
+                  styles.compactStatusPill,
+                  styles.compactBadgeSelfStart,
+                  { backgroundColor: badgeConfig.bg },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.compactStatusText,
+                    { color: badgeConfig.color },
+                  ]}
+                >
+                  {badgeConfig.label}
+                </Text>
+              </View>
+            ) : null}
+            {/* Source label */}
+            <View style={styles.compactSourceRow}>
+              <SourceLabel item={item} />
+            </View>
+            {/* Title (checkbox is outside this Pressable) */}
+            <Text
+              numberOfLines={2}
+              style={[
+                styles.compactEventTitle,
+                isCompleted && styles.completedText,
+              ]}
+            >
+              {item.title}
+            </Text>
+            {contextText ? (
+              <Text style={styles.compactContextText}>{contextText}</Text>
+            ) : null}
+          </Pressable>
+        </View>
+        <HomeTaskItemsAccordion
+          expanded={itemsExpanded ?? false}
+          onToggle={onToggleItems ?? (() => {})}
+          onToggleSubtask={onToggleSubtask}
+          onImagePress={onImagePress}
+          subtasks={item.subtasks ?? []}
+          taskId={item.id}
+        />
       </View>
     );
   }
@@ -765,6 +1045,51 @@ export function HomeDailyCommandCenter({
   const [undatedExpanded, setUndatedExpanded] = useState(false);
   const [endedExpanded, setEndedExpanded] = useState(false);
   const [completedExpanded, setCompletedExpanded] = useState(true);
+  // Tracks which task-item accordions are open. Multiple can be open at once.
+  // Functional updates ensure no stale state across nowMs-driven re-renders.
+  const [expandedItemTaskIds, setExpandedItemTaskIds] = useState<Set<string>>(
+    new Set()
+  );
+
+  // ─── Image preview state ──────────────────────────────────────────────────
+  const [imagePreviewUri, setImagePreviewUri] = useState<string | null>(null);
+
+  // ─── Subtask toggle mutation ──────────────────────────────────────────────
+  const toggleSubtaskMutation = useMutation(api.tasks.toggleSubtaskCompleted);
+  // Per-(taskId:subtaskId) in-flight guard — prevents duplicate taps while a
+  // request is pending. Does NOT block other items.
+  const pendingSubtaskToggles = useRef(new Set<string>());
+
+  const handleToggleSubtask = useCallback(
+    async (taskId: string, subtaskId: string): Promise<void> => {
+      const key = `${taskId}:${subtaskId}`;
+      if (pendingSubtaskToggles.current.has(key)) return;
+      pendingSubtaskToggles.current.add(key);
+      try {
+        await toggleSubtaskMutation({
+          id: taskId as Id<'tasks'>,
+          subtaskId,
+        });
+      } catch (error) {
+        console.error('toggleSubtask error:', error);
+      } finally {
+        pendingSubtaskToggles.current.delete(key);
+      }
+    },
+    [toggleSubtaskMutation]
+  );
+
+  const toggleItemsFor = (taskId: string): void => {
+    setExpandedItemTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      return next;
+    });
+  };
 
   const today = new Date(nowMs);
   const isToday = isSameCalendarDay(selectedDate, today);
@@ -818,6 +1143,7 @@ export function HomeDailyCommandCenter({
     completed: true,
     completedAt: task.completedAt,
     assigneeDisplays: task.assigneeDisplays,
+    subtasks: task.subtasks,
   });
 
   const completedTodayItems: HomeDailyItem[] = (() => {
@@ -872,7 +1198,11 @@ export function HomeDailyCommandCenter({
             // Defensive: never feature an event whose endAt has already passed.
             // Normally endedItems filtering removes these, but guards against any
             // edge case where endAt is stale or the filter ran with stale nowMs.
-            !(item.type === 'event' && item.endAt !== undefined && item.endAt <= nowMs)
+            !(
+              item.type === 'event' &&
+              item.endAt !== undefined &&
+              item.endAt <= nowMs
+            )
         ) ?? null);
   const featuredItemId = featuredItem?.id;
 
@@ -911,486 +1241,588 @@ export function HomeDailyCommandCenter({
   const visibleUndatedTasks = undatedTasks.filter((t) => !t.completed);
 
   return (
-    <View style={styles.root}>
-      {/* ── Attention section (overdue + invitations) ────────────────────────── */}
-      {attentionCount > 0 ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            דורש תשומת לב · {attentionCount}
-          </Text>
-          <View style={styles.attentionCard}>
-            {isToday
-              ? overdueTasks.map((task, index) => (
-                  <View
-                    key={task.id}
-                    style={[
-                      styles.attentionRow,
-                      (index > 0 || invitations.length > 0) &&
-                        styles.dividedRow,
-                    ]}
-                  >
-                    <TaskCheckbox
-                      checked={task.completed}
-                      onToggle={() => onToggleTask(task.id)}
-                    />
-                    <Pressable
-                      accessibilityLabel={`פתיחת משימה באיחור: ${task.title}`}
-                      accessibilityRole="button"
-                      accessible={true}
-                      onPress={() => onOpenTask(task.id)}
-                      style={styles.attentionBody}
+    <>
+      <View style={styles.root}>
+        {/* ── Attention section (overdue + invitations) ────────────────────────── */}
+        {attentionCount > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>
+              דורש תשומת לב · {attentionCount}
+            </Text>
+            <View style={styles.attentionCard}>
+              {isToday
+                ? overdueTasks.map((task, index) => (
+                    <View
+                      key={task.id}
+                      style={
+                        index > 0 || invitations.length > 0
+                          ? styles.dividedRow
+                          : undefined
+                      }
                     >
-                      <Text numberOfLines={2} style={styles.attentionTitle}>
-                        {task.title}
-                      </Text>
-                      <Text style={styles.overdueLabel}>ממתינה להשלמה</Text>
-                      {task.dueDate !== undefined ? (
-                        <Text style={styles.overdueDueLabel}>
-                          {formatDueLabel(
-                            task.dueDate,
-                            task.hasTime ?? false,
-                            task.dueAt,
-                            nowMs
-                          )}
-                        </Text>
+                      <View style={styles.attentionRow}>
+                        <TaskCheckbox
+                          checked={task.completed}
+                          onToggle={() => onToggleTask(task.id)}
+                        />
+                        <Pressable
+                          accessibilityLabel={`פתיחת משימה באיחור: ${task.title}`}
+                          accessibilityRole="button"
+                          accessible={true}
+                          onPress={() => onOpenTask(task.id)}
+                          style={styles.attentionBody}
+                        >
+                          <Text numberOfLines={2} style={styles.attentionTitle}>
+                            {task.title}
+                          </Text>
+                          <Text style={styles.overdueLabel}>ממתינה להשלמה</Text>
+                          {task.dueDate !== undefined ? (
+                            <Text style={styles.overdueDueLabel}>
+                              {formatDueLabel(
+                                task.dueDate,
+                                task.hasTime ?? false,
+                                task.dueAt,
+                                nowMs
+                              )}
+                            </Text>
+                          ) : null}
+                        </Pressable>
+                      </View>
+                      {(task.subtasks?.length ?? 0) > 0 ? (
+                        <HomeTaskItemsAccordion
+                          expanded={expandedItemTaskIds.has(task.id)}
+                          onImagePress={setImagePreviewUri}
+                          onToggle={() => toggleItemsFor(task.id)}
+                          onToggleSubtask={(subtaskId) =>
+                            handleToggleSubtask(task.id, subtaskId)
+                          }
+                          subtasks={task.subtasks ?? []}
+                          taskId={task.id}
+                        />
                       ) : null}
-                    </Pressable>
-                  </View>
-                ))
-              : null}
-            {invitations.map((item, index) => (
-              <View
-                key={item.id}
-                style={[
-                  styles.invitationBlock,
-                  (index > 0 || (isToday && overdueTasks.length > 0)) &&
-                    styles.dividedRow,
-                ]}
-              >
-                <Pressable
-                  accessibilityLabel={`פתיחת הזמנה: ${item.title}`}
-                  accessibilityRole="button"
-                  accessible={true}
-                  onPress={() => onOpenItem(item)}
-                  style={styles.invitationHeader}
+                    </View>
+                  ))
+                : null}
+              {invitations.map((item, index) => (
+                <View
+                  key={item.id}
+                  style={[
+                    styles.invitationBlock,
+                    (index > 0 || (isToday && overdueTasks.length > 0)) &&
+                      styles.dividedRow,
+                  ]}
                 >
-                  <View style={styles.inviteIcon}>
-                    <MaterialIcons
-                      color={tc.primary}
-                      name="mail-outline"
-                      size={20}
-                    />
-                  </View>
-                  <View style={styles.attentionBody}>
-                    <Text style={styles.attentionTitle}>
-                      הזמנה ממתינה לאישור
-                    </Text>
-                    <Text numberOfLines={1} style={styles.invitationSubtitle}>
-                      {item.title}
-                    </Text>
-                  </View>
-                </Pressable>
-                <View style={styles.rsvpRow}>
-                  {(
-                    [
-                      ['yes', 'כן'],
-                      ['maybe', 'אולי'],
-                      ['no', 'לא'],
-                    ] as const
-                  ).map(([status, label]) => (
-                    <Pressable
-                      accessibilityLabel={`${label}, ${item.title}`}
-                      accessibilityRole="button"
-                      accessible={true}
-                      key={status}
-                      onPress={() => onRsvp(item, status)}
-                      style={({ pressed }) => [
-                        styles.rsvpButton,
-                        status ===
-                          (item.myPersonalRsvpStatus ?? item.rsvpStatus) &&
-                          styles.rsvpButtonPrimary,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.rsvpButtonText,
+                  <Pressable
+                    accessibilityLabel={`פתיחת הזמנה: ${item.title}`}
+                    accessibilityRole="button"
+                    accessible={true}
+                    onPress={() => onOpenItem(item)}
+                    style={styles.invitationHeader}
+                  >
+                    <View style={styles.inviteIcon}>
+                      <MaterialIcons
+                        color={tc.primary}
+                        name="mail-outline"
+                        size={20}
+                      />
+                    </View>
+                    <View style={styles.attentionBody}>
+                      <Text style={styles.attentionTitle}>
+                        הזמנה ממתינה לאישור
+                      </Text>
+                      <Text numberOfLines={1} style={styles.invitationSubtitle}>
+                        {item.title}
+                      </Text>
+                    </View>
+                  </Pressable>
+                  <View style={styles.rsvpRow}>
+                    {(
+                      [
+                        ['yes', 'כן'],
+                        ['maybe', 'אולי'],
+                        ['no', 'לא'],
+                      ] as const
+                    ).map(([status, label]) => (
+                      <Pressable
+                        accessibilityLabel={`${label}, ${item.title}`}
+                        accessibilityRole="button"
+                        accessible={true}
+                        key={status}
+                        onPress={() => onRsvp(item, status)}
+                        style={({ pressed }) => [
+                          styles.rsvpButton,
                           status ===
                             (item.myPersonalRsvpStatus ?? item.rsvpStatus) &&
-                            styles.rsvpButtonTextPrimary,
+                            styles.rsvpButtonPrimary,
+                          pressed && styles.pressed,
                         ]}
                       >
-                        {label}
-                      </Text>
-                    </Pressable>
-                  ))}
+                        <Text
+                          style={[
+                            styles.rsvpButtonText,
+                            status ===
+                              (item.myPersonalRsvpStatus ?? item.rsvpStatus) &&
+                              styles.rsvpButtonTextPrimary,
+                          ]}
+                        >
+                          {label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
                 </View>
-              </View>
-            ))}
-          </View>
-        </View>
-      ) : null}
-
-      {/* ── Schedule section ─────────────────────────────────────────────────── */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          {isPast ? 'היום שהיה' : 'הלו״ז שלי'}
-        </Text>
-
-        {/* All-day events */}
-        {allDayItems.length > 0 ? (
-          <View style={styles.allDayGroup}>
-            {allDayItems.map((item) => (
-              <Pressable
-                accessibilityLabel={`פתיחת אירוע לכל היום: ${item.title}`}
-                accessibilityRole="button"
-                accessible={true}
-                key={item.id}
-                onPress={() => onOpenItem(item)}
-                style={styles.allDayRow}
-              >
-                <Text style={styles.allDayLabel}>כל היום</Text>
-                <Text numberOfLines={2} style={styles.allDayTitle}>
-                  {item.title}
-                </Text>
-                <MaterialIcons color="#ADB3B5" name="chevron-left" size={21} />
-              </Pressable>
-            ))}
+              ))}
+            </View>
           </View>
         ) : null}
 
-        {/* ── Today: "מוקדם יותר" (ended events) ─────────────────────────────── */}
-        {isToday && endedItems.length > 0 ? (
-          <View style={styles.collapsibleSection}>
-            <Pressable
-              accessible={true}
-              accessibilityLabel={`מוקדם יותר, ${endedItems.length} אירועים, ${endedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
-              accessibilityRole="button"
-              onPress={() => setEndedExpanded((prev) => !prev)}
-              style={styles.collapsibleHeader}
-            >
-              <Text style={styles.collapsibleHeaderText}>
-                מוקדם יותר · {endedItems.length}
-              </Text>
-              <MaterialIcons
-                color={tc.textSecondary}
-                name={endedExpanded ? 'expand-less' : 'expand-more'}
-                size={22}
-              />
-            </Pressable>
-            {endedExpanded ? (
-              <View style={styles.collapsibleContent}>
-                {endedItems.map((item) => (
+        {/* ── Schedule section ─────────────────────────────────────────────────── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>
+            {isPast ? 'היום שהיה' : 'הלו״ז שלי'}
+          </Text>
+
+          {/* All-day events */}
+          {allDayItems.length > 0 ? (
+            <View style={styles.allDayGroup}>
+              {allDayItems.map((item) => (
+                <Pressable
+                  accessibilityLabel={`פתיחת אירוע לכל היום: ${item.title}`}
+                  accessibilityRole="button"
+                  accessible={true}
+                  key={item.id}
+                  onPress={() => onOpenItem(item)}
+                  style={styles.allDayRow}
+                >
+                  <Text style={styles.allDayLabel}>כל היום</Text>
+                  <Text numberOfLines={2} style={styles.allDayTitle}>
+                    {item.title}
+                  </Text>
+                  <MaterialIcons
+                    color="#ADB3B5"
+                    name="chevron-left"
+                    size={21}
+                  />
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+
+          {/* ── Today: "מוקדם יותר" (ended events) ─────────────────────────────── */}
+          {isToday && endedItems.length > 0 ? (
+            <View style={styles.collapsibleSection}>
+              <Pressable
+                accessible={true}
+                accessibilityLabel={`מוקדם יותר, ${endedItems.length} אירועים, ${endedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
+                accessibilityRole="button"
+                onPress={() => setEndedExpanded((prev) => !prev)}
+                style={styles.collapsibleHeader}
+              >
+                <Text style={styles.collapsibleHeaderText}>
+                  מוקדם יותר · {endedItems.length}
+                </Text>
+                <MaterialIcons
+                  color={tc.textSecondary}
+                  name={endedExpanded ? 'expand-less' : 'expand-more'}
+                  size={22}
+                />
+              </Pressable>
+              {endedExpanded ? (
+                <View style={styles.collapsibleContent}>
+                  {endedItems.map((item) => (
+                    <UnifiedTimelineCard
+                      displayMode="compact"
+                      item={item}
+                      itemsExpanded={expandedItemTaskIds.has(item.id)}
+                      key={item.id}
+                      nowMs={nowMs}
+                      onImagePress={setImagePreviewUri}
+                      onNavigate={() =>
+                        onNavigate(item.location, item.locationUrl)
+                      }
+                      onOpen={() => onOpenItem(item)}
+                      onOpenRemoteUrl={() => {
+                        if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
+                      }}
+                      onToggleComplete={() => onToggleTask(item.id)}
+                      onToggleItems={() => toggleItemsFor(item.id)}
+                      onToggleSubtask={(subtaskId) =>
+                        handleToggleSubtask(item.id, subtaskId)
+                      }
+                      temporalState="ended"
+                    />
+                  ))}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {/* ── Active events — all featured ──────────────────────────────────── */}
+          {activeItems.map((item) => (
+            <UnifiedTimelineCard
+              displayMode="featured"
+              item={item}
+              itemsExpanded={expandedItemTaskIds.has(item.id)}
+              key={item.id}
+              nowMs={nowMs}
+              onImagePress={setImagePreviewUri}
+              onNavigate={() => onNavigate(item.location, item.locationUrl)}
+              onOpen={() => onOpenItem(item)}
+              onOpenRemoteUrl={() => {
+                if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
+              }}
+              onRsvp={onRsvp}
+              onToggleComplete={() => onToggleTask(item.id)}
+              onToggleItems={() => toggleItemsFor(item.id)}
+              onToggleSubtask={(subtaskId) =>
+                handleToggleSubtask(item.id, subtaskId)
+              }
+              temporalState="active"
+            />
+          ))}
+
+          {/* ── Featured (first upcoming) item ───────────────────────────────── */}
+          {featuredItem && !isPast ? (
+            <UnifiedTimelineCard
+              displayMode="featured"
+              featuredBadgeLabel={isToday ? 'הבא בתור' : 'הראשון בלו״ז'}
+              item={featuredItem}
+              itemsExpanded={expandedItemTaskIds.has(featuredItem.id)}
+              nowMs={nowMs}
+              onImagePress={setImagePreviewUri}
+              onNavigate={() =>
+                onNavigate(featuredItem.location, featuredItem.locationUrl)
+              }
+              onOpen={() => onOpenItem(featuredItem)}
+              onOpenRemoteUrl={() => {
+                if (featuredItem.remoteUrl)
+                  onOpenRemoteUrl(featuredItem.remoteUrl);
+              }}
+              onRsvp={onRsvp}
+              onToggleComplete={() => onToggleTask(featuredItem.id)}
+              onToggleItems={() => toggleItemsFor(featuredItem.id)}
+              onToggleSubtask={(subtaskId) =>
+                handleToggleSubtask(featuredItem.id, subtaskId)
+              }
+              temporalState={getTemporalState(featuredItem)}
+            />
+          ) : null}
+
+          {/* ── Remaining items (compact) ─────────────────────────────────────── */}
+          {remainingItems.length > 0 ? (
+            <View style={styles.compactGroup}>
+              {remainingItems.map((item) => {
+                const tState = getTemporalState(item);
+                return (
                   <UnifiedTimelineCard
                     displayMode="compact"
                     item={item}
+                    itemsExpanded={expandedItemTaskIds.has(item.id)}
                     key={item.id}
                     nowMs={nowMs}
-                    onNavigate={() => onNavigate(item.location, item.locationUrl)}
+                    onImagePress={setImagePreviewUri}
+                    onNavigate={() =>
+                      onNavigate(item.location, item.locationUrl)
+                    }
                     onOpen={() => onOpenItem(item)}
                     onOpenRemoteUrl={() => {
                       if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
                     }}
+                    onRsvp={onRsvp}
                     onToggleComplete={() => onToggleTask(item.id)}
-                    temporalState="ended"
+                    onToggleItems={() => toggleItemsFor(item.id)}
+                    onToggleSubtask={(subtaskId) =>
+                      handleToggleSubtask(item.id, subtaskId)
+                    }
+                    temporalState={tState}
                   />
-                ))}
-              </View>
-            ) : null}
-          </View>
-        ) : null}
+                );
+              })}
+            </View>
+          ) : null}
 
-        {/* ── Active events — all featured ──────────────────────────────────── */}
-        {activeItems.map((item) => (
-          <UnifiedTimelineCard
-            displayMode="featured"
-            item={item}
-            key={item.id}
-            nowMs={nowMs}
-            onNavigate={() => onNavigate(item.location, item.locationUrl)}
-            onOpen={() => onOpenItem(item)}
-            onOpenRemoteUrl={() => {
-              if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
-            }}
-            onRsvp={onRsvp}
-            onToggleComplete={() => onToggleTask(item.id)}
-            temporalState="active"
-          />
-        ))}
-
-        {/* ── Featured (first upcoming) item ───────────────────────────────── */}
-        {featuredItem && !isPast ? (
-          <UnifiedTimelineCard
-            displayMode="featured"
-            featuredBadgeLabel={isToday ? 'הבא בתור' : 'הראשון בלו״ז'}
-            item={featuredItem}
-            nowMs={nowMs}
-            onNavigate={() =>
-              onNavigate(featuredItem.location, featuredItem.locationUrl)
-            }
-            onOpen={() => onOpenItem(featuredItem)}
-            onOpenRemoteUrl={() => {
-              if (featuredItem.remoteUrl) onOpenRemoteUrl(featuredItem.remoteUrl);
-            }}
-            onRsvp={onRsvp}
-            onToggleComplete={() => onToggleTask(featuredItem.id)}
-            temporalState={getTemporalState(featuredItem)}
-          />
-        ) : null}
-
-        {/* ── Remaining items (compact) ─────────────────────────────────────── */}
-        {remainingItems.length > 0 ? (
-          <View style={styles.compactGroup}>
-            {remainingItems.map((item) => {
-              const tState = getTemporalState(item);
-              return (
-                <UnifiedTimelineCard
-                  displayMode="compact"
-                  item={item}
-                  key={item.id}
-                  nowMs={nowMs}
-                  onNavigate={() =>
-                    onNavigate(item.location, item.locationUrl)
-                  }
-                  onOpen={() => onOpenItem(item)}
-                  onOpenRemoteUrl={() => {
-                    if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
-                  }}
-                  onRsvp={onRsvp}
-                  onToggleComplete={() => onToggleTask(item.id)}
-                  temporalState={tState}
-                />
-              );
-            })}
-          </View>
-        ) : null}
-
-        {/* Empty state */}
-        {allDayItems.length === 0 &&
-        activeItems.length === 0 &&
-        !featuredItem &&
-        remainingItems.length === 0 &&
-        endedItems.length === 0 ? (
-          <View style={styles.calmEmpty}>
-            <MaterialIcons
-              color={tc.primary}
-              name="event-available"
-              size={22}
-            />
-            <Text style={styles.calmEmptyText}>
-              אין עוד דברים מתוזמנים {emptySuffix}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-
-      {/* ── Untimed tasks for selected day ───────────────────────────────────── */}
-      {visibleUntimedTasks.length > 0 ? (
-        <View style={styles.section}>
-          <View style={styles.sectionHeadingRow}>
-            <Text style={styles.sectionTitle}>
-              {isToday ? 'משימות להיום' : 'משימות לתאריך הזה'}
-            </Text>
-            <Pressable
-              accessibilityLabel="פתיחת כל המשימות"
-              accessibilityRole="button"
-              accessible={true}
-              onPress={onOpenTasks}
-            >
-              <Text style={styles.sectionLink}>הכל</Text>
-            </Pressable>
-          </View>
-          <View style={styles.taskList}>
-            {visibleUntimedTasks.map((task, index) => (
-              <Pressable
-                accessibilityLabel={`פתיחת משימה: ${task.title}`}
-                accessibilityRole="button"
-                accessible={true}
-                key={task.id}
-                onPress={() => onOpenTask(task.id)}
-                style={[styles.taskRow, index > 0 && styles.dividedRow]}
-              >
-                <TaskCheckbox
-                  checked={task.completed}
-                  onToggle={() => onToggleTask(task.id)}
-                />
-                <Text
-                  numberOfLines={2}
-                  style={[
-                    styles.taskTitle,
-                    task.completed && styles.completedText,
-                  ]}
-                >
-                  {task.title}
-                </Text>
-                <MaterialIcons color="#ADB3B5" name="chevron-left" size={21} />
-              </Pressable>
-            ))}
-          </View>
-        </View>
-      ) : null}
-
-      {/* ── Today: "בוצעו היום" (completed tasks) ────────────────────────────── */}
-      {isToday && completedTodayItems.length > 0 ? (
-        <View style={styles.section}>
-          <Pressable
-            accessible={true}
-            accessibilityLabel={`בוצעו היום, ${completedTodayItems.length} משימות, ${completedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
-            accessibilityRole="button"
-            onPress={() => setCompletedExpanded((prev) => !prev)}
-            style={styles.collapsibleHeaderCard}
-          >
-            <Text style={styles.collapsibleHeaderText}>
-              בוצעו היום · {completedTodayItems.length}
-            </Text>
-            <MaterialIcons
-              color={tc.textSecondary}
-              name={completedExpanded ? 'expand-less' : 'expand-more'}
-              size={22}
-            />
-          </Pressable>
-          {completedExpanded ? (
-            <View style={styles.collapsibleContent}>
-              {completedTodayItems.map((item) => (
-                <UnifiedTimelineCard
-                  displayMode="compact"
-                  item={item}
-                  key={item.id}
-                  nowMs={nowMs}
-                  onOpen={() => onOpenItem(item)}
-                  onToggleComplete={() => onToggleTask(item.id)}
-                  temporalState="completed"
-                />
-              ))}
+          {/* Empty state */}
+          {allDayItems.length === 0 &&
+          activeItems.length === 0 &&
+          !featuredItem &&
+          remainingItems.length === 0 &&
+          endedItems.length === 0 ? (
+            <View style={styles.calmEmpty}>
+              <MaterialIcons
+                color={tc.primary}
+                name="event-available"
+                size={22}
+              />
+              <Text style={styles.calmEmptyText}>
+                אין עוד דברים מתוזמנים {emptySuffix}
+              </Text>
             </View>
           ) : null}
         </View>
-      ) : null}
 
-      {/* ── Today: undated tasks (incomplete only) ────────────────────────────── */}
-      {isToday && undatedTaskCount > 0 ? (
-        <View style={styles.section}>
-          <View style={styles.undatedAccordion}>
-            <Pressable
-              accessibilityLabel={`${undatedTaskCount} משימות פתוחות ללא תאריך, ${undatedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
-              accessibilityRole="button"
-              accessible={true}
-              onPress={() => setUndatedExpanded((prev) => !prev)}
-              style={styles.undatedAccordionHeader}
-            >
-              <Text style={styles.undatedText}>
-                {undatedTaskCount === 1
-                  ? 'משימה פתוחה אחת ללא תאריך'
-                  : `${undatedTaskCount} משימות פתוחות ללא תאריך`}
+        {/* ── Untimed tasks for selected day ───────────────────────────────────── */}
+        {visibleUntimedTasks.length > 0 ? (
+          <View style={styles.section}>
+            <View style={styles.sectionHeadingRow}>
+              <Text style={styles.sectionTitle}>
+                {isToday ? 'משימות להיום' : 'משימות לתאריך הזה'}
               </Text>
-              <MaterialIcons
-                color={tc.primary}
-                name={undatedExpanded ? 'expand-less' : 'expand-more'}
-                size={23}
-              />
-            </Pressable>
-            {undatedExpanded ? (
-              <View style={styles.undatedAccordionContent}>
-                {visibleUndatedTasks.map((task, index) => (
+              <Pressable
+                accessibilityLabel="פתיחת כל המשימות"
+                accessibilityRole="button"
+                accessible={true}
+                onPress={onOpenTasks}
+              >
+                <Text style={styles.sectionLink}>הכל</Text>
+              </Pressable>
+            </View>
+            <View style={styles.taskList}>
+              {visibleUntimedTasks.map((task, index) => (
+                <View
+                  key={task.id}
+                  style={index > 0 ? styles.dividedRow : undefined}
+                >
                   <Pressable
                     accessibilityLabel={`פתיחת משימה: ${task.title}`}
                     accessibilityRole="button"
                     accessible={true}
-                    key={task.id}
                     onPress={() => onOpenTask(task.id)}
-                    style={[styles.taskRow, index > 0 && styles.dividedRow]}
+                    style={styles.taskRow}
                   >
                     <TaskCheckbox
                       checked={task.completed}
                       onToggle={() => onToggleTask(task.id)}
                     />
-                    <Text
-                      numberOfLines={2}
-                      style={[
-                        styles.taskTitle,
-                        task.completed && styles.completedText,
-                      ]}
-                    >
-                      {task.title}
-                    </Text>
-                    <MaterialIcons color="#ADB3B5" name="chevron-left" size={21} />
+                    <View style={styles.taskRowBody}>
+                      <Text
+                        numberOfLines={2}
+                        style={[
+                          styles.taskTitle,
+                          task.completed && styles.completedText,
+                        ]}
+                      >
+                        {task.title}
+                      </Text>
+                    </View>
+                    <MaterialIcons
+                      color="#ADB3B5"
+                      name="chevron-left"
+                      size={21}
+                    />
                   </Pressable>
+                  {(task.subtasks?.length ?? 0) > 0 ? (
+                    <HomeTaskItemsAccordion
+                      expanded={expandedItemTaskIds.has(task.id)}
+                      onImagePress={setImagePreviewUri}
+                      onToggle={() => toggleItemsFor(task.id)}
+                      onToggleSubtask={(subtaskId) =>
+                        handleToggleSubtask(task.id, subtaskId)
+                      }
+                      subtasks={task.subtasks ?? []}
+                      taskId={task.id}
+                    />
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        {/* ── Today: "בוצעו היום" (completed tasks) ────────────────────────────── */}
+        {isToday && completedTodayItems.length > 0 ? (
+          <View style={styles.section}>
+            <Pressable
+              accessible={true}
+              accessibilityLabel={`בוצעו היום, ${completedTodayItems.length} משימות, ${completedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
+              accessibilityRole="button"
+              onPress={() => setCompletedExpanded((prev) => !prev)}
+              style={styles.collapsibleHeaderCard}
+            >
+              <Text style={styles.collapsibleHeaderText}>
+                בוצעו היום · {completedTodayItems.length}
+              </Text>
+              <MaterialIcons
+                color={tc.textSecondary}
+                name={completedExpanded ? 'expand-less' : 'expand-more'}
+                size={22}
+              />
+            </Pressable>
+            {completedExpanded ? (
+              <View style={styles.collapsibleContent}>
+                {completedTodayItems.map((item) => (
+                  <UnifiedTimelineCard
+                    displayMode="compact"
+                    item={item}
+                    itemsExpanded={expandedItemTaskIds.has(item.id)}
+                    key={item.id}
+                    nowMs={nowMs}
+                    onImagePress={setImagePreviewUri}
+                    onOpen={() => onOpenItem(item)}
+                    onToggleComplete={() => onToggleTask(item.id)}
+                    onToggleItems={() => toggleItemsFor(item.id)}
+                    onToggleSubtask={(subtaskId) =>
+                      handleToggleSubtask(item.id, subtaskId)
+                    }
+                    temporalState="completed"
+                  />
                 ))}
               </View>
             ) : null}
           </View>
-        </View>
-      ) : null}
+        ) : null}
 
-      {/* ── Birthdays ─────────────────────────────────────────────────────────── */}
-      {!isPast ? (
-        <View style={styles.section}>
-          <View style={styles.sectionHeadingRow}>
-            <Text style={styles.sectionTitle}>ימי הולדת קרובים</Text>
-            {hasAnyBirthdays ? (
+        {/* ── Today: undated tasks (incomplete only) ────────────────────────────── */}
+        {isToday && undatedTaskCount > 0 ? (
+          <View style={styles.section}>
+            <View style={styles.undatedAccordion}>
               <Pressable
-                accessibilityLabel="פתיחת כל ימי ההולדת"
+                accessibilityLabel={`${undatedTaskCount} משימות פתוחות ללא תאריך, ${undatedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
                 accessibilityRole="button"
                 accessible={true}
-                onPress={onOpenBirthdays}
+                onPress={() => setUndatedExpanded((prev) => !prev)}
+                style={styles.undatedAccordionHeader}
               >
-                <Text style={styles.sectionLink}>הצג הכל</Text>
+                <Text style={styles.undatedText}>
+                  {undatedTaskCount === 1
+                    ? 'משימה פתוחה אחת ללא תאריך'
+                    : `${undatedTaskCount} משימות פתוחות ללא תאריך`}
+                </Text>
+                <MaterialIcons
+                  color={tc.primary}
+                  name={undatedExpanded ? 'expand-less' : 'expand-more'}
+                  size={23}
+                />
               </Pressable>
-            ) : null}
+              {undatedExpanded ? (
+                <View style={styles.undatedAccordionContent}>
+                  {visibleUndatedTasks.map((task, index) => (
+                    <View
+                      key={task.id}
+                      style={index > 0 ? styles.dividedRow : undefined}
+                    >
+                      <Pressable
+                        accessibilityLabel={`פתיחת משימה: ${task.title}`}
+                        accessibilityRole="button"
+                        accessible={true}
+                        onPress={() => onOpenTask(task.id)}
+                        style={styles.taskRow}
+                      >
+                        <TaskCheckbox
+                          checked={task.completed}
+                          onToggle={() => onToggleTask(task.id)}
+                        />
+                        <View style={styles.taskRowBody}>
+                          <Text
+                            numberOfLines={2}
+                            style={[
+                              styles.taskTitle,
+                              task.completed && styles.completedText,
+                            ]}
+                          >
+                            {task.title}
+                          </Text>
+                        </View>
+                        <MaterialIcons
+                          color="#ADB3B5"
+                          name="chevron-left"
+                          size={21}
+                        />
+                      </Pressable>
+                      {(task.subtasks?.length ?? 0) > 0 ? (
+                        <HomeTaskItemsAccordion
+                          expanded={expandedItemTaskIds.has(task.id)}
+                          onImagePress={setImagePreviewUri}
+                          onToggle={() => toggleItemsFor(task.id)}
+                          onToggleSubtask={(subtaskId) =>
+                            handleToggleSubtask(task.id, subtaskId)
+                          }
+                          subtasks={task.subtasks ?? []}
+                          taskId={task.id}
+                        />
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </View>
           </View>
-          {birthdays.length > 0 ? (
-            <ScrollView
-              contentContainerStyle={styles.birthdayRow}
-              horizontal={true}
-              showsHorizontalScrollIndicator={false}
-            >
-              {birthdays.map((birthday) => (
+        ) : null}
+
+        {/* ── Birthdays ─────────────────────────────────────────────────────────── */}
+        {!isPast ? (
+          <View style={styles.section}>
+            <View style={styles.sectionHeadingRow}>
+              <Text style={styles.sectionTitle}>ימי הולדת קרובים</Text>
+              {hasAnyBirthdays ? (
                 <Pressable
-                  accessibilityLabel={`יום ההולדת של ${birthday.name}`}
+                  accessibilityLabel="פתיחת כל ימי ההולדת"
                   accessibilityRole="button"
                   accessible={true}
-                  key={birthday.id}
-                  onPress={() => onOpenBirthday(birthday)}
-                  style={styles.birthdayCard}
+                  onPress={onOpenBirthdays}
                 >
-                  <BirthdayAvatar
-                    birthday={birthday}
-                    key={birthday.photoUri ?? 'no-photo'}
-                  />
-                  <View style={styles.birthdayBody}>
-                    <Text numberOfLines={1} style={styles.birthdayName}>
-                      {birthday.name}
-                    </Text>
-                    <Text numberOfLines={1} style={styles.birthdayCountdown}>
-                      {getCountdownLabel(birthday)}
-                    </Text>
-                  </View>
+                  <Text style={styles.sectionLink}>הצג הכל</Text>
                 </Pressable>
-              ))}
-            </ScrollView>
-          ) : hasAnyBirthdays ? (
-            <Text style={styles.noBirthdays}>
-              אין ימי הולדת ב־30 הימים הקרובים
-            </Text>
-          ) : (
-            <View style={styles.birthdayEmptyState}>
-              <Text style={styles.birthdayEmptyText}>
-                עדיין לא הוספת ימי הולדת
-              </Text>
-              <Pressable
-                accessibilityLabel="הוספת יום הולדת"
-                accessibilityRole="button"
-                accessible={true}
-                onPress={onAddBirthday}
-                style={styles.birthdayAddButton}
-              >
-                <Text style={styles.birthdayAddButtonText}>הוספה</Text>
-              </Pressable>
+              ) : null}
             </View>
-          )}
-        </View>
-      ) : null}
-    </View>
+            {birthdays.length > 0 ? (
+              <ScrollView
+                contentContainerStyle={styles.birthdayRow}
+                horizontal={true}
+                showsHorizontalScrollIndicator={false}
+              >
+                {birthdays.map((birthday) => (
+                  <Pressable
+                    accessibilityLabel={`יום ההולדת של ${birthday.name}`}
+                    accessibilityRole="button"
+                    accessible={true}
+                    key={birthday.id}
+                    onPress={() => onOpenBirthday(birthday)}
+                    style={styles.birthdayCard}
+                  >
+                    <BirthdayAvatar
+                      birthday={birthday}
+                      key={birthday.photoUri ?? 'no-photo'}
+                    />
+                    <View style={styles.birthdayBody}>
+                      <Text numberOfLines={1} style={styles.birthdayName}>
+                        {birthday.name}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.birthdayCountdown}>
+                        {getCountdownLabel(birthday)}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : hasAnyBirthdays ? (
+              <Text style={styles.noBirthdays}>
+                אין ימי הולדת ב־30 הימים הקרובים
+              </Text>
+            ) : (
+              <View style={styles.birthdayEmptyState}>
+                <Text style={styles.birthdayEmptyText}>
+                  עדיין לא הוספת ימי הולדת
+                </Text>
+                <Pressable
+                  accessibilityLabel="הוספת יום הולדת"
+                  accessibilityRole="button"
+                  accessible={true}
+                  onPress={onAddBirthday}
+                  style={styles.birthdayAddButton}
+                >
+                  <Text style={styles.birthdayAddButtonText}>הוספה</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        ) : null}
+      </View>
+
+      <SubtaskImagePreviewModal
+        uri={imagePreviewUri}
+        onClose={() => setImagePreviewUri(null)}
+      />
+    </>
   );
 }
 
@@ -1438,6 +1870,83 @@ const styles = StyleSheet.create({
   dividedRow: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#E5E9EB',
+  },
+  // ── Task row body — wraps title in list rows ───────────────────────────────
+  taskRowBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  // ── HomeTaskItemsAccordion styles ──────────────────────────────────────────
+  itemsAccordionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#E5E9EB',
+  },
+  itemsSummaryRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+    minHeight: 44,
+  },
+  itemsSummaryText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#334E6F',
+    fontWeight: '600',
+    textAlign: getTextAlign(),
+    writingDirection: 'rtl',
+  },
+  itemRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+    minHeight: 40,
+    backgroundColor: 'transparent',
+  },
+  itemRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E9EB',
+  },
+  itemCheckboxTouch: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    flexShrink: 0,
+  },
+  itemIndicator: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: '#ADB3B5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  itemIndicatorDone: {
+    backgroundColor: '#52B788',
+    borderColor: '#52B788',
+  },
+  itemTitle: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#2D3335',
+    textAlign: getTextAlign(),
+    writingDirection: 'rtl',
+  },
+  itemTitleDone: {
+    color: '#92999C',
+    textDecorationLine: 'line-through',
+  },
+  itemThumbWrap: {
+    flexShrink: 0,
   },
   inviteIcon: {
     width: 40,
@@ -1688,6 +2197,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 1,
+  },
+  // Row that holds the checkbox sibling + the main-content Pressable
+  taskMainRowCompact: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+  },
+  // The Pressable that opens the full task — takes remaining width beside checkbox
+  compactCardOpenContent: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
   // Inner content padding (applied to Pressable shell or inner Pressable in RSVP variant)
   compactCardPadding: {
