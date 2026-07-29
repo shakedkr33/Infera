@@ -941,7 +941,18 @@ export default function HomeScreen() {
                   sizeBytes: s.attachment.sizeBytes,
                   createdAt: s.attachment.createdAt,
                 }
-              : undefined,
+              : s.image
+                ? {
+                    id: `${s.id}-img`,
+                    type: 'image' as const,
+                    storageId: String(s.image.storageId),
+                    originalName: '',
+                    displayName: '',
+                    mimeType: s.image.mimeType,
+                    sizeBytes: s.image.sizeBytes,
+                    createdAt: s.image.createdAt,
+                  }
+                : undefined,
           })),
         };
       });
@@ -1001,7 +1012,18 @@ export default function HomeScreen() {
                   sizeBytes: s.attachment.sizeBytes,
                   createdAt: s.attachment.createdAt,
                 }
-              : undefined,
+              : s.image
+                ? {
+                    id: `${s.id}-img`,
+                    type: 'image' as const,
+                    storageId: String(s.image.storageId),
+                    originalName: '',
+                    displayName: '',
+                    mimeType: s.image.mimeType,
+                    sizeBytes: s.image.sizeBytes,
+                    createdAt: s.image.createdAt,
+                  }
+                : undefined,
           })),
         };
       });
@@ -1609,6 +1631,34 @@ export default function HomeScreen() {
           dueAt: t.dueAt ?? undefined,
           assigneeDisplays:
             assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
+          subtasks: (t.subtasks ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+            attachment: s.attachment
+              ? {
+                  id: s.attachment.id,
+                  type: s.attachment.type,
+                  storageId: String(s.attachment.storageId),
+                  originalName: s.attachment.originalName ?? '',
+                  displayName: s.attachment.displayName ?? '',
+                  mimeType: s.attachment.mimeType,
+                  sizeBytes: s.attachment.sizeBytes,
+                  createdAt: s.attachment.createdAt,
+                }
+              : s.image
+                ? {
+                    id: `${s.id}-img`,
+                    type: 'image' as const,
+                    storageId: String(s.image.storageId),
+                    originalName: '',
+                    displayName: '',
+                    mimeType: s.image.mimeType,
+                    sizeBytes: s.image.sizeBytes,
+                    createdAt: s.image.createdAt,
+                  }
+                : undefined,
+          })),
         };
       });
 
@@ -1634,6 +1684,34 @@ export default function HomeScreen() {
           completedAt: t.completedAt ?? undefined,
           assigneeDisplays:
             assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
+          subtasks: (t.subtasks ?? []).map((s) => ({
+            id: s.id,
+            title: s.title,
+            completed: s.completed,
+            attachment: s.attachment
+              ? {
+                  id: s.attachment.id,
+                  type: s.attachment.type,
+                  storageId: String(s.attachment.storageId),
+                  originalName: s.attachment.originalName ?? '',
+                  displayName: s.attachment.displayName ?? '',
+                  mimeType: s.attachment.mimeType,
+                  sizeBytes: s.attachment.sizeBytes,
+                  createdAt: s.attachment.createdAt,
+                }
+              : s.image
+                ? {
+                    id: `${s.id}-img`,
+                    type: 'image' as const,
+                    storageId: String(s.image.storageId),
+                    originalName: '',
+                    displayName: '',
+                    mimeType: s.image.mimeType,
+                    sizeBytes: s.image.sizeBytes,
+                    createdAt: s.image.createdAt,
+                  }
+                : undefined,
+          })),
         };
       });
 
