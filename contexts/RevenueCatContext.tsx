@@ -140,6 +140,29 @@ const PREVIEW_PACKAGES: PackageInfo[] = [
 // ============================================================================
 
 /**
+ * Returns true when a RevenueCat log message describes a purchase cancellation.
+ *
+ * RevenueCat's native SDK emits cancellation notices at LOG_LEVEL.ERROR, which
+ * the SDK's default log handler routes to console.error, triggering the React
+ * Native red LogBox.  Cancellation is a normal user action — not an app error —
+ * so we intercept these messages in a custom setLogHandler and demote them.
+ *
+ * Only the (logLevel, message) pair is available inside LogHandler, so this
+ * helper uses the narrowest reliable pattern set for the cancellation messages
+ * emitted by RevenueCat 9.x on iOS and Android.
+ */
+function isPurchaseCancellationMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('purchase was cancelled') ||
+    lower.includes('purchase was canceled') ||
+    lower.includes('user cancelled') ||
+    lower.includes('user canceled') ||
+    lower.includes('purchase_cancelled')
+  );
+}
+
+/**
  * בדיקה האם רצים ב-Expo Go
  */
 function isRunningInExpoGo(): boolean {
@@ -342,6 +365,41 @@ export function RevenueCatProvider({
           // אפשר להעביר Convex user ID בעתיד עם Purchases.logIn()
         });
 
+        // Override the default log handler so that purchase-cancellation
+        // messages (which RevenueCat emits at ERROR level) do NOT reach
+        // console.error and trigger the React Native red LogBox.
+        // Cancellation is a normal user action, not an application failure.
+        // All other log levels, and all genuine error messages, are forwarded
+        // using the same routing as the SDK default.
+        Purchases.setLogHandler((logLevel, message) => {
+          if (
+            logLevel === Purchases.LOG_LEVEL.ERROR &&
+            isPurchaseCancellationMessage(message)
+          ) {
+            // Expected user action — only surface in dev builds for diagnostics
+            if (__DEV__) {
+              console.debug(`[RevenueCat] ${message}`);
+            }
+            return;
+          }
+          switch (logLevel) {
+            case Purchases.LOG_LEVEL.DEBUG:
+              console.debug(`[RevenueCat] ${message}`);
+              break;
+            case Purchases.LOG_LEVEL.INFO:
+              console.info(`[RevenueCat] ${message}`);
+              break;
+            case Purchases.LOG_LEVEL.WARN:
+              console.warn(`[RevenueCat] ${message}`);
+              break;
+            case Purchases.LOG_LEVEL.ERROR:
+              console.error(`[RevenueCat] ${message}`);
+              break;
+            default:
+              console.log(`[RevenueCat] ${message}`);
+          }
+        });
+
         // טעינת ההצעות (Offerings)
         const offerings = await Purchases.getOfferings();
 
@@ -464,21 +522,27 @@ export function RevenueCatProvider({
         return hasPremium;
       } catch (error: unknown) {
         const purchasesError = error as {
+          code?: string;
           userCancelled?: boolean;
           message?: string;
-          code?: string;
         };
 
-        // בדיקה אם המשתמש ביטל - לא מציגים שגיאה
-        if (purchasesError.userCancelled) {
+        // PURCHASES_ERROR_CODE.PURCHASE_CANCELLED_ERROR === "1"
+        // userCancelled is deprecated in SDK 9.x but still reliable as fallback.
+        const isCancelled =
+          purchasesError.code === '1' ||
+          purchasesError.userCancelled === true;
+
+        if (isCancelled) {
+          // Cancellation is a normal user action — no alert, no error log.
           return false;
         }
 
-        // בדיקה לפי קוד שגיאה
-        const errorMessage = purchasesError.message || 'שגיאה לא ידועה';
+        // בדיקת ביטול לפי תוכן ההודעה (גיבוי)
+        const errorMessage = purchasesError.message ?? '';
         if (
-          errorMessage.includes('cancelled') ||
-          errorMessage.includes('canceled')
+          errorMessage.toLowerCase().includes('cancelled') ||
+          errorMessage.toLowerCase().includes('canceled')
         ) {
           return false;
         }
