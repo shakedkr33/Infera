@@ -201,6 +201,8 @@ interface CalendarEvent {
   profileCircles?: ProfileCircle[];
   profileCirclesExtraCount?: number;
   profileCirclesContext?: 'sharedWith' | 'alsoAddedToCalendar';
+  /** "חשוב לזכור" items — only populated for community events */
+  importantItems?: ImportantItem[];
 }
 
 interface BirthdayInfo {
@@ -1483,6 +1485,7 @@ interface CalendarDayEventsSheetProps {
     pressEvent: GestureResponderEvent
   ) => void;
   onOpenTaskSheet: (id: string) => void;
+  myImportantItemChecks?: Record<string, Record<string, boolean>>;
 }
 
 function CalendarDayEventsSheet({
@@ -1496,6 +1499,7 @@ function CalendarDayEventsSheet({
   onEventNavigate,
   onEventLongPress,
   onOpenTaskSheet,
+  myImportantItemChecks = {},
 }: CalendarDayEventsSheetProps): React.JSX.Element {
   return (
     <Modal
@@ -1561,13 +1565,17 @@ function CalendarDayEventsSheet({
 
             {events.map((ev) => {
               const kind = ev.eventVisualKind ?? 'personal';
+              const hasSheetImportantItems =
+                !ev.cancelled &&
+                (ev.importantItems?.length ?? 0) > 0;
               return (
+                <View key={ev.listKey ?? ev.id}>
                 <Pressable
-                  key={ev.listKey ?? ev.id}
                   style={[
                     sheetStyles.sheetRow,
                     kind === 'community' && sheetStyles.sheetRowCommunity,
                     kind === 'shared' && sheetStyles.sheetRowShared,
+                    hasSheetImportantItems && { marginBottom: 0, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
                   ]}
                   onPress={() => onEventNavigate(ev)}
                   onLongPress={(pressEvent) => onEventLongPress(ev, pressEvent)}
@@ -1591,6 +1599,14 @@ function CalendarDayEventsSheet({
                     </Text>
                   </View>
                 </Pressable>
+                {hasSheetImportantItems ? (
+                  <InlineImportantItemsSection
+                    eventId={String(ev.id)}
+                    items={ev.importantItems ?? []}
+                    checks={myImportantItemChecks[String(ev.id)] ?? {}}
+                  />
+                ) : null}
+                </View>
               );
             })}
 
@@ -2246,6 +2262,13 @@ export default function CalendarScreen(): React.JSX.Element {
         profileCircles: gridPc.length > 0 ? gridPc : undefined,
         profileCirclesExtraCount: gridPcExtra > 0 ? gridPcExtra : undefined,
         profileCirclesContext: gridPcContext,
+        importantItems: isSavedCommunityInSpace
+          ? (() => {
+              const rawItems = (ev as { importantItems?: ImportantItem[] })
+                .importantItems;
+              return rawItems && rawItems.length > 0 ? rawItems : undefined;
+            })()
+          : undefined,
       };
       if (!eventsByDay[day].some((e) => e.id === personalRow.id)) {
         eventsByDay[day].push(personalRow);
@@ -2298,6 +2321,10 @@ export default function CalendarScreen(): React.JSX.Element {
         communityName: ev.communityName,
         sortTimeMs: ev.startTime,
         eventVisualKind: 'community' as const,
+        importantItems:
+          ev.importantItems && ev.importantItems.length > 0
+            ? ev.importantItems
+            : undefined,
       };
       if (!eventsByDay[day].some((e) => e.id === communityRow.id)) {
         eventsByDay[day].push(communityRow);
@@ -3936,6 +3963,7 @@ export default function CalendarScreen(): React.JSX.Element {
                         const key = `${displayYear}-${String(displayMonth + 1).padStart(2, '0')}-${String(visibleDay).padStart(2, '0')}`;
                         return holidaysByDay[key] ?? [];
                       })()}
+                      myImportantItemChecks={myImportantItemChecks}
                       onEventPress={handleOpenEventDetails}
                       onClose={() => setSelectedDay(null)}
                       onOpenTaskSheet={(id) => {
@@ -3985,6 +4013,7 @@ export default function CalendarScreen(): React.JSX.Element {
           events={sheetDayData?.events ?? []}
           tasks={sheetDayTasks}
           holidays={sheetDayHolidays}
+          myImportantItemChecks={myImportantItemChecks}
           onClose={closeDayEventsSheet}
           onEventLongPress={handleExpandedEventLongPress}
           onEventNavigate={handleExpandedEventNavigate}
@@ -4802,6 +4831,7 @@ interface DayEventsListProps {
   onEventPress: (event: CalendarEvent) => void;
   onClose: () => void;
   onOpenTaskSheet: (id: string) => void;
+  myImportantItemChecks?: Record<string, Record<string, boolean>>;
 }
 
 function DayEventsList({
@@ -4814,6 +4844,7 @@ function DayEventsList({
   onEventPress,
   onClose,
   onOpenTaskSheet,
+  myImportantItemChecks = {},
 }: DayEventsListProps): React.JSX.Element {
   const router = useRouter();
   const { findBirthdayByName, openBirthdayCard } = useBirthdaySheets();
@@ -5021,12 +5052,25 @@ function DayEventsList({
           myPersonalRsvpStatus: event.myPersonalRsvpStatus,
         });
         const eventTitle = getCalendarEventTitle(event);
+        const hasImportantItems =
+          !event.cancelled &&
+          (event.importantItems?.length ?? 0) > 0;
         return (
-          <Pressable
+          <View
             key={event.listKey ?? event.id}
             style={[
-              dStyles.card,
-              rsvpVisual.kind !== 'normal' && dStyles.pendingPersonalInviteCard,
+              hasImportantItems ? dStyles.unifiedCardOuter : undefined,
+              hasImportantItems &&
+                rsvpVisual.kind !== 'normal' &&
+                dStyles.pendingPersonalInviteCard,
+            ]}
+          >
+          <Pressable
+            style={[
+              hasImportantItems ? dStyles.cardFlatPressable : dStyles.card,
+              !hasImportantItems &&
+                rsvpVisual.kind !== 'normal' &&
+                dStyles.pendingPersonalInviteCard,
             ]}
             onPress={() => onEventPress(event)}
             accessible={true}
@@ -5167,6 +5211,16 @@ function DayEventsList({
               </>
             )}
           </Pressable>
+          {hasImportantItems ? (
+            <View style={dStyles.importantItemsInset}>
+              <InlineImportantItemsSection
+                eventId={String(event.id)}
+                items={event.importantItems ?? []}
+                checks={myImportantItemChecks[String(event.id)] ?? {}}
+              />
+            </View>
+          ) : null}
+          </View>
         );
       })}
 
@@ -6804,6 +6858,33 @@ const dStyles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
+  },
+  /* Unified outer shell used when an event has important items.
+     Owns the white card decoration (bg, radius, border, shadow, spacing)
+     so the event Pressable and accordion share one visual container. */
+  unifiedCardOuter: {
+    marginBottom: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  /* Flat pressable inside unifiedCardOuter — layout only, no decoration */
+  cardFlatPressable: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    padding: 12,
+    gap: 10,
+  },
+  /* Horizontal inset for the accordion inside unifiedCardOuter */
+  importantItemsInset: {
+    paddingHorizontal: 12,
+    paddingBottom: 10,
   },
   timeCol: {
     alignItems: 'center',

@@ -11,6 +11,8 @@ import {
   View,
 } from 'react-native';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
+import type { ImportantItem } from '@/components/InlineImportantItemsSection';
+import { InlineImportantItemsSection } from '@/components/InlineImportantItemsSection';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -58,6 +60,8 @@ export type HomeDailyItem = {
   myAssignedTasks?: { id: string; title: string; completed: boolean }[];
   /** Read-only subtask preview items — populated only for task-type items. */
   subtasks?: HomeSubtaskPreviewItem[];
+  /** "חשוב לזכור" items for community events — drives the per-user accordion. */
+  importantItems?: ImportantItem[];
 };
 
 export type HomeDailyTask = {
@@ -100,6 +104,10 @@ interface UnifiedTimelineCardProps {
   onToggleSubtask?: (subtaskId: string) => void;
   /** Called when the user taps an item thumbnail — receives the resolved URI. */
   onImagePress?: (uri: string) => void;
+  /** "חשוב לזכור" items for community events. */
+  importantItems?: ImportantItem[];
+  /** Per-item completion state for the current user (itemId → completed). */
+  checks?: Record<string, boolean>;
 }
 
 type HomeDailyCommandCenterProps = {
@@ -132,6 +140,8 @@ type HomeDailyCommandCenterProps = {
   onOpenBirthday: (birthday: Birthday) => void;
   onOpenBirthdays: () => void;
   onAddBirthday: () => void;
+  /** Current user's completion map: eventId → { itemId: boolean } */
+  myImportantItemChecks: Record<string, Record<string, boolean>>;
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -401,9 +411,13 @@ const UnifiedTimelineCard = ({
   onToggleItems,
   onToggleSubtask,
   onImagePress,
+  importantItems = [],
+  checks = {},
 }: UnifiedTimelineCardProps): React.JSX.Element => {
   const hasTaskSubtasks =
     item.type === 'task' && (item.subtasks?.length ?? 0) > 0;
+  const hasEventImportantItems =
+    item.type === 'event' && importantItems.length > 0;
   const hasNavigation =
     item.location.trim().length > 0 && parseGeoUri(item.locationUrl) !== null;
   const hasRemoteAction = Boolean(item.remoteUrl);
@@ -588,6 +602,16 @@ const UnifiedTimelineCard = ({
             subtasks={item.subtasks ?? []}
             taskId={item.id}
           />
+        ) : null}
+
+        {hasEventImportantItems ? (
+          <View style={styles.importantItemsWrapper}>
+            <InlineImportantItemsSection
+              eventId={String(item.id)}
+              items={importantItems}
+              checks={checks}
+            />
+          </View>
         ) : null}
 
         {showMaybeRsvpRow ? (
@@ -818,6 +842,15 @@ const UnifiedTimelineCard = ({
             taskId={item.id}
           />
         ) : null}
+        {hasEventImportantItems ? (
+          <View style={styles.importantItemsWrapper}>
+            <InlineImportantItemsSection
+              eventId={String(item.id)}
+              items={importantItems}
+              checks={checks}
+            />
+          </View>
+        ) : null}
         <View style={styles.rsvpRowCardSection}>
           {(
             [
@@ -880,6 +913,15 @@ const UnifiedTimelineCard = ({
             subtasks={item.subtasks ?? []}
             taskId={item.id}
           />
+        ) : null}
+        {hasEventImportantItems ? (
+          <View style={styles.importantItemsWrapper}>
+            <InlineImportantItemsSection
+              eventId={String(item.id)}
+              items={importantItems}
+              checks={checks}
+            />
+          </View>
         ) : null}
         <View style={styles.compactNavActionRow}>
           <Pressable
@@ -994,6 +1036,47 @@ const UnifiedTimelineCard = ({
           subtasks={item.subtasks ?? []}
           taskId={item.id}
         />
+        {hasEventImportantItems ? (
+          <View style={styles.importantItemsWrapper}>
+            <InlineImportantItemsSection
+              eventId={String(item.id)}
+              items={importantItems}
+              checks={checks}
+            />
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
+  // Default compact card — event-only path needs a View wrapper when there are important items
+  // so the accordion Pressables are siblings of (not nested inside) the card Pressable.
+  if (hasEventImportantItems) {
+    return (
+      <View
+        style={[
+          styles.compactCardShell,
+          isEnded && styles.endedCompactCard,
+          isOverdue && styles.overdueCompactCard,
+          isCompleted && styles.completedCompactCard,
+        ]}
+      >
+        <Pressable
+          accessible={true}
+          accessibilityLabel={`פתיחת ${item.title}`}
+          accessibilityRole="button"
+          onPress={onOpen}
+          style={styles.compactCardPadding}
+        >
+          {compactContent}
+        </Pressable>
+        <View style={styles.importantItemsWrapper}>
+          <InlineImportantItemsSection
+            eventId={String(item.id)}
+            items={importantItems}
+            checks={checks}
+          />
+        </View>
       </View>
     );
   }
@@ -1041,6 +1124,7 @@ export function HomeDailyCommandCenter({
   onOpenBirthday,
   onOpenBirthdays,
   onAddBirthday,
+  myImportantItemChecks,
 }: HomeDailyCommandCenterProps): React.JSX.Element {
   const [undatedExpanded, setUndatedExpanded] = useState(false);
   const [endedExpanded, setEndedExpanded] = useState(false);
@@ -1450,6 +1534,8 @@ export function HomeDailyCommandCenter({
                         handleToggleSubtask(item.id, subtaskId)
                       }
                       temporalState="ended"
+                      importantItems={item.importantItems}
+                      checks={myImportantItemChecks[item.id] ?? {}}
                     />
                   ))}
                 </View>
@@ -1478,6 +1564,8 @@ export function HomeDailyCommandCenter({
                 handleToggleSubtask(item.id, subtaskId)
               }
               temporalState="active"
+              importantItems={item.importantItems}
+              checks={myImportantItemChecks[item.id] ?? {}}
             />
           ))}
 
@@ -1505,6 +1593,8 @@ export function HomeDailyCommandCenter({
                 handleToggleSubtask(featuredItem.id, subtaskId)
               }
               temporalState={getTemporalState(featuredItem)}
+              importantItems={featuredItem.importantItems}
+              checks={myImportantItemChecks[featuredItem.id] ?? {}}
             />
           ) : null}
 
@@ -1535,6 +1625,8 @@ export function HomeDailyCommandCenter({
                       handleToggleSubtask(item.id, subtaskId)
                     }
                     temporalState={tState}
+                    importantItems={item.importantItems}
+                    checks={myImportantItemChecks[item.id] ?? {}}
                   />
                 );
               })}
@@ -2594,5 +2686,10 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.72,
+  },
+  importantItemsWrapper: {
+    marginTop: 4,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
   },
 });

@@ -2273,6 +2273,7 @@ export default function HomeScreen() {
             birthdays={upcomingBirthdays}
             completedTodayTasksAllSources={completedTodayTasksAllSources}
             hasAnyBirthdays={hasBirthdays}
+            myImportantItemChecks={myImportantItemChecks ?? {}}
             nowMs={nowMs}
             onAddBirthday={openBirthdayAddChoice}
             onNavigate={handleOpenNavPicker}
