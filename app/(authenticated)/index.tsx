@@ -2151,100 +2151,101 @@ export default function HomeScreen() {
         />
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
-        {/* ── Date section: segmented control ────────────────────────────────── */}
-        <View style={stylesRtl.dateSectionRow}>
-          {/* RTL order (row-reverse): אתמול (right) | היום | מחר | 📅 (left) */}
-          <View style={stylesRtl.pillStrip}>
-            <Pressable
-              accessible={true}
-              accessibilityLabel="אתמול"
-              accessibilityRole="button"
-              accessibilityState={{ selected: isSelectedYesterday }}
-              onPress={() => selectDate(yesterday)}
+      {/* ── Date navigation bar (sticky — outside ScrollView) ─────────────── */}
+      <View style={stylesRtl.dateSectionRow}>
+        {/* RTL order (row-reverse): אתמול (right) | היום | מחר | 📅 (left) */}
+        <View style={stylesRtl.pillStrip}>
+          <Pressable
+            accessible={true}
+            accessibilityLabel="אתמול"
+            accessibilityRole="button"
+            accessibilityState={{ selected: isSelectedYesterday }}
+            onPress={() => selectDate(yesterday)}
+            style={[
+              stylesRtl.dayPillTab,
+              isSelectedYesterday ? stylesRtl.dayPillTabActive : null,
+            ]}
+          >
+            <Text
               style={[
-                stylesRtl.dayPillTab,
-                isSelectedYesterday ? stylesRtl.dayPillTabActive : null,
+                stylesRtl.dayPillText,
+                isSelectedYesterday && stylesRtl.dayPillTextActive,
               ]}
             >
-              <Text
-                style={[
-                  stylesRtl.dayPillText,
-                  isSelectedYesterday && stylesRtl.dayPillTextActive,
-                ]}
-              >
-                אתמול
-              </Text>
-            </Pressable>
-            <Pressable
-              accessible={true}
-              accessibilityLabel="היום"
-              accessibilityRole="button"
-              accessibilityState={{ selected: isSelectedToday }}
-              onPress={() => selectDate(today)}
+              אתמול
+            </Text>
+          </Pressable>
+          <Pressable
+            accessible={true}
+            accessibilityLabel="היום"
+            accessibilityRole="button"
+            accessibilityState={{ selected: isSelectedToday }}
+            onPress={() => selectDate(today)}
+            style={[
+              stylesRtl.dayPillTab,
+              isSelectedToday ? stylesRtl.dayPillTabActive : null,
+            ]}
+          >
+            <Text
               style={[
-                stylesRtl.dayPillTab,
-                isSelectedToday ? stylesRtl.dayPillTabActive : null,
+                stylesRtl.dayPillText,
+                isSelectedToday && stylesRtl.dayPillTextActive,
               ]}
             >
-              <Text
-                style={[
-                  stylesRtl.dayPillText,
-                  isSelectedToday && stylesRtl.dayPillTextActive,
-                ]}
-              >
-                היום
-              </Text>
-            </Pressable>
-            <Pressable
-              accessible={true}
-              accessibilityLabel="מחר"
-              accessibilityRole="button"
-              accessibilityState={{ selected: isSelectedTomorrow }}
-              onPress={() => selectDate(tomorrow)}
+              היום
+            </Text>
+          </Pressable>
+          <Pressable
+            accessible={true}
+            accessibilityLabel="מחר"
+            accessibilityRole="button"
+            accessibilityState={{ selected: isSelectedTomorrow }}
+            onPress={() => selectDate(tomorrow)}
+            style={[
+              stylesRtl.dayPillTab,
+              isSelectedTomorrow ? stylesRtl.dayPillTabActive : null,
+            ]}
+          >
+            <Text
               style={[
-                stylesRtl.dayPillTab,
-                isSelectedTomorrow ? stylesRtl.dayPillTabActive : null,
+                stylesRtl.dayPillText,
+                isSelectedTomorrow && stylesRtl.dayPillTextActive,
               ]}
             >
-              <Text
-                style={[
-                  stylesRtl.dayPillText,
-                  isSelectedTomorrow && stylesRtl.dayPillTextActive,
-                ]}
-              >
-                מחר
-              </Text>
-            </Pressable>
-            <Pressable
-              accessible={true}
-              accessibilityLabel={
-                calendarMode === 'segmented' ? 'פתח לוח שנה חודשי' : 'חזרה לבחירת יום'
-              }
-              accessibilityRole="button"
-              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-              onPress={() =>
-                setCalendarMode((m) => (m === 'segmented' ? 'month' : 'segmented'))
-              }
-              style={[
-                stylesRtl.calendarIconBtn,
-                isCustomDate ? stylesRtl.calendarIconBtnActive : null,
-              ]}
-            >
-              <MaterialIcons
-                color={isCustomDate ? tc.primary : tc.textSecondary}
-                name={calendarMode === 'segmented' ? 'calendar-month' : 'view-week'}
-                size={20}
-              />
-            </Pressable>
-          </View>
+              מחר
+            </Text>
+          </Pressable>
+          <Pressable
+            accessible={true}
+            accessibilityLabel={
+              calendarMode === 'segmented' ? 'פתח לוח שנה חודשי' : 'חזרה לבחירת יום'
+            }
+            accessibilityRole="button"
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            onPress={() =>
+              setCalendarMode((m) => (m === 'segmented' ? 'month' : 'segmented'))
+            }
+            style={[
+              stylesRtl.calendarIconBtn,
+              isCustomDate ? stylesRtl.calendarIconBtnActive : null,
+            ]}
+          >
+            <MaterialIcons
+              color={isCustomDate ? tc.primary : tc.textSecondary}
+              name={calendarMode === 'segmented' ? 'calendar-month' : 'view-week'}
+              size={20}
+            />
+          </Pressable>
         </View>
+      </View>
 
-        {calendarMode === 'month' ? (
-          <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
-            {renderMonthCalendar()}
-          </View>
-        ) : null}
+      {calendarMode === 'month' ? (
+        <View style={{ paddingHorizontal: 16, marginBottom: 8, backgroundColor: '#f6f7f8' }}>
+          {renderMonthCalendar()}
+        </View>
+      ) : null}
+
+      <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
 
         {(todayCount + selectedDayUntimedTasks.length > 0 ||
           hasOverdueTasks) && (
@@ -4306,6 +4307,11 @@ export default function HomeScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
+/** Deeper warm greige for the date-navigation pill track.
+ *  Distinct from the screen background (#f6f7f8) and the global warmGray token
+ *  which is used on bottom sheets and empty states throughout the app. */
+const HOME_DATE_TABS_BG = '#EDE8E2';
+
 const styles = StyleSheet.create({
   safeAreaRtl: {
     direction: 'rtl',
@@ -4426,7 +4432,15 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     paddingHorizontal: 16,
     paddingTop: 10,
+    paddingBottom: 10,
+    backgroundColor: '#f6f7f8',
     gap: 8,
+    zIndex: 10,
+    shadowColor: '#1A1A1A',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 3,
   },
   todayChip: {
     backgroundColor: '#36a9e2',
@@ -4444,7 +4458,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: rtl.flexDirection,
     alignItems: 'stretch',
-    backgroundColor: tc.warmGray,
+    backgroundColor: HOME_DATE_TABS_BG,
     borderRadius: 26,
     padding: 4,
     minHeight: 48,
