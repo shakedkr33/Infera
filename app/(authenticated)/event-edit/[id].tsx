@@ -369,7 +369,7 @@ export default function EditEventScreen(): React.JSX.Element {
         description: data.notes?.trim() || undefined,
         startTime: startTs,
         endTime: endTs,
-        allDay: data.isAllDay || undefined,
+        allDay: data.isAllDay,
         ...(!isCommunityEvent
           ? {
               isRecurring: data.recurrence !== 'none',
