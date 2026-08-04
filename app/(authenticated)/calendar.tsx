@@ -2508,22 +2508,29 @@ export default function CalendarScreen(): React.JSX.Element {
   }, [selectedDay]);
 
   // Sync shared values when month or viewport changes.
+  // isWeekCollapsed must be included so that any layout remeasure that triggers
+  // this effect (e.g. the content View's onLayout firing on tab-focus return)
+  // does not silently reset calendarHeight from WEEK_ONLY_PANEL_HEIGHT back to
+  // compactPanelHeight while the grid is still showing only one week row.
   useEffect(() => {
     compactHeightSV.value = compactPanelHeight;
     expandedHeightSV.value = expandedPanelHeight;
-    calendarHeight.value = withSpring(
-      snapState === 'expanded' ? expandedPanelHeight : compactPanelHeight,
-      {
-        damping: 20,
-        stiffness: 90,
-      }
-    );
+    const targetHeight = isWeekCollapsed
+      ? WEEK_ONLY_PANEL_HEIGHT
+      : snapState === 'expanded'
+        ? expandedPanelHeight
+        : compactPanelHeight;
+    calendarHeight.value = withSpring(targetHeight, {
+      damping: 20,
+      stiffness: 90,
+    });
   }, [
     compactPanelHeight,
     expandedPanelHeight,
     calendarHeight,
     compactHeightSV,
     expandedHeightSV,
+    isWeekCollapsed,
     snapState,
   ]);
 
