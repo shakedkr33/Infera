@@ -1610,8 +1610,7 @@ export default function HomeScreen() {
       .filter(
         (t) =>
           t.completed &&
-          isCompletedToday(t) &&
-          !isEventDerivedImportantItemTask(t)
+          isCompletedToday(t)
       )
       .map((t) => {
         const assigneeDisplays = resolveAllNonSelfAssignees(
@@ -1666,8 +1665,7 @@ export default function HomeScreen() {
       .filter(
         (t) =>
           t.completed &&
-          isCompletedToday(t) &&
-          !isEventDerivedImportantItemTask(t)
+          isCompletedToday(t)
       )
       .map((t) => {
         const assigneeDisplays = resolveAllNonSelfAssignees(
