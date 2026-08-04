@@ -8,11 +8,13 @@
     "ios": "expo run:ios",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "check": "biome check --write .",
+    "check": "biome check .",
+    "check:fix": "biome check --write .",
     "type-check": "tsc --noEmit",
     "type-check:watch": "tsc --noEmit --watch",
     "lint:full": "biome check . && bun run type-check",
-    "check:full": "biome check --write . && bun run type-check",
+    "check:full": "biome check . && bun run type-check",
+    "check:full:fix": "biome check --write . && bun run type-check",
     "ultracite": "ultracite"
   },
   "dependencies": {
