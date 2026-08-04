@@ -2134,6 +2134,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView
+      edges={['top', 'left', 'right']}
       style={[
         { flex: 1, backgroundColor: '#f6f7f8' },
         ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,

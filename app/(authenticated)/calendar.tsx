@@ -3691,6 +3691,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
   return (
     <SafeAreaView
+      edges={['top', 'left', 'right']}
       style={[
         styles.safeArea,
         ANDROID_MATCH_IOS_LAYOUT ? styles.safeAreaRtl : null,
