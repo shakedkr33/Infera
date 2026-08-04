@@ -1631,43 +1631,72 @@ export function HomeDailyCommandCenter({
         {/* ── Today: "בוצעו היום" (completed tasks) ────────────────────────────── */}
         {isToday && completedTodayItems.length > 0 ? (
           <View style={styles.section}>
-            <Pressable
-              accessible={true}
-              accessibilityLabel={`בוצעו היום, ${completedTodayItems.length} משימות, ${completedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
-              accessibilityRole="button"
-              onPress={() => setCompletedExpanded((prev) => !prev)}
-              style={styles.collapsibleHeaderCard}
-            >
-              <Text style={styles.collapsibleHeaderText}>
-                בוצעו היום · {completedTodayItems.length}
-              </Text>
-              <MaterialIcons
-                color={tc.textSecondary}
-                name={completedExpanded ? 'expand-less' : 'expand-more'}
-                size={22}
-              />
-            </Pressable>
-            {completedExpanded ? (
-              <View style={styles.collapsibleContent}>
-                {completedTodayItems.map((item) => (
-                  <UnifiedTimelineCard
-                    displayMode="compact"
-                    item={item}
-                    itemsExpanded={expandedItemTaskIds.has(item.id)}
-                    key={item.id}
-                    nowMs={nowMs}
-                    onImagePress={setImagePreviewUri}
-                    onOpen={() => onOpenItem(item)}
-                    onToggleComplete={() => onToggleTask(item.id)}
-                    onToggleItems={() => toggleItemsFor(item.id)}
-                    onToggleSubtask={(subtaskId) =>
-                      handleToggleSubtask(item.id, subtaskId)
-                    }
-                    temporalState="completed"
-                  />
-                ))}
-              </View>
-            ) : null}
+            <View style={styles.completedAccordion}>
+              <Pressable
+                accessible={true}
+                accessibilityLabel={`בוצעו היום, ${completedTodayItems.length} משימות, ${completedExpanded ? 'לחץ לכיווץ' : 'לחץ להרחבה'}`}
+                accessibilityRole="button"
+                onPress={() => setCompletedExpanded((prev) => !prev)}
+                style={styles.completedAccordionHeader}
+              >
+                <Text style={styles.collapsibleHeaderText}>
+                  בוצעו היום · {completedTodayItems.length}
+                </Text>
+                <MaterialIcons
+                  color={tc.textSecondary}
+                  name={completedExpanded ? 'expand-less' : 'expand-more'}
+                  size={22}
+                />
+              </Pressable>
+              {completedExpanded ? (
+                <View style={styles.completedAccordionContent}>
+                  {completedTodayItems.map((item, index) => (
+                    <View
+                      key={item.id}
+                      style={index > 0 ? styles.dividedRow : undefined}
+                    >
+                      <Pressable
+                        accessible={true}
+                        accessibilityLabel={`פתיחת משימה: ${item.title}`}
+                        accessibilityRole="button"
+                        onPress={() => onOpenItem(item)}
+                        style={styles.taskRow}
+                      >
+                        <TaskCheckbox
+                          checked={item.completed}
+                          onToggle={() => onToggleTask(item.id)}
+                        />
+                        <View style={styles.taskRowBody}>
+                          <Text
+                            numberOfLines={2}
+                            style={[styles.taskTitle, styles.completedText]}
+                          >
+                            {item.title}
+                          </Text>
+                        </View>
+                        <MaterialIcons
+                          color="#ADB3B5"
+                          name="chevron-left"
+                          size={21}
+                        />
+                      </Pressable>
+                      {(item.subtasks?.length ?? 0) > 0 ? (
+                        <HomeTaskItemsAccordion
+                          expanded={expandedItemTaskIds.has(item.id)}
+                          onImagePress={setImagePreviewUri}
+                          onToggle={() => toggleItemsFor(item.id)}
+                          onToggleSubtask={(subtaskId) =>
+                            handleToggleSubtask(item.id, subtaskId)
+                          }
+                          subtasks={item.subtasks ?? []}
+                          taskId={item.id}
+                        />
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </View>
           </View>
         ) : null}
 
@@ -1872,9 +1901,12 @@ const styles = StyleSheet.create({
     borderTopColor: '#E5E9EB',
   },
   // ── Task row body — wraps title in list rows ───────────────────────────────
+  // justifyContent: 'center' ensures the title text is vertically centred even
+  // if the column container grows (e.g. via Yoga cross-axis measurement).
   taskRowBody: {
     flex: 1,
     minWidth: 0,
+    justifyContent: 'center',
   },
   // ── HomeTaskItemsAccordion styles ──────────────────────────────────────────
   itemsAccordionDivider: {
@@ -2398,7 +2430,6 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   taskTitle: {
-    flex: 1,
     color: '#252A2C',
     fontSize: 14,
     fontWeight: '600',
@@ -2448,6 +2479,29 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   undatedAccordionContent: {
+    borderTopWidth: 1,
+    borderTopColor: '#E5E9EB',
+    backgroundColor: '#FFFFFF',
+  },
+  // ── Completed tasks accordion — unified shell (mirrors undatedAccordion) ───
+  completedAccordion: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E9EDEE',
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  completedAccordionHeader: {
+    minHeight: 52,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'transparent',
+  },
+  completedAccordionContent: {
     borderTopWidth: 1,
     borderTopColor: '#E5E9EB',
     backgroundColor: '#FFFFFF',
