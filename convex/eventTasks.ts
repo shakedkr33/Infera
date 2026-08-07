@@ -10,6 +10,27 @@ import { isActiveCommunityMember } from './communityMemberUtils';
 import { createUserNotifications } from './userNotifications';
 
 // ─────────────────────────────────────────────────────────────
+// Helper: manager check usable from both queries and mutations
+// ─────────────────────────────────────────────────────────────
+async function isEventTaskManager(
+  ctx: QueryCtx | MutationCtx,
+  event: { createdBy: Id<'users'>; communityId?: Id<'communities'> },
+  userId: Id<'users'>
+): Promise<boolean> {
+  if (event.createdBy === userId) return true;
+  if (!event.communityId) return false;
+  const membership = await getCommunityMembership(
+    ctx,
+    event.communityId,
+    userId
+  );
+  return (
+    isActiveCommunityMember(membership) &&
+    (membership.role === 'owner' || membership.role === 'admin')
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // סיכום משימות לפי קהילה (לתצוגת כרטיסי אירועים — ללא N+1)
 // ─────────────────────────────────────────────────────────────
 export const getTaskCountsByCommunity = query({
@@ -101,18 +122,128 @@ async function canManageEventTasks(
   event: { createdBy: Id<'users'>; communityId?: Id<'communities'> },
   userId: Id<'users'>
 ): Promise<boolean> {
-  if (event.createdBy === userId) return true;
-  if (!event.communityId) return false;
-  const membership = await getCommunityMembership(
-    ctx,
-    event.communityId,
-    userId
-  );
-  return (
-    isActiveCommunityMember(membership) &&
-    (membership.role === 'owner' || membership.role === 'admin')
-  );
+  return isEventTaskManager(ctx, event, userId);
 }
+
+// ─────────────────────────────────────────────────────────────
+// Batch query for Home: authorized tasks per community event
+// ─────────────────────────────────────────────────────────────
+
+const homeEventTaskShape = v.object({
+  _id: v.id('eventTasks'),
+  title: v.string(),
+  completed: v.boolean(),
+  completedAt: v.optional(v.number()),
+  order: v.optional(v.number()),
+  assignedToUserId: v.optional(v.id('users')),
+  assignedToManual: v.optional(v.string()),
+  assigneeDisplay: v.optional(v.string()),
+  isAssignedToCurrentUser: v.boolean(),
+});
+
+export const listEventTasksForHome = query({
+  args: { eventIds: v.array(v.id('events')) },
+  returns: v.array(
+    v.object({
+      eventId: v.id('events'),
+      canManageTasks: v.boolean(),
+      tasksVisibleToParticipants: v.boolean(),
+      tasks: v.array(homeEventTaskShape),
+    })
+  ),
+  handler: async (ctx, { eventIds }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const results = await Promise.all(
+      eventIds.map(async (eventId) => {
+        const event = await ctx.db.get(eventId);
+        if (!event || !event.communityId) return null;
+        if (event.status === 'cancelled') return null;
+
+        const membership = await getCommunityMembership(
+          ctx,
+          event.communityId,
+          userId
+        );
+        if (!isActiveCommunityMember(membership)) return null;
+
+        const canManage = await isEventTaskManager(ctx, event, userId);
+        const tasksVisibleToParticipants =
+          event.tasksVisibleToParticipants === true;
+
+        const allTasks = await ctx.db
+          .query('eventTasks')
+          .withIndex('by_event', (q) => q.eq('eventId', eventId))
+          .collect();
+
+        // Server-side visibility contract
+        const authorizedTasks =
+          canManage || tasksVisibleToParticipants
+            ? allTasks
+            : allTasks.filter((t) => t.assignedToUserId === userId);
+
+        if (authorizedTasks.length === 0) return null;
+
+        // Enrich with assignee display
+        const enriched = await Promise.all(
+          authorizedTasks.map(async (t) => {
+            let assigneeDisplay: string | undefined;
+            if (t.assignedToUserId) {
+              const user = await ctx.db.get(t.assignedToUserId);
+              assigneeDisplay =
+                (user as { fullName?: string } | null)?.fullName ?? undefined;
+            } else if (t.assignedToManual?.trim()) {
+              assigneeDisplay = t.assignedToManual.trim();
+            }
+            return {
+              _id: t._id,
+              title: t.title,
+              completed: t.completed ?? false,
+              completedAt: t.completedAt,
+              order: t.order,
+              assignedToUserId: t.assignedToUserId,
+              assignedToManual: t.assignedToManual,
+              assigneeDisplay,
+              isAssignedToCurrentUser: t.assignedToUserId === userId,
+            };
+          })
+        );
+
+        // Sort: members with full visibility → mine first, then unassigned, then others.
+        // Managers and members with only their own tasks → source order.
+        const sorted =
+          !canManage && tasksVisibleToParticipants
+            ? enriched.sort((a, b) => {
+                const rankA = a.isAssignedToCurrentUser
+                  ? 0
+                  : !a.assignedToUserId && !a.assignedToManual
+                    ? 1
+                    : 2;
+                const rankB = b.isAssignedToCurrentUser
+                  ? 0
+                  : !b.assignedToUserId && !b.assignedToManual
+                    ? 1
+                    : 2;
+                if (rankA !== rankB) return rankA - rankB;
+                return (a.order ?? 0) - (b.order ?? 0);
+              })
+            : enriched.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+        return {
+          eventId,
+          canManageTasks: canManage,
+          tasksVisibleToParticipants,
+          tasks: sorted,
+        };
+      })
+    );
+
+    return results.filter(
+      (r): r is NonNullable<typeof r> => r !== null
+    );
+  },
+});
 
 // ─────────────────────────────────────────────────────────────
 // שליפת משימות אירוע (כולל assignee display)
@@ -126,6 +257,8 @@ export const listByEvent = query({
     const event = await ctx.db.get(eventId);
     if (!event) return [];
 
+    let canManageTasks = false;
+
     if (event.communityId) {
       const membership = await getCommunityMembership(
         ctx,
@@ -134,15 +267,14 @@ export const listByEvent = query({
       );
       if (!isActiveCommunityMember(membership)) return [];
 
-      const canManageTasks =
+      canManageTasks =
         event.createdBy === userId ||
         membership.role === 'owner' ||
         membership.role === 'admin';
-
-      if (!canManageTasks && event.tasksVisibleToParticipants !== true)
-        return [];
     } else if (event.createdBy !== userId) {
       return [];
+    } else {
+      canManageTasks = true;
     }
 
     const tasks = await ctx.db
@@ -150,8 +282,15 @@ export const listByEvent = query({
       .withIndex('by_event', (q) => q.eq('eventId', eventId))
       .collect();
 
+    // When visibility is disabled and the user is not a manager, return only
+    // tasks assigned to the current user (never hide a member's own tasks).
+    const filteredTasks =
+      !canManageTasks && event.tasksVisibleToParticipants !== true
+        ? tasks.filter((t) => t.assignedToUserId === userId)
+        : tasks;
+
     const enriched = await Promise.all(
-      tasks.map(async (t) => {
+      filteredTasks.map(async (t) => {
         let assigneeDisplay: string | undefined;
         if (t.assignedToUserId) {
           const user = await ctx.db.get(t.assignedToUserId);
@@ -283,6 +422,18 @@ export const toggleCompleted = mutation({
         .unique();
       if (!isActiveCommunityMember(member)) {
         throw new Error('רק חברי הקהילה יכולים לעדכן משימות');
+      }
+
+      // Authorization: manager OR task assigned to the authenticated user.
+      // Visibility does NOT grant completion permission — viewing and completing are separate.
+      const isMgr =
+        event.createdBy === userId ||
+        member.role === 'owner' ||
+        member.role === 'admin';
+      const isAssignedToMe = task.assignedToUserId === userId;
+
+      if (!isMgr && !isAssignedToMe) {
+        throw new Error('אין הרשאה לשנות מצב משימה זו');
       }
     }
 

@@ -606,8 +606,10 @@ export default function EventDetailScreen() {
   const canRegularMemberSeeTasks = Boolean(
     event.communityId && myCommunityMembership && participantsCanSeeTasks
   );
+  // The server already filters tasks per the visibility contract.
+  // Show the section to managers always, and to members when they have visible tasks.
   const canSeeTasksSection = event.communityId
-    ? canManageTasks || canRegularMemberSeeTasks
+    ? canManageTasks || canRegularMemberSeeTasks || (eventTasks !== undefined && eventTasks.length > 0)
     : isCreator;
   const eventTasksForDisplay = uniqueById(
     eventTasks ?? [],
@@ -1131,6 +1133,27 @@ export default function EventDetailScreen() {
               </View>
             ) : null}
 
+            {/* Manager-only visibility status explanation */}
+            {canManageTasks ? (
+              <View style={styles.managerVisibilityRow}>
+                <Ionicons
+                  name={participantsCanSeeTasks ? 'eye-outline' : 'lock-closed-outline'}
+                  size={15}
+                  color="#6B7280"
+                />
+                <View style={styles.managerVisibilityTextBlock}>
+                  <Text style={styles.managerVisibilityTitle}>
+                    {participantsCanSeeTasks ? 'גלוי למשתתפים' : 'מוגבל למנהלים'}
+                  </Text>
+                  <Text style={styles.managerVisibilityDesc}>
+                    {participantsCanSeeTasks
+                      ? 'כל חברי הקהילה יכולים לראות את המשימות וההקצאות.'
+                      : 'כל משתתף רואה רק משימות שהוקצו אליו.'}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+
             {eventTasksForDisplay.length === 0 ? (
               <View style={styles.emptyParticipants}>
                 <Ionicons name="list-outline" size={32} color="#d1d5db" />
@@ -1160,7 +1183,7 @@ export default function EventDetailScreen() {
                         : 'הוקצה';
                   return (
                     <View key={task._id} style={styles.taskRow}>
-                      {/* Actions — left side in RTL (creator only) */}
+                      {/* Actions — left side in RTL (manager only) */}
                       {canManageTasks && (
                         <View style={styles.taskActions}>
                           <TouchableOpacity
@@ -1223,7 +1246,6 @@ export default function EventDetailScreen() {
                           </TouchableOpacity>
                         </View>
                       )}
-                      {/* Content — right side in RTL */}
                       <View style={styles.taskContent}>
                         <Text style={styles.taskTitle} numberOfLines={2}>
                           {task.title}
@@ -2106,6 +2128,32 @@ const styles = StyleSheet.create({
   taskVisibilityHelper: {
     fontSize: 12,
     color: '#6b7280',
+    textAlign: HEB_TEXT_ALIGN,
+  },
+  managerVisibilityRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#F8FAFB',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E9EB',
+  },
+  managerVisibilityTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  managerVisibilityTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6B7280',
+    textAlign: HEB_TEXT_ALIGN,
+  },
+  managerVisibilityDesc: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 1,
     textAlign: HEB_TEXT_ALIGN,
   },
   taskVisibilityToggleTouch: {

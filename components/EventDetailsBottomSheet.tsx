@@ -826,8 +826,12 @@ export function EventDetailsBottomSheet({
     : isEventCreator;
   const participantsCanSeeTasks =
     displayEvent?.tasksVisibleToParticipants === true;
+  // Use the server-filtered task result: managers always see the section;
+  // regular members see it only when the backend returned authorized tasks.
+  const hasAuthorizedEventTasks =
+    eventTasks !== undefined && eventTasks.length > 0;
   const canSeeEventTasksSection = displayEvent?.communityId
-    ? canManageTasks || Boolean(myMembership && participantsCanSeeTasks)
+    ? canManageTasks || hasAuthorizedEventTasks
     : isEventCreator;
 
   const canEdit = displayEvent?.communityId
@@ -1539,6 +1543,27 @@ export function EventDetailsBottomSheet({
               {convexEventId && canSeeEventTasksSection ? (
                 <View style={styles.sectionCard}>
                   <Text style={styles.sectionTitle}>משימות לאירוע</Text>
+                  {canManageTasks ? (
+                    <View style={styles.managerVisibilityInfo}>
+                      <MaterialIcons
+                        name={participantsCanSeeTasks ? 'visibility' : 'lock'}
+                        size={15}
+                        color="#6b7280"
+                      />
+                      <View style={styles.managerVisibilityInfoText}>
+                        <Text style={styles.managerVisibilityInfoTitle}>
+                          {participantsCanSeeTasks
+                            ? 'גלוי למשתתפים'
+                            : 'מוגבל למנהלים'}
+                        </Text>
+                        <Text style={styles.managerVisibilityInfoDesc}>
+                          {participantsCanSeeTasks
+                            ? 'כל חברי הקהילה יכולים לראות את המשימות וההקצאות.'
+                            : 'כל משתתף רואה רק משימות שהוקצו אליו.'}
+                        </Text>
+                      </View>
+                    </View>
+                  ) : null}
                   {eventTasks === undefined ? (
                     <Text style={styles.mutedText}>טוען משימות...</Text>
                   ) : tasks.length > 0 ? (
@@ -3093,6 +3118,33 @@ const styles = StyleSheet.create({
     color: '#334155',
     fontSize: 15,
     fontWeight: '800',
+  },
+  managerVisibilityInfo: {
+    flexDirection: HEB_ROW,
+    alignItems: 'flex-start',
+    gap: 6,
+    paddingVertical: 4,
+    width: '100%',
+  },
+  managerVisibilityInfoText: {
+    flex: 1,
+    gap: 1,
+    alignItems: HEB_FLEX_END,
+  },
+  managerVisibilityInfoTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+    alignSelf: 'stretch',
+  },
+  managerVisibilityInfoDesc: {
+    fontSize: 11,
+    color: '#64748b',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+    alignSelf: 'stretch',
   },
 });
 

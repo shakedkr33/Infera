@@ -11,6 +11,11 @@ import {
   View,
 } from 'react-native';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
+import {
+  EventTasksAccordion,
+  type AuthorizedHomeEventTask,
+  type EventTaskAccordionData,
+} from '@/components/home/EventTasksAccordion';
 import type { ImportantItem } from '@/components/InlineImportantItemsSection';
 import { InlineImportantItemsSection } from '@/components/InlineImportantItemsSection';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
@@ -25,6 +30,8 @@ import type { SubTaskAttachment } from '@/lib/types/task';
 import { getCountdownLabel } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 import { colors as tc } from '@/theme/colors';
+
+export type { AuthorizedHomeEventTask, EventTaskAccordionData };
 
 /** Focused read-only subtask preview item for Home screen display. */
 export type HomeSubtaskPreviewItem = {
@@ -62,6 +69,8 @@ export type HomeDailyItem = {
   subtasks?: HomeSubtaskPreviewItem[];
   /** "חשוב לזכור" items for community events — drives the per-user accordion. */
   importantItems?: ImportantItem[];
+  /** Authorized event tasks for the community-event task accordion. */
+  authorizedEventTasks?: EventTaskAccordionData;
 };
 
 export type HomeDailyTask = {
@@ -108,6 +117,14 @@ interface UnifiedTimelineCardProps {
   importantItems?: ImportantItem[];
   /** Per-item completion state for the current user (itemId → completed). */
   checks?: Record<string, boolean>;
+  /** Authorized event tasks accordion data. */
+  eventTasksData?: EventTaskAccordionData;
+  /** Whether the event-tasks accordion is currently expanded. */
+  eventTasksExpanded?: boolean;
+  /** Toggle the event-tasks accordion — must not trigger onOpen. */
+  onToggleEventTasks?: () => void;
+  /** Toggle completion of an event task by its ID. */
+  onToggleEventTaskCompleted?: (taskId: string) => void;
 }
 
 type HomeDailyCommandCenterProps = {
@@ -413,11 +430,17 @@ const UnifiedTimelineCard = ({
   onImagePress,
   importantItems = [],
   checks = {},
+  eventTasksData,
+  eventTasksExpanded,
+  onToggleEventTasks,
+  onToggleEventTaskCompleted,
 }: UnifiedTimelineCardProps): React.JSX.Element => {
   const hasTaskSubtasks =
     item.type === 'task' && (item.subtasks?.length ?? 0) > 0;
   const hasEventImportantItems =
     item.type === 'event' && importantItems.length > 0;
+  const hasEventTasks =
+    item.type === 'event' && (eventTasksData?.tasks.length ?? 0) > 0;
   const hasNavigation =
     item.location.trim().length > 0 && parseGeoUri(item.locationUrl) !== null;
   const hasRemoteAction = Boolean(item.remoteUrl);
@@ -584,7 +607,8 @@ const UnifiedTimelineCard = ({
 
           {progressElement}
 
-          {(item.myAssignedTasks?.length ?? 0) > 0 ? (
+          {/* Static assigned-tasks hint — shown only when no full accordion is available */}
+          {(item.myAssignedTasks?.length ?? 0) > 0 && !hasEventTasks ? (
             <Text style={styles.assignedTasksText}>
               {item.myAssignedTasks?.length === 1
                 ? 'יש לך משימה אחת באירוע'
@@ -601,6 +625,17 @@ const UnifiedTimelineCard = ({
             onImagePress={onImagePress}
             subtasks={item.subtasks ?? []}
             taskId={item.id}
+          />
+        ) : null}
+
+        {hasEventTasks && eventTasksData ? (
+          <EventTasksAccordion
+            tasks={eventTasksData.tasks}
+            canManageTasks={eventTasksData.canManageTasks}
+            tasksVisibleToParticipants={eventTasksData.tasksVisibleToParticipants}
+            expanded={eventTasksExpanded ?? false}
+            onToggle={onToggleEventTasks ?? (() => {})}
+            onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
           />
         ) : null}
 
@@ -842,6 +877,16 @@ const UnifiedTimelineCard = ({
             taskId={item.id}
           />
         ) : null}
+        {hasEventTasks && eventTasksData ? (
+          <EventTasksAccordion
+            tasks={eventTasksData.tasks}
+            canManageTasks={eventTasksData.canManageTasks}
+            tasksVisibleToParticipants={eventTasksData.tasksVisibleToParticipants}
+            expanded={eventTasksExpanded ?? false}
+            onToggle={onToggleEventTasks ?? (() => {})}
+            onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
+          />
+        ) : null}
         {hasEventImportantItems ? (
           <View style={styles.importantItemsWrapper}>
             <InlineImportantItemsSection
@@ -912,6 +957,16 @@ const UnifiedTimelineCard = ({
             onImagePress={onImagePress}
             subtasks={item.subtasks ?? []}
             taskId={item.id}
+          />
+        ) : null}
+        {hasEventTasks && eventTasksData ? (
+          <EventTasksAccordion
+            tasks={eventTasksData.tasks}
+            canManageTasks={eventTasksData.canManageTasks}
+            tasksVisibleToParticipants={eventTasksData.tasksVisibleToParticipants}
+            expanded={eventTasksExpanded ?? false}
+            onToggle={onToggleEventTasks ?? (() => {})}
+            onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
           />
         ) : null}
         {hasEventImportantItems ? (
@@ -1050,8 +1105,8 @@ const UnifiedTimelineCard = ({
   }
 
   // Default compact card — event-only path needs a View wrapper when there are important items
-  // so the accordion Pressables are siblings of (not nested inside) the card Pressable.
-  if (hasEventImportantItems) {
+  // or event tasks so the accordion Pressables are siblings of (not nested inside) the card Pressable.
+  if (hasEventImportantItems || hasEventTasks) {
     return (
       <View
         style={[
@@ -1070,13 +1125,25 @@ const UnifiedTimelineCard = ({
         >
           {compactContent}
         </Pressable>
-        <View style={styles.importantItemsWrapper}>
-          <InlineImportantItemsSection
-            eventId={String(item.id)}
-            items={importantItems}
-            checks={checks}
+        {hasEventTasks && eventTasksData ? (
+          <EventTasksAccordion
+            tasks={eventTasksData.tasks}
+            canManageTasks={eventTasksData.canManageTasks}
+            tasksVisibleToParticipants={eventTasksData.tasksVisibleToParticipants}
+            expanded={eventTasksExpanded ?? false}
+            onToggle={onToggleEventTasks ?? (() => {})}
+            onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
           />
-        </View>
+        ) : null}
+        {hasEventImportantItems ? (
+          <View style={styles.importantItemsWrapper}>
+            <InlineImportantItemsSection
+              eventId={String(item.id)}
+              items={importantItems}
+              checks={checks}
+            />
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -1134,6 +1201,10 @@ export function HomeDailyCommandCenter({
   const [expandedItemTaskIds, setExpandedItemTaskIds] = useState<Set<string>>(
     new Set()
   );
+  // Tracks which event-task accordions are open (one per event card).
+  const [expandedEventTaskIds, setExpandedEventTaskIds] = useState<Set<string>>(
+    new Set()
+  );
 
   // ─── Image preview state ──────────────────────────────────────────────────
   const [imagePreviewUri, setImagePreviewUri] = useState<string | null>(null);
@@ -1143,6 +1214,25 @@ export function HomeDailyCommandCenter({
   // Per-(taskId:subtaskId) in-flight guard — prevents duplicate taps while a
   // request is pending. Does NOT block other items.
   const pendingSubtaskToggles = useRef(new Set<string>());
+
+  // ─── Event task toggle mutation ───────────────────────────────────────────
+  const toggleEventTaskMutation = useMutation(api.eventTasks.toggleCompleted);
+  const pendingEventTaskToggles = useRef(new Set<string>());
+
+  const handleToggleEventTask = useCallback(
+    async (taskId: string): Promise<void> => {
+      if (pendingEventTaskToggles.current.has(taskId)) return;
+      pendingEventTaskToggles.current.add(taskId);
+      try {
+        await toggleEventTaskMutation({ id: taskId as Id<'eventTasks'> });
+      } catch (error) {
+        console.error('toggleEventTask error:', error);
+      } finally {
+        pendingEventTaskToggles.current.delete(taskId);
+      }
+    },
+    [toggleEventTaskMutation]
+  );
 
   const handleToggleSubtask = useCallback(
     async (taskId: string, subtaskId: string): Promise<void> => {
@@ -1170,6 +1260,18 @@ export function HomeDailyCommandCenter({
         next.delete(taskId);
       } else {
         next.add(taskId);
+      }
+      return next;
+    });
+  };
+
+  const toggleEventTasksFor = (eventId: string): void => {
+    setExpandedEventTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) {
+        next.delete(eventId);
+      } else {
+        next.add(eventId);
       }
       return next;
     });
@@ -1536,6 +1638,10 @@ export function HomeDailyCommandCenter({
                       temporalState="ended"
                       importantItems={item.importantItems}
                       checks={myImportantItemChecks[item.id] ?? {}}
+                      eventTasksData={item.authorizedEventTasks}
+                      eventTasksExpanded={expandedEventTaskIds.has(item.id)}
+                      onToggleEventTasks={() => toggleEventTasksFor(item.id)}
+                      onToggleEventTaskCompleted={handleToggleEventTask}
                     />
                   ))}
                 </View>
@@ -1566,6 +1672,10 @@ export function HomeDailyCommandCenter({
               temporalState="active"
               importantItems={item.importantItems}
               checks={myImportantItemChecks[item.id] ?? {}}
+              eventTasksData={item.authorizedEventTasks}
+              eventTasksExpanded={expandedEventTaskIds.has(item.id)}
+              onToggleEventTasks={() => toggleEventTasksFor(item.id)}
+              onToggleEventTaskCompleted={handleToggleEventTask}
             />
           ))}
 
@@ -1595,6 +1705,10 @@ export function HomeDailyCommandCenter({
               temporalState={getTemporalState(featuredItem)}
               importantItems={featuredItem.importantItems}
               checks={myImportantItemChecks[featuredItem.id] ?? {}}
+              eventTasksData={featuredItem.authorizedEventTasks}
+              eventTasksExpanded={expandedEventTaskIds.has(featuredItem.id)}
+              onToggleEventTasks={() => toggleEventTasksFor(featuredItem.id)}
+              onToggleEventTaskCompleted={handleToggleEventTask}
             />
           ) : null}
 
@@ -1627,6 +1741,10 @@ export function HomeDailyCommandCenter({
                     temporalState={tState}
                     importantItems={item.importantItems}
                     checks={myImportantItemChecks[item.id] ?? {}}
+                    eventTasksData={item.authorizedEventTasks}
+                    eventTasksExpanded={expandedEventTaskIds.has(item.id)}
+                    onToggleEventTasks={() => toggleEventTasksFor(item.id)}
+                    onToggleEventTaskCompleted={handleToggleEventTask}
                   />
                 );
               })}

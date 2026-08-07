@@ -24,6 +24,7 @@ import {
   HomeDailyCommandCenter,
   type HomeDailyItem,
   type HomeDailyTask,
+  type EventTaskAccordionData,
 } from '@/components/home/HomeDailyCommandCenter';
 import type { AssignedEventTask } from '@/components/InlineEventTasksSection';
 import { InlineEventTasksSection } from '@/components/InlineEventTasksSection';
@@ -172,6 +173,8 @@ type Item = {
   myPersonalRsvpStatus?: 'yes' | 'maybe' | 'no' | 'none';
   /** Timestamp (ms) when the task was completed — used for "בוצעו היום" grouping. */
   completedAt?: number;
+  /** Authorized event tasks for the community-event task accordion (server-filtered). */
+  authorizedEventTasks?: EventTaskAccordionData;
 };
 
 type UndatedTask = {
@@ -762,6 +765,43 @@ export default function HomeScreen() {
     [communityEvents]
   );
 
+  // Batch query: authorized event tasks per community event (server-filtered per role/visibility).
+  // Skipped when there are no community events to avoid unnecessary subscriptions.
+  const homeEventTaskResults =
+    useQuery(
+      api.eventTasks.listEventTasksForHome,
+      communityEventIds.length > 0 ? { eventIds: communityEventIds } : 'skip'
+    ) ?? [];
+
+  // Build a fast lookup: eventId → authorized task accordion data.
+  const eventTaskDataById = useMemo<Record<string, EventTaskAccordionData>>(
+    () =>
+      homeEventTaskResults.reduce<Record<string, EventTaskAccordionData>>(
+        (acc, r) => {
+          acc[String(r.eventId)] = {
+            tasks: r.tasks.map((t) => ({
+              id: String(t._id),
+              title: t.title,
+              completed: t.completed,
+              completedAt: t.completedAt,
+              order: t.order,
+              assignedToUserId: t.assignedToUserId
+                ? String(t.assignedToUserId)
+                : undefined,
+              assignedToManual: t.assignedToManual,
+              assigneeDisplay: t.assigneeDisplay,
+              isAssignedToCurrentUser: t.isAssignedToCurrentUser,
+            })),
+            canManageTasks: r.canManageTasks,
+            tasksVisibleToParticipants: r.tasksVisibleToParticipants,
+          };
+          return acc;
+        },
+        {}
+      ),
+    [homeEventTaskResults]
+  );
+
   // For each community event, which family members (same space) also added it to their calendar
   const familyAlsoAdded =
     useQuery(
@@ -1108,6 +1148,7 @@ export default function HomeScreen() {
         profileCircles: familyAlsoAdded[String(ev._id)] ?? [],
         profileCirclesExtraCount: 0,
         profileCirclesContext: 'alsoAddedToCalendar' as const,
+        authorizedEventTasks: eventTaskDataById[String(ev._id)],
       };
     });
   }, [
@@ -1116,6 +1157,7 @@ export default function HomeScreen() {
     communityImportantItemsById,
     familyAlsoAdded,
     myRsvpByEventIdHome,
+    eventTaskDataById,
   ]);
 
   // ── Assigned event task items mapped to Item shape ────────────────────────
@@ -1349,6 +1391,12 @@ export default function HomeScreen() {
           // Carry importantItems from community data so they survive deduplication
           // regardless of which version of the event wins the seen-id check.
           importantItems: communityImportantItemsById[String(ev._id)],
+          // Carry authorizedEventTasks from community data so accordion data
+          // survives deduplication regardless of which representation wins the
+          // seen-id check (mirrors the importantItems propagation pattern).
+          authorizedEventTasks: communityIdStr
+            ? eventTaskDataById[String(ev._id)]
+            : undefined,
           profileCircles,
           profileCirclesExtraCount,
           profileCirclesContext,
@@ -1366,6 +1414,7 @@ export default function HomeScreen() {
       currentUser,
       myRsvpByEventIdHome,
       familyContacts?.selfEntityId,
+      eventTaskDataById,
     ]
   );
 
