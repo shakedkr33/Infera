@@ -1109,7 +1109,7 @@ export default function HomeScreen() {
       return {
         id: ev._id,
         time: ev.allDay
-          ? ''
+          ? 'כל היום'
           : new Date(ev.startTime).toLocaleTimeString('he-IL', {
               hour: '2-digit',
               minute: '2-digit',
@@ -1344,7 +1344,7 @@ export default function HomeScreen() {
         return {
           id: ev._id,
           time: ev.allDay
-            ? ''
+            ? 'כל היום'
             : new Date(ev.startTime).toLocaleTimeString('he-IL', {
                 hour: '2-digit',
                 minute: '2-digit',
@@ -1427,7 +1427,7 @@ export default function HomeScreen() {
         return {
           id: ev._id,
           time: ev.allDay
-            ? ''
+            ? 'כל היום'
             : new Date(ev.startTime).toLocaleTimeString('he-IL', {
                 hour: '2-digit',
                 minute: '2-digit',

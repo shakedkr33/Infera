@@ -317,6 +317,7 @@ export function EventDetailsBottomSheet({
   );
   const claimEventTask = useMutation(api.eventTasks.claimEventTask);
   const unclaimEventTask = useMutation(api.eventTasks.unclaimEventTask);
+  const toggleEventTaskCompleted = useMutation(api.eventTasks.toggleCompleted);
 
   const eventDoc = useQuery(
     api.events.getById,
@@ -737,6 +738,12 @@ export function EventDetailsBottomSheet({
           ),
       },
     ]);
+  };
+
+  const handleToggleEventTaskCompleted = (taskId: Id<'eventTasks'>): void => {
+    toggleEventTaskCompleted({ id: taskId }).catch(() =>
+      Alert.alert('שגיאה', 'לא ניתן לעדכן מצב המשימה')
+    );
   };
 
   if (!visible || (!displayEvent && !convexEventId)) return null;
@@ -1593,15 +1600,86 @@ export function EventDetailsBottomSheet({
                         const isClaimable = showSelfClaimAction && !hasAssignee;
                         const canUnclaimHere =
                           showSelfClaimAction && isAssignedToCurrentUser;
+                        // Manager OR task assigned to current user may complete.
+                        // Visibility alone does NOT grant completion permission.
+                        const canCompleteTask =
+                          canManageTasks ||
+                          (task.assignedToUserId !== undefined &&
+                            task.assignedToUserId === currentUserId);
+                        const isCompleted = task.completed === true;
                         return (
                           <View key={task._id} style={styles.detailListRow}>
+                            {/* Completion checkbox — enabled for manager or own-assigned tasks */}
+                            {canCompleteTask ? (
+                              <Pressable
+                                accessible={true}
+                                accessibilityLabel={`${isCompleted ? 'בטל סימון' : 'סמן כבוצע'}: ${task.title}`}
+                                accessibilityRole="checkbox"
+                                accessibilityState={{ checked: isCompleted }}
+                                hitSlop={11}
+                                onPress={() =>
+                                  handleToggleEventTaskCompleted(task._id)
+                                }
+                                style={styles.eventTaskCheckboxTouch}
+                              >
+                                <View
+                                  style={[
+                                    styles.eventTaskCheckbox,
+                                    isCompleted &&
+                                      styles.eventTaskCheckboxDone,
+                                  ]}
+                                >
+                                  {isCompleted ? (
+                                    <MaterialIcons
+                                      color="#FFFFFF"
+                                      name="check"
+                                      size={10}
+                                    />
+                                  ) : null}
+                                </View>
+                              </Pressable>
+                            ) : (
+                              <View
+                                accessible={true}
+                                accessibilityLabel={task.title}
+                                accessibilityRole="checkbox"
+                                accessibilityState={{
+                                  checked: isCompleted,
+                                  disabled: true,
+                                }}
+                                style={styles.eventTaskCheckboxTouch}
+                              >
+                                <View
+                                  style={[
+                                    styles.eventTaskCheckbox,
+                                    styles.eventTaskCheckboxDisabled,
+                                    isCompleted &&
+                                      styles.eventTaskCheckboxDoneDisabled,
+                                  ]}
+                                >
+                                  {isCompleted ? (
+                                    <MaterialIcons
+                                      color="#C4C9CB"
+                                      name="check"
+                                      size={10}
+                                    />
+                                  ) : null}
+                                </View>
+                              </View>
+                            )}
                             <MaterialIcons
                               color="#36a9e2"
                               name="checklist"
                               size={16}
                             />
                             <View style={styles.detailListContent}>
-                              <Text style={styles.detailListTitle}>
+                              <Text
+                                style={[
+                                  styles.detailListTitle,
+                                  isCompleted &&
+                                    styles.detailListTitleCompleted,
+                                ]}
+                              >
                                 {task.title}
                               </Text>
                               {isClaimable ? (
@@ -2813,6 +2891,39 @@ const styles = StyleSheet.create({
     textAlign: HEB_TEXT_ALIGN,
     writingDirection: HEB_WRITING_DIRECTION,
     alignSelf: 'stretch',
+  },
+  detailListTitleCompleted: {
+    color: '#92999C',
+    textDecorationLine: 'line-through',
+  },
+  eventTaskCheckboxTouch: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    flexShrink: 0,
+  },
+  eventTaskCheckbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: '#ADB3B5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  eventTaskCheckboxDone: {
+    backgroundColor: '#52B788',
+    borderColor: '#52B788',
+  },
+  eventTaskCheckboxDisabled: {
+    borderColor: '#D4D8DA',
+    backgroundColor: 'transparent',
+  },
+  eventTaskCheckboxDoneDisabled: {
+    backgroundColor: '#D4D8DA',
+    borderColor: '#D4D8DA',
   },
   mutedText: {
     alignSelf: 'stretch',

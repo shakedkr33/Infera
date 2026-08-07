@@ -55,6 +55,8 @@ export type HomeDailyItem = {
   completed: boolean;
   /** Timestamp (ms) when the task was completed — used for "בוצעו היום" grouping. */
   completedAt?: number;
+  /** True for all-day events — suppresses elapsed/countdown contextText and progress bar. */
+  allDay?: boolean;
   groupName?: string;
   communityId?: string;
   linkedEventId?: string;
@@ -475,8 +477,9 @@ const UnifiedTimelineCard = ({
     }
   })();
 
-  // Context text (live time line)
+  // Context text (live time line) — suppressed for all-day events
   const contextText = ((): string | null => {
+    if (item.allDay) return null;
     if (temporalState === 'active' && item.startAt !== undefined) {
       return formatElapsed(item.startAt, nowMs);
     }
@@ -513,6 +516,7 @@ const UnifiedTimelineCard = ({
     let progressElement: React.JSX.Element | null = null;
     if (
       item.type === 'event' &&
+      !item.allDay &&
       temporalState === 'active' &&
       item.startAt !== undefined &&
       item.endAt !== undefined &&
@@ -1568,28 +1572,36 @@ export function HomeDailyCommandCenter({
             {isPast ? 'היום שהיה' : 'הלו״ז שלי'}
           </Text>
 
-          {/* All-day events */}
+          {/* All-day events — rendered as full unified cards */}
           {allDayItems.length > 0 ? (
             <View style={styles.allDayGroup}>
               {allDayItems.map((item) => (
-                <Pressable
-                  accessibilityLabel={`פתיחת אירוע לכל היום: ${item.title}`}
-                  accessibilityRole="button"
-                  accessible={true}
+                <UnifiedTimelineCard
+                  displayMode="compact"
+                  item={item}
+                  itemsExpanded={expandedItemTaskIds.has(item.id)}
                   key={item.id}
-                  onPress={() => onOpenItem(item)}
-                  style={styles.allDayRow}
-                >
-                  <Text style={styles.allDayLabel}>כל היום</Text>
-                  <Text numberOfLines={2} style={styles.allDayTitle}>
-                    {item.title}
-                  </Text>
-                  <MaterialIcons
-                    color="#ADB3B5"
-                    name="chevron-left"
-                    size={21}
-                  />
-                </Pressable>
+                  nowMs={nowMs}
+                  onImagePress={setImagePreviewUri}
+                  onNavigate={() => onNavigate(item.location, item.locationUrl)}
+                  onOpen={() => onOpenItem(item)}
+                  onOpenRemoteUrl={() => {
+                    if (item.remoteUrl) onOpenRemoteUrl(item.remoteUrl);
+                  }}
+                  onRsvp={onRsvp}
+                  onToggleComplete={() => onToggleTask(item.id)}
+                  onToggleItems={() => toggleItemsFor(item.id)}
+                  onToggleSubtask={(subtaskId) =>
+                    handleToggleSubtask(item.id, subtaskId)
+                  }
+                  temporalState={getTemporalState(item)}
+                  importantItems={item.importantItems}
+                  checks={myImportantItemChecks[item.id] ?? {}}
+                  eventTasksData={item.authorizedEventTasks}
+                  eventTasksExpanded={expandedEventTaskIds.has(item.id)}
+                  onToggleEventTasks={() => toggleEventTasksFor(item.id)}
+                  onToggleEventTaskCompleted={handleToggleEventTask}
+                />
               ))}
             </View>
           ) : null}
