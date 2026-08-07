@@ -1561,12 +1561,12 @@ export function EventDetailsBottomSheet({
                         <Text style={styles.managerVisibilityInfoTitle}>
                           {participantsCanSeeTasks
                             ? 'גלוי למשתתפים'
-                            : 'מוגבל למנהלים'}
+                            : 'גלוי לפי הקצאה'}
                         </Text>
                         <Text style={styles.managerVisibilityInfoDesc}>
                           {participantsCanSeeTasks
-                            ? 'כל חברי הקהילה יכולים לראות את המשימות וההקצאות.'
-                            : 'כל משתתף רואה רק משימות שהוקצו אליו.'}
+                            ? 'כל חברי הקהילה יראו את המשימות וההקצאות ויוכלו להשתבץ'
+                            : 'כל משתתף יראה רק משימות שהוקצו אליו. מנהלי האירוע ימשיכו לראות את כולן'}
                         </Text>
                       </View>
                     </View>
@@ -1589,7 +1589,7 @@ export function EventDetailsBottomSheet({
                         const assignmentLabel = !hasAssignee
                           ? 'לא הוקצה'
                           : isAssignedToCurrentUser
-                            ? 'הוקצה אליי ✓'
+                            ? '✓ הוקצה אליי'
                             : assigneeDisplay
                               ? `הוקצה ל-${assigneeDisplay}`
                               : 'הוקצה';
@@ -1597,16 +1597,23 @@ export function EventDetailsBottomSheet({
                           displayEvent.communityId &&
                           Boolean(myMembership) &&
                           participantsCanSeeTasks;
-                        const isClaimable = showSelfClaimAction && !hasAssignee;
+                        const eventHasStarted =
+                          typeof displayEvent.startTime === 'number' &&
+                          displayEvent.startTime <= Date.now();
+                        const isClaimable =
+                          showSelfClaimAction && !hasAssignee && !eventHasStarted;
+                        const isCompleted = task.completed === true;
                         const canUnclaimHere =
-                          showSelfClaimAction && isAssignedToCurrentUser;
+                          showSelfClaimAction &&
+                          isAssignedToCurrentUser &&
+                          !eventHasStarted &&
+                          !isCompleted;
                         // Manager OR task assigned to current user may complete.
                         // Visibility alone does NOT grant completion permission.
                         const canCompleteTask =
                           canManageTasks ||
                           (task.assignedToUserId !== undefined &&
                             task.assignedToUserId === currentUserId);
-                        const isCompleted = task.completed === true;
                         return (
                           <View key={task._id} style={styles.detailListRow}>
                             {/* Completion checkbox — enabled for manager or own-assigned tasks */}
@@ -1633,7 +1640,7 @@ export function EventDetailsBottomSheet({
                                     <MaterialIcons
                                       color="#FFFFFF"
                                       name="check"
-                                      size={10}
+                                      size={16}
                                     />
                                   ) : null}
                                 </View>
@@ -1659,19 +1666,14 @@ export function EventDetailsBottomSheet({
                                 >
                                   {isCompleted ? (
                                     <MaterialIcons
-                                      color="#C4C9CB"
+                                      color="#FFFFFF"
                                       name="check"
-                                      size={10}
+                                      size={16}
                                     />
                                   ) : null}
                                 </View>
                               </View>
                             )}
-                            <MaterialIcons
-                              color="#36a9e2"
-                              name="checklist"
-                              size={16}
-                            />
                             <View style={styles.detailListContent}>
                               <Text
                                 style={[
@@ -1689,16 +1691,20 @@ export function EventDetailsBottomSheet({
                                   accessible={true}
                                   onPress={() => handleClaimEventTask(task._id)}
                                   style={({ pressed }) => [
-                                    styles.taskAssignmentAction,
+                                    styles.taskAssignmentActionPressable,
                                     pressed &&
                                       styles.taskAssignmentActionPressed,
                                   ]}
                                 >
-                                  <Text
-                                    style={[styles.taskAssignmentActionText]}
+                                  <View
+                                    style={styles.taskAssignmentAction}
                                   >
-                                    אני אקח
-                                  </Text>
+                                    <Text
+                                      style={styles.taskAssignmentActionText}
+                                    >
+                                      + אני אקח
+                                    </Text>
+                                  </View>
                                 </Pressable>
                               ) : canUnclaimHere ? (
                                 <View style={styles.taskAssignmentStatusRow}>
@@ -1709,24 +1715,27 @@ export function EventDetailsBottomSheet({
                                     ]}
                                     numberOfLines={1}
                                   >
-                                    הוקצה אליי
+                                    ✓ הוקצה אליי
                                   </Text>
                                   <Pressable
                                     accessibilityLabel="בטל הקצאה"
                                     accessibilityRole="button"
                                     accessible={true}
+                                    hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
                                     onPress={() =>
                                       handleUnclaimEventTask(task._id)
                                     }
                                     style={({ pressed }) => [
-                                      styles.taskUnassignAction,
+                                      styles.taskUnassignPressable,
                                       pressed &&
                                         styles.taskAssignmentActionPressed,
                                     ]}
                                   >
-                                    <Text style={styles.taskUnassignActionText}>
-                                      בטל הקצאה
-                                    </Text>
+                                    <View style={styles.taskUnassignAction}>
+                                      <Text style={styles.taskUnassignActionText}>
+                                        בטל הקצאה
+                                      </Text>
+                                    </View>
                                   </Pressable>
                                 </View>
                               ) : (
@@ -1763,11 +1772,18 @@ export function EventDetailsBottomSheet({
                           onPress={() => setShowAllTasks((value) => !value)}
                           style={styles.showMoreBtn}
                         >
-                          <Text style={styles.showMoreText}>
-                            {showAllTasks
-                              ? 'הצג פחות משימות'
-                              : 'הצג עוד משימות'}
-                          </Text>
+                          <View style={styles.showMoreBtnInner}>
+                            <Text style={styles.showMoreText}>
+                              {showAllTasks
+                                ? 'הצג פחות משימות'
+                                : 'הצג עוד משימות'}
+                            </Text>
+                            <MaterialIcons
+                              color="#00668E"
+                              name={showAllTasks ? 'expand-less' : 'expand-more'}
+                              size={18}
+                            />
+                          </View>
                         </Pressable>
                       ) : null}
                     </View>
@@ -2904,26 +2920,27 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   eventTaskCheckbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    borderColor: '#ADB3B5',
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: 'rgba(0,102,142,0.45)',
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
   eventTaskCheckboxDone: {
-    backgroundColor: '#52B788',
-    borderColor: '#52B788',
+    backgroundColor: '#00668E',
+    borderColor: '#00668E',
   },
   eventTaskCheckboxDisabled: {
     borderColor: '#D4D8DA',
     backgroundColor: 'transparent',
   },
   eventTaskCheckboxDoneDisabled: {
-    backgroundColor: '#D4D8DA',
-    borderColor: '#D4D8DA',
+    backgroundColor: '#C4C9CB',
+    borderColor: '#C4C9CB',
   },
   mutedText: {
     alignSelf: 'stretch',
@@ -2933,18 +2950,18 @@ const styles = StyleSheet.create({
     width: '100%',
     writingDirection: HEB_WRITING_DIRECTION,
   },
-  taskAssignmentAction: {
+  taskAssignmentActionPressable: {
     alignSelf: HEB_FLEX_END,
-    minHeight: 44,
+  },
+  taskAssignmentAction: {
+    minHeight: 36,
     justifyContent: 'center',
-    alignItems: HEB_FLEX_END,
-    minWidth: 76,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    alignItems: 'center',
+    minWidth: 80,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: '#E6F4FB',
-    borderWidth: 1,
-    borderColor: '#7dd3fc',
+    backgroundColor: '#00668E',
   },
   taskAssignmentActionPressed: {
     opacity: 0.84,
@@ -2954,10 +2971,10 @@ const styles = StyleSheet.create({
     borderColor: '#86efac',
   },
   taskAssignmentActionText: {
-    fontSize: 12,
-    color: '#0369a1',
-    fontWeight: '800',
-    lineHeight: 16,
+    fontSize: 13,
+    color: '#FFFFFF',
+    fontWeight: '700',
+    lineHeight: 18,
     textAlign: HEB_TEXT_ALIGN,
     includeFontPadding: false,
     writingDirection: HEB_WRITING_DIRECTION,
@@ -2972,18 +2989,25 @@ const styles = StyleSheet.create({
     justifyContent: HEB_FLEX_END,
     gap: 10,
   },
+  taskUnassignPressable: {
+    alignSelf: 'auto',
+  },
   taskUnassignAction: {
-    minHeight: 32,
+    minHeight: 42,
     justifyContent: 'center',
+    alignItems: 'center',
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1.5,
+    borderColor: '#94a3b8',
+    backgroundColor: '#f1f5f9',
   },
   taskUnassignActionText: {
-    fontSize: 12,
-    color: '#64748b',
+    fontSize: 13,
+    color: '#475569',
     fontWeight: '700',
-    lineHeight: 16,
+    lineHeight: 18,
     textAlign: HEB_TEXT_ALIGN,
     includeFontPadding: false,
     writingDirection: HEB_WRITING_DIRECTION,
@@ -3016,17 +3040,28 @@ const styles = StyleSheet.create({
   },
   showMoreBtn: {
     alignSelf: HEB_FLEX_END,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    minHeight: 32,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    minHeight: 42,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: '#b3d9ea',
+    backgroundColor: '#f0f9ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  showMoreBtnInner: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 4,
   },
   showMoreText: {
-    alignSelf: 'stretch',
-    color: '#36a9e2',
+    color: '#00668E',
     fontWeight: '700',
     fontSize: 13,
+    lineHeight: 18,
+    includeFontPadding: false,
     textAlign: HEB_TEXT_ALIGN,
-    width: '100%',
     writingDirection: HEB_WRITING_DIRECTION,
   },
   importantItemsList: {

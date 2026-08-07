@@ -248,7 +248,7 @@ export function RelatedTasksSection({
             <Text style={s.visibilityTitle}>משימות גלויות למשתתפים</Text>
             <Text style={s.visibilityText}>
               {tasksVisibleToParticipants
-                ? 'המשתתפים יראו את המשימות ויוכלו להשתבץ'
+                ? 'כל חברי הקהילה יראו את המשימות וההקצאות ויוכלו להשתבץ'
                 : visibilityOffHelperText}
             </Text>
           </View>

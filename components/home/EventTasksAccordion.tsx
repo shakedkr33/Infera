@@ -87,7 +87,7 @@ export function EventTasksAccordion({
               />
               <View style={styles.visibilityTextBlock}>
                 <Text style={styles.visibilityTitle}>
-                  {tasksVisibleToParticipants ? 'גלוי למשתתפים' : 'מוגבל למנהלים'}
+                  {tasksVisibleToParticipants ? 'גלוי למשתתפים' : 'גלוי לפי הקצאה'}
                 </Text>
                 <Text style={styles.visibilityDesc}>
                   {tasksVisibleToParticipants
@@ -138,7 +138,7 @@ export function EventTasksAccordion({
                       ]}
                     >
                       {task.completed ? (
-                        <MaterialIcons color="#FFFFFF" name="check" size={10} />
+                        <MaterialIcons color="#FFFFFF" name="check" size={16} />
                       ) : null}
                     </View>
                   </Pressable>
@@ -158,7 +158,7 @@ export function EventTasksAccordion({
                       ]}
                     >
                       {task.completed ? (
-                        <MaterialIcons color="#C4C9CB" name="check" size={10} />
+                        <MaterialIcons color="#FFFFFF" name="check" size={16} />
                       ) : null}
                     </View>
                   </View>
@@ -267,26 +267,27 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    borderColor: '#ADB3B5',
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: 'rgba(0,102,142,0.45)',
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
   checkboxDone: {
-    backgroundColor: '#52B788',
-    borderColor: '#52B788',
+    backgroundColor: tc.primary,
+    borderColor: tc.primary,
   },
   checkboxDisabled: {
     borderColor: '#D4D8DA',
     backgroundColor: 'transparent',
   },
   checkboxDoneDisabled: {
-    backgroundColor: '#D4D8DA',
-    borderColor: '#D4D8DA',
+    backgroundColor: '#C4C9CB',
+    borderColor: '#C4C9CB',
   },
   taskBody: {
     flex: 1,

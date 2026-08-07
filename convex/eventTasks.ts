@@ -796,6 +796,12 @@ export const unclaimEventTask = mutation({
     if (!canManage && task.assignedToUserId !== userId) {
       throw new Error('ניתן להסיר רק הקצאה של עצמך');
     }
+    if (task.completed === true) {
+      throw new ConvexError({
+        code: 'TASK_ALREADY_COMPLETED',
+        message: 'לא ניתן לבטל הקצאה של משימה שכבר בוצעה',
+      });
+    }
 
     await ctx.db.patch(id, {
       assignedToUserId: undefined,

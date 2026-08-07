@@ -1093,8 +1093,8 @@ export default function EventDetailScreen() {
                   </Text>
                   <Text style={styles.taskVisibilityHelper}>
                     {participantsCanSeeTasks
-                      ? 'המשתתפים יראו את המשימות ויוכלו להשתבץ'
-                      : 'רק מנהלי האירוע רואים את המשימות'}
+                      ? 'כל חברי הקהילה יראו את המשימות וההקצאות ויוכלו להשתבץ'
+                      : 'כל משתתף יראה רק משימות שהוקצו אליו. מנהלי האירוע ימשיכו לראות את כולן'}
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -1143,7 +1143,7 @@ export default function EventDetailScreen() {
                 />
                 <View style={styles.managerVisibilityTextBlock}>
                   <Text style={styles.managerVisibilityTitle}>
-                    {participantsCanSeeTasks ? 'גלוי למשתתפים' : 'מוגבל למנהלים'}
+                    {participantsCanSeeTasks ? 'גלוי למשתתפים' : 'גלוי לפי הקצאה'}
                   </Text>
                   <Text style={styles.managerVisibilityDesc}>
                     {participantsCanSeeTasks
