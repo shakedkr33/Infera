@@ -7,6 +7,7 @@
  * - Managers see all tasks + a quiet visibility-status row
  * - Members see their own tasks (visibility disabled) or all tasks (visibility enabled)
  * - Checkboxes call the parent-supplied onToggleCompleted handler
+ * - Self-claim / self-unclaim actions appear for eligible future-event tasks
  * - RTL-correct Hebrew layout
  */
 import { MaterialIcons } from '@expo/vector-icons';
@@ -38,6 +39,12 @@ interface EventTasksAccordionProps {
   expanded: boolean;
   onToggle: () => void;
   onToggleCompleted: (taskId: string) => void;
+  /** Canonical Unix-ms event start time — gates claim/unclaim actions. */
+  eventStartTime?: number;
+  /** Called when the user taps "+ אני אקח" on an eligible unassigned task. */
+  onClaimTask?: (taskId: string) => void;
+  /** Called when the user taps "בטל הקצאה" on their own incomplete task. */
+  onUnclaimTask?: (taskId: string) => void;
 }
 
 export function EventTasksAccordion({
@@ -47,10 +54,18 @@ export function EventTasksAccordion({
   expanded,
   onToggle,
   onToggleCompleted,
+  eventStartTime,
+  onClaimTask,
+  onUnclaimTask,
 }: EventTasksAccordionProps): React.JSX.Element | null {
   if (tasks.length === 0) return null;
 
   const summaryLabel = `משימות האירוע · ${tasks.length}`;
+
+  // Event has started when the canonical start timestamp is in the past.
+  // If startTime is unavailable (e.g. all-day edge case), block actions conservatively.
+  const eventHasStarted =
+    eventStartTime !== undefined && eventStartTime <= Date.now();
 
   return (
     <>
@@ -103,10 +118,27 @@ export function EventTasksAccordion({
             const isAssigned =
               Boolean(task.assignedToUserId) ||
               Boolean(task.assignedToManual?.trim());
+
+            // Self-claim: visible only when task is unassigned and event hasn't started.
+            const isClaimable =
+              !isAssigned &&
+              !eventHasStarted &&
+              eventStartTime !== undefined &&
+              onClaimTask !== undefined;
+
+            // Self-unclaim: only own task, incomplete, event not started.
+            const canUnclaimHere =
+              task.isAssignedToCurrentUser &&
+              !task.completed &&
+              !eventHasStarted &&
+              eventStartTime !== undefined &&
+              onUnclaimTask !== undefined;
+
+            // Informational label used when no action is shown.
             const assignmentLabel = task.isAssignedToCurrentUser
-              ? 'הוקצה אליי'
+              ? '✓ הוקצה אליי'
               : task.assigneeDisplay
-                ? `${task.assigneeDisplay}`
+                ? task.assigneeDisplay
                 : isAssigned
                   ? 'הוקצה'
                   : 'לא הוקצה';
@@ -164,7 +196,7 @@ export function EventTasksAccordion({
                   </View>
                 )}
 
-                {/* Title + assignment label */}
+                {/* Title + assignment label / action */}
                 <View style={styles.taskBody}>
                   <Text
                     numberOfLines={2}
@@ -175,16 +207,61 @@ export function EventTasksAccordion({
                   >
                     {task.title}
                   </Text>
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.assignmentLabel,
-                      task.isAssignedToCurrentUser && styles.assignmentLabelMe,
-                      !isAssigned && styles.assignmentLabelUnassigned,
-                    ]}
-                  >
-                    {assignmentLabel}
-                  </Text>
+
+                  {isClaimable ? (
+                    /* + אני אקח — primary claim action */
+                    <Pressable
+                      accessible={true}
+                      accessibilityLabel="אני אקח"
+                      accessibilityRole="button"
+                      onPress={() => onClaimTask?.(task.id)}
+                      style={({ pressed }) => [
+                        styles.claimPressable,
+                        pressed && styles.actionPressed,
+                      ]}
+                    >
+                      <View style={styles.claimAction}>
+                        <Text style={styles.claimActionText}>+ אני אקח</Text>
+                      </View>
+                    </Pressable>
+                  ) : canUnclaimHere ? (
+                    /* ✓ הוקצה אליי + בטל הקצאה — own incomplete task, future event */
+                    <View style={styles.ownAssignmentRow}>
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.assignmentLabel, styles.assignmentLabelMe]}
+                      >
+                        ✓ הוקצה אליי
+                      </Text>
+                      <Pressable
+                        accessible={true}
+                        accessibilityLabel="בטל הקצאה"
+                        accessibilityRole="button"
+                        hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
+                        onPress={() => onUnclaimTask?.(task.id)}
+                        style={({ pressed }) => [
+                          styles.unclaimPressable,
+                          pressed && styles.actionPressed,
+                        ]}
+                      >
+                        <View style={styles.unclaimAction}>
+                          <Text style={styles.unclaimActionText}>בטל הקצאה</Text>
+                        </View>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    /* Informational assignment label — no action */
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.assignmentLabel,
+                        task.isAssignedToCurrentUser && styles.assignmentLabelMe,
+                        !isAssigned && styles.assignmentLabelUnassigned,
+                      ]}
+                    >
+                      {assignmentLabel}
+                    </Text>
+                  )}
                 </View>
               </View>
             );
@@ -292,7 +369,7 @@ const styles = StyleSheet.create({
   taskBody: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
+    gap: 4,
   },
   taskTitle: {
     fontSize: 14,
@@ -318,5 +395,58 @@ const styles = StyleSheet.create({
   },
   assignmentLabelUnassigned: {
     color: '#ADB3B5',
+  },
+  // ── Claim action (+ אני אקח) ──────────────────────────────────────────────
+  claimPressable: {
+    alignSelf: 'flex-start',
+  },
+  claimAction: {
+    minHeight: 34,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 13,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#00668E',
+  },
+  claimActionText: {
+    fontSize: 12,
+    color: '#FFFFFF',
+    fontWeight: '700',
+    textAlign: getTextAlign(),
+    writingDirection: 'rtl',
+    includeFontPadding: false,
+  },
+  actionPressed: {
+    opacity: 0.84,
+  },
+  // ── Own-assignment row (✓ הוקצה אליי + בטל הקצאה) ────────────────────────
+  ownAssignmentRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  unclaimPressable: {
+    alignSelf: 'auto',
+  },
+  unclaimAction: {
+    minHeight: 34,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 6,
+    backgroundColor: '#F1F4F5',
+    borderWidth: 1.5,
+    borderColor: '#CBD5D9',
+  },
+  unclaimActionText: {
+    fontSize: 12,
+    color: '#334E6F',
+    fontWeight: '700',
+    textAlign: getTextAlign(),
+    writingDirection: 'rtl',
+    includeFontPadding: false,
   },
 });

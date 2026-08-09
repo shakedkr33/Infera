@@ -2,6 +2,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { useCallback, useRef, useState } from 'react';
 import {
+  Alert,
   Image,
   type ImageErrorEventData,
   Pressable,
@@ -127,6 +128,10 @@ interface UnifiedTimelineCardProps {
   onToggleEventTasks?: () => void;
   /** Toggle completion of an event task by its ID. */
   onToggleEventTaskCompleted?: (taskId: string) => void;
+  /** Called when user taps "+ אני אקח" on an eligible unassigned event task. */
+  onClaimEventTask?: (taskId: string) => void;
+  /** Called when user taps "בטל הקצאה" on their own incomplete event task. */
+  onUnclaimEventTask?: (taskId: string) => void;
 }
 
 type HomeDailyCommandCenterProps = {
@@ -436,6 +441,8 @@ const UnifiedTimelineCard = ({
   eventTasksExpanded,
   onToggleEventTasks,
   onToggleEventTaskCompleted,
+  onClaimEventTask,
+  onUnclaimEventTask,
 }: UnifiedTimelineCardProps): React.JSX.Element => {
   const hasTaskSubtasks =
     item.type === 'task' && (item.subtasks?.length ?? 0) > 0;
@@ -640,6 +647,9 @@ const UnifiedTimelineCard = ({
             expanded={eventTasksExpanded ?? false}
             onToggle={onToggleEventTasks ?? (() => {})}
             onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
+            eventStartTime={item.startAt}
+            onClaimTask={onClaimEventTask}
+            onUnclaimTask={onUnclaimEventTask}
           />
         ) : null}
 
@@ -889,6 +899,9 @@ const UnifiedTimelineCard = ({
             expanded={eventTasksExpanded ?? false}
             onToggle={onToggleEventTasks ?? (() => {})}
             onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
+            eventStartTime={item.startAt}
+            onClaimTask={onClaimEventTask}
+            onUnclaimTask={onUnclaimEventTask}
           />
         ) : null}
         {hasEventImportantItems ? (
@@ -971,6 +984,9 @@ const UnifiedTimelineCard = ({
             expanded={eventTasksExpanded ?? false}
             onToggle={onToggleEventTasks ?? (() => {})}
             onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
+            eventStartTime={item.startAt}
+            onClaimTask={onClaimEventTask}
+            onUnclaimTask={onUnclaimEventTask}
           />
         ) : null}
         {hasEventImportantItems ? (
@@ -1137,6 +1153,9 @@ const UnifiedTimelineCard = ({
             expanded={eventTasksExpanded ?? false}
             onToggle={onToggleEventTasks ?? (() => {})}
             onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
+            eventStartTime={item.startAt}
+            onClaimTask={onClaimEventTask}
+            onUnclaimTask={onUnclaimEventTask}
           />
         ) : null}
         {hasEventImportantItems ? (
@@ -1223,6 +1242,12 @@ export function HomeDailyCommandCenter({
   const toggleEventTaskMutation = useMutation(api.eventTasks.toggleCompleted);
   const pendingEventTaskToggles = useRef(new Set<string>());
 
+  // ─── Event task claim / unclaim mutations ─────────────────────────────────
+  const claimEventTaskMutation = useMutation(api.eventTasks.claimEventTask);
+  const unclaimEventTaskMutation = useMutation(api.eventTasks.unclaimEventTask);
+  const pendingClaimIds = useRef(new Set<string>());
+  const pendingUnclaimIds = useRef(new Set<string>());
+
   const handleToggleEventTask = useCallback(
     async (taskId: string): Promise<void> => {
       if (pendingEventTaskToggles.current.has(taskId)) return;
@@ -1236,6 +1261,38 @@ export function HomeDailyCommandCenter({
       }
     },
     [toggleEventTaskMutation]
+  );
+
+  const handleClaimEventTask = useCallback(
+    async (taskId: string): Promise<void> => {
+      if (pendingClaimIds.current.has(taskId)) return;
+      pendingClaimIds.current.add(taskId);
+      try {
+        await claimEventTaskMutation({ id: taskId as Id<'eventTasks'> });
+      } catch (error) {
+        Alert.alert('שגיאה', 'לא ניתן להשתבץ למשימה כרגע');
+        console.error('claimEventTask error:', error);
+      } finally {
+        pendingClaimIds.current.delete(taskId);
+      }
+    },
+    [claimEventTaskMutation]
+  );
+
+  const handleUnclaimEventTask = useCallback(
+    async (taskId: string): Promise<void> => {
+      if (pendingUnclaimIds.current.has(taskId)) return;
+      pendingUnclaimIds.current.add(taskId);
+      try {
+        await unclaimEventTaskMutation({ id: taskId as Id<'eventTasks'> });
+      } catch (error) {
+        Alert.alert('שגיאה', 'לא ניתן להסיר הקצאה כרגע');
+        console.error('unclaimEventTask error:', error);
+      } finally {
+        pendingUnclaimIds.current.delete(taskId);
+      }
+    },
+    [unclaimEventTaskMutation]
   );
 
   const handleToggleSubtask = useCallback(
@@ -1601,6 +1658,8 @@ export function HomeDailyCommandCenter({
                   eventTasksExpanded={expandedEventTaskIds.has(item.id)}
                   onToggleEventTasks={() => toggleEventTasksFor(item.id)}
                   onToggleEventTaskCompleted={handleToggleEventTask}
+                  onClaimEventTask={handleClaimEventTask}
+                  onUnclaimEventTask={handleUnclaimEventTask}
                 />
               ))}
             </View>
@@ -1654,6 +1713,8 @@ export function HomeDailyCommandCenter({
                       eventTasksExpanded={expandedEventTaskIds.has(item.id)}
                       onToggleEventTasks={() => toggleEventTasksFor(item.id)}
                       onToggleEventTaskCompleted={handleToggleEventTask}
+                      onClaimEventTask={handleClaimEventTask}
+                      onUnclaimEventTask={handleUnclaimEventTask}
                     />
                   ))}
                 </View>
@@ -1688,6 +1749,8 @@ export function HomeDailyCommandCenter({
               eventTasksExpanded={expandedEventTaskIds.has(item.id)}
               onToggleEventTasks={() => toggleEventTasksFor(item.id)}
               onToggleEventTaskCompleted={handleToggleEventTask}
+              onClaimEventTask={handleClaimEventTask}
+              onUnclaimEventTask={handleUnclaimEventTask}
             />
           ))}
 
@@ -1721,6 +1784,8 @@ export function HomeDailyCommandCenter({
               eventTasksExpanded={expandedEventTaskIds.has(featuredItem.id)}
               onToggleEventTasks={() => toggleEventTasksFor(featuredItem.id)}
               onToggleEventTaskCompleted={handleToggleEventTask}
+              onClaimEventTask={handleClaimEventTask}
+              onUnclaimEventTask={handleUnclaimEventTask}
             />
           ) : null}
 
@@ -1757,6 +1822,8 @@ export function HomeDailyCommandCenter({
                     eventTasksExpanded={expandedEventTaskIds.has(item.id)}
                     onToggleEventTasks={() => toggleEventTasksFor(item.id)}
                     onToggleEventTaskCompleted={handleToggleEventTask}
+                    onClaimEventTask={handleClaimEventTask}
+                    onUnclaimEventTask={handleUnclaimEventTask}
                   />
                 );
               })}
