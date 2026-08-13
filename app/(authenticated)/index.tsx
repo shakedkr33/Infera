@@ -21,10 +21,10 @@ import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import type { EventItem } from '@/components/EventDetailsBottomSheet';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import {
+  type EventTaskAccordionData,
   HomeDailyCommandCenter,
   type HomeDailyItem,
   type HomeDailyTask,
-  type EventTaskAccordionData,
 } from '@/components/home/HomeDailyCommandCenter';
 import type { AssignedEventTask } from '@/components/InlineEventTasksSection';
 import { InlineEventTasksSection } from '@/components/InlineEventTasksSection';
@@ -37,7 +37,6 @@ import { ProfileCircles } from '@/components/ProfileCircles';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { colors } from '@/constants/theme';
-import { colors as tc } from '@/theme/colors';
 import { useNotifications } from '@/contexts/NotificationsContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -46,10 +45,12 @@ import { useBirthdaySheets } from '@/lib/components/birthday/BirthdaySheetsProvi
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { SubtaskImagePreviewModal } from '@/lib/components/task/SubtaskImagePreviewModal';
 import { SubtaskAttachmentPreview } from '@/lib/components/task/SubtasksSection';
+import { isEventEligibleForHomeImportantItemsPreview } from '@/lib/homeImportantItemsPreview';
 import { APP_IS_RTL, getTextAlign, position, rtl, spacing } from '@/lib/rtl';
 import type { SubTaskAttachment } from '@/lib/types/task';
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
+import { colors as tc } from '@/theme/colors';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
@@ -733,7 +734,8 @@ export default function HomeScreen() {
   const isSelectedToday = isSameDay(selectedDate, today);
   const isSelectedTomorrow = isSameDay(selectedDate, tomorrow);
   const isSelectedYesterday = isSameDay(selectedDate, yesterday);
-  const isCustomDate = !isSelectedToday && !isSelectedYesterday && !isSelectedTomorrow;
+  const isCustomDate =
+    !isSelectedToday && !isSelectedYesterday && !isSelectedTomorrow;
   const emptyDayCopy = getEmptyStateCopy(selectedDate);
   const year = today.getFullYear();
   const month = today.getMonth();
@@ -854,8 +856,12 @@ export default function HomeScreen() {
     useQuery(api.eventTasks.listMyAssignedEventTasksForDate, { from, to }) ??
     [];
 
-  const myImportantItemChecks =
-    useQuery(api.tasks.getMyImportantItemChecks) ?? {};
+  // Single batched "already added to my tasks" source of truth for every
+  // community event's "חשוב לזכור" group — shared with Event Details and
+  // the community "תזכורות" tab. One query for the whole Home screen,
+  // never one per event/important item (see PART D6).
+  const myImportantItemsBundleStatus =
+    useQuery(api.tasks.getMyImportantItemsBundleStatus) ?? {};
 
   // ── Convex: dated tasks ────────────────────────────────────────────────────
   // listMyTasks mirrors Tasks-screen visibility: creator, assignedTo,
@@ -1082,14 +1088,31 @@ export default function HomeScreen() {
 
   // ── importantItems indexed by eventId — feeds both communityEventItems and
   //    personalEventItems so the section survives deduplication either way ──
+  // STAGE 4 ALIGNMENT PART F/G/I — once the source event has ended, its
+  // "חשוב לזכור" preview/action must stop appearing on this ACTIVE Home
+  // surface (the event card itself is untouched — governed entirely by
+  // Home's own existing personal-calendar date logic).
   const communityImportantItemsById = useMemo(() => {
     const map: Record<string, ImportantItem[]> = {};
     for (const ev of communityEvents) {
       const items = (ev as { importantItems?: ImportantItem[] }).importantItems;
-      if (items && items.length > 0) map[String(ev._id)] = items;
+      if (
+        items &&
+        items.length > 0 &&
+        isEventEligibleForHomeImportantItemsPreview(
+          {
+            startTime: ev.startTime,
+            endTime: ev.endTime,
+            allDay: ev.allDay,
+          },
+          nowMs
+        )
+      ) {
+        map[String(ev._id)] = items;
+      }
     }
     return map;
-  }, [communityEvents]);
+  }, [communityEvents, nowMs]);
 
   // ── Community event items mapped to Item shape ────────────────────────────
   const communityEventItems: Item[] = useMemo(() => {
@@ -1648,19 +1671,13 @@ export default function HomeScreen() {
 
     const currentUserId = currentUser?._id as string | undefined;
 
-    const isCompletedToday = (t: {
-      completedAt?: number | null;
-    }): boolean =>
+    const isCompletedToday = (t: { completedAt?: number | null }): boolean =>
       t.completedAt != null &&
       t.completedAt >= todayStartMs &&
       t.completedAt < todayEndMs;
 
     const fromDated: HomeDailyTask[] = (convexTasks ?? [])
-      .filter(
-        (t) =>
-          t.completed &&
-          isCompletedToday(t)
-      )
+      .filter((t) => t.completed && isCompletedToday(t))
       .map((t) => {
         const assigneeDisplays = resolveAllNonSelfAssignees(
           t,
@@ -1711,11 +1728,7 @@ export default function HomeScreen() {
       });
 
     const fromUndated: HomeDailyTask[] = (convexUndatedTasks ?? [])
-      .filter(
-        (t) =>
-          t.completed &&
-          isCompletedToday(t)
-      )
+      .filter((t) => t.completed && isCompletedToday(t))
       .map((t) => {
         const assigneeDisplays = resolveAllNonSelfAssignees(
           t,
@@ -1855,7 +1868,16 @@ export default function HomeScreen() {
   // TODO: בעתיד לחבר לסטטוס אמיתי של משתמש חדש מ-Convex
 
   // TODO: להוסיף בעתיד מסך/התראות לאירועים שנדחו כדי לאפשר חרטה
-  const visibleItems = allItems.filter((i) => i.rsvpStatus !== 'no');
+  // Stage 1D: community-event personal inclusion (creator / per-community
+  // auto-add / explicit save / RSVP yes-or-maybe) is fully decided server-side
+  // (see computeIsSavedToMyCalendar + listCommunityEventsForDate). An item
+  // only reaches allItems when the server already decided it belongs on the
+  // viewer's personal Home — including auto-add-included events where RSVP
+  // happens to be "no" (RSVP and calendar inclusion are independent: "no"
+  // means "not attending", not "remove from my calendar"). Filtering by
+  // rsvpStatus here again would incorrectly hide those legitimately-included
+  // events, so this list is no longer filtered by RSVP status.
+  const visibleItems = allItems;
 
   // ── Insight card ───────────────────────────────────────────────────────────
   // TODO: re-enable when AI insight is ready
@@ -2268,12 +2290,16 @@ export default function HomeScreen() {
           <Pressable
             accessible={true}
             accessibilityLabel={
-              calendarMode === 'segmented' ? 'פתח לוח שנה חודשי' : 'חזרה לבחירת יום'
+              calendarMode === 'segmented'
+                ? 'פתח לוח שנה חודשי'
+                : 'חזרה לבחירת יום'
             }
             accessibilityRole="button"
             hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
             onPress={() =>
-              setCalendarMode((m) => (m === 'segmented' ? 'month' : 'segmented'))
+              setCalendarMode((m) =>
+                m === 'segmented' ? 'month' : 'segmented'
+              )
             }
             style={[
               stylesRtl.calendarIconBtn,
@@ -2282,7 +2308,9 @@ export default function HomeScreen() {
           >
             <MaterialIcons
               color={isCustomDate ? tc.primary : tc.textSecondary}
-              name={calendarMode === 'segmented' ? 'calendar-month' : 'view-week'}
+              name={
+                calendarMode === 'segmented' ? 'calendar-month' : 'view-week'
+              }
               size={20}
             />
           </Pressable>
@@ -2290,13 +2318,18 @@ export default function HomeScreen() {
       </View>
 
       {calendarMode === 'month' ? (
-        <View style={{ paddingHorizontal: 16, marginBottom: 8, backgroundColor: '#f6f7f8' }}>
+        <View
+          style={{
+            paddingHorizontal: 16,
+            marginBottom: 8,
+            backgroundColor: '#f6f7f8',
+          }}
+        >
           {renderMonthCalendar()}
         </View>
       ) : null}
 
       <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
-
         {(todayCount + selectedDayUntimedTasks.length > 0 ||
           hasOverdueTasks) && (
           <Text style={stylesRtl.subtitleCount}>
@@ -2322,7 +2355,7 @@ export default function HomeScreen() {
             birthdays={upcomingBirthdays}
             completedTodayTasksAllSources={completedTodayTasksAllSources}
             hasAnyBirthdays={hasBirthdays}
-            myImportantItemChecks={myImportantItemChecks ?? {}}
+            myImportantItemsBundleStatus={myImportantItemsBundleStatus ?? {}}
             nowMs={nowMs}
             onAddBirthday={openBirthdayAddChoice}
             onNavigate={handleOpenNavPicker}
@@ -2604,11 +2637,7 @@ export default function HomeScreen() {
             ) : null}
             {nextEvent.importantItems && nextEvent.importantItems.length > 0 ? (
               <View style={stylesRtl.nextEventTaskExpansionContainer}>
-                <InlineImportantItemsSection
-                  eventId={String(nextEvent.id)}
-                  items={nextEvent.importantItems}
-                  checks={myImportantItemChecks[String(nextEvent.id)] ?? {}}
-                />
+                <InlineImportantItemsSection items={nextEvent.importantItems} />
               </View>
             ) : null}
             {nextEvent.type === 'task' &&
@@ -3192,11 +3221,7 @@ export default function HomeScreen() {
                       {item.importantItems && item.importantItems.length > 0 ? (
                         <View style={stylesRtl.taskExpansionContainer}>
                           <InlineImportantItemsSection
-                            eventId={String(item.id)}
                             items={item.importantItems}
-                            checks={
-                              myImportantItemChecks[String(item.id)] ?? {}
-                            }
                           />
                         </View>
                       ) : null}
@@ -3279,572 +3304,552 @@ export default function HomeScreen() {
                   </View>
                 )}
                 {restOfDayItems.map((item) => (
-                    <Swipeable
-                      key={item.id}
-                      renderRightActions={() => {
-                        if (item.type !== 'task') return null;
-                        if (item.taskSource === 'event_task') {
-                          return (
-                            <Pressable
-                              style={stylesRtl.openEventAction}
-                              onPress={() => handleOpenItemEvent(item)}
-                              accessible={true}
-                              accessibilityRole="button"
-                              accessibilityLabel="פתיחה באירוע"
-                            >
-                              <MaterialIcons
-                                name="open-in-new"
-                                size={22}
-                                color="white"
-                              />
-                              <Text style={stylesRtl.swipeActionLabel}>
-                                פתח אירוע
-                              </Text>
-                            </Pressable>
-                          );
-                        }
+                  <Swipeable
+                    key={item.id}
+                    renderRightActions={() => {
+                      if (item.type !== 'task') return null;
+                      if (item.taskSource === 'event_task') {
                         return (
                           <Pressable
-                            style={stylesRtl.deleteAction}
-                            onPress={() => confirmDelete(item)}
+                            style={stylesRtl.openEventAction}
+                            onPress={() => handleOpenItemEvent(item)}
                             accessible={true}
                             accessibilityRole="button"
-                            accessibilityLabel="מחיקת משימה"
+                            accessibilityLabel="פתיחה באירוע"
                           >
                             <MaterialIcons
-                              name="delete-outline"
-                              size={26}
+                              name="open-in-new"
+                              size={22}
                               color="white"
                             />
+                            <Text style={stylesRtl.swipeActionLabel}>
+                              פתח אירוע
+                            </Text>
                           </Pressable>
                         );
+                      }
+                      return (
+                        <Pressable
+                          style={stylesRtl.deleteAction}
+                          onPress={() => confirmDelete(item)}
+                          accessible={true}
+                          accessibilityRole="button"
+                          accessibilityLabel="מחיקת משימה"
+                        >
+                          <MaterialIcons
+                            name="delete-outline"
+                            size={26}
+                            color="white"
+                          />
+                        </Pressable>
+                      );
+                    }}
+                  >
+                    <View
+                      style={{
+                        flexDirection: rtl.flexDirection,
+                        gap: 16,
+                        marginBottom: 4,
                       }}
                     >
-                      <View
-                        style={{
-                          flexDirection: rtl.flexDirection,
-                          gap: 16,
-                          marginBottom: 4,
-                        }}
-                      >
-                        {/* Time column */}
-                        <View style={stylesRtl.timeColumn}>
-                          <Text style={stylesRtl.timeText}>{item.time}</Text>
-                          {item.endTime && (
-                            <Text
-                              style={{
-                                fontSize: 10,
-                                color: '#cbd5e1',
-                                textAlign: 'center',
-                                marginTop: 1,
-                              }}
-                            >
-                              {item.endTime}
-                            </Text>
-                          )}
-                        </View>
+                      {/* Time column */}
+                      <View style={stylesRtl.timeColumn}>
+                        <Text style={stylesRtl.timeText}>{item.time}</Text>
+                        {item.endTime && (
+                          <Text
+                            style={{
+                              fontSize: 10,
+                              color: '#cbd5e1',
+                              textAlign: 'center',
+                              marginTop: 1,
+                            }}
+                          >
+                            {item.endTime}
+                          </Text>
+                        )}
+                      </View>
 
-                        {/* Card */}
-                        <View style={{ flex: 1, marginBottom: 12 }}>
-                          <Pressable onPress={() => handleCardPress(item)}>
+                      {/* Card */}
+                      <View style={{ flex: 1, marginBottom: 12 }}>
+                        <Pressable onPress={() => handleCardPress(item)}>
+                          <View
+                            style={[
+                              stylesRtl.timelineCard,
+                              item.myAssignedTasks &&
+                                item.myAssignedTasks.length > 0 &&
+                                stylesRtl.timelineCardWithTasks,
+                            ]}
+                          >
                             <View
                               style={[
-                                stylesRtl.timelineCard,
-                                item.myAssignedTasks &&
-                                  item.myAssignedTasks.length > 0 &&
-                                  stylesRtl.timelineCardWithTasks,
+                                stylesRtl.timelineAccent,
+                                { backgroundColor: item.iconColor },
                               ]}
+                            />
+                            <View
+                              style={{
+                                flexDirection: rtl.flexDirection,
+                                alignItems: 'flex-start',
+                                gap: 10,
+                                flex: 1,
+                              }}
                             >
-                              <View
-                                style={[
-                                  stylesRtl.timelineAccent,
-                                  { backgroundColor: item.iconColor },
-                                ]}
-                              />
-                              <View
-                                style={{
-                                  flexDirection: rtl.flexDirection,
-                                  alignItems: 'flex-start',
-                                  gap: 10,
-                                  flex: 1,
-                                }}
-                              >
-                                {item.type === 'task' && (
-                                  <TaskCheckbox
-                                    checked={item.completed}
-                                    onToggle={() => toggleTask(item.id)}
-                                  />
-                                )}
-                                <View style={{ flex: 1 }}>
-                                  {item.communityId && item.groupName ? (
-                                    <View style={{ marginBottom: 6 }}>
-                                      <CommunityEventNameTag
-                                        name={item.groupName}
-                                      />
-                                    </View>
-                                  ) : null}
-                                  {/* Title row: title + assignee circles (tasks) / profile circles (events) */}
-                                  <View
-                                    style={{
-                                      flexDirection: rtl.flexDirection,
-                                      alignItems: 'center',
-                                      gap: 6,
-                                    }}
-                                  >
-                                    <Text
-                                      style={[
-                                        stylesRtl.taskTitle,
-                                        item.completed &&
-                                          stylesRtl.completedText,
-                                      ]}
-                                    >
-                                      {item.title}
-                                    </Text>
-                                    {(item.assigneeDisplays?.length ?? 0) >
-                                    0 ? (
-                                      <View
-                                        style={{
-                                          flexDirection: 'row',
-                                          alignItems: 'center',
-                                        }}
-                                      >
-                                        {(item.assigneeDisplays ?? [])
-                                          .slice(0, 3)
-                                          .map((d, i) => (
-                                            <View
-                                              key={`${d.initials}:${d.color}`}
-                                              style={[
-                                                stylesRtl.assigneeCircle,
-                                                {
-                                                  backgroundColor: d.color,
-                                                  marginLeft: i === 0 ? 0 : -6,
-                                                  zIndex: 3 - i,
-                                                },
-                                              ]}
-                                            >
-                                              <Text
-                                                style={{
-                                                  fontSize: 9,
-                                                  color: '#fff',
-                                                  fontWeight: '700',
-                                                }}
-                                              >
-                                                {d.initials}
-                                              </Text>
-                                            </View>
-                                          ))}
-                                      </View>
-                                    ) : item.type === 'event' &&
-                                      ((item.profileCircles?.length ?? 0) > 0 ||
-                                        (item.profileCirclesExtraCount ?? 0) >
-                                          0) ? (
-                                      <ProfileCircles
-                                        profiles={item.profileCircles ?? []}
-                                        extraCount={
-                                          item.profileCirclesExtraCount
-                                        }
-                                        context={
-                                          item.profileCirclesContext ??
-                                          'sharedWith'
-                                        }
-                                        size={22}
-                                      />
-                                    ) : null}
+                              {item.type === 'task' && (
+                                <TaskCheckbox
+                                  checked={item.completed}
+                                  onToggle={() => toggleTask(item.id)}
+                                />
+                              )}
+                              <View style={{ flex: 1 }}>
+                                {item.communityId && item.groupName ? (
+                                  <View style={{ marginBottom: 6 }}>
+                                    <CommunityEventNameTag
+                                      name={item.groupName}
+                                    />
                                   </View>
-
-                                  {/* RSVP inline chips */}
-                                  {openRsvpForId === item.id && (
+                                ) : null}
+                                {/* Title row: title + assignee circles (tasks) / profile circles (events) */}
+                                <View
+                                  style={{
+                                    flexDirection: rtl.flexDirection,
+                                    alignItems: 'center',
+                                    gap: 6,
+                                  }}
+                                >
+                                  <Text
+                                    style={[
+                                      stylesRtl.taskTitle,
+                                      item.completed && stylesRtl.completedText,
+                                    ]}
+                                  >
+                                    {item.title}
+                                  </Text>
+                                  {(item.assigneeDisplays?.length ?? 0) > 0 ? (
                                     <View
                                       style={{
-                                        flexDirection: 'row-reverse',
-                                        gap: 8,
-                                        marginTop: 10,
-                                        flexWrap: 'wrap',
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
                                       }}
                                     >
-                                      {(
-                                        [
-                                          {
-                                            key: 'yes',
-                                            label: 'כן',
-                                            activeBg: '#e0f2fe',
-                                            activeColor: '#0369a1',
-                                          },
-                                          {
-                                            key: 'maybe',
-                                            label: 'אולי',
-                                            activeBg: '#fef9c3',
-                                            activeColor: '#854d0e',
-                                          },
-                                          {
-                                            key: 'no',
-                                            label: 'לא',
-                                            activeBg: '#fee2e2',
-                                            activeColor: '#991b1b',
-                                          },
-                                        ] as const
-                                      ).map((opt) => {
-                                        const isSelected =
-                                          item.rsvpStatus === opt.key;
-                                        return (
-                                          <Pressable
-                                            key={opt.key}
-                                            onPress={() => {
-                                              // TODO: לסנכרן עם Convex בעתיד
-                                              setItems((prev) =>
-                                                prev.map((i) =>
-                                                  i.id === item.id
-                                                    ? {
-                                                        ...i,
-                                                        rsvpStatus: opt.key,
-                                                      }
-                                                    : i
-                                                )
-                                              );
-                                              setOpenRsvpForId(null);
-                                            }}
-                                            style={{
-                                              backgroundColor: isSelected
-                                                ? opt.activeBg
-                                                : '#fff',
-                                              borderRadius: 20,
-                                              paddingHorizontal: 16,
-                                              paddingVertical: 6,
-                                              borderWidth: 1,
-                                              borderColor: isSelected
-                                                ? 'transparent'
-                                                : '#e5e7eb',
-                                            }}
-                                            accessible={true}
-                                            accessibilityRole="button"
-                                            accessibilityLabel={opt.label}
+                                      {(item.assigneeDisplays ?? [])
+                                        .slice(0, 3)
+                                        .map((d, i) => (
+                                          <View
+                                            key={`${d.initials}:${d.color}`}
+                                            style={[
+                                              stylesRtl.assigneeCircle,
+                                              {
+                                                backgroundColor: d.color,
+                                                marginLeft: i === 0 ? 0 : -6,
+                                                zIndex: 3 - i,
+                                              },
+                                            ]}
                                           >
                                             <Text
                                               style={{
-                                                color: isSelected
-                                                  ? opt.activeColor
-                                                  : '#6b7280',
-                                                fontWeight: isSelected
-                                                  ? '700'
-                                                  : '500',
-                                                fontSize: 14,
+                                                fontSize: 9,
+                                                color: '#fff',
+                                                fontWeight: '700',
                                               }}
                                             >
-                                              {opt.label}
-                                            </Text>
-                                          </Pressable>
-                                        );
-                                      })}
-                                    </View>
-                                  )}
-
-                                  {/* Metadata row: location/group on right, badge on left */}
-                                  {(item.location ||
-                                    (item.groupName &&
-                                      !item.communityId &&
-                                      !item.pendingPersonalInvite) ||
-                                    item.personalTaskSummary ||
-                                    item.pending ||
-                                    item.pendingPersonalInvite) && (
-                                    <View
-                                      style={{
-                                        flexDirection: rtl.flexDirection,
-                                        justifyContent: 'space-between',
-                                        alignItems: 'flex-start',
-                                        marginTop: 4,
-                                      }}
-                                    >
-                                      {/* Right: location, group, task summary */}
-                                      <View style={{ flex: 1 }}>
-                                        {item.location ? (
-                                          <Text style={stylesRtl.itemLocation}>
-                                            {item.location}
-                                          </Text>
-                                        ) : null}
-                                        {item.groupName &&
-                                        !item.communityId &&
-                                        !item.pendingPersonalInvite ? (
-                                          <View style={stylesRtl.groupRow}>
-                                            <MaterialIcons
-                                              name="group"
-                                              size={12}
-                                              color="#64748b"
-                                            />
-                                            <Text style={stylesRtl.groupText}>
-                                              {item.groupName}
+                                              {d.initials}
                                             </Text>
                                           </View>
-                                        ) : null}
-                                        {item.personalTaskSummary ? (
-                                          <Text
-                                            style={
-                                              stylesRtl.personalTaskSummary
-                                            }
-                                          >
-                                            {item.personalTaskSummary}
-                                          </Text>
-                                        ) : null}
-                                      </View>
+                                        ))}
+                                    </View>
+                                  ) : item.type === 'event' &&
+                                    ((item.profileCircles?.length ?? 0) > 0 ||
+                                      (item.profileCirclesExtraCount ?? 0) >
+                                        0) ? (
+                                    <ProfileCircles
+                                      profiles={item.profileCircles ?? []}
+                                      extraCount={item.profileCirclesExtraCount}
+                                      context={
+                                        item.profileCirclesContext ??
+                                        'sharedWith'
+                                      }
+                                      size={22}
+                                    />
+                                  ) : null}
+                                </View>
 
-                                      {/* Left: personal invite RSVP badge (display-only) */}
-                                      {item.pendingPersonalInvite && (
-                                        <View
-                                          style={{
-                                            marginLeft: 8,
-                                            flexShrink: 0,
-                                          }}
-                                        >
-                                          {item.groupName === 'בוטל' ? (
-                                            <View
-                                              style={[
-                                                stylesRtl.pendingBadge,
-                                                { backgroundColor: '#f3f4f6' },
-                                              ]}
-                                            >
-                                              <Text
-                                                style={[
-                                                  stylesRtl.pendingBadgeText,
-                                                  { color: '#6b7280' },
-                                                ]}
-                                              >
-                                                בוטל
-                                              </Text>
-                                            </View>
-                                          ) : item.myPersonalRsvpStatus ===
-                                            'no' ? (
-                                            <View
-                                              style={[
-                                                stylesRtl.pendingBadge,
-                                                { backgroundColor: '#f3f4f6' },
-                                              ]}
-                                            >
-                                              <Text
-                                                style={[
-                                                  stylesRtl.pendingBadgeText,
-                                                  { color: '#6b7280' },
-                                                ]}
-                                              >
-                                                לא מגיע/ה
-                                              </Text>
-                                            </View>
-                                          ) : item.myPersonalRsvpStatus ===
-                                            'maybe' ? (
-                                            <View
-                                              style={[
-                                                stylesRtl.pendingBadge,
-                                                { backgroundColor: '#fef9c3' },
-                                              ]}
-                                            >
-                                              <Text
-                                                style={[
-                                                  stylesRtl.pendingBadgeText,
-                                                  { color: '#854d0e' },
-                                                ]}
-                                              >
-                                                אולי
-                                              </Text>
-                                            </View>
-                                          ) : (
-                                            <View
-                                              style={stylesRtl.pendingBadge}
-                                            >
-                                              <Text
-                                                style={
-                                                  stylesRtl.pendingBadgeText
-                                                }
-                                              >
-                                                ממתין לאישור
-                                              </Text>
-                                            </View>
-                                          )}
-                                        </View>
-                                      )}
-                                      {/* Left: pending badge — tapping opens RSVP chips */}
-                                      {item.pending && (
+                                {/* RSVP inline chips */}
+                                {openRsvpForId === item.id && (
+                                  <View
+                                    style={{
+                                      flexDirection: 'row-reverse',
+                                      gap: 8,
+                                      marginTop: 10,
+                                      flexWrap: 'wrap',
+                                    }}
+                                  >
+                                    {(
+                                      [
+                                        {
+                                          key: 'yes',
+                                          label: 'כן',
+                                          activeBg: '#e0f2fe',
+                                          activeColor: '#0369a1',
+                                        },
+                                        {
+                                          key: 'maybe',
+                                          label: 'אולי',
+                                          activeBg: '#fef9c3',
+                                          activeColor: '#854d0e',
+                                        },
+                                        {
+                                          key: 'no',
+                                          label: 'לא',
+                                          activeBg: '#fee2e2',
+                                          activeColor: '#991b1b',
+                                        },
+                                      ] as const
+                                    ).map((opt) => {
+                                      const isSelected =
+                                        item.rsvpStatus === opt.key;
+                                      return (
                                         <Pressable
-                                          onPress={(e) => {
-                                            e.stopPropagation?.();
-                                            setOpenRsvpForId((prev) =>
-                                              prev === item.id ? null : item.id
+                                          key={opt.key}
+                                          onPress={() => {
+                                            // TODO: לסנכרן עם Convex בעתיד
+                                            setItems((prev) =>
+                                              prev.map((i) =>
+                                                i.id === item.id
+                                                  ? {
+                                                      ...i,
+                                                      rsvpStatus: opt.key,
+                                                    }
+                                                  : i
+                                              )
                                             );
+                                            setOpenRsvpForId(null);
                                           }}
-                                          hitSlop={{
-                                            top: 8,
-                                            bottom: 8,
-                                            left: 8,
-                                            right: 8,
+                                          style={{
+                                            backgroundColor: isSelected
+                                              ? opt.activeBg
+                                              : '#fff',
+                                            borderRadius: 20,
+                                            paddingHorizontal: 16,
+                                            paddingVertical: 6,
+                                            borderWidth: 1,
+                                            borderColor: isSelected
+                                              ? 'transparent'
+                                              : '#e5e7eb',
                                           }}
                                           accessible={true}
                                           accessibilityRole="button"
-                                          accessibilityLabel="סטטוס אישור"
-                                          style={{
-                                            marginLeft: 8,
-                                            flexShrink: 0,
-                                          }}
+                                          accessibilityLabel={opt.label}
                                         >
-                                          {(!item.rsvpStatus ||
-                                            item.rsvpStatus === 'none') && (
-                                            <View
-                                              style={stylesRtl.pendingBadge}
-                                            >
-                                              <Text
-                                                style={
-                                                  stylesRtl.pendingBadgeText
-                                                }
-                                              >
-                                                ממתין לאישור
-                                              </Text>
-                                            </View>
-                                          )}
-                                          {item.rsvpStatus === 'yes' && (
-                                            <View
-                                              style={[
-                                                stylesRtl.pendingBadge,
-                                                { backgroundColor: '#dcfce7' },
-                                              ]}
-                                            >
-                                              <Text
-                                                style={[
-                                                  stylesRtl.pendingBadgeText,
-                                                  { color: '#166534' },
-                                                ]}
-                                              >
-                                                ✓ מאושר
-                                              </Text>
-                                            </View>
-                                          )}
-                                          {item.rsvpStatus === 'maybe' && (
-                                            <View
-                                              style={[
-                                                stylesRtl.pendingBadge,
-                                                { backgroundColor: '#fef9c3' },
-                                              ]}
-                                            >
-                                              <Text
-                                                style={[
-                                                  stylesRtl.pendingBadgeText,
-                                                  { color: '#854d0e' },
-                                                ]}
-                                              >
-                                                אולי
-                                              </Text>
-                                            </View>
-                                          )}
+                                          <Text
+                                            style={{
+                                              color: isSelected
+                                                ? opt.activeColor
+                                                : '#6b7280',
+                                              fontWeight: isSelected
+                                                ? '700'
+                                                : '500',
+                                              fontSize: 14,
+                                            }}
+                                          >
+                                            {opt.label}
+                                          </Text>
                                         </Pressable>
-                                      )}
-                                    </View>
-                                  )}
+                                      );
+                                    })}
+                                  </View>
+                                )}
 
-                                  {/* Navigate / Join button */}
-                                  {item.remoteUrl ||
-                                  (item.location &&
-                                    parseGeoUri(item.locationUrl)) ? (
-                                    <Pressable
-                                      onPress={(e) => {
-                                        e.stopPropagation?.();
-                                        if (item.remoteUrl) {
-                                          Linking.openURL(item.remoteUrl).catch(
-                                            () =>
-                                              Alert.alert(
-                                                'שגיאה',
-                                                'לא ניתן לפתוח את הקישור.'
-                                              )
-                                          );
-                                        } else {
-                                          handleOpenNavPicker(
-                                            item.location,
-                                            item.locationUrl
-                                          );
-                                        }
-                                      }}
-                                      style={{
-                                        alignSelf: rtl.alignEnd,
-                                        marginTop: 6,
-                                        backgroundColor: item.remoteUrl
-                                          ? 'rgba(54,169,226,0.1)'
-                                          : 'rgba(141,110,99,0.1)',
-                                        borderRadius: 10,
-                                        paddingHorizontal: 10,
-                                        paddingVertical: 4,
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        gap: 4,
-                                      }}
-                                      accessible={true}
-                                      accessibilityRole="button"
-                                      accessibilityLabel={
-                                        item.remoteUrl ? 'הצטרף לפגישה' : 'נווט'
-                                      }
-                                    >
-                                      <MaterialIcons
-                                        name={
-                                          item.remoteUrl
-                                            ? 'videocam'
-                                            : 'near-me'
-                                        }
-                                        size={13}
-                                        color={
-                                          item.remoteUrl ? '#36a9e2' : '#8d6e63'
-                                        }
-                                      />
-                                      <Text
+                                {/* Metadata row: location/group on right, badge on left */}
+                                {(item.location ||
+                                  (item.groupName &&
+                                    !item.communityId &&
+                                    !item.pendingPersonalInvite) ||
+                                  item.personalTaskSummary ||
+                                  item.pending ||
+                                  item.pendingPersonalInvite) && (
+                                  <View
+                                    style={{
+                                      flexDirection: rtl.flexDirection,
+                                      justifyContent: 'space-between',
+                                      alignItems: 'flex-start',
+                                      marginTop: 4,
+                                    }}
+                                  >
+                                    {/* Right: location, group, task summary */}
+                                    <View style={{ flex: 1 }}>
+                                      {item.location ? (
+                                        <Text style={stylesRtl.itemLocation}>
+                                          {item.location}
+                                        </Text>
+                                      ) : null}
+                                      {item.groupName &&
+                                      !item.communityId &&
+                                      !item.pendingPersonalInvite ? (
+                                        <View style={stylesRtl.groupRow}>
+                                          <MaterialIcons
+                                            name="group"
+                                            size={12}
+                                            color="#64748b"
+                                          />
+                                          <Text style={stylesRtl.groupText}>
+                                            {item.groupName}
+                                          </Text>
+                                        </View>
+                                      ) : null}
+                                      {item.personalTaskSummary ? (
+                                        <Text
+                                          style={stylesRtl.personalTaskSummary}
+                                        >
+                                          {item.personalTaskSummary}
+                                        </Text>
+                                      ) : null}
+                                    </View>
+
+                                    {/* Left: personal invite RSVP badge (display-only) */}
+                                    {item.pendingPersonalInvite && (
+                                      <View
                                         style={{
-                                          color: item.remoteUrl
-                                            ? '#36a9e2'
-                                            : '#8d6e63',
-                                          fontSize: 12,
-                                          fontWeight: '700',
+                                          marginLeft: 8,
+                                          flexShrink: 0,
                                         }}
                                       >
-                                        {item.remoteUrl ? 'הצטרף' : 'נווט'}
-                                      </Text>
-                                    </Pressable>
-                                  ) : null}
-                                </View>
+                                        {item.groupName === 'בוטל' ? (
+                                          <View
+                                            style={[
+                                              stylesRtl.pendingBadge,
+                                              { backgroundColor: '#f3f4f6' },
+                                            ]}
+                                          >
+                                            <Text
+                                              style={[
+                                                stylesRtl.pendingBadgeText,
+                                                { color: '#6b7280' },
+                                              ]}
+                                            >
+                                              בוטל
+                                            </Text>
+                                          </View>
+                                        ) : item.myPersonalRsvpStatus ===
+                                          'no' ? (
+                                          <View
+                                            style={[
+                                              stylesRtl.pendingBadge,
+                                              { backgroundColor: '#f3f4f6' },
+                                            ]}
+                                          >
+                                            <Text
+                                              style={[
+                                                stylesRtl.pendingBadgeText,
+                                                { color: '#6b7280' },
+                                              ]}
+                                            >
+                                              לא מגיע/ה
+                                            </Text>
+                                          </View>
+                                        ) : item.myPersonalRsvpStatus ===
+                                          'maybe' ? (
+                                          <View
+                                            style={[
+                                              stylesRtl.pendingBadge,
+                                              { backgroundColor: '#fef9c3' },
+                                            ]}
+                                          >
+                                            <Text
+                                              style={[
+                                                stylesRtl.pendingBadgeText,
+                                                { color: '#854d0e' },
+                                              ]}
+                                            >
+                                              אולי
+                                            </Text>
+                                          </View>
+                                        ) : (
+                                          <View style={stylesRtl.pendingBadge}>
+                                            <Text
+                                              style={stylesRtl.pendingBadgeText}
+                                            >
+                                              ממתין לאישור
+                                            </Text>
+                                          </View>
+                                        )}
+                                      </View>
+                                    )}
+                                    {/* Left: pending badge — tapping opens RSVP chips */}
+                                    {item.pending && (
+                                      <Pressable
+                                        onPress={(e) => {
+                                          e.stopPropagation?.();
+                                          setOpenRsvpForId((prev) =>
+                                            prev === item.id ? null : item.id
+                                          );
+                                        }}
+                                        hitSlop={{
+                                          top: 8,
+                                          bottom: 8,
+                                          left: 8,
+                                          right: 8,
+                                        }}
+                                        accessible={true}
+                                        accessibilityRole="button"
+                                        accessibilityLabel="סטטוס אישור"
+                                        style={{
+                                          marginLeft: 8,
+                                          flexShrink: 0,
+                                        }}
+                                      >
+                                        {(!item.rsvpStatus ||
+                                          item.rsvpStatus === 'none') && (
+                                          <View style={stylesRtl.pendingBadge}>
+                                            <Text
+                                              style={stylesRtl.pendingBadgeText}
+                                            >
+                                              ממתין לאישור
+                                            </Text>
+                                          </View>
+                                        )}
+                                        {item.rsvpStatus === 'yes' && (
+                                          <View
+                                            style={[
+                                              stylesRtl.pendingBadge,
+                                              { backgroundColor: '#dcfce7' },
+                                            ]}
+                                          >
+                                            <Text
+                                              style={[
+                                                stylesRtl.pendingBadgeText,
+                                                { color: '#166534' },
+                                              ]}
+                                            >
+                                              ✓ מאושר
+                                            </Text>
+                                          </View>
+                                        )}
+                                        {item.rsvpStatus === 'maybe' && (
+                                          <View
+                                            style={[
+                                              stylesRtl.pendingBadge,
+                                              { backgroundColor: '#fef9c3' },
+                                            ]}
+                                          >
+                                            <Text
+                                              style={[
+                                                stylesRtl.pendingBadgeText,
+                                                { color: '#854d0e' },
+                                              ]}
+                                            >
+                                              אולי
+                                            </Text>
+                                          </View>
+                                        )}
+                                      </Pressable>
+                                    )}
+                                  </View>
+                                )}
+
+                                {/* Navigate / Join button */}
+                                {item.remoteUrl ||
+                                (item.location &&
+                                  parseGeoUri(item.locationUrl)) ? (
+                                  <Pressable
+                                    onPress={(e) => {
+                                      e.stopPropagation?.();
+                                      if (item.remoteUrl) {
+                                        Linking.openURL(item.remoteUrl).catch(
+                                          () =>
+                                            Alert.alert(
+                                              'שגיאה',
+                                              'לא ניתן לפתוח את הקישור.'
+                                            )
+                                        );
+                                      } else {
+                                        handleOpenNavPicker(
+                                          item.location,
+                                          item.locationUrl
+                                        );
+                                      }
+                                    }}
+                                    style={{
+                                      alignSelf: rtl.alignEnd,
+                                      marginTop: 6,
+                                      backgroundColor: item.remoteUrl
+                                        ? 'rgba(54,169,226,0.1)'
+                                        : 'rgba(141,110,99,0.1)',
+                                      borderRadius: 10,
+                                      paddingHorizontal: 10,
+                                      paddingVertical: 4,
+                                      flexDirection: 'row',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                    }}
+                                    accessible={true}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={
+                                      item.remoteUrl ? 'הצטרף לפגישה' : 'נווט'
+                                    }
+                                  >
+                                    <MaterialIcons
+                                      name={
+                                        item.remoteUrl ? 'videocam' : 'near-me'
+                                      }
+                                      size={13}
+                                      color={
+                                        item.remoteUrl ? '#36a9e2' : '#8d6e63'
+                                      }
+                                    />
+                                    <Text
+                                      style={{
+                                        color: item.remoteUrl
+                                          ? '#36a9e2'
+                                          : '#8d6e63',
+                                        fontSize: 12,
+                                        fontWeight: '700',
+                                      }}
+                                    >
+                                      {item.remoteUrl ? 'הצטרף' : 'נווט'}
+                                    </Text>
+                                  </Pressable>
+                                ) : null}
                               </View>
                             </View>
-                          </Pressable>
-                          {item.myAssignedTasks &&
-                          item.myAssignedTasks.length > 0 ? (
-                            <View style={stylesRtl.taskExpansionContainer}>
-                              <InlineEventTasksSection
-                                tasks={item.myAssignedTasks}
-                              />
-                            </View>
-                          ) : null}
-                          {item.importantItems &&
-                          item.importantItems.length > 0 ? (
-                            <View style={stylesRtl.taskExpansionContainer}>
-                              <InlineImportantItemsSection
-                                eventId={String(item.id)}
-                                items={item.importantItems}
-                                checks={
-                                  myImportantItemChecks[String(item.id)] ?? {}
-                                }
-                              />
-                            </View>
-                          ) : null}
-                          {item.type === 'task' &&
-                          (item.subtasks?.length ?? 0) > 0 &&
-                          !item.completed ? (
-                            <View style={stylesRtl.taskExpansionContainer}>
-                              <HomeSubtaskSection
-                                taskId={item.id}
-                                subtasks={item.subtasks ?? []}
-                                isExpanded={expandedHomeTaskIds.has(item.id)}
-                                onToggleExpansion={() =>
-                                  toggleHomeTaskExpansion(item.id)
-                                }
-                                onToggleSubtask={(subtaskId) =>
-                                  toggleHomeSubtask(item.id, subtaskId)
-                                }
-                              />
-                            </View>
-                          ) : null}
-                        </View>
+                          </View>
+                        </Pressable>
+                        {item.myAssignedTasks &&
+                        item.myAssignedTasks.length > 0 ? (
+                          <View style={stylesRtl.taskExpansionContainer}>
+                            <InlineEventTasksSection
+                              tasks={item.myAssignedTasks}
+                            />
+                          </View>
+                        ) : null}
+                        {item.importantItems &&
+                        item.importantItems.length > 0 ? (
+                          <View style={stylesRtl.taskExpansionContainer}>
+                            <InlineImportantItemsSection
+                              items={item.importantItems}
+                            />
+                          </View>
+                        ) : null}
+                        {item.type === 'task' &&
+                        (item.subtasks?.length ?? 0) > 0 &&
+                        !item.completed ? (
+                          <View style={stylesRtl.taskExpansionContainer}>
+                            <HomeSubtaskSection
+                              taskId={item.id}
+                              subtasks={item.subtasks ?? []}
+                              isExpanded={expandedHomeTaskIds.has(item.id)}
+                              onToggleExpansion={() =>
+                                toggleHomeTaskExpansion(item.id)
+                              }
+                              onToggleSubtask={(subtaskId) =>
+                                toggleHomeSubtask(item.id, subtaskId)
+                              }
+                            />
+                          </View>
+                        ) : null}
                       </View>
-                    </Swipeable>
-                  ))}
+                    </View>
+                  </Swipeable>
+                ))}
               </View>
             ) : null}
           </>

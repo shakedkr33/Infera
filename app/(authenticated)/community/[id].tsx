@@ -1,7 +1,6 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useConvex, useMutation, useQuery } from 'convex/react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Plus } from 'lucide-react-native';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
   type ComponentProps,
   useCallback,
@@ -25,6 +24,7 @@ import {
   Share,
   type StyleProp,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   type TextStyle,
@@ -35,18 +35,34 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
+import { ImportantItemsAddToTasksButton } from '@/components/ImportantItemsAddToTasksButton';
 import {
   type JoinApprovalMode,
   JoinApprovalSettingsModal,
 } from '@/components/JoinApprovalSettingsModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
+import { useActionSheet } from '@/contexts/ActionSheetContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
+import {
+  formatEventsTabMonthYearLabel,
+  getCurrentEventsTabMonth,
+  getEventsTabMonthRange,
+  getEventsTabMonthTemporalKind,
+  getLocalDayStart,
+  getNextEventsTabMonth,
+  getPreviousEventsTabMonth,
+  hasEventEndedByNow,
+  isCurrentEventsTabMonth,
+} from '@/lib/eventsTabDateHelpers';
 import {
   getOpenCommunityCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
 } from '@/lib/openCommunityCalendarUi';
-import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
+import { resolveActiveCommunityContext } from '@/lib/resolveActiveCommunityContext';
+import { APP_IS_RTL, needsExplicitRTL, position, rtl } from '@/lib/rtl';
+import { isTaskPastDue } from '@/lib/taskDueStatus';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
@@ -55,15 +71,14 @@ import { getConvexErrorCode } from '@/lib/utils/convexError';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRIMARY = '#36a9e2';
-const NOW_PLUS_60_DAYS = () => Date.now() + 60 * 24 * 60 * 60 * 1000;
-const CALENDAR_REMOVE_CONFIRM_TITLE = 'להסיר מהיומן?';
-const CALENDAR_REMOVE_CONFIRM_MESSAGE =
-  'שימי לב, הוקצו לך משימות באירוע הזה. האירוע יוסר מהיומן שלך, אבל המשימות עדיין יופיעו במסך המשימות.';
-const CALENDAR_REMOVE_CONFIRMATION_CODE =
-  'CALENDAR_REMOVE_REQUIRES_ACTIVE_TASK_CONFIRMATION';
 
-const TABS = ['הכל', 'אירועים', 'תזכורות', 'פעילות'] as const;
+// Stage 2A: "הכל" was renamed to "ראשי" (the Main overview tab). Old
+// deep-links / persisted params using "הכל" are still accepted — see the
+// activeTab initializer below — so existing links never break.
+const TABS = ['ראשי', 'אירועים', 'תזכורות', 'פעילות'] as const;
 type Tab = (typeof TABS)[number];
+/** Stage 2A backward-compat: pre-rename tab param value. */
+const LEGACY_MAIN_TAB_PARAM = 'הכל';
 
 const EVENT_COLORS = [
   '#36a9e2',
@@ -77,6 +92,14 @@ const EVENT_COLORS = [
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type RsvpStatus = 'yes' | 'no' | 'maybe' | 'none';
+/**
+ * STAGE 3 CORRECTION (Part A) — "אירועים" tab date scope is now always an
+ * exact calendar month, navigated one month at a time via prev/next arrows
+ * (see MonthYearNavigator). The former "קרובים" default + forward-only
+ * 12-month tab strip has been removed — there is no product-imposed past
+ * or future navigation limit any more (see lib/eventsTabDateHelpers.ts).
+ */
+type EventsTabFilter = { year: number; monthIndex0: number };
 type TaskSummary = {
   total: number;
   assigned: number;
@@ -99,11 +122,16 @@ interface EventDoc {
   requiresRsvp?: boolean;
   tasksVisibleToParticipants?: boolean;
   createdBy?: Id<'users'>;
+  /** Stage 2A: used for the "ראשי" tab's "חדש" chip (createdAt > previous visit). */
+  createdAt?: number;
   status?: 'active' | 'cancelled';
   cancelledAt?: number;
   cancelReason?: string;
   /** Open community events: personal calendar / "הסר מהיומן" (from Convex) */
   isSavedToMyCalendar?: boolean;
+  /** Stage 3 — "אירועים" tab bucket flags (from listCommunityEventsTabPaged only). */
+  isPendingRsvp?: boolean;
+  isAdditionalEligible?: boolean;
   importantItems?: Array<{ id: string; title: string }>;
 }
 
@@ -138,6 +166,25 @@ interface TaskDoc {
     uploadedAt: number;
     uploadedBy: Id<'users'>;
   }>;
+}
+
+/**
+ * Stage 4 — Community "תזכורות" tab: one entry per personally-relevant,
+ * active community event that has "חשוב לזכור" items — from
+ * api.events.listCommunityEventReminderGroupsPaged. Deliberately NOT the
+ * shared `EventDoc` shape: this is a narrow, server-shaped reminder-group
+ * projection, not a general-purpose event record.
+ */
+interface EventReminderGroupDoc {
+  _id: Id<'events'>;
+  title: string;
+  startTime: number;
+  endTime: number;
+  allDay?: boolean;
+  location?: string;
+  status?: 'active' | 'cancelled';
+  importantItems: Array<{ id: string; title: string }>;
+  createdBy: Id<'users'>;
 }
 
 type CommunityActivityType =
@@ -192,18 +239,6 @@ function isEventPast(event: EventDoc): boolean {
   return event.endTime < now;
 }
 
-function uniqueById<T>(items: readonly T[], getId: (item: T) => string): T[] {
-  const seen = new Set<string>();
-  const unique: T[] = [];
-  for (const item of items) {
-    const id = getId(item);
-    if (seen.has(id)) continue;
-    seen.add(id);
-    unique.push(item);
-  }
-  return unique;
-}
-
 function formatEventDate(ts: number, allDay?: boolean): string {
   const d = new Date(ts);
   if (allDay) {
@@ -235,6 +270,77 @@ function formatFlyerTime(event: EventDoc): string {
     hour: '2-digit',
     minute: '2-digit',
   })}`;
+}
+
+// ─── Stage 2A "ראשי" tab helpers ────────────────────────────────────────────
+
+/**
+ * Local (device-timezone) day-boundary key, mirroring the existing
+ * calendar.tsx Y/M/D comparison approach. No new timezone semantics are
+ * introduced here — this only reuses `Date`'s local getters.
+ */
+function getLocalDayKey(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function isEventOnLocalDay(event: EventDoc, dayKey: string): boolean {
+  return getLocalDayKey(event.startTime) === dayKey;
+}
+
+/**
+ * Stage 2A "חדש" chip: an event is "new" only once we know the viewer's
+ * PREVIOUS visit timestamp (captured before `markCommunityViewed` runs —
+ * see `previousVisitAtRef` in the screen component) and this event was
+ * created after that visit. `undefined` previousVisitAt (e.g. first-ever
+ * visit) never renders "חדש" — matches the existing
+ * `computeHasNewEventsSinceVisit` convention of treating "unknown" as "not
+ * new" rather than "everything is new".
+ */
+function isEventNewSincePreviousVisit(
+  event: EventDoc,
+  previousVisitAt: number | undefined
+): boolean {
+  if (previousVisitAt === undefined || event.createdAt === undefined) {
+    return false;
+  }
+  return event.createdAt > previousVisitAt;
+}
+
+function formatMainCardDateTime(event: EventDoc): string {
+  const dateLabel = new Date(event.startTime).toLocaleDateString('he-IL', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'long',
+  });
+  if (event.allDay) return `${dateLabel} · כל היום`;
+  const timeLabel = new Date(event.startTime).toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `${dateLabel} · ${timeLabel}`;
+}
+
+/** Compact RSVP/status line for Stage 2A Main cards — reuses existing
+ * status vocabulary (no new RSVP semantics).
+ *
+ * QA FIX (Issue 3): the creator of an RSVP-required event never needs to
+ * RSVP to their own event (see computeRsvpAttentionState's canonical
+ * creator exemption in convex/communityCalendarState.ts) — so the creator
+ * must never see "נדרש אישור הגעה" on their own card, even though their
+ * own rsvpStatus is naturally 'none'/unanswered.
+ */
+function getMainCardStatusLabel(
+  event: EventDoc,
+  rsvpStatus: RsvpStatus,
+  isCreator: boolean
+): string {
+  if (event.requiresRsvp === false) return 'פתוח לחברי הקהילה';
+  if (isCreator) return 'אירוע שלך';
+  if (rsvpStatus === 'yes') return 'אישרת הגעה';
+  if (rsvpStatus === 'no') return 'סימנת שלא מגיע/ה';
+  if (rsvpStatus === 'maybe') return 'סימנת אולי מגיע/ה';
+  return 'נדרש אישור הגעה';
 }
 
 function formatDueDate(ts: number): string {
@@ -569,74 +675,12 @@ function RsvpBottomSheet({
 }
 
 // ─── Action Sheet (+ button) ──────────────────────────────────────────────────
-
-// ─── Add Popover Menu ─────────────────────────────────────────────────────────
-
-interface AddPopoverMenuProps {
-  visible: boolean;
-  position: { x: number; y: number };
-  communityId: string;
-  canCreateCommunityEvent: boolean;
-  onClose: () => void;
-}
-
-function AddPopoverMenu({
-  visible,
-  position,
-  communityId,
-  canCreateCommunityEvent,
-  onClose,
-}: AddPopoverMenuProps) {
-  const router = useRouter();
-  if (!visible) return null;
-  return (
-    <Modal visible transparent animationType="none" onRequestClose={onClose}>
-      <Pressable style={styles.popoverBackdrop} onPress={onClose} />
-      <View style={[styles.popover, { top: position.y, left: position.x }]}>
-        {canCreateCommunityEvent ? (
-          <Pressable
-            style={[styles.popoverItem, styles.popoverBorder]}
-            onPress={() => {
-              onClose();
-              router.push(
-                `/(authenticated)/event/new?communityId=${communityId}` as Parameters<
-                  typeof router.push
-                >[0]
-              );
-            }}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel="אירוע חדש"
-          >
-            <Text style={styles.popoverLabel}>אירוע חדש</Text>
-            <Ionicons name="calendar-outline" size={18} color="#374151" />
-          </Pressable>
-        ) : null}
-        <Pressable
-          style={
-            canCreateCommunityEvent
-              ? styles.popoverItem
-              : [styles.popoverItem, styles.popoverSingleItem]
-          }
-          onPress={() => {
-            onClose();
-            router.push(
-              `/(authenticated)/community-reminder/new?communityId=${communityId}` as Parameters<
-                typeof router.push
-              >[0]
-            );
-          }}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="תזכורת חדשה"
-        >
-          <Text style={styles.popoverLabel}>תזכורת חדשה</Text>
-          <Ionicons name="checkmark-circle-outline" size={18} color="#374151" />
-        </Pressable>
-      </View>
-    </Modal>
-  );
-}
+// Stage 2B: the top community "+" (and its AddPopoverMenu) was removed after
+// the GLOBAL bottom-center "+" became context-aware — see _layout.tsx's
+// ActionSheetModal and this screen's setActiveCommunityContext effect above.
+// Community event/reminder creation is now reached exclusively through the
+// global "+", using the exact same routes ("/event/new?communityId=" and
+// "/community-reminder/new?communityId=") this popover used to push to.
 
 type FlyerVariant = {
   bg: string;
@@ -710,6 +754,14 @@ interface CommunityEventFlyerCardProps {
   communityArchived?: boolean;
 }
 
+// No longer rendered by the replaced "הכל"/TabAll tab (Stage 2A).
+// Intentionally kept — the flyer/invitation visual direction it implements
+// is explicitly reserved (per the Stage 2A prompt) for Event Details and the
+// future "אירועים" tab redesign (Stage 2B/3), which is out of scope here.
+// Deleting a working, reusable component to satisfy this stage's lint pass
+// would risk losing it for that upcoming work; removal is deferred to
+// whichever stage actually retires it.
+// biome-ignore lint/correctness/noUnusedVariables: see comment above.
 function CommunityEventFlyerCard({
   event,
   rsvpStatus,
@@ -1180,9 +1232,19 @@ function SectionHeader({
 
 interface OverflowItem {
   label: string;
-  iconName: React.ComponentProps<typeof Ionicons>['name'];
+  /** Secondary explanatory copy shown under the label (e.g. auto-add setting). */
+  subtitle?: string;
+  iconName?: React.ComponentProps<typeof Ionicons>['name'];
   onPress: () => void;
   danger?: boolean;
+  /**
+   * Stage 2B: renders a native Switch instead of the trailing icon, for
+   * PERSONAL preference rows (e.g. auto-add to calendar) that every active
+   * member can control — not an owner/admin-only action, so it does not
+   * close the popover on tap (the row's `onPress` still fires the mutation;
+   * the popover stays open so the user can see the switch flip).
+   */
+  toggle?: { value: boolean };
 }
 
 interface OverflowMenuProps {
@@ -1211,23 +1273,48 @@ function OverflowMenu({
               idx < items.length - 1 && styles.popoverBorder,
             ]}
             onPress={() => {
+              // Toggle rows are driven ONLY by the Switch's onValueChange
+              // below (tapping the row itself is a no-op) so the mutation —
+              // which flips the current value — never fires twice from one
+              // tap. Every other row closes the popover and fires its action.
+              if (m.toggle) return;
               onClose();
               m.onPress();
             }}
             accessible
-            accessibilityRole="button"
+            accessibilityRole={m.toggle ? 'switch' : 'button'}
             accessibilityLabel={m.label}
+            accessibilityState={
+              m.toggle ? { checked: m.toggle.value } : undefined
+            }
           >
-            <Text
-              style={[styles.popoverLabel, m.danger && styles.popoverDanger]}
-            >
-              {m.label}
-            </Text>
-            <Ionicons
-              name={m.iconName}
-              size={18}
-              color={m.danger ? '#ef4444' : '#374151'}
-            />
+            <View style={styles.popoverLabelBlock}>
+              <Text
+                style={[styles.popoverLabel, m.danger && styles.popoverDanger]}
+              >
+                {m.label}
+              </Text>
+              {m.subtitle ? (
+                <Text style={styles.popoverSubtitle}>{m.subtitle}</Text>
+              ) : null}
+            </View>
+            {m.toggle ? (
+              <Switch
+                ios_backgroundColor="#b0bec5"
+                onValueChange={m.onPress}
+                thumbColor="#ffffff"
+                trackColor={{ false: '#b0bec5', true: PRIMARY }}
+                value={m.toggle.value}
+              />
+            ) : (
+              m.iconName && (
+                <Ionicons
+                  name={m.iconName}
+                  size={18}
+                  color={m.danger ? '#ef4444' : '#374151'}
+                />
+              )
+            )}
           </Pressable>
         ))}
       </View>
@@ -1528,11 +1615,7 @@ function CommunityReminderRow({
             {task.dueDate !== undefined ? (
               <View style={styles.reminderExpandedMeta}>
                 <View style={styles.reminderExpandedMetaRow}>
-                  <Ionicons
-                    name="calendar-outline"
-                    size={14}
-                    color="#6b7280"
-                  />
+                  <Ionicons name="calendar-outline" size={14} color="#6b7280" />
                   <Text style={styles.reminderExpandedMetaText}>
                     {formatDueDate(task.dueDate)}
                     {task.hasTime && task.dueAt !== undefined
@@ -1756,878 +1839,1642 @@ function ActivityList({
   );
 }
 
-// ─── Tab: הכל ────────────────────────────────────────────────────────────────
+// ─── Tab: ראשי (Stage 2A Main overview) ─────────────────────────────────────
 
-interface TabAllProps {
-  communityId: Id<'communities'>;
-  rsvpMap: Record<string, RsvpStatus>;
-  onSeeMoreEvents: () => void;
-  onSeeMoreReminders: () => void;
-  onOpenEventDetails: (eventId: Id<'events'>) => void;
-  // Persisted state lifted to parent so it survives tab switches
-  hiddenReminderIds: Set<string>;
-  setHiddenReminderIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  /** Bidirectional optimistic overrides: true = personally completed, false = personally open. */
-  completionOverrides: Map<string, boolean>;
-  setCompletionOverrides: React.Dispatch<
-    React.SetStateAction<Map<string, boolean>>
-  >;
-  localTaskCache: Map<string, TaskDoc>;
-  setLocalTaskCache: React.Dispatch<React.SetStateAction<Map<string, TaskDoc>>>;
-  onToggleTask: (id: Id<'tasks'>) => Promise<unknown>;
-  isRemindersOpen: boolean;
-  setIsRemindersOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  currentUserId?: Id<'users'>;
-  taskCountsMap: Record<string, TaskSummary>;
-  onInlineRsvp: (eventId: Id<'events'>, status: RsvpStatus) => Promise<void>;
-  communityMyRole?: 'owner' | 'admin' | 'member';
+type ImportantNowItem = {
+  key: string;
+  label: string;
+  iconName: IoniconName;
+  emphasis?: boolean;
+  onPress?: () => void;
+};
+
+interface ImportantNowRowProps {
+  item: ImportantNowItem;
 }
 
-function TabAll({
+function ImportantNowRow({ item }: ImportantNowRowProps) {
+  const row = (
+    <View
+      style={[
+        styles.importantNowRow,
+        item.emphasis && styles.importantNowRowEmphasis,
+      ]}
+    >
+      <View
+        style={[
+          styles.importantNowIconWrap,
+          item.emphasis && styles.importantNowIconWrapEmphasis,
+        ]}
+      >
+        <Ionicons
+          color={item.emphasis ? '#fff' : PRIMARY}
+          name={item.iconName}
+          size={18}
+        />
+      </View>
+      <Text numberOfLines={1} style={styles.importantNowLabel}>
+        {item.label}
+      </Text>
+      {item.onPress ? (
+        <Ionicons color="#9ca3af" name="chevron-back" size={16} />
+      ) : null}
+    </View>
+  );
+
+  if (!item.onPress) return row;
+
+  return (
+    <Pressable
+      accessible
+      accessibilityLabel={item.label}
+      accessibilityRole="button"
+      onPress={item.onPress}
+    >
+      {row}
+    </Pressable>
+  );
+}
+
+interface MainEventChipsProps {
+  isToday: boolean;
+  isTomorrow: boolean;
+  isNew: boolean;
+}
+
+function MainEventChips({ isToday, isTomorrow, isNew }: MainEventChipsProps) {
+  if (!isToday && !isTomorrow && !isNew) return null;
+  return (
+    <View style={styles.mainChipsRow}>
+      {isNew ? (
+        <View style={[styles.mainChip, styles.mainChipNew]}>
+          <Text style={styles.mainChipTextNew}>חדש</Text>
+        </View>
+      ) : null}
+      {isToday ? (
+        <View style={[styles.mainChip, styles.mainChipToday]}>
+          <Text style={styles.mainChipTextToday}>היום</Text>
+        </View>
+      ) : isTomorrow ? (
+        <View style={[styles.mainChip, styles.mainChipTomorrow]}>
+          <Text style={styles.mainChipTextTomorrow}>מחר</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+interface MainEventCardProps {
+  event: EventDoc;
+  rsvpStatus: RsvpStatus;
+  isCreator: boolean;
+  taskSummary?: TaskSummary;
+  cardWidth: number;
+  isNew: boolean;
+  isToday: boolean;
+  isTomorrow: boolean;
+  onOpenDetails: (eventId: Id<'events'>) => void;
+}
+
+/**
+ * Stage 2A "ראשי" carousel card — compact by design (per the approved
+ * Stitch mockup). This intentionally does NOT reuse CommunityEventFlyerCard:
+ * the flyer/invitation visual direction is reserved for Event Details (see
+ * prompt's "MY EVENTS — CARD CONTENT"), and Main needs a smaller, denser
+ * card for fast horizontal scanning.
+ */
+function MainEventCard({
+  event,
+  rsvpStatus,
+  isCreator,
+  taskSummary,
+  cardWidth,
+  isNew,
+  isToday,
+  isTomorrow,
+  onOpenDetails,
+}: MainEventCardProps) {
+  const statusLabel = getMainCardStatusLabel(event, rsvpStatus, isCreator);
+  const taskTotal = taskSummary?.totalTasksCount ?? taskSummary?.total ?? 0;
+  const locationLabel = event.location?.trim();
+
+  return (
+    <Pressable
+      accessible
+      accessibilityLabel={`פרטי אירוע ${event.title}`}
+      accessibilityRole="button"
+      onPress={() => onOpenDetails(event._id)}
+      style={[styles.mainEventCard, { width: cardWidth }]}
+    >
+      <MainEventChips isNew={isNew} isToday={isToday} isTomorrow={isTomorrow} />
+      <Text numberOfLines={2} style={styles.mainEventTitle}>
+        {event.title}
+      </Text>
+      <Text numberOfLines={1} style={styles.mainEventDate}>
+        {formatMainCardDateTime(event)}
+      </Text>
+      {locationLabel ? (
+        <Text numberOfLines={1} style={styles.mainEventLocation}>
+          📍 {locationLabel}
+        </Text>
+      ) : null}
+      <View style={styles.mainEventFooter}>
+        <Text numberOfLines={1} style={styles.mainEventStatus}>
+          {statusLabel}
+        </Text>
+        {taskSummary && taskTotal > 0 ? (
+          <TaskSummaryLine
+            copy="compact"
+            doneStyle={styles.mainEventTaskSummaryDone}
+            style={styles.mainEventTaskSummary}
+            taskSummary={taskSummary}
+          />
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
+interface MainPendingRsvpRowProps {
+  event: EventDoc;
+  isNew: boolean;
+  isToday: boolean;
+  isTomorrow: boolean;
+  /**
+   * QA FIX (Issue 3): true ONLY for the event's actual creator — never for
+   * owner/admin merely by role. In practice the creator's own event no
+   * longer appears in this list at all (see computeRsvpAttentionState),
+   * so this is always false here in normal operation; kept as an explicit
+   * defensive guard rather than assumed.
+   */
+  flyerDetailsOnly: boolean;
+  onOpenDetails: (eventId: Id<'events'>) => void;
+  onRsvpSelect: (eventId: Id<'events'>, status: RsvpStatus) => Promise<void>;
+}
+
+/**
+ * Stage 2A "מחכים לתגובה" row. Reuses the exact same inline
+ * כן/אולי/לא RSVP interaction and mutation path (`onRsvpSelect` →
+ * `handleInlineRsvp` in the parent) as CommunityEventFlyerCard — no new
+ * RSVP semantics are introduced here.
+ */
+function MainPendingRsvpRow({
+  event,
+  isNew,
+  isToday,
+  isTomorrow,
+  flyerDetailsOnly,
+  onOpenDetails,
+  onRsvpSelect,
+}: MainPendingRsvpRowProps) {
+  const [showInlineChoices, setShowInlineChoices] = useState(false);
+
+  return (
+    <View style={styles.pendingRow}>
+      <Pressable
+        accessible
+        accessibilityLabel={`פרטי אירוע ${event.title}`}
+        accessibilityRole="button"
+        onPress={() => onOpenDetails(event._id)}
+        style={styles.pendingRowContent}
+      >
+        <MainEventChips
+          isNew={isNew}
+          isToday={isToday}
+          isTomorrow={isTomorrow}
+        />
+        <Text numberOfLines={1} style={styles.pendingRowTitle}>
+          {event.title}
+        </Text>
+        <Text numberOfLines={1} style={styles.pendingRowMeta}>
+          {formatMainCardDateTime(event)}
+        </Text>
+      </Pressable>
+      <View style={styles.pendingRowCtaWrap}>
+        {flyerDetailsOnly ? (
+          <TouchableOpacity
+            accessible
+            accessibilityLabel="לפרטים"
+            accessibilityRole="button"
+            onPress={() => onOpenDetails(event._id)}
+            style={styles.pendingRowCtaBtn}
+          >
+            <Text style={styles.pendingRowCtaText}>לפרטים</Text>
+          </TouchableOpacity>
+        ) : showInlineChoices ? (
+          <View style={styles.pendingInlineRsvpRow}>
+            {(
+              [
+                { status: 'yes', label: 'כן' },
+                { status: 'maybe', label: 'אולי' },
+                { status: 'no', label: 'לא' },
+              ] as { status: RsvpStatus; label: string }[]
+            ).map((opt) => (
+              <TouchableOpacity
+                accessible
+                accessibilityLabel={opt.label}
+                accessibilityRole="button"
+                key={`${event._id}-${opt.status}`}
+                onPress={() => {
+                  onRsvpSelect(event._id, opt.status).finally(() => {
+                    setShowInlineChoices(false);
+                  });
+                }}
+                style={styles.pendingInlineRsvpBtn}
+              >
+                <Text style={styles.pendingInlineRsvpText}>{opt.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : (
+          <TouchableOpacity
+            accessible
+            accessibilityLabel="אישור הגעה"
+            accessibilityRole="button"
+            onPress={() => setShowInlineChoices(true)}
+            style={styles.pendingRowCtaBtn}
+          >
+            <Text style={styles.pendingRowCtaText}>אישור הגעה</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+}
+
+interface AdditionalEventCardProps {
+  event: EventDoc;
+  cardWidth: number;
+  isNew: boolean;
+  isToday: boolean;
+  isTomorrow: boolean;
+  taskSummary?: TaskSummary;
+  isAdding: boolean;
+  onOpenDetails: (eventId: Id<'events'>) => void;
+  onAddToCalendar: (eventId: Id<'events'>) => void;
+}
+
+/**
+ * QA FIX (Issue 2) — "אירועים נוספים" card. Reuses the exact same compact
+ * card visual language as MainEventCard (title/date/location/task summary)
+ * plus the SAME "הוסף ליומן" label already used by the open-event footer
+ * button (getOpenCommunityCalendarActionLabel) — no new copy is introduced.
+ * The label is always the "add" variant here by construction: this card is
+ * only ever rendered for events listCommunityAdditionalEventsPaged already
+ * confirmed are NOT in the viewer's personal calendar.
+ */
+function AdditionalEventCard({
+  event,
+  cardWidth,
+  isNew,
+  isToday,
+  isTomorrow,
+  taskSummary,
+  isAdding,
+  onOpenDetails,
+  onAddToCalendar,
+}: AdditionalEventCardProps) {
+  const taskTotal = taskSummary?.totalTasksCount ?? taskSummary?.total ?? 0;
+  const locationLabel = event.location?.trim();
+  const addLabel = getOpenCommunityCalendarActionLabel(false);
+
+  return (
+    <View style={[styles.mainEventCard, { width: cardWidth }]}>
+      <Pressable
+        accessible
+        accessibilityLabel={`פרטי אירוע ${event.title}`}
+        accessibilityRole="button"
+        onPress={() => onOpenDetails(event._id)}
+        style={styles.additionalEventPressable}
+      >
+        <MainEventChips
+          isNew={isNew}
+          isToday={isToday}
+          isTomorrow={isTomorrow}
+        />
+        <Text numberOfLines={2} style={styles.mainEventTitle}>
+          {event.title}
+        </Text>
+        <Text numberOfLines={1} style={styles.mainEventDate}>
+          {formatMainCardDateTime(event)}
+        </Text>
+        {locationLabel ? (
+          <Text numberOfLines={1} style={styles.mainEventLocation}>
+            📍 {locationLabel}
+          </Text>
+        ) : null}
+        {taskSummary && taskTotal > 0 ? (
+          <TaskSummaryLine
+            copy="compact"
+            doneStyle={styles.mainEventTaskSummaryDone}
+            style={styles.mainEventTaskSummary}
+            taskSummary={taskSummary}
+          />
+        ) : null}
+      </Pressable>
+      <Pressable
+        accessible
+        accessibilityHint="מוסיף את האירוע ליומן האישי שלך"
+        accessibilityLabel={addLabel}
+        accessibilityRole="button"
+        disabled={isAdding}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        onPress={() => onAddToCalendar(event._id)}
+        style={({ pressed }) => [
+          styles.additionalEventAddBtn,
+          (pressed || isAdding) && styles.additionalEventAddBtnPressed,
+        ]}
+      >
+        <Text style={styles.additionalEventAddBtnText}>
+          {isAdding ? '...' : addLabel}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+interface TabMainProps {
+  communityId: Id<'communities'>;
+  rsvpMap: Record<string, RsvpStatus>;
+  onOpenEventDetails: (eventId: Id<'events'>) => void;
+  onSeeMoreEvents: () => void;
+  onSeeMoreReminders: () => void;
+  currentUserId?: Id<'users'>;
+  onInlineRsvp: (eventId: Id<'events'>, status: RsvpStatus) => Promise<void>;
+  /** Captured BEFORE markCommunityViewed runs — see previousVisitAtRef above. */
+  previousVisitAt: number | undefined;
+  /**
+   * MICRO-FIX (stale-across-focus) — device-local midnight, refreshed by
+   * the PARENT screen on every genuine focus/visit (see its
+   * `focusedLocalDayStart` state, set alongside `isScreenFocused` in the
+   * same `useFocusEffect`), never recomputed from this component's own
+   * per-mount `now`. This screen is a hidden `Tabs.Screen` that can stay
+   * mounted across a tab switch away and back — including overnight — so
+   * a per-mount `localDayStart` here would silently keep scanning from
+   * YESTERDAY's midnight after an overnight revisit to the same mounted
+   * screen. See lib/eventsTabDateHelpers.ts's getLocalDayStart.
+   */
+  focusedLocalDayStart: number;
+}
+
+function TabMain({
   communityId,
   rsvpMap,
-  onToggleTask,
   onOpenEventDetails,
-  hiddenReminderIds,
-  setHiddenReminderIds,
-  completionOverrides,
-  setCompletionOverrides,
-  localTaskCache,
-  setLocalTaskCache,
-  isRemindersOpen,
-  setIsRemindersOpen,
+  onSeeMoreEvents,
+  onSeeMoreReminders,
   currentUserId,
-  taskCountsMap,
   onInlineRsvp,
-  communityMyRole,
-}: TabAllProps) {
+  previousVisitAt,
+  focusedLocalDayStart,
+}: TabMainProps) {
   const { width: screenWidth } = useWindowDimensions();
-  const flyerColumns = screenWidth < 360 ? 1 : 2;
-  const horizontalPadding = 32; // TabAll horizontal margins
-  const gridGap = 12;
-  const availableWidth = screenWidth - horizontalPadding;
-  const flyerCardWidth =
-    flyerColumns === 1 ? availableWidth : (availableWidth - gridGap) / 2;
-  // Stable timestamps — computed once on mount, never change
-  const windowStart = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  }, []);
-  const windowEnd = useMemo(() => NOW_PLUS_60_DAYS(), []);
+  const carouselCardWidth = Math.min(240, screenWidth * 0.68);
 
-  // Memoized query args — prevents Convex from seeing new object references each render
-  const eventsArgs = useMemo(
+  // Stable "now" — computed once per mount, never Date.now() inside a Convex
+  // query (see the no-date-now-in-queries rule). Also keeps the overview
+  // query's args referentially stable across re-renders. Intentionally left
+  // UNCHANGED by the stale-across-focus micro-fix above — other logic in
+  // this component (todayKey/tomorrowKey) still legitimately wants a stable
+  // per-mount instant, not a per-focus one.
+  const now = useMemo(() => Date.now(), []);
+  const todayKey = useMemo(() => getLocalDayKey(now), [now]);
+  const tomorrowKey = useMemo(
+    () => getLocalDayKey(now + 24 * 60 * 60 * 1000),
+    [now]
+  );
+
+  // Stage 2A: single bounded query resolves BOTH "האירועים שלי" and
+  // "מחכים לתגובה" independently — see listCommunityMainOverview in
+  // convex/events.ts for the bounding strategy (never a full-community
+  // collect(), see Stage 1C).
+  const overviewArgs = useMemo(
     () => ({
       communityId,
-      cursor: null as null,
-      numItems: 8,
-      fromTime: windowStart,
-      toTime: windowEnd,
+      now,
+      localDayStart: focusedLocalDayStart,
+      myEventsLimit: 6,
+      pendingRsvpLimit: 3,
     }),
-    [communityId, windowStart, windowEnd]
+    [communityId, now, focusedLocalDayStart]
   );
+  const overview = useQuery(api.events.listCommunityMainOverview, overviewArgs);
+  const isLoadingOverview = overview === undefined;
+  // BUG FIX (manual QA) — the server query now over-fetches all-day events
+  // (whose startTime sits at local midnight, see
+  // isEventStartTimeEligibleForUpcomingScan's doc comment) and intentionally
+  // defers the "has this all-day event already ended" decision to the
+  // client's device-local-timezone hasEventEndedByNow, exactly like the
+  // "אירועים" tab already does for the identical reason (see that helper's
+  // doc comment + convex/communityCalendarState.ts). Timed-event behavior is
+  // unchanged: hasEventEndedByNow(timed) is false for any event the server
+  // already guaranteed startTime >= now.
+  const myEvents = ((overview?.myEvents ?? []) as EventDoc[]).filter(
+    (e) => !hasEventEndedByNow(e, Date.now())
+  );
+  const myEventsHasMore = overview?.myEventsHasMore ?? false;
+  const pendingRsvpEvents = (
+    (overview?.pendingRsvpEvents ?? []) as EventDoc[]
+  ).filter((e) => !hasEventEndedByNow(e, Date.now()));
+  const pendingRsvpHasMore = overview?.pendingRsvpHasMore ?? false;
+
+  // Bounded reminders summary for "מה חשוב עכשיו" — reuses the same paged
+  // query as the Reminders tab (numItems matches its existing convention).
+  // The open-reminder count is only trusted (and shown) when this page's
+  // raw scan reached the end (`isDone`); otherwise we omit the summary item
+  // rather than show a potentially-wrong number (see prompt's REMINDERS
+  // CAUTION — no unbounded scan just for display copy).
   const remindersArgs = useMemo(
     () => ({ communityId, cursor: null as null, numItems: 8 }),
     [communityId]
   );
-  const activityPreviewArgs = useMemo(
-    () => ({ communityId, limit: 3 }),
-    [communityId]
-  );
-
-  const eventsPage = useQuery(api.events.listByCommunityPaged, eventsArgs);
   const remindersPage = useQuery(
     api.tasks.listCommunityRemindersPaged,
     remindersArgs
   );
-  const activityPreview = useQuery(
-    api.communityActivities.listCommunityActivities,
-    activityPreviewArgs
-  ) as CommunityActivityItem[] | undefined;
+  const remindersOpenCount = useMemo(() => {
+    if (!remindersPage || !remindersPage.isDone) return null;
+    return remindersPage.page.length;
+  }, [remindersPage]);
 
-  const events = (eventsPage?.page ?? []) as EventDoc[];
-  const reminders = (remindersPage?.page ?? []) as TaskDoc[];
+  // ── QA FIX (Issue 2) — "אירועים נוספים": genuinely paginated, NOT capped
+  // to 2-3 events. A separate query (listCommunityAdditionalEventsPaged)
+  // from the bounded "האירועים שלי"/"מחכים לתגובה" overview above, so this
+  // list can keep growing (5/10/30+ events) via `onEndReached` without ever
+  // widening — or duplicating the logic of — the Stage 2A bounded scan.
+  // Reset whenever the community changes, since this screen instance can
+  // stay mounted across communities (see Issue 1 / useFocusEffect above).
+  const [additionalCursor, setAdditionalCursor] = useState<string | null>(null);
+  const [additionalEvents, setAdditionalEvents] = useState<EventDoc[]>([]);
+  const [additionalLoadingMore, setAdditionalLoadingMore] = useState(false);
+  const seenAdditionalCursors = useRef<Set<string | null>>(new Set([null]));
 
-  const isLoadingEvents = eventsPage === undefined;
-  const isLoadingReminders = remindersPage === undefined;
-  const isLoadingActivityPreview = activityPreview === undefined;
+  useEffect(() => {
+    seenAdditionalCursors.current = new Set([null]);
+    setAdditionalCursor(null);
+    setAdditionalEvents([]);
+    setAdditionalLoadingMore(false);
+  }, [communityId]);
 
-  // hiddenReminderIds, completionOverrides, localTaskCache come from parent props
-  // so they survive tab switches
-
-  // Pending move state: items in the 600ms visual transition (open → completed)
-  const [pendingMoveIds, setPendingMoveIds] = useState<Set<string>>(new Set());
-  const [pendingSnapshots, setPendingSnapshots] = useState<
-    Map<string, TaskDoc>
-  >(new Map());
-
-  // Expand/collapse state for reminder rows — only one open at a time
-  const [expandedReminderId, setExpandedReminderId] = useState<string | null>(
-    null
+  const additionalArgs = useMemo(
+    () => ({
+      communityId,
+      cursor: additionalCursor,
+      numItems: 12,
+      now,
+      localDayStart: focusedLocalDayStart,
+    }),
+    [communityId, additionalCursor, now, focusedLocalDayStart]
   );
+  const additionalPage = useQuery(
+    api.events.listCommunityAdditionalEventsPaged,
+    additionalArgs
+  );
+  const isLoadingAdditional = additionalPage === undefined;
 
-  const activeEvents = events.filter((ev) => ev.status !== 'cancelled');
+  useEffect(() => {
+    if (!additionalPage) return;
+
+    setAdditionalEvents((prev) => {
+      const ids = new Set(prev.map((e) => e._id as string));
+      // BUG FIX (manual QA) — same client-side "has this all-day event
+      // already ended" deferral as the overview query above; see
+      // myEvents/pendingRsvpEvents's comment for the full explanation.
+      const freshPage = (additionalPage.page as EventDoc[]).filter(
+        (e) => !hasEventEndedByNow(e, Date.now())
+      );
+      const newItems = freshPage.filter((e) => !ids.has(e._id as string));
+      return additionalCursor === null ? freshPage : [...prev, ...newItems];
+    });
+
+    // Sparse-page auto-advance: eligibility filtering happens server-side
+    // AFTER pagination, so a page can come back empty while more events
+    // remain further out (isDone === false). Advance automatically so the
+    // carousel doesn't look prematurely finished — mirrors TabReminders'
+    // identical sparse-page handling below.
+    if (
+      additionalPage.page.length === 0 &&
+      additionalPage.isDone === false &&
+      additionalPage.continueCursor
+    ) {
+      const next = additionalPage.continueCursor;
+      if (!seenAdditionalCursors.current.has(next)) {
+        seenAdditionalCursors.current.add(next);
+        setAdditionalLoadingMore(true);
+        setAdditionalCursor(next);
+        return;
+      }
+    }
+    setAdditionalLoadingMore(false);
+  }, [additionalPage, additionalCursor]);
+
+  const handleLoadMoreAdditional = useCallback(() => {
+    if (
+      additionalPage?.isDone === false &&
+      additionalPage.continueCursor &&
+      !additionalLoadingMore
+    ) {
+      setAdditionalLoadingMore(true);
+      setAdditionalCursor(additionalPage.continueCursor);
+    }
+  }, [additionalPage, additionalLoadingMore]);
 
   const addCommunityEventToMyCalendar = useMutation(
     api.communityEventCalendar.addCommunityEventToMyCalendar
   );
-  const removeCommunityEventFromMyCalendar = useMutation(
-    api.communityEventCalendar.removeCommunityEventFromMyCalendar
-  );
-  const [
-    calendarRemoveConfirmationEventId,
-    setCalendarRemoveConfirmationEventId,
-  ] = useState<Id<'events'> | null>(null);
-
-  const showCalendarRemoveConfirmation = useCallback(
-    (eventId: Id<'events'>): void => {
-      setCalendarRemoveConfirmationEventId(eventId);
+  const [addingEventId, setAddingEventId] = useState<string | null>(null);
+  const handleAddToCalendar = useCallback(
+    (eventId: Id<'events'>) => {
+      setAddingEventId(eventId as string);
+      addCommunityEventToMyCalendar({ eventId })
+        .then(() => {
+          // Optimistically drop it from the local "אירועים נוספים" cache —
+          // it now belongs in "האירועים שלי" (the reactive overview query
+          // above picks it up on its own). Never manually add it there;
+          // that stays exclusively backend-driven per the Issue 2 spec.
+          setAdditionalEvents((prev) =>
+            prev.filter((e) => (e._id as string) !== (eventId as string))
+          );
+        })
+        .catch(() => {
+          Alert.alert('שגיאה', 'לא ניתן להוסיף את האירוע ליומן');
+        })
+        .finally(() => {
+          setAddingEventId((prev) =>
+            prev === (eventId as string) ? null : prev
+          );
+        });
     },
-    []
+    [addCommunityEventToMyCalendar]
   );
 
-  const handleConfirmCalendarRemoval = useCallback((): void => {
-    if (!calendarRemoveConfirmationEventId) return;
-    const eventId = calendarRemoveConfirmationEventId;
-    setCalendarRemoveConfirmationEventId(null);
-    removeCommunityEventFromMyCalendar({
-      eventId,
-      confirmRemoveWithActiveTask: true,
-    }).catch(() => Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן'));
-  }, [calendarRemoveConfirmationEventId, removeCommunityEventFromMyCalendar]);
+  // Task counts are requested ONLY for the events actually rendered on this
+  // screen (≤6 my-events + ≤3 pending + loaded "אירועים נוספים" pages,
+  // deduped) — never a community-wide scan.
+  const taskCountEventIds = useMemo(() => {
+    const ids = new Set<Id<'events'>>();
+    for (const ev of myEvents) ids.add(ev._id);
+    for (const ev of pendingRsvpEvents) ids.add(ev._id);
+    for (const ev of additionalEvents) ids.add(ev._id);
+    return [...ids];
+  }, [myEvents, pendingRsvpEvents, additionalEvents]);
+  const taskCountsMap =
+    useQuery(
+      api.eventTasks.getTaskCountsForEvents,
+      taskCountEventIds.length > 0 ? { eventIds: taskCountEventIds } : 'skip'
+    ) ?? {};
 
-  const handleCancelCalendarRemoval = useCallback(
-    (): void => setCalendarRemoveConfirmationEventId(null),
-    []
+  const isEventNew = useCallback(
+    (ev: EventDoc) => isEventNewSincePreviousVisit(ev, previousVisitAt),
+    [previousVisitAt]
   );
 
-  const handleCalendarToggle = useCallback(
-    async (eventId: Id<'events'>) => {
-      const ev = activeEvents.find((e) => e._id === eventId);
-      const saved = ev?.isSavedToMyCalendar === true;
-      const hasMyAssignedTasks =
-        taskCountsMap[eventId]?.hasMyAssignedTasks === true &&
-        taskCountsMap[eventId]?.myAssignedTasks.length > 0;
-
-      if (saved && hasMyAssignedTasks) {
-        showCalendarRemoveConfirmation(eventId);
-        return;
-      }
-
-      try {
-        if (saved) {
-          await removeCommunityEventFromMyCalendar({ eventId });
-          return;
-        }
-        await addCommunityEventToMyCalendar({ eventId });
-      } catch (error) {
-        const errorCode = getConvexErrorCode(error);
-        if (
-          saved &&
-          (errorCode === CALENDAR_REMOVE_CONFIRMATION_CODE ||
-            errorCode === 'CALENDAR_REMOVE_BLOCKED_BY_ACTIVE_TASK')
-        ) {
-          showCalendarRemoveConfirmation(eventId);
-          return;
-        }
-        Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן');
-      }
-    },
-    [
-      activeEvents,
-      addCommunityEventToMyCalendar,
-      removeCommunityEventFromMyCalendar,
-      showCalendarRemoveConfirmation,
-      taskCountsMap,
-    ]
+  // "מה חשוב עכשיו" candidates — nearest today/tomorrow event drawn from the
+  // union of the two already-bounded lists above (no extra query).
+  const relevantEvents = useMemo(() => {
+    const byId = new Map<string, EventDoc>();
+    for (const ev of myEvents) byId.set(ev._id as string, ev);
+    for (const ev of pendingRsvpEvents) byId.set(ev._id as string, ev);
+    return [...byId.values()].sort((a, b) => a.startTime - b.startTime);
+  }, [myEvents, pendingRsvpEvents]);
+  const todayEvent = useMemo(
+    () => relevantEvents.find((ev) => isEventOnLocalDay(ev, todayKey)),
+    [relevantEvents, todayKey]
+  );
+  const tomorrowEvent = useMemo(
+    () => relevantEvents.find((ev) => isEventOnLocalDay(ev, tomorrowKey)),
+    [relevantEvents, tomorrowKey]
   );
 
-  const recentlyCancelledEvents = events.filter(
-    (ev) =>
-      ev.status === 'cancelled' &&
-      ev.cancelledAt !== undefined &&
-      Date.now() - ev.cancelledAt < 24 * 60 * 60 * 1000
-  );
+  const importantNowItems = useMemo<ImportantNowItem[]>(() => {
+    const items: ImportantNowItem[] = [];
 
-  // Section 1: events the user created, or RSVPed "yes", or open events in personal calendar
-  const myEvents = activeEvents.filter((ev) => {
-    if (currentUserId !== undefined && ev.createdBy === currentUserId)
-      return true;
-    if (ev.requiresRsvp === false) {
-      return ev.isSavedToMyCalendar === true;
-    }
-    return (rsvpMap[ev._id] ?? 'none') === 'yes';
-  });
-
-  // Section 3: other members' events not in the user's personal calendar
-  const pendingEvents = activeEvents.filter((ev) => {
-    if (currentUserId !== undefined && ev.createdBy === currentUserId)
-      return false;
-    if (ev.requiresRsvp === false) {
-      return !ev.isSavedToMyCalendar;
-    }
-    return (rsvpMap[ev._id] ?? 'none') !== 'yes';
-  });
-
-  // Section 2: merge query results with locally-completed tasks + pending-transition tasks
-  const allRemindersForSection = useMemo(() => {
-    const queryIds = new Set(reminders.map((t) => t._id as string));
-    // Apply completion overrides to items still in the query.
-    // override=true → show as completed; override=false → show as open.
-    const fromQuery = reminders.map((t) => {
-      const override = completionOverrides.get(t._id as string);
-      if (override === undefined) return t;
-      return { ...t, completed: override };
-    });
-    // Items not in the server query but with a local override (completed or open).
-    // Keeps tasks visible during the brief period before the server reacts.
-    const fromLocalCache = [...completionOverrides.entries()]
-      .filter(([id]) => !queryIds.has(id))
-      .flatMap(([id, isCompleted]) => {
-        const cached = localTaskCache.get(id);
-        return cached ? [{ ...cached, completed: isCompleted }] : [];
+    if (todayEvent) {
+      items.push({
+        key: 'today',
+        label: `אירוע היום · ${todayEvent.title}`,
+        iconName: 'star',
+        emphasis: true,
+        onPress: () => onOpenEventDetails(todayEvent._id),
       });
-    // Items in pending transition that disappeared from query before 600ms elapsed
-    const fromPendingCache = [...pendingMoveIds]
-      .filter((id) => !queryIds.has(id) && !completionOverrides.has(id))
-      .flatMap((id) => {
-        const snap = pendingSnapshots.get(id);
-        return snap ? [{ ...snap, completed: false }] : [];
+    }
+
+    if (pendingRsvpEvents.length > 0) {
+      const label = pendingRsvpHasMore
+        ? 'אירועים מחכים לתגובה'
+        : pendingRsvpEvents.length === 1
+          ? 'אירוע אחד מחכה לתגובה'
+          : `${pendingRsvpEvents.length} אירועים מחכים לתגובה`;
+      items.push({
+        key: 'pending',
+        label,
+        iconName: 'help-circle-outline',
+        onPress: onSeeMoreEvents,
       });
-    return uniqueById(
-      [...fromQuery, ...fromLocalCache, ...fromPendingCache],
-      (task) => task._id as string
-    );
+    }
+
+    if (tomorrowEvent) {
+      items.push({
+        key: 'tomorrow',
+        label: `אירוע מחר · ${tomorrowEvent.title}`,
+        iconName: 'calendar-outline',
+        onPress: () => onOpenEventDetails(tomorrowEvent._id),
+      });
+    }
+
+    if (remindersOpenCount !== null && remindersOpenCount > 0) {
+      const label =
+        remindersOpenCount === 1
+          ? 'תזכורת אחת קרובה'
+          : `${remindersOpenCount} תזכורות קרובות`;
+      items.push({
+        key: 'reminders',
+        label,
+        iconName: 'notifications-outline',
+        onPress: onSeeMoreReminders,
+      });
+    }
+
+    return items.slice(0, 3);
   }, [
-    reminders,
-    completionOverrides,
-    localTaskCache,
-    pendingMoveIds,
-    pendingSnapshots,
+    todayEvent,
+    tomorrowEvent,
+    pendingRsvpEvents.length,
+    pendingRsvpHasMore,
+    remindersOpenCount,
+    onOpenEventDetails,
+    onSeeMoreEvents,
+    onSeeMoreReminders,
   ]);
 
-  const visibleForSection = allRemindersForSection.filter(
-    (t) => !hiddenReminderIds.has(t._id as string)
-  );
-  const openReminderItems = visibleForSection.filter(
-    (t) => !t.completed && !pendingMoveIds.has(t._id as string)
-  );
-  const pendingMoveItems = visibleForSection.filter((t) =>
-    pendingMoveIds.has(t._id as string)
-  );
-  const completedReminderItems = visibleForSection.filter(
-    (t) => t.completed && !pendingMoveIds.has(t._id as string)
-  );
-  const openCount = openReminderItems.length + pendingMoveItems.length;
-  const completedCount = completedReminderItems.length;
-  const remindersSummaryText =
-    completedCount > 0
-      ? `${openCount} פתוחות · ${completedCount} הושלמו`
-      : `${openCount} פתוחות`;
-
-  const handleToggleInSection = useCallback(
-    (id: Id<'tasks'>) => {
-      const task = allRemindersForSection.find((t) => t._id === id);
-      const isEffectivelyCompleted = task?.completed ?? false;
-      const isPending = pendingMoveIds.has(id as string);
-
-      // Snapshot previous override so we can roll back on mutation failure.
-      const prevOverride = completionOverrides.get(id as string);
-
-      if (!isEffectivelyCompleted && !isPending) {
-        // Open → completing: 600ms visual delay before moving to completed group
-        const taskSnapshot = task;
-        if (taskSnapshot) {
-          setPendingSnapshots((prev) =>
-            new Map(prev).set(id as string, taskSnapshot)
-          );
-        }
-        setPendingMoveIds((prev) => new Set([...prev, id as string]));
-        setTimeout(() => {
-          setPendingMoveIds((prev) => {
-            const s = new Set(prev);
-            s.delete(id as string);
-            return s;
-          });
-          setPendingSnapshots((prev) => {
-            const m = new Map(prev);
-            m.delete(id as string);
-            return m;
-          });
-          if (taskSnapshot) {
-            setCompletionOverrides((prev) =>
-              new Map(prev).set(id as string, true)
-            );
-            setLocalTaskCache((prev) =>
-              new Map(prev).set(id as string, taskSnapshot)
-            );
-          }
-        }, 600);
-      } else {
-        // Completed/pending → open: immediately show task as open.
-        // Keep the cached snapshot so it stays visible until the server adds
-        // it back to the open query (override=false keeps it in fromLocalCache).
-        if (isPending) {
-          setPendingMoveIds((prev) => {
-            const s = new Set(prev);
-            s.delete(id as string);
-            return s;
-          });
-          setPendingSnapshots((prev) => {
-            const m = new Map(prev);
-            m.delete(id as string);
-            return m;
-          });
-        }
-        if (task) {
-          setLocalTaskCache((prev) =>
-            new Map(prev).set(id as string, { ...task, completed: false })
-          );
-        }
-        setCompletionOverrides((prev) =>
-          new Map(prev).set(id as string, false)
-        );
-      }
-
-      onToggleTask(id).catch(() => {
-        // Mutation failed — restore the previous visual state.
-        setCompletionOverrides((prev) => {
-          const m = new Map(prev);
-          if (prevOverride === undefined) {
-            m.delete(id as string);
-          } else {
-            m.set(id as string, prevOverride);
-          }
-          return m;
-        });
-        // Clear any pending transition that started for this item.
-        setPendingMoveIds((prev) => {
-          const s = new Set(prev);
-          s.delete(id as string);
-          return s;
-        });
-        setPendingSnapshots((prev) => {
-          const m = new Map(prev);
-          m.delete(id as string);
-          return m;
-        });
-        Alert.alert('שגיאה', 'לא ניתן לעדכן תזכורת');
-      });
-    },
-    [
-      allRemindersForSection,
-      completionOverrides,
-      pendingMoveIds,
-      onToggleTask,
-      setCompletionOverrides,
-      setLocalTaskCache,
-    ]
-  );
-
-  const handleToggleReminderExpand = useCallback((id: string) => {
-    setExpandedReminderId((prev) => (prev === id ? null : id));
-  }, []);
-
-  // Clear expandedReminderId when the expanded reminder leaves the visible list
-  const visibleReminderIds = useMemo(
-    () =>
-      new Set([
-        ...openReminderItems.map((t) => t._id as string),
-        ...pendingMoveItems.map((t) => t._id as string),
-        ...completedReminderItems.map((t) => t._id as string),
-      ]),
-    [openReminderItems, pendingMoveItems, completedReminderItems]
-  );
-  useEffect(() => {
-    if (expandedReminderId && !visibleReminderIds.has(expandedReminderId)) {
-      setExpandedReminderId(null);
-    }
-  }, [expandedReminderId, visibleReminderIds]);
-
-  const handleHideReminder = useCallback(
-    (id: string) => {
-      setHiddenReminderIds((prev) => new Set([...prev, id]));
-      setCompletionOverrides((prev) => {
-        const m = new Map(prev);
-        m.delete(id);
-        return m;
-      });
-    },
-    [setHiddenReminderIds, setCompletionOverrides]
+  // QA FIX (Issue 3): ONLY the event's actual creator is exempt from RSVP —
+  // management role (owner/admin) alone must never bypass RSVP for an event
+  // someone else created. In practice `pendingRsvpEvents` never contains the
+  // viewer's own created events any more (see computeRsvpAttentionState's
+  // creator exemption), so this always resolves to false there; kept
+  // explicit/defensive so this list is provably safe against ever
+  // regressing to a role-based bypass.
+  const isEventCreator = useCallback(
+    (ev: EventDoc) => ev.createdBy === currentUserId,
+    [currentUserId]
   );
 
   return (
-    <>
-      <ScrollView
-        style={styles.tabScroll}
-        contentContainerStyle={styles.tabContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* ── Section 1: האירועים שלי */}
+    <ScrollView
+      contentContainerStyle={styles.tabContent}
+      showsVerticalScrollIndicator={false}
+      style={styles.tabScroll}
+    >
+      {/* ── מה חשוב עכשיו — hidden entirely when there is nothing to show */}
+      {importantNowItems.length > 0 ? (
         <View>
-          <SectionHeader
-            title="האירועים שלי"
-            subtitle="אירועים שיצרת או שאישרת הגעה"
-          />
-          {isLoadingEvents ? (
-            <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
-          ) : myEvents.length === 0 ? (
-            <View style={styles.emptySmall}>
-              <Text style={styles.emptySmallText}>
-                עדיין לא הצטרפת לאירועים בקהילה זו
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.eventsGrid}>
-              {myEvents.map((ev) => {
-                const privilegedFlyer =
-                  communityMyRole === 'owner' ||
-                  communityMyRole === 'admin' ||
-                  ev.createdBy === currentUserId;
-                const showTaskMetrics =
-                  privilegedFlyer || ev.tasksVisibleToParticipants === true;
-                return (
-                  <CommunityEventFlyerCard
-                    key={ev._id}
-                    event={ev}
-                    isSavedToMyCalendar={ev.isSavedToMyCalendar}
-                    onCalendarToggle={handleCalendarToggle}
-                    rsvpStatus={rsvpMap[ev._id] ?? 'none'}
-                    taskSummary={taskCountsMap[ev._id]}
-                    cardWidth={flyerCardWidth}
-                    flyerDetailsOnly={privilegedFlyer}
-                    showTaskMetrics={showTaskMetrics}
-                    onOpenDetails={onOpenEventDetails}
-                    onRsvpSelect={onInlineRsvp}
-                  />
-                );
-              })}
-            </View>
-          )}
-        </View>
-
-        {/* ── Section 2: כדאי לזכור (accordion) */}
-        <View>
-          {/* Header — always visible */}
-          <Pressable
-            onPress={() => setIsRemindersOpen((v) => !v)}
-            style={styles.accordionHeader}
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel={`כדאי לזכור, ${remindersSummaryText}`}
-            accessibilityState={{ expanded: isRemindersOpen }}
-          >
-            {/* Right (RTL start): title */}
-            <Text style={styles.accordionTitle}>כדאי לזכור</Text>
-            {/* Left (RTL end): chevron + summary badge */}
-            <View style={styles.accordionLeft}>
-              <Ionicons
-                name={isRemindersOpen ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color="#6b7280"
-              />
-              {!isLoadingReminders && (
-                <View style={styles.reminderSummaryBadge}>
-                  <Text style={styles.reminderSummaryText}>
-                    {remindersSummaryText}
-                  </Text>
-                </View>
-              )}
-            </View>
-          </Pressable>
-
-          {/* Body — visible only when open */}
-          {isRemindersOpen &&
-            (isLoadingReminders ? (
-              <ActivityIndicator
-                color={PRIMARY}
-                style={{ marginVertical: 16 }}
-              />
-            ) : (
-              <View style={{ gap: 8, marginTop: 4 }}>
-                {/* Group 1: open (not completed) */}
-                {openReminderItems.map((t) => (
-                  <CommunityReminderRow
-                    key={t._id}
-                    task={t}
-                    onToggle={handleToggleInSection}
-                    isExpanded={expandedReminderId === (t._id as string)}
-                    onToggleExpand={handleToggleReminderExpand}
-                    currentUserId={currentUserId}
-                    myRole={communityMyRole}
-                  />
-                ))}
-                {/* Group 1: pending items (transitioning to completed — visually shown as completed) */}
-                {pendingMoveItems.map((t) => (
-                  <CommunityReminderRow
-                    key={t._id}
-                    task={{ ...t, completed: true }}
-                    onToggle={handleToggleInSection}
-                    isExpanded={expandedReminderId === (t._id as string)}
-                    onToggleExpand={handleToggleReminderExpand}
-                    currentUserId={currentUserId}
-                    myRole={communityMyRole}
-                  />
-                ))}
-                {/* Group 2: completed */}
-                {completedReminderItems.length > 0 && (
-                  <>
-                    <Text style={styles.completedGroupTitle}>הושלמו</Text>
-                    {completedReminderItems.map((t) => (
-                      <CommunityReminderRow
-                        key={t._id}
-                        task={t}
-                        onToggle={handleToggleInSection}
-                        onHide={handleHideReminder}
-                        isExpanded={expandedReminderId === (t._id as string)}
-                        onToggleExpand={handleToggleReminderExpand}
-                        currentUserId={currentUserId}
-                        myRole={communityMyRole}
-                      />
-                    ))}
-                  </>
-                )}
-                {/* Empty state */}
-                {openReminderItems.length === 0 &&
-                  pendingMoveItems.length === 0 &&
-                  completedReminderItems.length === 0 && (
-                    <View style={styles.emptySmall}>
-                      <Text style={styles.emptySmallText}>
-                        אין תזכורות לקהילה זו
-                      </Text>
-                    </View>
-                  )}
-              </View>
+          <SectionHeader title="מה חשוב עכשיו" />
+          <View style={styles.importantNowList}>
+            {importantNowItems.map((item) => (
+              <ImportantNowRow item={item} key={item.key} />
             ))}
+          </View>
         </View>
+      ) : null}
 
-        {/* ── Section 3: אירועים נוספים */}
+      {/* ── האירועים שלי — horizontal carousel, always shown (core section) */}
+      <View>
+        <SectionHeader
+          actionLabel="הצג הכל"
+          onAction={onSeeMoreEvents}
+          title="האירועים שלי"
+        />
+        {isLoadingOverview ? (
+          <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
+        ) : myEvents.length === 0 ? (
+          <View style={styles.emptySmall}>
+            <Text style={styles.emptySmallText}>
+              {myEventsHasMore
+                ? // The scan hit its safety cap without proof there are no
+                  // matching events further out — showing the flat "no
+                  // events" claim here would be a false negative (see the
+                  // Stage 2A scale-edge-case investigation). Point at the
+                  // existing "הצג הכל" action above instead of asserting
+                  // emptiness we can't actually confirm.
+                  'יש אירועים נוספים לצפייה'
+                : 'עדיין אין אירועים ביומן שלך בקהילה זו'}
+            </Text>
+          </View>
+        ) : (
+          <ScrollView
+            contentContainerStyle={styles.mainCarouselContent}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+          >
+            {myEvents.map((ev) => (
+              <MainEventCard
+                cardWidth={carouselCardWidth}
+                event={ev}
+                isCreator={isEventCreator(ev)}
+                isNew={isEventNew(ev)}
+                isToday={isEventOnLocalDay(ev, todayKey)}
+                isTomorrow={isEventOnLocalDay(ev, tomorrowKey)}
+                key={ev._id}
+                onOpenDetails={onOpenEventDetails}
+                rsvpStatus={rsvpMap[ev._id] ?? 'none'}
+                taskSummary={taskCountsMap[ev._id]}
+              />
+            ))}
+            {myEventsHasMore ? (
+              <Pressable
+                accessible
+                accessibilityLabel="הצג את כל האירועים שלי"
+                accessibilityRole="button"
+                onPress={onSeeMoreEvents}
+                style={[styles.mainSeeMoreCard, { width: carouselCardWidth }]}
+              >
+                <Ionicons color={PRIMARY} name="chevron-back" size={20} />
+                <Text style={styles.mainSeeMoreText}>הצג הכל</Text>
+              </Pressable>
+            ) : null}
+          </ScrollView>
+        )}
+      </View>
+
+      {/* ── מחכים לתגובה — short vertical list, hidden entirely when empty */}
+      {pendingRsvpEvents.length > 0 ? (
         <View>
           <SectionHeader
-            title="אירועים נוספים"
-            subtitle="אירועים בקהילה שעדיין לא הגבת אליהם"
+            actionLabel={pendingRsvpHasMore ? 'הצג הכל' : undefined}
+            onAction={pendingRsvpHasMore ? onSeeMoreEvents : undefined}
+            subtitle="אירועים שדורשים אישור הגעה ממך"
+            title="מחכים לתגובה"
           />
-          {isLoadingEvents ? (
+          {isLoadingOverview ? (
             <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
-          ) : pendingEvents.length === 0 ? (
-            <View style={[styles.emptySmall, { alignItems: 'center', gap: 8 }]}>
-              <Ionicons name="calendar-outline" size={36} color="#d1d5db" />
-              <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
-                אין אירועים נוספים להצגה
-              </Text>
-            </View>
           ) : (
-            <View style={styles.eventsGrid}>
-              {pendingEvents.map((ev) => {
-                const privilegedFlyer =
-                  communityMyRole === 'owner' || communityMyRole === 'admin';
-                const showTaskMetrics =
-                  privilegedFlyer || ev.tasksVisibleToParticipants === true;
-                return (
-                  <CommunityEventFlyerCard
-                    key={ev._id}
-                    event={ev}
-                    isSavedToMyCalendar={ev.isSavedToMyCalendar}
-                    onCalendarToggle={handleCalendarToggle}
-                    rsvpStatus={rsvpMap[ev._id] ?? 'none'}
-                    taskSummary={taskCountsMap[ev._id]}
-                    cardWidth={flyerCardWidth}
-                    flyerDetailsOnly={privilegedFlyer}
-                    showTaskMetrics={showTaskMetrics}
-                    onOpenDetails={onOpenEventDetails}
-                    onRsvpSelect={onInlineRsvp}
-                  />
-                );
-              })}
+            <View style={{ gap: 8 }}>
+              {pendingRsvpEvents.map((ev) => (
+                <MainPendingRsvpRow
+                  event={ev}
+                  flyerDetailsOnly={isEventCreator(ev)}
+                  isNew={isEventNew(ev)}
+                  isToday={isEventOnLocalDay(ev, todayKey)}
+                  isTomorrow={isEventOnLocalDay(ev, tomorrowKey)}
+                  key={ev._id}
+                  onOpenDetails={onOpenEventDetails}
+                  onRsvpSelect={onInlineRsvp}
+                />
+              ))}
             </View>
           )}
         </View>
+      ) : null}
 
-        {/* ── Section 4: פעילות בקהילה */}
+      {/* ── אירועים נוספים — QA FIX (Issue 2): upcoming community events not
+          yet in the viewer's personal calendar. Horizontal, genuinely
+          paginated list — NOT capped to 2-3 events (see
+          listCommunityAdditionalEventsPaged). Hidden entirely once loading
+          settles and there is nothing eligible to discover. */}
+      {isLoadingAdditional && additionalEvents.length === 0 ? (
         <View>
-          <SectionHeader title="פעילות בקהילה" />
-          {isLoadingActivityPreview ? (
-            <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
-          ) : activityPreview.length === 0 ? (
-            <View style={styles.activityPlaceholder}>
-              <Ionicons name="pulse-outline" size={36} color="#d1d5db" />
-              <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
-                פעילות אחרונה תופיע כאן בקרוב
-              </Text>
-            </View>
-          ) : (
-            <ActivityList
-              activities={activityPreview}
-              onOpenEventDetails={onOpenEventDetails}
-            />
-          )}
+          <SectionHeader
+            subtitle="אירועי קהילה שעדיין לא הוספת ליומן שלך"
+            title="אירועים נוספים"
+          />
+          <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
         </View>
-
-        {/* ── Section 5: אירועים שבוטלו (24h window) */}
-        {recentlyCancelledEvents.length > 0 ? (
-          <View style={styles.cancelledEventsSection}>
-            <Text style={styles.cancelledEventsTitle}>אירועים שבוטלו</Text>
-            <View style={styles.eventsGrid}>
-              {recentlyCancelledEvents.map((ev) => {
-                const privilegedCancelled =
-                  communityMyRole === 'owner' ||
-                  communityMyRole === 'admin' ||
-                  ev.createdBy === currentUserId;
-                const showTaskMetrics =
-                  privilegedCancelled || ev.tasksVisibleToParticipants === true;
-                return (
-                  <CommunityEventFlyerCard
-                    key={ev._id}
-                    event={ev}
-                    rsvpStatus="none"
-                    taskSummary={taskCountsMap[ev._id]}
-                    cardWidth={flyerCardWidth}
-                    flyerDetailsOnly
-                    showTaskMetrics={showTaskMetrics}
-                    onOpenDetails={onOpenEventDetails}
-                    onRsvpSelect={onInlineRsvp}
-                  />
-                );
-              })}
-            </View>
-          </View>
-        ) : null}
-      </ScrollView>
-      <AppConfirmationDialog
-        cancelLabel="ביטול"
-        confirmDestructive
-        confirmLabel="להסיר בכל זאת"
-        message={CALENDAR_REMOVE_CONFIRM_MESSAGE}
-        onCancel={handleCancelCalendarRemoval}
-        onConfirm={handleConfirmCalendarRemoval}
-        title={CALENDAR_REMOVE_CONFIRM_TITLE}
-        visible={calendarRemoveConfirmationEventId !== null}
-      />
-    </>
+      ) : additionalEvents.length > 0 ? (
+        <View>
+          <SectionHeader
+            subtitle="אירועי קהילה שעדיין לא הוספת ליומן שלך"
+            title="אירועים נוספים"
+          />
+          <FlatList<EventDoc>
+            contentContainerStyle={styles.mainCarouselContent}
+            data={additionalEvents}
+            horizontal
+            keyExtractor={(ev) => ev._id}
+            ListFooterComponent={
+              additionalLoadingMore ? (
+                <ActivityIndicator
+                  color={PRIMARY}
+                  style={{ marginHorizontal: 16 }}
+                />
+              ) : null
+            }
+            onEndReached={handleLoadMoreAdditional}
+            onEndReachedThreshold={0.5}
+            renderItem={({ item: ev }) => (
+              <AdditionalEventCard
+                cardWidth={carouselCardWidth}
+                event={ev}
+                isAdding={addingEventId === (ev._id as string)}
+                isNew={isEventNew(ev)}
+                isToday={isEventOnLocalDay(ev, todayKey)}
+                isTomorrow={isEventOnLocalDay(ev, tomorrowKey)}
+                onAddToCalendar={handleAddToCalendar}
+                onOpenDetails={onOpenEventDetails}
+                taskSummary={taskCountsMap[ev._id]}
+              />
+            )}
+            showsHorizontalScrollIndicator={false}
+          />
+        </View>
+      ) : null}
+    </ScrollView>
   );
 }
 
 // ─── Tab: אירועים ─────────────────────────────────────────────────────────────
+
+const EVENTS_TAB_PAGE_SIZE = 20;
+
+interface MonthYearNavigatorProps {
+  filter: EventsTabFilter;
+  isCurrentMonth: boolean;
+  onPrevMonth: () => void;
+  onNextMonth: () => void;
+  onJumpToCurrentMonth: () => void;
+}
+
+/**
+ * STAGE 3 CORRECTION (Part A) — replaces the former 12-month horizontal
+ * "קרובים" + month-tab strip with simple, unbounded prev/next month/year
+ * arrow navigation: "‹  אוגוסט 2026  ›". Reuses the EXACT visual language
+ * of calendar.tsx's CalendarMonthNavBar (chevron-right = physical-right =
+ * previous, chevron-left = physical-left = next, same #f8fafc circular
+ * chevron buttons) so month navigation looks and behaves identically
+ * everywhere in the app. There is no product-imposed past or future limit
+ * — every press is an O(1) client-state step via
+ * getPreviousEventsTabMonth/getNextEventsTabMonth.
+ */
+function MonthYearNavigator({
+  filter,
+  isCurrentMonth,
+  onPrevMonth,
+  onNextMonth,
+  onJumpToCurrentMonth,
+}: MonthYearNavigatorProps) {
+  const label = formatEventsTabMonthYearLabel(filter.year, filter.monthIndex0);
+  return (
+    <View style={styles.eventsMonthNavRow}>
+      <View style={styles.eventsMonthNavCluster}>
+        {/* Physical RIGHT button (first child in rtl layout) → previous month */}
+        <Pressable
+          accessible
+          accessibilityLabel="חודש קודם"
+          accessibilityRole="button"
+          hitSlop={10}
+          onPress={onPrevMonth}
+          style={styles.eventsMonthChevronBtn}
+        >
+          <MaterialIcons color="#647b87" name="chevron-right" size={22} />
+        </Pressable>
+        <View style={styles.eventsMonthTitleBlock}>
+          <Text style={styles.eventsMonthYearLabel}>{label}</Text>
+        </View>
+        {/* Physical LEFT button (last child in rtl layout) → next month */}
+        <Pressable
+          accessible
+          accessibilityLabel="חודש הבא"
+          accessibilityRole="button"
+          hitSlop={10}
+          onPress={onNextMonth}
+          style={styles.eventsMonthChevronBtn}
+        >
+          <MaterialIcons color="#647b87" name="chevron-left" size={22} />
+        </Pressable>
+      </View>
+      {!isCurrentMonth ? (
+        <Pressable
+          accessible
+          accessibilityLabel="חזרה לחודש הנוכחי"
+          accessibilityRole="button"
+          onPress={onJumpToCurrentMonth}
+          style={styles.eventsMonthJumpToCurrentBtn}
+        >
+          <Text style={styles.eventsMonthJumpToCurrentBtnText}>
+            החודש הנוכחי
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * Stage 3 compact card RSVP label. Deliberately a SEPARATE, short label set
+ * from getMainCardStatusLabel (Main's carousel cards have more room) —
+ * same precedent as EventRow's own local badgeLabel — but reuses the exact
+ * same underlying rule: the creator is never shown an RSVP badge (QA FIX
+ * Issue 3's creator exemption), and only requiresRsvp === true events show
+ * one at all. `null` means "no RSVP badge for this card".
+ */
+function getEventsTabRsvpLabel(
+  event: EventDoc,
+  rsvpStatus: RsvpStatus,
+  isCreator: boolean
+): string | null {
+  if (event.requiresRsvp !== true) return null;
+  if (isCreator) return null;
+  if (rsvpStatus === 'yes') return 'כן';
+  if (rsvpStatus === 'maybe') return 'אולי';
+  if (rsvpStatus === 'no') return 'לא';
+  return 'נדרש אישור הגעה';
+}
+
+/**
+ * STAGE 3 CORRECTION — 'historical' is a NEW bucket (Part B): a past month
+ * shows ONLY this bucket, and the current month additionally moves any
+ * already-ended event here instead of into my/pending/additional. It is
+ * purely informational — no RSVP action, no "הוסף ליומן" — except the
+ * manager-only duplicate action, which past events must still expose
+ * (Part D10).
+ */
+type EventsTabBucket = 'my' | 'pending' | 'additional' | 'historical';
+
+interface EventsTabCardProps {
+  event: EventDoc;
+  bucket: EventsTabBucket;
+  rsvpStatus: RsvpStatus;
+  isCreator: boolean;
+  isNew: boolean;
+  isToday: boolean;
+  isTomorrow: boolean;
+  taskSummary?: TaskSummary;
+  isAdding: boolean;
+  /** Part D1 — owner/admin only (the exact community-event-creation permission). */
+  canDuplicate: boolean;
+  onOpenDetails: (eventId: Id<'events'>) => void;
+  onRsvpPress: (eventId: Id<'events'>) => void;
+  onAddToCalendar: (eventId: Id<'events'>) => void;
+  onDuplicate: (eventId: Id<'events'>) => void;
+}
+
+/**
+ * Stage 3 — the full "אירועים" tab's compact card. QA FIX (manual QA gap):
+ * unlike the pre-Stage-3 EventRow, this surfaces location, RSVP state,
+ * "חשוב לזכור" count and task-assignment summary together so a member can
+ * understand an event without opening it. Deliberately reuses existing
+ * pieces (MainEventChips, TaskSummaryLine, formatMainCardDateTime,
+ * getOpenCommunityCalendarActionLabel) rather than a flyer-style layout —
+ * see the Stage 3 prompt's "avoid flyer-style giant cards" guidance.
+ *
+ * The RSVP badge is a tappable "אישור הגעה" button for `bucket === 'pending'`
+ * (opens the SAME existing RsvpBottomSheet as every other RSVP entry point
+ * in this screen — no second RSVP UX).
+ *
+ * STAGE 3 CORRECTION (Part C1–C3): an RSVP-required event the viewer
+ * answered "לא" now lands in `bucket === 'additional'` (see
+ * classifyCommunityEventForEventsTab) instead of disappearing. Its card
+ * shows the "לא" chip AND a separate "שינוי תשובה" action (same
+ * RsvpBottomSheet flow) INSTEAD OF "הוסף ליומן" — adding to the calendar
+ * makes no sense while the answer is still "no", and changing the answer
+ * to yes/maybe already re-includes the event in "האירועים שלי" on its own
+ * (see computeIsSavedToMyCalendar). `bucket === 'historical'` never shows
+ * either action — see the type doc above.
+ */
+function EventsTabCard({
+  event,
+  bucket,
+  rsvpStatus,
+  isCreator,
+  isNew,
+  isToday,
+  isTomorrow,
+  taskSummary,
+  isAdding,
+  canDuplicate,
+  onOpenDetails,
+  onRsvpPress,
+  onAddToCalendar,
+  onDuplicate,
+}: EventsTabCardProps) {
+  const locationLabel = event.location?.trim();
+  const importantItemsCount = event.importantItems?.length ?? 0;
+  const taskTotal = taskSummary?.totalTasksCount ?? taskSummary?.total ?? 0;
+  const rsvpLabel = getEventsTabRsvpLabel(event, rsvpStatus, isCreator);
+  const isPendingActionable = bucket === 'pending' && rsvpLabel !== null;
+  const isRsvpChangeActionable =
+    bucket === 'additional' && event.requiresRsvp === true;
+  const showAddToCalendar = bucket === 'additional' && !isRsvpChangeActionable;
+  const addLabel = getOpenCommunityCalendarActionLabel(false);
+
+  return (
+    <View style={styles.eventsTabCard}>
+      {canDuplicate ? (
+        <Pressable
+          accessible
+          accessibilityLabel="שכפל אירוע"
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={() => onDuplicate(event._id)}
+          style={styles.eventsTabDuplicateBtn}
+        >
+          <MaterialIcons color="#64748b" name="content-copy" size={16} />
+        </Pressable>
+      ) : null}
+      <Pressable
+        accessible
+        accessibilityLabel={`פרטי אירוע ${event.title}`}
+        accessibilityRole="button"
+        onPress={() => onOpenDetails(event._id)}
+        style={styles.eventsTabCardPressable}
+      >
+        <MainEventChips
+          isNew={isNew}
+          isToday={isToday}
+          isTomorrow={isTomorrow}
+        />
+        <Text numberOfLines={2} style={styles.eventsTabCardTitle}>
+          {event.title}
+        </Text>
+        <Text numberOfLines={1} style={styles.eventsTabCardMeta}>
+          {formatMainCardDateTime(event)}
+        </Text>
+        {locationLabel ? (
+          <Text numberOfLines={1} style={styles.eventsTabCardMeta}>
+            📍 {locationLabel}
+          </Text>
+        ) : null}
+        <View style={styles.eventsTabCardFooter}>
+          {rsvpLabel ? (
+            isPendingActionable ? (
+              <TouchableOpacity
+                accessible
+                accessibilityLabel="אישור הגעה"
+                accessibilityRole="button"
+                onPress={() => onRsvpPress(event._id)}
+                style={styles.eventsTabRsvpPendingBtn}
+              >
+                <Text style={styles.eventsTabRsvpPendingBtnText}>
+                  {rsvpLabel}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.eventsTabRsvpChip}>
+                <Text style={styles.eventsTabRsvpChipText}>{rsvpLabel}</Text>
+              </View>
+            )
+          ) : null}
+          {isRsvpChangeActionable ? (
+            <TouchableOpacity
+              accessible
+              accessibilityLabel="שינוי תשובה"
+              accessibilityRole="button"
+              onPress={() => onRsvpPress(event._id)}
+              style={styles.eventsTabRsvpPendingBtn}
+            >
+              <Text style={styles.eventsTabRsvpPendingBtnText}>
+                שינוי תשובה
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+          {importantItemsCount > 0 ? (
+            <Text numberOfLines={1} style={styles.eventsTabImportantChip}>
+              {`📌 חשוב לזכור · ${importantItemsCount}`}
+            </Text>
+          ) : null}
+          {taskSummary && taskTotal > 0 ? (
+            <TaskSummaryLine
+              copy="compact"
+              doneStyle={styles.eventsTabTaskSummaryDone}
+              style={styles.eventsTabTaskSummary}
+              taskSummary={taskSummary}
+            />
+          ) : null}
+        </View>
+      </Pressable>
+      {showAddToCalendar ? (
+        <Pressable
+          accessible
+          accessibilityHint="מוסיף את האירוע ליומן האישי שלך"
+          accessibilityLabel={addLabel}
+          accessibilityRole="button"
+          disabled={isAdding}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          onPress={() => onAddToCalendar(event._id)}
+          style={({ pressed }) => [
+            styles.additionalEventAddBtn,
+            (pressed || isAdding) && styles.additionalEventAddBtnPressed,
+          ]}
+        >
+          <Text style={styles.additionalEventAddBtnText}>
+            {isAdding ? '...' : addLabel}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+type EventsTabRow =
+  | { key: string; kind: 'section'; title: string; subtitle?: string }
+  | { key: string; kind: 'event'; event: EventDoc; bucket: EventsTabBucket }
+  | { key: string; kind: 'empty'; message: string }
+  | { key: string; kind: 'cancelled-header' }
+  | { key: string; kind: 'cancelled-event'; event: EventDoc };
 
 interface TabEventsProps {
   communityId: Id<'communities'>;
   rsvpMap: Record<string, RsvpStatus>;
   onRsvpPress: (eventId: Id<'events'>) => void;
   onOpenEventDetails: (eventId: Id<'events'>) => void;
-  selectedMonth: Date;
-  onMonthChange: (d: Date) => void;
+  filter: EventsTabFilter;
+  onFilterChange: (filter: EventsTabFilter) => void;
   searchQuery: string;
   currentUserId?: Id<'users'>;
-  taskCountsMap: Record<string, TaskSummary>;
+  /** Captured BEFORE markCommunityViewed runs — see previousVisitAtRef above. */
+  previousVisitAt: number | undefined;
+  /** Part D1 — drives `canDuplicate`: identical to canCreateCommunityContent
+   * (resolveActiveCommunityContext.ts) — owner/admin only. */
+  myRole?: 'owner' | 'admin' | 'member';
+  onDuplicateEvent: (eventId: Id<'events'>) => void;
 }
 
+/**
+ * Stage 3 — full "אירועים" tab: the complete event-management/browsing
+ * surface for a community (see the Stage 3 report for the full
+ * architecture writeup). ONE paginated, date-scoped query
+ * (listCommunityEventsTabPaged) drives everything below — the three
+ * sections ("האירועים שלי" / "מחכים לתגובה" / "אירועים נוספים") are a
+ * client-side bucketing of the SAME accumulated pages by the
+ * server-computed classification flags, never a separate query per
+ * section. This intentionally mirrors the "ראשי" tab's mental model, but
+ * without ראשי's small per-category caps — every event in the selected
+ * date scope is reachable via ordinary pagination.
+ */
 function TabEvents({
   communityId,
   rsvpMap,
   onRsvpPress,
   onOpenEventDetails,
-  selectedMonth,
-  onMonthChange,
+  filter,
+  onFilterChange,
   searchQuery,
   currentUserId,
-  taskCountsMap,
+  previousVisitAt,
+  myRole,
+  onDuplicateEvent,
 }: TabEventsProps) {
+  // Stable "now" per mount (this tab only mounts while active — see the
+  // conditional render in the parent) — never Date.now() inside a query.
+  const now = useMemo(() => Date.now(), []);
+  const todayKey = useMemo(() => getLocalDayKey(now), [now]);
+  const tomorrowKey = useMemo(
+    () => getLocalDayKey(now + 24 * 60 * 60 * 1000),
+    [now]
+  );
+
+  // Part D1 — identical permission source as the global "+" sheet's
+  // canCreateCommunityContent (resolveActiveCommunityContext.ts).
+  const canDuplicate = myRole === 'owner' || myRole === 'admin';
+
+  const isCurrentMonth = isCurrentEventsTabMonth(
+    now,
+    filter.year,
+    filter.monthIndex0
+  );
+  const monthTemporalKind = getEventsTabMonthTemporalKind(
+    now,
+    filter.year,
+    filter.monthIndex0
+  );
+  const handlePrevMonth = useCallback(() => {
+    onFilterChange(getPreviousEventsTabMonth(filter.year, filter.monthIndex0));
+  }, [filter, onFilterChange]);
+  const handleNextMonth = useCallback(() => {
+    onFilterChange(getNextEventsTabMonth(filter.year, filter.monthIndex0));
+  }, [filter, onFilterChange]);
+  const handleJumpToCurrentMonth = useCallback(() => {
+    onFilterChange(getCurrentEventsTabMonth(Date.now()));
+  }, [onFilterChange]);
+
+  const { fromTime, toTime } = useMemo(() => {
+    // toTime is the EXCLUSIVE start of the next month — the server query
+    // uses `.lt('startTime', toTime)`, so an event starting at exactly
+    // 00:00:00.000 on the 1st of next month is correctly excluded from
+    // this month's page (see listCommunityEventsTabPaged).
+    const { monthStart, nextMonthStart } = getEventsTabMonthRange(
+      filter.year,
+      filter.monthIndex0
+    );
+    return { fromTime: monthStart, toTime: nextMonthStart };
+  }, [filter]);
+  const filterKey = `${filter.year}-${filter.monthIndex0}`;
+
   const [cursor, setCursor] = useState<string | null>(null);
   const [accumulated, setAccumulated] = useState<EventDoc[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
+  const seenCursorsRef = useRef<Set<string | null>>(new Set([null]));
 
-  const monthStart = useMemo(
-    () =>
-      new Date(
-        selectedMonth.getFullYear(),
-        selectedMonth.getMonth(),
-        1
-      ).getTime(),
-    [selectedMonth]
-  );
-  const monthEnd = useMemo(
-    () =>
-      new Date(
-        selectedMonth.getFullYear(),
-        selectedMonth.getMonth() + 1,
-        0,
-        23,
-        59,
-        59,
-        999
-      ).getTime(),
-    [selectedMonth]
-  );
-
-  const page = useQuery(api.events.listByCommunityPaged, {
-    communityId,
-    cursor,
-    numItems: 20,
-    fromTime: monthStart,
-    toTime: monthEnd,
-  });
-
+  // Reset accumulation whenever the community or the selected date scope
+  // changes — this is a fresh scan, not a continuation of the previous one.
   useEffect(() => {
-    if (page?.page) {
-      setAccumulated((prev) => {
-        const ids = new Set(prev.map((e) => e._id));
-        const newItems = (page.page as EventDoc[]).filter(
-          (e) => !ids.has(e._id)
-        );
-        return cursor === null
-          ? (page.page as EventDoc[])
-          : [...prev, ...newItems];
-      });
-      setLoadingMore(false);
-    }
-  }, [page, cursor]);
-
-  // Reset when month changes
-  useEffect(() => {
+    seenCursorsRef.current = new Set([null]);
     setCursor(null);
     setAccumulated([]);
-  }, [monthStart]);
+    setLoadingMore(false);
+  }, [communityId, filterKey]);
 
-  const gracePeriod = 24 * 60 * 60 * 1000;
-  const activeEvents = accumulated.filter((ev) => ev.status !== 'cancelled');
-  const cancelledEvents = accumulated.filter(
-    (ev) =>
-      ev.status === 'cancelled' &&
-      ev.cancelledAt !== undefined &&
-      Date.now() - ev.cancelledAt < gracePeriod
+  const pageArgs = useMemo(
+    () => ({
+      communityId,
+      cursor,
+      numItems: EVENTS_TAB_PAGE_SIZE,
+      fromTime,
+      toTime,
+    }),
+    [communityId, cursor, fromTime, toTime]
   );
+  const page = useQuery(api.events.listCommunityEventsTabPaged, pageArgs);
 
-  const filtered = useMemo(() => {
-    let result = activeEvents;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(
-        (e) =>
-          e.title.toLowerCase().includes(q) ||
-          (e.location ?? '').toLowerCase().includes(q) ||
-          (e.description ?? '').toLowerCase().includes(q)
+  useEffect(() => {
+    if (!page) return;
+
+    setAccumulated((prev) => {
+      const ids = new Set(prev.map((e) => e._id as string));
+      const newItems = (page.page as EventDoc[]).filter(
+        (e) => !ids.has(e._id as string)
       );
-    }
-    const now = Date.now();
-    return result.sort((a, b) => {
-      const aPast = isEventPast(a);
-      const bPast = isEventPast(b);
-      if (aPast !== bPast) return aPast ? 1 : -1;
-      return a.startTime - b.startTime;
+      return cursor === null
+        ? (page.page as EventDoc[])
+        : [...prev, ...newItems];
     });
-  }, [activeEvents, searchQuery]);
 
-  const monthLabel = selectedMonth.toLocaleDateString('he-IL', {
-    month: 'long',
-    year: 'numeric',
-  });
-
-  const renderItem = useCallback(
-    ({ item }: { item: EventDoc }) => (
-      <EventRow
-        event={item}
-        rsvpStatus={rsvpMap[item._id] ?? 'none'}
-        onRsvpPress={onRsvpPress}
-        onOpenDetails={onOpenEventDetails}
-        taskSummary={taskCountsMap[item._id]}
-      />
-    ),
-    [rsvpMap, onRsvpPress, onOpenEventDetails, taskCountsMap]
-  );
-
-  const keyExtractor = useCallback((item: EventDoc) => item._id, []);
+    // Every event returned by this query keeps its true bucket flags (no
+    // post-fetch elimination like listCommunityAdditionalEventsPaged). A
+    // bucketable-empty page can only happen for a FUTURE/CURRENT month when
+    // every event on it is a plain RSVP "no" not-personal/pending-excluded
+    // one or a long-cancelled one. Auto-advance past it rather than risk a
+    // premature "no events" flash while more pages remain — same
+    // sparse-page precedent as TabMain's additional-events carousel.
+    // STAGE 3 CORRECTION (Part B) — for a PAST month, or for an
+    // already-ended event within the CURRENT month, every event is
+    // unconditionally bucketable into "אירועים שהתקיימו" regardless of the
+    // my/pending/additional flags above.
+    const pageHasBucketableEvent = page.page.some((ev) => {
+      const e = ev as EventDoc;
+      if (e.status === 'cancelled') return true;
+      if (monthTemporalKind === 'past') return true;
+      if (monthTemporalKind === 'current' && hasEventEndedByNow(e, now)) {
+        return true;
+      }
+      return e.isSavedToMyCalendar || e.isPendingRsvp || e.isAdditionalEligible;
+    });
+    if (
+      !pageHasBucketableEvent &&
+      page.isDone === false &&
+      page.continueCursor &&
+      !seenCursorsRef.current.has(page.continueCursor)
+    ) {
+      seenCursorsRef.current.add(page.continueCursor);
+      setLoadingMore(true);
+      setCursor(page.continueCursor);
+      return;
+    }
+    setLoadingMore(false);
+  }, [page, cursor, monthTemporalKind, now]);
 
   const handleLoadMore = useCallback(() => {
-    if (page?.isDone === false && page.continueCursor && !loadingMore) {
+    if (
+      page?.isDone === false &&
+      page.continueCursor &&
+      !loadingMore &&
+      !seenCursorsRef.current.has(page.continueCursor)
+    ) {
+      seenCursorsRef.current.add(page.continueCursor);
       setLoadingMore(true);
       setCursor(page.continueCursor);
     }
   }, [page, loadingMore]);
 
+  const gracePeriod = 24 * 60 * 60 * 1000;
+  const activeEvents = useMemo(
+    () => accumulated.filter((ev) => ev.status !== 'cancelled'),
+    [accumulated]
+  );
+  const cancelledEvents = useMemo(
+    () =>
+      accumulated.filter(
+        (ev) =>
+          ev.status === 'cancelled' &&
+          ev.cancelledAt !== undefined &&
+          Date.now() - ev.cancelledAt < gracePeriod
+      ),
+    [accumulated]
+  );
+
+  const searchFiltered = useMemo(() => {
+    if (!searchQuery.trim()) return activeEvents;
+    const q = searchQuery.toLowerCase();
+    return activeEvents.filter(
+      (e) =>
+        e.title.toLowerCase().includes(q) ||
+        (e.location ?? '').toLowerCase().includes(q) ||
+        (e.description ?? '').toLowerCase().includes(q)
+    );
+  }, [activeEvents, searchQuery]);
+
+  // STAGE 3 CORRECTION (Part B) — a PAST selected month shows ONLY the
+  // historical list (B1: "do NOT show meaningless current-action
+  // sections"). The CURRENT month keeps normal three-section semantics for
+  // events that have not yet ended, and additionally surfaces any
+  // already-ended event from earlier in the same month under "אירועים
+  // שהתקיימו" (B2) instead of discarding it. A FUTURE month has no
+  // historical section at all (B3).
+  const actionableEvents = useMemo(() => {
+    if (monthTemporalKind === 'past') return [];
+    if (monthTemporalKind === 'future') return searchFiltered;
+    return searchFiltered.filter((e) => !hasEventEndedByNow(e, now));
+  }, [searchFiltered, monthTemporalKind, now]);
+  const historicalEvents = useMemo(() => {
+    if (monthTemporalKind === 'future') return [];
+    const list =
+      monthTemporalKind === 'past'
+        ? searchFiltered
+        : searchFiltered.filter((e) => hasEventEndedByNow(e, now));
+    return [...list].sort((a, b) => b.startTime - a.startTime);
+  }, [searchFiltered, monthTemporalKind, now]);
+
+  const myEvents = useMemo(
+    () =>
+      actionableEvents
+        .filter((e) => e.isSavedToMyCalendar)
+        .sort((a, b) => a.startTime - b.startTime),
+    [actionableEvents]
+  );
+  const pendingEvents = useMemo(
+    () =>
+      actionableEvents
+        .filter((e) => e.isPendingRsvp)
+        .sort((a, b) => a.startTime - b.startTime),
+    [actionableEvents]
+  );
+  const additionalEvents = useMemo(
+    () =>
+      actionableEvents
+        .filter((e) => e.isAdditionalEligible)
+        .sort((a, b) => a.startTime - b.startTime),
+    [actionableEvents]
+  );
+
+  // STAGE 1C precedent: task counts are requested only for events
+  // accumulated so far (the currently loaded pages), never the whole
+  // community. "חשוב לזכור" needs no such query at all — importantItems is
+  // already part of every event document returned above.
+  const taskCountEventIds = useMemo(
+    () => accumulated.map((ev) => ev._id),
+    [accumulated]
+  );
+  const taskCountsMap =
+    useQuery(
+      api.eventTasks.getTaskCountsForEvents,
+      taskCountEventIds.length > 0 ? { eventIds: taskCountEventIds } : 'skip'
+    ) ?? {};
+
+  const addCommunityEventToMyCalendar = useMutation(
+    api.communityEventCalendar.addCommunityEventToMyCalendar
+  );
+  const [addingEventId, setAddingEventId] = useState<string | null>(null);
+  const handleAddToCalendar = useCallback(
+    (eventId: Id<'events'>) => {
+      setAddingEventId(eventId as string);
+      addCommunityEventToMyCalendar({ eventId })
+        .catch(() => {
+          Alert.alert('שגיאה', 'לא ניתן להוסיף את האירוע ליומן');
+        })
+        .finally(() => {
+          setAddingEventId((prev) =>
+            prev === (eventId as string) ? null : prev
+          );
+        });
+    },
+    [addCommunityEventToMyCalendar]
+  );
+
+  const isEventNew = useCallback(
+    (ev: EventDoc) => isEventNewSincePreviousVisit(ev, previousVisitAt),
+    [previousVisitAt]
+  );
+  const isEventCreator = useCallback(
+    (ev: EventDoc) => ev.createdBy === currentUserId,
+    [currentUserId]
+  );
+
+  const isFirstPageLoading = page === undefined && accumulated.length === 0;
+
+  const rows = useMemo<EventsTabRow[]>(() => {
+    if (isFirstPageLoading) return [];
+
+    const list: EventsTabRow[] = [];
+    const allBucketsEmpty =
+      myEvents.length === 0 &&
+      pendingEvents.length === 0 &&
+      additionalEvents.length === 0 &&
+      historicalEvents.length === 0;
+    // Only claim "no events" once the scan of the selected date scope has
+    // genuinely finished (page.isDone) — see the sparse-page comment above;
+    // hitting a bucketable-empty page mid-scan must never render this.
+    if (
+      allBucketsEmpty &&
+      cancelledEvents.length === 0 &&
+      page?.isDone !== false
+    ) {
+      list.push({
+        key: 'empty-all',
+        kind: 'empty',
+        message: 'אין אירועים בחודש הזה',
+      });
+      return list;
+    }
+
+    if (myEvents.length > 0) {
+      list.push({ key: 'section-my', kind: 'section', title: 'האירועים שלי' });
+      for (const ev of myEvents) {
+        list.push({
+          key: `my-${ev._id}`,
+          kind: 'event',
+          event: ev,
+          bucket: 'my',
+        });
+      }
+    }
+    if (pendingEvents.length > 0) {
+      list.push({
+        key: 'section-pending',
+        kind: 'section',
+        title: 'מחכים לתגובה',
+        subtitle: 'אירועים שדורשים אישור הגעה ממך',
+      });
+      for (const ev of pendingEvents) {
+        list.push({
+          key: `pending-${ev._id}`,
+          kind: 'event',
+          event: ev,
+          bucket: 'pending',
+        });
+      }
+    }
+    if (additionalEvents.length > 0) {
+      list.push({
+        key: 'section-additional',
+        kind: 'section',
+        title: 'אירועים נוספים',
+        subtitle: 'אירועי קהילה שעדיין לא הוספת ליומן שלך',
+      });
+      for (const ev of additionalEvents) {
+        list.push({
+          key: `additional-${ev._id}`,
+          kind: 'event',
+          event: ev,
+          bucket: 'additional',
+        });
+      }
+    }
+    if (historicalEvents.length > 0) {
+      list.push({
+        key: 'section-historical',
+        kind: 'section',
+        title: 'אירועים שהתקיימו',
+      });
+      for (const ev of historicalEvents) {
+        list.push({
+          key: `historical-${ev._id}`,
+          kind: 'event',
+          event: ev,
+          bucket: 'historical',
+        });
+      }
+    }
+    if (cancelledEvents.length > 0) {
+      list.push({ key: 'cancelled-header', kind: 'cancelled-header' });
+      for (const ev of cancelledEvents) {
+        list.push({
+          key: `cancelled-${ev._id}`,
+          kind: 'cancelled-event',
+          event: ev,
+        });
+      }
+    }
+    return list;
+  }, [
+    isFirstPageLoading,
+    myEvents,
+    pendingEvents,
+    additionalEvents,
+    historicalEvents,
+    cancelledEvents,
+    page,
+  ]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: EventsTabRow }) => {
+      if (item.kind === 'section') {
+        return (
+          <View style={styles.eventsTabSectionHeader}>
+            <Text style={styles.eventsTabSectionTitle}>{item.title}</Text>
+            {item.subtitle ? (
+              <Text style={styles.eventsTabSectionSubtitle}>
+                {item.subtitle}
+              </Text>
+            ) : null}
+          </View>
+        );
+      }
+      if (item.kind === 'empty') {
+        return (
+          <View style={styles.emptyFull}>
+            <Ionicons color="#d1d5db" name="calendar-outline" size={48} />
+            <Text style={styles.emptyText}>{item.message}</Text>
+          </View>
+        );
+      }
+      if (item.kind === 'cancelled-header') {
+        return (
+          <View style={styles.cancelledEventsSection}>
+            <Text style={styles.cancelledEventsTitle}>אירועים שבוטלו</Text>
+            <Text style={styles.cancelledEventsSubtitle}>
+              אירועים שבוטלו יוסרו מהתצוגה לאחר 24 שעות מרגע ביטולם
+            </Text>
+          </View>
+        );
+      }
+      if (item.kind === 'cancelled-event') {
+        return (
+          <EventRow
+            cancelReason={item.event.cancelReason}
+            event={item.event}
+            isCancelled
+            onOpenDetails={onOpenEventDetails}
+            onRsvpPress={() => {}}
+            rsvpStatus="none"
+          />
+        );
+      }
+      return (
+        <EventsTabCard
+          bucket={item.bucket}
+          canDuplicate={canDuplicate}
+          event={item.event}
+          isAdding={addingEventId === (item.event._id as string)}
+          isCreator={isEventCreator(item.event)}
+          isNew={isEventNew(item.event)}
+          isToday={isEventOnLocalDay(item.event, todayKey)}
+          isTomorrow={isEventOnLocalDay(item.event, tomorrowKey)}
+          onAddToCalendar={handleAddToCalendar}
+          onDuplicate={onDuplicateEvent}
+          onOpenDetails={onOpenEventDetails}
+          onRsvpPress={onRsvpPress}
+          rsvpStatus={rsvpMap[item.event._id] ?? 'none'}
+          taskSummary={taskCountsMap[item.event._id]}
+        />
+      );
+    },
+    [
+      addingEventId,
+      canDuplicate,
+      onDuplicateEvent,
+      handleAddToCalendar,
+      isEventCreator,
+      isEventNew,
+      onOpenEventDetails,
+      onRsvpPress,
+      rsvpMap,
+      taskCountsMap,
+      todayKey,
+      tomorrowKey,
+    ]
+  );
+
+  const keyExtractor = useCallback((item: EventsTabRow) => item.key, []);
+
   return (
     <View style={styles.tabFlex}>
-      {/* Month selector */}
-      <View style={styles.monthSelector}>
-        {/* First child = physical RIGHT in effective row-reverse: previous month */}
-        <TouchableOpacity
-          onPress={() => {
-            const d = new Date(selectedMonth);
-            d.setMonth(d.getMonth() - 1);
-            onMonthChange(d);
-          }}
-          style={styles.monthArrow}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="חודש קודם"
-        >
-          <Ionicons name="chevron-forward" size={20} color="#374151" />
-        </TouchableOpacity>
-        <Text style={styles.monthLabel}>{monthLabel}</Text>
-        {/* Last child = physical LEFT in effective row-reverse: next month */}
-        <TouchableOpacity
-          onPress={() => {
-            const d = new Date(selectedMonth);
-            d.setMonth(d.getMonth() + 1);
-            onMonthChange(d);
-          }}
-          style={styles.monthArrow}
-          accessible
-          accessibilityRole="button"
-          accessibilityLabel="חודש הבא"
-        >
-          <Ionicons name="chevron-back" size={20} color="#374151" />
-        </TouchableOpacity>
-      </View>
+      <MonthYearNavigator
+        filter={filter}
+        isCurrentMonth={isCurrentMonth}
+        onJumpToCurrentMonth={handleJumpToCurrentMonth}
+        onNextMonth={handleNextMonth}
+        onPrevMonth={handlePrevMonth}
+      />
 
-      {page === undefined ? (
+      {isFirstPageLoading ? (
         <View style={styles.loadingCenter}>
-          <ActivityIndicator size="large" color={PRIMARY} />
-        </View>
-      ) : filtered.length === 0 ? (
-        <View style={styles.emptyFull}>
-          <Ionicons name="calendar-outline" size={48} color="#d1d5db" />
-          <Text style={styles.emptyText}>אין אירועים בחודש זה</Text>
+          <ActivityIndicator color={PRIMARY} size="large" />
         </View>
       ) : (
-        <FlatList<EventDoc>
-          data={filtered}
+        <FlatList<EventsTabRow>
+          contentContainerStyle={styles.eventsTabListContent}
+          data={rows}
           keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          contentContainerStyle={{ paddingBottom: 100 }}
+          ListFooterComponent={
+            loadingMore ? (
+              <ActivityIndicator
+                color={PRIMARY}
+                style={{ marginVertical: 16 }}
+              />
+            ) : null
+          }
           onEndReached={handleLoadMore}
           onEndReachedThreshold={0.3}
-          ListFooterComponent={
-            <View>
-              {loadingMore ? (
-                <ActivityIndicator
-                  color={PRIMARY}
-                  style={{ marginVertical: 16 }}
-                />
-              ) : null}
-              {cancelledEvents.length > 0 ? (
-                <View style={styles.cancelledEventsSection}>
-                  <Text style={styles.cancelledEventsTitle}>
-                    אירועים שבוטלו
-                  </Text>
-                  <Text style={styles.cancelledEventsSubtitle}>
-                    אירועים שבוטלו יוסרו מהתצוגה לאחר 24 שעות מרגע ביטולם
-                  </Text>
-                  {cancelledEvents.map((ev) => (
-                    <EventRow
-                      key={ev._id}
-                      event={ev}
-                      rsvpStatus="none"
-                      onRsvpPress={() => {}}
-                      onOpenDetails={onOpenEventDetails}
-                      isCancelled
-                      cancelReason={ev.cancelReason}
-                    />
-                  ))}
-                </View>
-              ) : null}
-            </View>
-          }
+          renderItem={renderItem}
           showsVerticalScrollIndicator={false}
         />
       )}
@@ -2637,11 +3484,133 @@ function TabEvents({
 
 // ─── Tab: תזכורות ─────────────────────────────────────────────────────────────
 
+/**
+ * Stage 4 — one grouped card per personally-relevant community event that
+ * still has active "חשוב לזכור" items. Deliberately NOT a per-item card
+ * (see the Stage 4 report) — the whole group opens the EXISTING Event
+ * Details flow; there is no separate reminder-detail screen for event
+ * important items.
+ *
+ * Manual QA follow-up: each important item now renders as its own
+ * structured row (not one text blob), an authorized manager (event creator
+ * OR active community owner/admin — the SAME rule events.update already
+ * enforces server-side) gets a per-item delete control, and the card
+ * exposes the canonical group-level "הוסף למשימות שלי" action shared with
+ * Event Details.
+ */
+interface EventReminderGroupCardProps {
+  group: EventReminderGroupDoc;
+  currentUserId?: Id<'users'>;
+  myRole?: 'owner' | 'admin' | 'member';
+  alreadyAdded: boolean;
+  onOpenEventDetails: (eventId: Id<'events'>) => void;
+  onDeleteItem: (eventId: Id<'events'>, itemId: string) => void;
+}
+
+function EventReminderGroupCard({
+  group,
+  currentUserId,
+  myRole,
+  alreadyAdded,
+  onOpenEventDetails,
+  onDeleteItem,
+}: EventReminderGroupCardProps): React.JSX.Element {
+  const dateLabel = formatDueDate(group.startTime);
+  const timeLabel = group.allDay
+    ? 'כל היום'
+    : new Date(group.startTime).toLocaleTimeString('he-IL', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+  // Same authorization rule as events.update: the event creator, or an
+  // active community owner/admin — never every owner/admin unconditionally,
+  // and never inferred from anything other than this exact rule.
+  const canManage = canManageEventReminderItem({
+    currentUserId,
+    eventCreatedBy: group.createdBy,
+    myRole,
+  });
+
+  return (
+    <View style={styles.eventReminderGroupCard}>
+      <Pressable
+        onPress={() => onOpenEventDetails(group._id)}
+        style={({ pressed }) => [
+          styles.eventReminderGroupPressable,
+          pressed && { opacity: 0.85 },
+        ]}
+        accessible
+        accessibilityRole="button"
+        accessibilityLabel={`חשוב לזכור לאירוע ${group.title}, ${dateLabel} ${timeLabel}`}
+        accessibilityHint="פותח את פרטי האירוע"
+      >
+        <View style={styles.eventReminderGroupHeaderRow}>
+          <Ionicons name="calendar-outline" size={16} color={PRIMARY} />
+          <Text style={styles.eventReminderGroupTitle} numberOfLines={2}>
+            {group.title}
+          </Text>
+        </View>
+        <Text style={styles.eventReminderGroupMeta}>
+          {`${dateLabel} · ${timeLabel}`}
+        </Text>
+        <View style={styles.eventReminderGroupDivider} />
+        <Text style={styles.eventReminderGroupItemsLabel}>חשוב לזכור</Text>
+      </Pressable>
+
+      <View style={styles.eventReminderGroupItemsBlock}>
+        {group.importantItems.map((item, index) => (
+          <View
+            key={item.id}
+            style={[
+              styles.eventReminderGroupItemRow,
+              index > 0 && styles.eventReminderGroupItemRowSeparator,
+            ]}
+          >
+            <Text style={styles.eventReminderGroupItemText} numberOfLines={2}>
+              {`• ${item.title}`}
+            </Text>
+            {canManage ? (
+              <Pressable
+                onPress={() => onDeleteItem(group._id, item.id)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel={`הסר את ${item.title} מחשוב לזכור`}
+                accessibilityHint="מוחק את הפריט מהאירוע"
+                style={({ pressed }) => [
+                  styles.eventReminderGroupItemDeleteBtn,
+                  pressed && { opacity: 0.6 },
+                ]}
+              >
+                <Ionicons
+                  name="close-circle-outline"
+                  size={19}
+                  color="#9ca3af"
+                />
+              </Pressable>
+            ) : null}
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.eventReminderGroupFooterRow}>
+        <ImportantItemsAddToTasksButton
+          eventId={group._id}
+          alreadyAdded={alreadyAdded}
+          onError={() => Alert.alert('שגיאה', 'לא ניתן להוסיף למשימות כרגע')}
+        />
+      </View>
+    </View>
+  );
+}
+
 interface TabRemindersProps {
   communityId: Id<'communities'>;
   onToggle: (id: Id<'tasks'>) => void;
   currentUserId?: Id<'users'>;
   myRole?: 'owner' | 'admin' | 'member';
+  onOpenEventDetails: (eventId: Id<'events'>) => void;
 }
 
 function TabReminders({
@@ -2649,11 +3618,16 @@ function TabReminders({
   onToggle,
   currentUserId,
   myRole,
+  onOpenEventDetails,
 }: TabRemindersProps) {
+  // Stable "now" per mount — never Date.now() inside a query, and
+  // hasEventEndedByNow (device-local wall clock) is applied client-side
+  // below, exactly like the "אירועים" tab (see the Stage 4 report).
+  const now = useMemo(() => Date.now(), []);
+
   const [cursor, setCursor] = useState<string | null>(null);
   const [accumulated, setAccumulated] = useState<TaskDoc[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
   const [expandedReminderId, setExpandedReminderId] = useState<string | null>(
     null
   );
@@ -2661,7 +3635,15 @@ function TabReminders({
   // but defensive cursor loop if Convex somehow returns the same continueCursor twice.
   const seenCursors = useRef<Set<string | null>>(new Set([null]));
 
-  const since30Days = useMemo(() => Date.now() - 30 * 24 * 60 * 60 * 1000, []);
+  // ── Event-based "חשוב לזכור" groups — independent bounded/paginated query
+  const [eventGroupsCursor, setEventGroupsCursor] = useState<string | null>(
+    null
+  );
+  const [eventGroupsAccumulated, setEventGroupsAccumulated] = useState<
+    EventReminderGroupDoc[]
+  >([]);
+  const [eventGroupsLoadingMore, setEventGroupsLoadingMore] = useState(false);
+  const seenEventGroupsCursors = useRef<Set<string | null>>(new Set([null]));
 
   const page = useQuery(api.tasks.listCommunityRemindersPaged, {
     communityId,
@@ -2669,10 +3651,32 @@ function TabReminders({
     numItems: 20,
   });
 
-  const completedPage = useQuery(api.tasks.listCompletedCommunityReminders, {
-    communityId,
-    since: since30Days,
-  });
+  const eventGroupsPage = useQuery(
+    api.events.listCommunityEventReminderGroupsPaged,
+    { communityId, cursor: eventGroupsCursor, numItems: 20, now }
+  );
+
+  // Single batched "already added to my tasks" source of truth — shared by
+  // Event Details, this tab, and Home. Never one query per event group.
+  const bundleStatusByEventId = useQuery(
+    api.tasks.getMyImportantItemsBundleStatus,
+    {}
+  );
+
+  const updateEvent = useMutation(api.events.update);
+  const handleDeleteImportantItem = useCallback(
+    (eventId: Id<'events'>, itemId: string) => {
+      const group = eventGroupsAccumulated.find((g) => g._id === eventId);
+      if (!group) return;
+      const importantItems = group.importantItems.filter(
+        (item) => item.id !== itemId
+      );
+      updateEvent({ id: eventId, importantItems }).catch(() => {
+        Alert.alert('שגיאה', 'לא ניתן למחוק את הפריט כרגע');
+      });
+    },
+    [eventGroupsAccumulated, updateEvent]
+  );
 
   useEffect(() => {
     if (!page?.page) return;
@@ -2705,6 +3709,41 @@ function TabReminders({
     setLoadingMore(false);
   }, [page, cursor]);
 
+  // Event reminder groups: identical sparse-page auto-advance pattern —
+  // eligibility filtering happens server-side AFTER the page is fetched, so
+  // an eligible-but-later group must never be missed by a premature "done".
+  useEffect(() => {
+    if (!eventGroupsPage?.page) return;
+
+    setEventGroupsAccumulated((prev) => {
+      if (eventGroupsCursor === null) return eventGroupsPage.page;
+      // Beyond the first page: merge in place so a manager's per-item
+      // delete (which reactively re-runs this query) refreshes an
+      // already-accumulated group's importantItems instead of leaving a
+      // stale snapshot from when that page was first fetched.
+      const freshById = new Map(eventGroupsPage.page.map((g) => [g._id, g]));
+      const merged = prev.map((g) => freshById.get(g._id) ?? g);
+      const prevIds = new Set(prev.map((g) => g._id));
+      const newItems = eventGroupsPage.page.filter((g) => !prevIds.has(g._id));
+      return [...merged, ...newItems];
+    });
+
+    if (
+      eventGroupsPage.page.length === 0 &&
+      eventGroupsPage.isDone === false &&
+      eventGroupsPage.continueCursor
+    ) {
+      const next = eventGroupsPage.continueCursor;
+      if (!seenEventGroupsCursors.current.has(next)) {
+        seenEventGroupsCursors.current.add(next);
+        setEventGroupsLoadingMore(true);
+        setEventGroupsCursor(next);
+        return;
+      }
+    }
+    setEventGroupsLoadingMore(false);
+  }, [eventGroupsPage, eventGroupsCursor]);
+
   const handleLoadMore = useCallback(() => {
     if (page?.isDone === false && page.continueCursor && !loadingMore) {
       setLoadingMore(true);
@@ -2712,35 +3751,98 @@ function TabReminders({
     }
   }, [page, loadingMore]);
 
+  const handleLoadMoreEventGroups = useCallback(() => {
+    if (
+      eventGroupsPage?.isDone === false &&
+      eventGroupsPage.continueCursor &&
+      !eventGroupsLoadingMore
+    ) {
+      setEventGroupsLoadingMore(true);
+      setEventGroupsCursor(eventGroupsPage.continueCursor);
+    }
+  }, [eventGroupsPage, eventGroupsLoadingMore]);
+
   const handleToggleExpand = useCallback((id: string) => {
     setExpandedReminderId((prev) => (prev === id ? null : id));
   }, []);
 
-  const completedTasks = (completedPage ?? []) as TaskDoc[];
-  const historyCount = completedTasks.length;
+  // "Has this event ended" is device-local-time-sensitive — decided here,
+  // client-side, exactly like the "אירועים" tab (hasEventEndedByNow), never
+  // in the Convex query. Active groups are already in ascending startTime
+  // order from the server's indexed scan, so no further client-side sort
+  // is needed to satisfy "nearest relevant event first".
+  const activeEventGroups = useMemo(
+    () =>
+      eventGroupsAccumulated.filter((g) => !hasEventEndedByNow(g, Date.now())),
+    [eventGroupsAccumulated]
+  );
 
-  // Clear expandedReminderId when the expanded reminder is no longer in the open list
-  const accumulatedIds = useMemo(
-    () => new Set(accumulated.map((t) => t._id as string)),
+  // STAGE 4 ALIGNMENT PART H2/H3 — "מהקהילה" is an ACTIVE surface: the
+  // backend (`listCommunityRemindersPaged`) already excludes reminders the
+  // current user personally completed. On top of that, a reminder whose
+  // real due/reminder timestamp (dueAt when hasTime, else end-of-day of
+  // dueDate) has already passed must also drop out of the active list. A
+  // reminder with NO date at all ("ללא תאריך") has no reliable timestamp
+  // and is therefore never treated as past-due (see lib/taskDueStatus.ts).
+  const activeGeneralReminders = useMemo(
+    () => accumulated.filter((t) => !isTaskPastDue(t, Date.now())),
     [accumulated]
   );
-  useEffect(() => {
-    if (expandedReminderId && !accumulatedIds.has(expandedReminderId)) {
-      // Also check completed tasks (visible when showHistory is true)
-      const inCompleted = completedTasks.some(
-        (t) => (t._id as string) === expandedReminderId
-      );
-      if (!inCompleted) {
-        setExpandedReminderId(null);
-      }
-    }
-  }, [expandedReminderId, accumulatedIds, completedTasks]);
 
-  if (page === undefined) {
+  // Clear expandedReminderId when the expanded reminder is no longer in the
+  // active list (the 30-day completed-reminder history UI was removed from
+  // this active tab — see PART H1).
+  const activeGeneralReminderIds = useMemo(
+    () => new Set(activeGeneralReminders.map((t) => t._id as string)),
+    [activeGeneralReminders]
+  );
+  useEffect(() => {
+    if (
+      expandedReminderId &&
+      !activeGeneralReminderIds.has(expandedReminderId)
+    ) {
+      setExpandedReminderId(null);
+    }
+  }, [expandedReminderId, activeGeneralReminderIds]);
+
+  if (page === undefined || eventGroupsPage === undefined) {
     return (
       <View style={styles.loadingCenter}>
         <ActivityIndicator size="large" color={PRIMARY} />
       </View>
+    );
+  }
+
+  // ── Unified empty state — only when BOTH content types are genuinely
+  // exhausted (not merely mid-sparse-page auto-advance) and empty.
+  const eventGroupsSettled =
+    !eventGroupsLoadingMore && eventGroupsPage.isDone !== false;
+  const generalRemindersSettled = !loadingMore && page.isDone !== false;
+  const isFullyEmpty =
+    eventGroupsSettled &&
+    activeEventGroups.length === 0 &&
+    generalRemindersSettled &&
+    activeGeneralReminders.length === 0;
+
+  if (isFullyEmpty) {
+    return (
+      <ScrollView
+        style={styles.tabScroll}
+        contentContainerStyle={{ paddingBottom: 100 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <View
+          style={[
+            styles.emptySmall,
+            { alignItems: 'center', gap: 8, marginTop: 48 },
+          ]}
+        >
+          <Ionicons name="notifications-outline" size={36} color="#d1d5db" />
+          <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
+            אין תזכורות כרגע
+          </Text>
+        </View>
+      </ScrollView>
     );
   }
 
@@ -2750,90 +3852,76 @@ function TabReminders({
       contentContainerStyle={{ paddingBottom: 100 }}
       showsVerticalScrollIndicator={false}
     >
-      {/* ── Section 1: תזכורות פתוחות */}
-      <View style={{ marginHorizontal: 16, marginTop: 16 }}>
-        <SectionHeader title="תזכורות פתוחות" />
-        {accumulated.length === 0 ? (
-          // Show the true "all done" state only when all pages are exhausted.
-          // While auto-advancing through sparse pages, show a spinner instead
-          // so we never display a premature empty state.
-          loadingMore || page.isDone === false ? (
+      {/* ── Section 1: מאירועים — event-based "חשוב לזכור" groups */}
+      {activeEventGroups.length > 0 || !eventGroupsSettled ? (
+        <View style={{ marginHorizontal: 16, marginTop: 16 }}>
+          <SectionHeader title="מאירועים" />
+          {activeEventGroups.length === 0 ? (
             <ActivityIndicator color={PRIMARY} style={{ marginVertical: 16 }} />
           ) : (
-            <View style={[styles.emptySmall, { alignItems: 'center', gap: 8 }]}>
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={36}
-                color="#d1d5db"
-              />
-              <Text style={[styles.emptySmallText, { textAlign: 'center' }]}>
-                כל התזכורות טופלו 🎉
-              </Text>
+            <View style={{ gap: 10 }}>
+              {activeEventGroups.map((group) => (
+                <EventReminderGroupCard
+                  key={group._id}
+                  group={group}
+                  currentUserId={currentUserId}
+                  myRole={myRole}
+                  alreadyAdded={
+                    bundleStatusByEventId?.[String(group._id)] === true
+                  }
+                  onOpenEventDetails={onOpenEventDetails}
+                  onDeleteItem={handleDeleteImportantItem}
+                />
+              ))}
+              {eventGroupsLoadingMore ? (
+                <ActivityIndicator
+                  color={PRIMARY}
+                  style={{ marginVertical: 8 }}
+                />
+              ) : eventGroupsPage?.isDone === false ? (
+                <TouchableOpacity
+                  onPress={handleLoadMoreEventGroups}
+                  style={{ paddingVertical: 12, alignItems: 'center' }}
+                  accessible
+                  accessibilityRole="button"
+                  accessibilityLabel="טען עוד"
+                >
+                  <Text
+                    style={{ color: PRIMARY, fontSize: 14, fontWeight: '600' }}
+                  >
+                    טען עוד
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
-          )
-        ) : (
-          <View style={{ gap: 8 }}>
-            {accumulated.map((t) => (
-              <CommunityReminderRow
-                key={t._id}
-                task={t}
-                onToggle={onToggle}
-                isExpanded={expandedReminderId === (t._id as string)}
-                onToggleExpand={handleToggleExpand}
-                currentUserId={currentUserId}
-                myRole={myRole}
-              />
-            ))}
-            {loadingMore ? (
+          )}
+        </View>
+      ) : null}
+
+      {/* ── Section 2: מהקהילה — ACTIVE standalone community reminders only.
+          Personally-completed reminders are excluded server-side; past-due
+          reminders (real dueAt/dueDate has passed) are excluded here. This
+          is an active mental-load surface, not a history screen — the
+          previous 30-day completed-reminder history UI was removed (PART
+          H1); completed/old reminders remain in the database untouched. */}
+      {activeGeneralReminders.length > 0 || !generalRemindersSettled ? (
+        <View
+          style={{
+            marginHorizontal: 16,
+            marginTop: activeEventGroups.length > 0 ? 24 : 16,
+          }}
+        >
+          <SectionHeader title="מהקהילה" />
+          {activeGeneralReminders.length === 0 ? (
+            generalRemindersSettled ? null : (
               <ActivityIndicator
                 color={PRIMARY}
-                style={{ marginVertical: 8 }}
+                style={{ marginVertical: 16 }}
               />
-            ) : page?.isDone === false ? (
-              <TouchableOpacity
-                onPress={handleLoadMore}
-                style={{ paddingVertical: 12, alignItems: 'center' }}
-                accessible
-                accessibilityRole="button"
-                accessibilityLabel="טען עוד"
-              >
-                <Text
-                  style={{ color: PRIMARY, fontSize: 14, fontWeight: '600' }}
-                >
-                  טען עוד
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        )}
-      </View>
-
-      {/* ── Section 2: תזכורות אחרונות (30 days history) */}
-      {historyCount > 0 ? (
-        <View style={{ marginHorizontal: 16, marginTop: 24 }}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionRight}>
-              <Text style={styles.sectionTitle}>תזכורות אחרונות</Text>
-              <Text style={styles.sectionSubtitle}>
-                תזכורות שטופלו נשמרות כאן עד 30 יום
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => setShowHistory((v) => !v)}
-              accessible
-              accessibilityRole="button"
-              accessibilityLabel={
-                showHistory ? 'הסתר היסטוריה' : `הצג היסטוריה ${historyCount}`
-              }
-            >
-              <Text style={styles.sectionAction}>
-                {showHistory ? 'הסתר' : `הצג היסטוריה (${historyCount})`}
-              </Text>
-            </TouchableOpacity>
-          </View>
-          {showHistory ? (
+            )
+          ) : (
             <View style={{ gap: 8 }}>
-              {completedTasks.map((t) => (
+              {activeGeneralReminders.map((t) => (
                 <CommunityReminderRow
                   key={t._id}
                   task={t}
@@ -2844,8 +3932,28 @@ function TabReminders({
                   myRole={myRole}
                 />
               ))}
+              {loadingMore ? (
+                <ActivityIndicator
+                  color={PRIMARY}
+                  style={{ marginVertical: 8 }}
+                />
+              ) : page?.isDone === false ? (
+                <TouchableOpacity
+                  onPress={handleLoadMore}
+                  style={{ paddingVertical: 12, alignItems: 'center' }}
+                  accessible
+                  accessibilityRole="button"
+                  accessibilityLabel="טען עוד"
+                >
+                  <Text
+                    style={{ color: PRIMARY, fontSize: 14, fontWeight: '600' }}
+                  >
+                    טען עוד
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
-          ) : null}
+          )}
         </View>
       ) : null}
     </ScrollView>
@@ -2913,8 +4021,10 @@ export default function CommunityDetailScreen() {
   const community = useQuery(api.communities.getCommunity, { communityId });
   const myRsvps = useQuery(api.eventRsvps.listByUser);
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
-  const taskCountsMap =
-    useQuery(api.eventTasks.getTaskCountsByCommunity, { communityId }) ?? {};
+  // STAGE 1C: getTaskCountsByCommunity (unbounded — scans every event and
+  // every event's tasks in the community) was removed from this top level.
+  // TabMain and TabEvents each fetch their own task counts scoped to only
+  // the events they've actually loaded, via getTaskCountsForEvents.
 
   // ── Mutations
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
@@ -2927,18 +4037,19 @@ export default function CommunityDetailScreen() {
   const updateJoinApprovalMode = useMutation(
     api.communities.updateCommunityJoinApprovalMode
   );
+  const toggleAutoAddEvents = useMutation(api.communities.toggleAutoAddEvents);
 
   // ── Local state
   const [activeTab, setActiveTab] = useState<Tab>(() => {
+    if (tab === LEGACY_MAIN_TAB_PARAM) return 'ראשי';
     if (tab && (TABS as readonly string[]).includes(tab)) return tab as Tab;
-    return 'הכל';
+    return 'ראשי';
   });
-  const [isRemindersOpen, setIsRemindersOpen] = useState(false);
-  const [selectedMonth, setSelectedMonth] = useState(() => new Date());
+  const [eventsFilter, setEventsFilter] = useState<EventsTabFilter>(() =>
+    getCurrentEventsTabMonth(Date.now())
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 8, y: 80 });
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const [addMenuPos, setAddMenuPos] = useState({ x: 8, y: 80 });
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [joinApprovalOpen, setJoinApprovalOpen] = useState(false);
@@ -2964,31 +4075,135 @@ export default function CommunityDetailScreen() {
     setDescriptionCanExpand(false);
   }, [communityId, community?.description]);
 
-  // Mark viewed for list "new events" hint — only for fully approved members
+  // ── Optimization Sprint Fix #1 ───────────────────────────────────────────
+  // Previously, the markCommunityViewed effect below depended on the whole
+  // reactive `community` object, so EVERY reactive update re-ran it:
+  //
+  //   effect → markCommunityViewed → lastViewedAt patch → getCommunity
+  //   invalidation → new `community` reference → effect → ... (unbounded
+  //   loop; ~85K/~120K calls in production per the confirmed audit).
+  //
+  // This screen is a hidden `Tabs.Screen` (see the Stage 2B comment below)
+  // that stays MOUNTED after navigating away, so "once per mount" (a ref
+  // reset only on `communityId` change) is not a valid fix either — it
+  // would silently skip marking a genuine revisit to the SAME community.
+  // The correct unit of work is ONE mark per genuine screen FOCUS ("visit"):
+  // `useFocusEffect` resets the per-visit guards on every focus and its
+  // cleanup fires on blur (React Navigation focus semantics), independent
+  // of mount/unmount.
+  const [isScreenFocused, setIsScreenFocused] = useState(false);
+  const hasCapturedVisitRef = useRef(false);
+  const hasMarkedViewedThisVisitRef = useRef(false);
+  // MICRO-FIX (stale-across-focus) — the "ראשי" tab's Main-overview/
+  // Additional-events server queries need the VIEWER's device-local
+  // midnight as their scan lower bound (see getLocalDayStart's doc
+  // comment / TabMainProps.focusedLocalDayStart). This screen can stay
+  // MOUNTED across a tab switch away and back (same reason
+  // markCommunityViewed above moved off "once per mount"), so a
+  // per-mount value would silently go stale after an overnight revisit.
+  // Refreshed in the SAME useFocusEffect below that resets the other
+  // per-visit guards — one fresh capture per genuine focus, never a
+  // timer, never recomputed on every render.
+  const [focusedLocalDayStart, setFocusedLocalDayStart] = useState(() =>
+    getLocalDayStart(Date.now())
+  );
+  // Stage 2A: snapshot of the viewer's PREVIOUS visit to this community —
+  // captured once per VISIT, from the FIRST reactive `community` value this
+  // visit ever sees, BEFORE markCommunityViewed (below) has a chance to
+  // advance `lastViewedAt` to "now". Used to decide which events are "חדש"
+  // (event.createdAt > previousVisitAtRef.current) for the rest of THIS
+  // visit even though the live `community.myLastViewedAt` value advances
+  // underneath it once markCommunityViewed fires.
+  const previousVisitAtRef = useRef<number | undefined>(undefined);
+
+  // Resets the per-visit guards on every genuine focus (a new "visit"), and
+  // clears them again on blur so the NEXT focus — whether it's the same
+  // community or a different one — is treated as a fresh visit. Mirrors the
+  // Stage 2B `useFocusEffect` pattern below (active community context).
+  useFocusEffect(
+    useCallback(() => {
+      hasCapturedVisitRef.current = false;
+      hasMarkedViewedThisVisitRef.current = false;
+      setIsScreenFocused(true);
+      // One fresh capture per genuine focus/visit — see the
+      // focusedLocalDayStart declaration above for why this can't be a
+      // per-mount value.
+      setFocusedLocalDayStart(getLocalDayStart(Date.now()));
+      return () => {
+        setIsScreenFocused(false);
+      };
+    }, [])
+  );
+  // Defensive: also reset when navigating directly between two different
+  // community routes (communityId changes) so a stale previous-visit value
+  // can never leak from one community into another.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: communityId is
+  // intentionally the sole re-run trigger — it is not read in the body.
   useEffect(() => {
+    hasCapturedVisitRef.current = false;
+    hasMarkedViewedThisVisitRef.current = false;
+    previousVisitAtRef.current = undefined;
+  }, [communityId]);
+
+  useEffect(() => {
+    if (!isScreenFocused) return;
+    if (community === undefined || community === null) return;
+    if (hasCapturedVisitRef.current) return;
+    hasCapturedVisitRef.current = true;
+    previousVisitAtRef.current = community.myLastViewedAt;
+  }, [isScreenFocused, community]);
+
+  // Mark viewed for list "new events" hint — only for fully approved
+  // members, and only ONCE per focus/visit (see the Fix #1 comment above).
+  // A 30s server-side idempotency guard (convex/communities.ts) backs this
+  // up defensively, but is not a substitute for this visit-scoped guard.
+  useEffect(() => {
+    if (!isScreenFocused) return;
+    if (hasMarkedViewedThisVisitRef.current) return;
     if (community === undefined || community === null) return;
     if (community.myMembershipStatus === 'pending') return;
+    hasMarkedViewedThisVisitRef.current = true;
     markCommunityViewed({ communityId }).catch(() => {
       // non-blocking
     });
-  }, [communityId, community, markCommunityViewed]);
-  const addBtnRef = useRef<View>(null);
+  }, [isScreenFocused, communityId, community, markCommunityViewed]);
 
-  // ── Persisted TabAll state — lifted here so it survives tab switches
-  const [hiddenReminderIds, setHiddenReminderIds] = useState<Set<string>>(
-    new Set()
-  );
-  const [completionOverrides, setCompletionOverrides] = useState<
-    Map<string, boolean>
-  >(new Map());
-  const [localTaskCache, setLocalTaskCache] = useState<Map<string, TaskDoc>>(
-    new Map()
+  // Stage 2B: tell the GLOBAL "+" sheet which community is active so it can
+  // expose "אירוע בקהילה" / "תזכורת בקהילה" for authorized creators. Uses the
+  // SAME owner/admin gate already enforced by the server for community
+  // event/reminder creation (convex/events.ts, convex/tasks.ts) — this never
+  // broadens who can create community content.
+  //
+  // QA FIX (Issue 1 — stale global "+" context): this screen is registered
+  // as a hidden `Tabs.Screen` (see app/(authenticated)/_layout.tsx), so
+  // React Navigation's tab navigator keeps it MOUNTED in the background
+  // when the user switches to Home/Calendar/Tasks/Communities — it is only
+  // ever unmounted when the whole authenticated stack unmounts (e.g. sign
+  // out). A plain `useEffect` cleanup therefore never re-runs on a tab
+  // switch, so the community context used to stay stuck on the "+" sheet
+  // until another community screen happened to mount and overwrite it.
+  // `useFocusEffect` (re-exported by expo-router from
+  // @react-navigation/native) fires its cleanup on BLUR — i.e. exactly when
+  // this screen stops being the focused route, regardless of whether it
+  // stays mounted — so the context is cleared the instant the user leaves
+  // this specific community screen, even via a tab switch.
+  const { setActiveCommunityContext } = useActionSheet();
+  useFocusEffect(
+    useCallback(() => {
+      const nextContext = resolveActiveCommunityContext({
+        communityId,
+        community,
+      });
+      if (nextContext === null) return;
+      setActiveCommunityContext(nextContext);
+      return () => setActiveCommunityContext(null);
+    }, [community, communityId, setActiveCommunityContext])
   );
 
-  // ── Back navigation — inner tabs go back to הכל, הכל goes to communities list
+  // ── Back navigation — inner tabs go back to ראשי, ראשי goes to communities list
   const handleBack = useCallback(() => {
-    if (activeTab !== 'הכל') {
-      setActiveTab('הכל');
+    if (activeTab !== 'ראשי') {
+      setActiveTab('ראשי');
       return;
     }
     router.replace(
@@ -3075,6 +4290,27 @@ export default function CommunityDetailScreen() {
     setSelectedEventId(null);
   }, []);
 
+  /**
+   * Part D3 — duplication opens the EXISTING community event creation route
+   * in a pre-filled duplication mode via `duplicateFromEventId`; it never
+   * writes a new event directly, and the entire source event is never
+   * serialized into route params — CommunityEventForm (event/new.tsx)
+   * fetches it through the existing data layer (api.events.getById /
+   * api.eventTasks.listByEvent).
+   */
+  const handleDuplicateEvent = useCallback(
+    (eventId: Id<'events'>) => {
+      router.push({
+        pathname: '/(authenticated)/event/new',
+        params: {
+          communityId,
+          duplicateFromEventId: eventId as string,
+        },
+      });
+    },
+    [communityId, router]
+  );
+
   const handleNavigateToLocation = useCallback((_location: string) => {
     // Navigation is handled internally by EventDetailsBottomSheet via NavigationPickerModal
   }, []);
@@ -3117,6 +4353,15 @@ export default function CommunityDetailScreen() {
       ]
     );
   }, [deleteCommunity, communityId, router]);
+
+  // Stage 2B: personal preference — no bulk save-row creation, no RSVP change.
+  // Backend just flips communityMembers.autoAddEventsToCalendar; the reactive
+  // `community` query re-renders the Switch with the real persisted value.
+  const handleToggleAutoAdd = useCallback(() => {
+    toggleAutoAddEvents({ communityId }).catch(() => {
+      Alert.alert('שגיאה', 'לא ניתן לעדכן את ההגדרה');
+    });
+  }, [toggleAutoAddEvents, communityId]);
 
   const handleOpenJoinApprovalSettings = useCallback(() => {
     setJoinApprovalDraft(community?.joinApprovalMode ?? 'automatic');
@@ -3171,19 +4416,6 @@ export default function CommunityDetailScreen() {
     });
   }, []);
 
-  // Add popover anchored to exact button position using measureInWindow
-  const handleAddPress = useCallback(() => {
-    if (!addBtnRef.current) {
-      setAddMenuPos({ x: 8, y: 80 });
-      setAddMenuOpen(true);
-      return;
-    }
-    addBtnRef.current.measureInWindow((x, y, _w, h) => {
-      setAddMenuPos({ x, y: y + h + 4 });
-      setAddMenuOpen(true);
-    });
-  }, []);
-
   const overflowItems = useMemo<OverflowItem[]>(
     () => [
       {
@@ -3211,6 +4443,14 @@ export default function CommunityDetailScreen() {
             },
           ]
         : []),
+      // Stage 2B: PERSONAL preference — visible to every active member, not
+      // owner/admin-gated. Value comes straight from the reactive query.
+      {
+        label: 'הוספה אוטומטית ליומן',
+        subtitle: 'כל אירועי הקהילה יופיעו ביומן שלך',
+        onPress: handleToggleAutoAdd,
+        toggle: { value: community?.myAutoAddEventsToCalendar === true },
+      },
       {
         label: 'ניהול חברים',
         iconName: 'people-outline',
@@ -3250,6 +4490,7 @@ export default function CommunityDetailScreen() {
       handleOpenJoinApprovalSettings,
       handleDeleteCommunity,
       handleShare,
+      handleToggleAutoAdd,
     ]
   );
 
@@ -3397,20 +4638,6 @@ export default function CommunityDetailScreen() {
               </View>
             ) : null}
           </View>
-          {(community.myRole === 'owner' || community.myRole === 'admin') && (
-            <View ref={addBtnRef}>
-              <TouchableOpacity
-                onPress={handleAddPress}
-                activeOpacity={0.75}
-                accessible
-                accessibilityRole="button"
-                accessibilityLabel="הוסף אירוע או תזכורת"
-                style={styles.communityHeaderAddButton}
-              >
-                <Plus size={18} color="#36a9e2" strokeWidth={2.4} />
-              </TouchableOpacity>
-            </View>
-          )}
         </View>
 
         {/* שמאל: ⋯ בלבד */}
@@ -3459,39 +4686,32 @@ export default function CommunityDetailScreen() {
       </ScrollView>
 
       {/* ── Tab content */}
-      {activeTab === 'הכל' && (
-        <TabAll
+      {activeTab === 'ראשי' && (
+        <TabMain
           communityId={communityId}
           rsvpMap={rsvpMap}
-          onToggleTask={handleToggleTask}
           onOpenEventDetails={handleOpenEventDetails}
           onSeeMoreEvents={handleSeeMoreEvents}
           onSeeMoreReminders={handleSeeMoreReminders}
-          hiddenReminderIds={hiddenReminderIds}
-          setHiddenReminderIds={setHiddenReminderIds}
-          completionOverrides={completionOverrides}
-          setCompletionOverrides={setCompletionOverrides}
-          localTaskCache={localTaskCache}
-          setLocalTaskCache={setLocalTaskCache}
-          isRemindersOpen={isRemindersOpen}
-          setIsRemindersOpen={setIsRemindersOpen}
           currentUserId={currentUserId}
-          taskCountsMap={taskCountsMap}
           onInlineRsvp={handleInlineRsvp}
-          communityMyRole={community?.myRole ?? undefined}
+          previousVisitAt={previousVisitAtRef.current}
+          focusedLocalDayStart={focusedLocalDayStart}
         />
       )}
       {activeTab === 'אירועים' && (
         <TabEvents
           communityId={communityId}
-          rsvpMap={rsvpMap}
-          onRsvpPress={setRsvpSheet}
-          onOpenEventDetails={handleOpenEventDetails}
-          selectedMonth={selectedMonth}
-          onMonthChange={setSelectedMonth}
-          searchQuery={searchQuery}
           currentUserId={currentUserId}
-          taskCountsMap={taskCountsMap}
+          filter={eventsFilter}
+          myRole={community?.myRole ?? undefined}
+          onDuplicateEvent={handleDuplicateEvent}
+          onFilterChange={setEventsFilter}
+          onOpenEventDetails={handleOpenEventDetails}
+          onRsvpPress={setRsvpSheet}
+          previousVisitAt={previousVisitAtRef.current}
+          rsvpMap={rsvpMap}
+          searchQuery={searchQuery}
         />
       )}
       {activeTab === 'תזכורות' && (
@@ -3500,6 +4720,7 @@ export default function CommunityDetailScreen() {
           onToggle={handleToggleTaskWithAlert}
           currentUserId={currentUserId}
           myRole={community?.myRole ?? undefined}
+          onOpenEventDetails={handleOpenEventDetails}
         />
       )}
       {activeTab === 'פעילות' && (
@@ -3510,16 +4731,6 @@ export default function CommunityDetailScreen() {
       )}
 
       {/* ── Modals */}
-      <AddPopoverMenu
-        visible={addMenuOpen}
-        position={addMenuPos}
-        communityId={communityId}
-        canCreateCommunityEvent={
-          community?.myRole === 'owner' || community?.myRole === 'admin'
-        }
-        onClose={() => setAddMenuOpen(false)}
-      />
-
       <RsvpBottomSheet
         eventId={rsvpSheet}
         currentStatus={rsvpSheet ? (rsvpMap[rsvpSheet] ?? 'none') : 'none'}
@@ -3660,17 +4871,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: 18,
   },
-  communityHeaderAddButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#EAF7FD',
-    borderWidth: 1,
-    borderColor: '#BEE7F8',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
   // ── Tabs strip
   tabsScroll: {
     backgroundColor: '#fff',
@@ -3734,6 +4934,321 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   sectionAction: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
+
+  // ── Stage 2A "ראשי" (Main) tab ──────────────────────────────────────────
+  importantNowList: { gap: 8 },
+  importantNowRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#eef2f6',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  importantNowRowEmphasis: {
+    backgroundColor: '#eaf6fd',
+    borderColor: '#bee7f8',
+  },
+  importantNowIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#eaf6fd',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importantNowIconWrapEmphasis: { backgroundColor: PRIMARY },
+  importantNowLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1f2937',
+    textAlign: rtl.textAlign,
+  },
+  mainChipsRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  mainChip: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  mainChipNew: { backgroundColor: '#fee2e2' },
+  mainChipTextNew: { fontSize: 11, fontWeight: '700', color: '#dc2626' },
+  mainChipToday: { backgroundColor: '#dbeafe' },
+  mainChipTextToday: { fontSize: 11, fontWeight: '700', color: '#1d4ed8' },
+  mainChipTomorrow: { backgroundColor: '#f1f5f9' },
+  mainChipTextTomorrow: { fontSize: 11, fontWeight: '700', color: '#475569' },
+  mainCarouselContent: {
+    flexDirection: 'row-reverse',
+    gap: 12,
+    paddingLeft: 16,
+  },
+  mainEventCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#eef2f6',
+    backgroundColor: '#fff',
+    padding: 14,
+    minHeight: 148,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  mainEventTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1f2937',
+    textAlign: rtl.textAlign,
+    marginBottom: 4,
+  },
+  mainEventDate: {
+    fontSize: 12,
+    color: '#4b5563',
+    textAlign: rtl.textAlign,
+    marginBottom: 2,
+  },
+  mainEventLocation: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: rtl.textAlign,
+    marginBottom: 6,
+  },
+  mainEventFooter: { marginTop: 'auto', gap: 2 },
+  mainEventStatus: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: PRIMARY,
+    textAlign: rtl.textAlign,
+  },
+  mainEventTaskSummary: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
+  },
+  mainEventTaskSummaryDone: { color: '#16a34a' },
+  additionalEventPressable: { flex: 1 },
+  additionalEventAddBtn: {
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: PRIMARY,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  additionalEventAddBtnPressed: { opacity: 0.6 },
+  additionalEventAddBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: PRIMARY,
+  },
+  mainSeeMoreCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#eef2f6',
+    borderStyle: 'dashed',
+    backgroundColor: '#fafbfc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 148,
+  },
+  mainSeeMoreText: { fontSize: 13, fontWeight: '600', color: PRIMARY },
+  pendingRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#eef2f6',
+    padding: 12,
+  },
+  pendingRowContent: { flex: 1 },
+  pendingRowTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1f2937',
+    textAlign: rtl.textAlign,
+  },
+  pendingRowMeta: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: rtl.textAlign,
+    marginTop: 2,
+  },
+  pendingRowCtaWrap: { minWidth: 92 },
+  pendingRowCtaBtn: {
+    minHeight: 40,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: PRIMARY,
+  },
+  pendingRowCtaText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+  pendingInlineRsvpRow: {
+    flexDirection: 'row-reverse',
+    gap: 6,
+    minHeight: 40,
+  },
+  pendingInlineRsvpBtn: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingInlineRsvpText: { fontSize: 12, fontWeight: '700', color: '#374151' },
+
+  // ── STAGE 3 CORRECTION (Part A) — month/year arrow navigator, reusing
+  // calendar.tsx's CalendarMonthNavBar visual language (same chevron
+  // buttons/colors) instead of the removed 12-month horizontal strip.
+  eventsMonthNavRow: {
+    backgroundColor: '#fff',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f1f5f9',
+    paddingVertical: 8,
+    alignItems: 'center',
+    gap: 4,
+  },
+  eventsMonthNavCluster: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 6,
+  },
+  eventsMonthChevronBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  eventsMonthTitleBlock: { minWidth: 140, alignItems: 'center' },
+  eventsMonthYearLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111517',
+    textAlign: 'center',
+  },
+  eventsMonthJumpToCurrentBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  eventsMonthJumpToCurrentBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: PRIMARY,
+  },
+
+  // ── Stage 3 "אירועים" tab — list content / section headers
+  eventsTabListContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 100,
+    gap: 10,
+  },
+  eventsTabSectionHeader: { paddingTop: 6, paddingBottom: 2 },
+  eventsTabSectionTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: rtl.textAlign,
+  },
+  eventsTabSectionSubtitle: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
+    marginTop: 2,
+  },
+
+  // ── Stage 3 "אירועים" tab — compact event card
+  eventsTabCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#eef2f6',
+    backgroundColor: '#fff',
+    padding: 14,
+  },
+  // Part D2A — compact manager-only duplicate icon, positioned so it never
+  // overlaps the card's main open-details Pressable (separate touch target,
+  // absolute-positioned in the card's top corner).
+  eventsTabDuplicateBtn: {
+    position: 'absolute',
+    top: 8,
+    ...position.end(8),
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+    zIndex: 1,
+  },
+  eventsTabCardPressable: { gap: 2 },
+  eventsTabCardTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1f2937',
+    textAlign: rtl.textAlign,
+    marginBottom: 2,
+  },
+  eventsTabCardMeta: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: rtl.textAlign,
+  },
+  eventsTabCardFooter: {
+    flexDirection: rtl.flexDirection,
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  eventsTabRsvpChip: {
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  eventsTabRsvpChipText: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  eventsTabRsvpPendingBtn: {
+    borderRadius: 999,
+    backgroundColor: PRIMARY,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eventsTabRsvpPendingBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  eventsTabImportantChip: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0369a1',
+  },
+  eventsTabTaskSummary: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
+  },
+  eventsTabTaskSummaryDone: { color: '#16a34a' },
 
   // ── Events grid
   // direction:'ltr' cancels the inherited direction:'rtl' (from ANDROID_MATCH_IOS_LAYOUT root)
@@ -4336,20 +5851,103 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     gap: 10,
   },
-  popoverSingleItem: {
-    borderTopWidth: 0,
-  },
   popoverBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f3f4f6',
+  },
+  popoverLabelBlock: {
+    flex: 1,
+    gap: 2,
   },
   popoverLabel: {
     fontSize: 15,
     color: '#374151',
     textAlign: rtl.textAlign,
-    flex: 1,
+  },
+  popoverSubtitle: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: rtl.textAlign,
   },
   popoverDanger: { color: '#ef4444' },
+
+  // ── Stage 4 / manual QA follow-up: event-based "חשוב לזכור" reminder
+  // group card — a single card per event with structured per-item rows,
+  // an optional per-item manager delete control, and a group-level
+  // "הוסף למשימות שלי" footer action.
+  eventReminderGroupCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#eef2f6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+    overflow: 'hidden',
+  },
+  eventReminderGroupPressable: {
+    padding: 14,
+    paddingBottom: 8,
+  },
+  eventReminderGroupHeaderRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    gap: 6,
+  },
+  eventReminderGroupTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1f2937',
+    textAlign: rtl.textAlign,
+  },
+  eventReminderGroupMeta: {
+    fontSize: 12.5,
+    color: '#6b7280',
+    marginTop: 4,
+    textAlign: rtl.textAlign,
+  },
+  eventReminderGroupDivider: {
+    height: 1,
+    backgroundColor: '#f1f3f5',
+    marginVertical: 10,
+  },
+  eventReminderGroupItemsLabel: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#374151',
+    textAlign: rtl.textAlign,
+  },
+  eventReminderGroupItemsBlock: {
+    paddingHorizontal: 14,
+  },
+  eventReminderGroupItemRow: {
+    flexDirection: rtl.flexDirection,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingVertical: 8,
+    minHeight: 32,
+  },
+  eventReminderGroupItemRowSeparator: {
+    borderTopWidth: 1,
+    borderTopColor: '#f5f6f8',
+  },
+  eventReminderGroupItemText: {
+    flex: 1,
+    fontSize: 13.5,
+    color: '#374151',
+    textAlign: rtl.textAlign,
+  },
+  eventReminderGroupItemDeleteBtn: {
+    padding: 2,
+  },
+  eventReminderGroupFooterRow: {
+    padding: 14,
+    paddingTop: 10,
+  },
 
   // ── Reminder rows (expandable cards)
   reminderRow: {

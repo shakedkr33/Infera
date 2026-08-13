@@ -21,13 +21,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
-import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { UpgradeModal } from '@/components/UpgradeModal';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
+import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
 import { isOpenCommunityCalendarActionVisible } from '@/lib/openCommunityCalendarUi';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 import { parseGeoUri } from '@/lib/utils/geoUri';
@@ -237,7 +237,6 @@ export default function EventDetailScreen() {
     api.tasks.hasUserCopiedAllImportantItemsFromEvent,
     eventId ? { eventId } : 'skip'
   );
-  const myImportantItemChecks = useQuery(api.tasks.getMyImportantItemChecks);
   const currentUserId = useQuery(api.users.getMyId) ?? undefined;
 
   const upsertRsvp = useMutation(api.eventRsvps.upsertRsvp);
@@ -258,9 +257,7 @@ export default function EventDetailScreen() {
   const addEventImportantItemsToMyTasks = useMutation(
     api.tasks.addEventImportantItemsToMyTasks
   );
-  const toggleImportantItemCheckMutation = useMutation(
-    api.tasks.toggleImportantItemCheck
-  );
+  const updateEventMutation = useMutation(api.events.update);
   // FIXED: link-based sharing for personal events (no communityId)
   const createShareLinkMutation = useMutation(api.shareLinks.createShareLink);
 
@@ -276,6 +273,17 @@ export default function EventDetailScreen() {
     api.communities.getCommunityMembers,
     event?.communityId ? { communityId: event.communityId } : 'skip'
   );
+  /**
+   * Part D1 — computed here (rather than in the derived-state block below)
+   * so `overflowItems` (a hook, evaluated before the `event === null` early
+   * return) can safely reference it — reused below as the single source for
+   * both `canManageCommunityEvent` and "שכפל אירוע"'s gating.
+   */
+  const isCommunityOwnerOrAdminEarly =
+    communityMembersData?.members?.find((m) => m.userId === currentUserId)
+      ?.role === 'owner' ||
+    communityMembersData?.members?.find((m) => m.userId === currentUserId)
+      ?.role === 'admin';
 
   const communityRecord = useQuery(
     api.communities.getById,
@@ -373,16 +381,28 @@ export default function EventDetailScreen() {
     }
   }, [eventId, isCopyingImportantItems, addEventImportantItemsToMyTasks]);
 
-  const handleToggleImportantItem = useCallback(
-    async (itemId: string, itemTitle: string) => {
+  /**
+   * PART B/J — Event Details is the canonical management surface for event
+   * important-items: an authorized manager (creator OR active community
+   * owner/admin) may remove one item at a time, for BOTH future and PAST
+   * events. This DELETEs shared event content — never to be confused with
+   * completing the user's own personal task copy.
+   */
+  const handleDeleteImportantItem = useCallback(
+    async (itemId: string) => {
       if (!eventId) return;
+      const currentItems = eventImportantItems ?? event?.importantItems ?? [];
+      const nextItems = currentItems.filter((item) => item.id !== itemId);
       try {
-        await toggleImportantItemCheckMutation({ eventId, itemId, itemTitle });
+        await updateEventMutation({
+          id: eventId,
+          importantItems: nextItems,
+        });
       } catch {
-        // silently ignore — Convex surfaces in dev
+        Alert.alert('שגיאה', 'לא ניתן למחוק את הפריט כרגע');
       }
     },
-    [eventId, toggleImportantItemCheckMutation]
+    [eventId, eventImportantItems, event?.importantItems, updateEventMutation]
   );
 
   const handleCancelEvent = useCallback(async () => {
@@ -502,6 +522,24 @@ export default function EventDetailScreen() {
         onPress: handleShare,
       },
     ];
+    // Part D1/D2B — owner/admin only, same permission source as
+    // canCreateCommunityContent (resolveActiveCommunityContext.ts).
+    if (event?.communityId && isCommunityOwnerOrAdminEarly) {
+      items.push({
+        label: 'שכפל אירוע',
+        iconName: 'copy-outline',
+        onPress: () =>
+          handleGatedAction(() => {
+            router.push({
+              pathname: '/(authenticated)/event/new',
+              params: {
+                communityId: event.communityId as string,
+                duplicateFromEventId: eventId as string,
+              },
+            });
+          }),
+      });
+    }
     if (event?.status !== 'cancelled') {
       items.push({
         label: 'בטל אירוע',
@@ -518,6 +556,7 @@ export default function EventDetailScreen() {
     event?.status,
     eventId,
     router,
+    isCommunityOwnerOrAdminEarly,
   ]);
 
   // ── Invalid route param (e.g. mock item ids like "1", "2")
@@ -590,14 +629,26 @@ export default function EventDetailScreen() {
   const currentStatus: RsvpStatus = (myRsvp?.status as RsvpStatus) ?? 'none';
   const members = communityMembersData?.members ?? [];
   const myCommunityMembership = members.find((m) => m.userId === currentUserId);
-  const isCommunityOwnerOrAdmin =
-    myCommunityMembership?.role === 'owner' ||
-    myCommunityMembership?.role === 'admin';
+  const isCommunityOwnerOrAdmin = isCommunityOwnerOrAdminEarly;
   const canManageCommunityEvent =
     Boolean(event.communityId) && (isCreator || isCommunityOwnerOrAdmin);
-  /** Owner/admin/creator: no RSVP prompt on community events */
-  const skipCommunityRsvpPrompt =
-    isCreator || (Boolean(event.communityId) && isCommunityOwnerOrAdmin);
+  // PART B/J — same authorization rule enforced server-side in
+  // events.update; works identically for future AND past events (no
+  // time-based gate). Reused from the community "תזכורות" tab's per-item
+  // delete authorization so there is a single source of truth.
+  const canManageImportantItems = canManageEventReminderItem({
+    currentUserId,
+    eventCreatedBy: event.createdBy ?? '',
+    myRole: myCommunityMembership?.role,
+  });
+  /**
+   * QA FIX (Issue 3) — CANONICAL CREATOR RSVP RULE: only the event's actual
+   * creator is exempt from RSVP. A non-creator owner/admin must still go
+   * through the normal RSVP flow — see EventDetailsBottomSheet.tsx and
+   * convex/communityCalendarState.ts's computeRsvpAttentionState for the
+   * matching fix.
+   */
+  const skipCommunityRsvpPrompt = isCreator;
   const canOpenEventOverflowMenu = event.communityId
     ? canManageCommunityEvent
     : isCreator;
@@ -609,7 +660,9 @@ export default function EventDetailScreen() {
   // The server already filters tasks per the visibility contract.
   // Show the section to managers always, and to members when they have visible tasks.
   const canSeeTasksSection = event.communityId
-    ? canManageTasks || canRegularMemberSeeTasks || (eventTasks !== undefined && eventTasks.length > 0)
+    ? canManageTasks ||
+      canRegularMemberSeeTasks ||
+      (eventTasks !== undefined && eventTasks.length > 0)
     : isCreator;
   const eventTasksForDisplay = uniqueById(
     eventTasks ?? [],
@@ -634,10 +687,6 @@ export default function EventDetailScreen() {
   const reminderLabels = getReminderLabels(event);
   const importantItems = eventImportantItems ?? event.importantItems ?? [];
   const hasImportantItems = importantItems.length > 0;
-  const myChecksForEvent: Record<string, boolean> =
-    eventId && myImportantItemChecks
-      ? (myImportantItemChecks[eventId] ?? {})
-      : {};
   const importantItemsCopyLoading = importantItemsCopyState === undefined;
   const allImportantItemsCopied =
     importantItemsCopyState?.allCopied === true && hasImportantItems;
@@ -903,27 +952,24 @@ export default function EventDetailScreen() {
               </Text>
             </View>
             <View style={styles.importantItemsList}>
-              {importantItems.map((item) => {
-                const checked = myChecksForEvent[item.id] ?? false;
-                return (
-                  <View key={item.id} style={styles.importantItemRow}>
-                    <TaskCheckbox
-                      checked={checked}
-                      onToggle={() =>
-                        handleToggleImportantItem(item.id, item.title)
-                      }
-                    />
-                    <Text
-                      style={[
-                        styles.importantItemText,
-                        checked && styles.importantItemTextDone,
-                      ]}
+              {importantItems.map((item) => (
+                <View key={item.id} style={styles.importantItemRow}>
+                  <Text style={styles.importantItemBullet}>•</Text>
+                  <Text style={styles.importantItemText}>{item.title}</Text>
+                  {canManageImportantItems ? (
+                    <Pressable
+                      accessibilityLabel={`מחק פריט: ${item.title}`}
+                      accessibilityRole="button"
+                      accessible={true}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      onPress={() => handleDeleteImportantItem(item.id)}
+                      style={styles.importantItemDeleteBtn}
                     >
-                      {item.title}
-                    </Text>
-                  </View>
-                );
-              })}
+                      <Ionicons color="#94a3b8" name="close" size={16} />
+                    </Pressable>
+                  ) : null}
+                </View>
+              ))}
             </View>
             <Pressable
               accessibilityLabel={importantItemsButtonLabel}
@@ -1137,13 +1183,19 @@ export default function EventDetailScreen() {
             {canManageTasks ? (
               <View style={styles.managerVisibilityRow}>
                 <Ionicons
-                  name={participantsCanSeeTasks ? 'eye-outline' : 'lock-closed-outline'}
+                  name={
+                    participantsCanSeeTasks
+                      ? 'eye-outline'
+                      : 'lock-closed-outline'
+                  }
                   size={15}
                   color="#6B7280"
                 />
                 <View style={styles.managerVisibilityTextBlock}>
                   <Text style={styles.managerVisibilityTitle}>
-                    {participantsCanSeeTasks ? 'גלוי למשתתפים' : 'גלוי לפי הקצאה'}
+                    {participantsCanSeeTasks
+                      ? 'גלוי למשתתפים'
+                      : 'גלוי לפי הקצאה'}
                   </Text>
                   <Text style={styles.managerVisibilityDesc}>
                     {participantsCanSeeTasks
@@ -1983,9 +2035,8 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     writingDirection: HEB_WRITING_DIRECTION,
   },
-  importantItemTextDone: {
-    textDecorationLine: 'line-through',
-    color: '#94a3b8',
+  importantItemDeleteBtn: {
+    padding: 4,
   },
   importantItemsCopyBtn: {
     marginTop: 4,

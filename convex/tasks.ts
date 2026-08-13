@@ -11,6 +11,8 @@ import {
   cancelPendingJobsForTaskHelper,
 } from './reminderScheduler';
 import {
+  buildImportantItemsBundleSubtasks,
+  buildImportantItemsBundleTaskTitle,
   clearPersonalCompleted,
   getPersonalCompletion,
   hasExplicitAssigneeForCommunityActivity,
@@ -793,21 +795,38 @@ export const listCommunityRemindersPaged = query({
         const resolved = await resolveCurrentEventImportantItemTask(ctx, task);
         if (!resolved) return null;
 
+        // "מהקהילה" must contain ONLY true standalone general community
+        // reminders. Event-derived task rows (the legacy per-item sync rows
+        // created by syncCommunityEventImportantItemTasks with
+        // sourceType === 'community_event_important_item', or any task
+        // carrying an explicit participant assignment) already surface
+        // as their own grouped card under "מאירועים"
+        // (listCommunityEventReminderGroupsPaged) and must never be
+        // duplicated here.
+        //
+        // NOTE: re-bound through an explicitly-typed `Doc<'tasks'>` local
+        // (rather than relying on `resolved` after the guard) so
+        // TypeScript does not carry the `isGeneralCommunityReminder`
+        // type-guard's narrowed `communityId` type into the rest of this
+        // map callback — every branch below must return the same
+        // `Doc<'tasks'>` shape.
+        if (!isGeneralCommunityReminder(resolved)) return null;
+        const general: Doc<'tasks'> = resolved;
+
         // For general community reminders: filter by personal completion.
-        if (userId && isGeneralCommunityReminder(resolved)) {
+        if (userId) {
           const personal = await getPersonalCompletion(
             ctx,
-            resolved._id,
+            general._id,
             userId
           );
           // Personally completed → exclude from open list.
           if (personal.completed) return null;
-          return resolved;
+          return general;
         }
 
-        // For other task types (event-linked items, etc.): use shared completed.
-        if (resolved.completed) return null;
-        return resolved;
+        if (general.completed) return null;
+        return general;
       })
     );
 
@@ -2438,14 +2457,10 @@ export const addEventImportantItemsToMyTasks = mutation({
 
     const dueDate = getImportantItemDueDate(event.startTime);
 
-    const subtasks = importantItems.map((item) => ({
-      id: item.id,
-      title: item.title,
-      completed: false,
-    }));
+    const subtasks = buildImportantItemsBundleSubtasks(importantItems);
 
     await ctx.db.insert('tasks', {
-      title: `חשוב לזכור - ${event.title}`,
+      title: buildImportantItemsBundleTaskTitle(event.title),
       completed: false,
       subtasks,
       spaceId,
@@ -2627,6 +2642,45 @@ export const getMyImportantItemChecks = query({
       const eventKey = String(task.sourceEventId);
       if (!result[eventKey]) result[eventKey] = {};
       result[eventKey][task.sourceImportantItemId] = task.completed;
+    }
+    return result;
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Returns a map: eventId (string) → true when the current user already has
+// an active "חשוב לזכור" bundle task (sourceType ===
+// 'community_event_important_items_bundle') for that event — i.e. the
+// canonical "already added to my tasks" state.
+//
+// One bounded, indexed scan for the authenticated user — reused as the
+// SINGLE source of "already added" truth across Home, the community
+// "תזכורות" tab, and Event Details, so all three surfaces agree without
+// each needing its own per-event query (see the Home N+1 safety note on
+// the Home screen's call site).
+// ─────────────────────────────────────────────────────────────
+export const getMyImportantItemsBundleStatus = query({
+  args: {},
+  returns: v.record(v.string(), v.boolean()),
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return {};
+
+    const bundleTasks = await ctx.db
+      .query('tasks')
+      .withIndex('by_assigned', (q) => q.eq('assignedTo', userId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field('sourceType'), 'community_event_important_items_bundle'),
+          q.eq(q.field('deletedAt'), undefined)
+        )
+      )
+      .collect();
+
+    const result: Record<string, boolean> = {};
+    for (const task of bundleTasks) {
+      if (!task.sourceEventId) continue;
+      result[String(task.sourceEventId)] = true;
     }
     return result;
   },

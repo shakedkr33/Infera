@@ -688,33 +688,36 @@ export function DateTimeCard({
               שעת הסיום חייבת להיות אחרי שעת ההתחלה
             </Text>
           )}
-
-          {/* ── Day chips — hidden in allDay mode ── */}
-          <View style={s.divider} />
-          <View style={s.dayChipsRow}>
-            {DAY_CHIPS.map((chip) => {
-              const isActive = startDate === chipMidnight(chip.daysFromNow);
-              return (
-                <Pressable
-                  key={chip.label}
-                  style={[s.dayChip, isActive && s.dayChipActive]}
-                  onPress={() => handleDayChip(chip.daysFromNow)}
-                  accessible={true}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: isActive }}
-                  accessibilityLabel={chip.label}
-                >
-                  <Text
-                    style={[s.dayChipText, isActive && s.dayChipTextActive]}
-                  >
-                    {chip.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
         </>
       )}
+
+      {/* ── Quick DATE shortcuts (היום/מחר/מחרתיים) ──────────────────────────
+          BUG FIX (manual QA) — these are DATE shortcuts, not time controls,
+          so they must stay visible in BOTH allDay and timed mode (this row
+          used to live only inside the timed-mode branch above, so turning
+          "כל היום" on silently hid it). Only the time-specific pickers below
+          stay conditional on `!isAllDay`. */}
+      <View style={s.divider} />
+      <View style={s.dayChipsRow}>
+        {DAY_CHIPS.map((chip) => {
+          const isActive = startDate === chipMidnight(chip.daysFromNow);
+          return (
+            <Pressable
+              key={chip.label}
+              style={[s.dayChip, isActive && s.dayChipActive]}
+              onPress={() => handleDayChip(chip.daysFromNow)}
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={chip.label}
+            >
+              <Text style={[s.dayChipText, isActive && s.dayChipTextActive]}>
+                {chip.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
       {/* ══════════════════════════════════════════════════════════════════════
           Pickers — rendered below the form rows, regardless of allDay state.

@@ -9,6 +9,7 @@ import {
   effectiveMemberStatus,
   isActiveCommunityMember,
 } from './communityMemberUtils';
+import { shouldSkipMarkCommunityViewed } from '../lib/communityViewedIdempotency';
 import { createUserNotifications } from './userNotifications';
 
 async function requireOwnerOrAdminActive(
@@ -235,6 +236,20 @@ export const getCommunity = query({
       myRole: membership?.role ?? null,
       myMembershipStatus: membershipStatus,
       myNotificationsEnabled: membership?.notificationsEnabled ?? true,
+      // Stage 2B: the viewer's PERSONAL auto-add-to-calendar preference for
+      // this community (communityMembers.autoAddEventsToCalendar). Exposed
+      // here so the community UI can show the REAL current value instead of
+      // duplicating local state — see toggleAutoAddEvents below.
+      myAutoAddEventsToCalendar: membership?.autoAddEventsToCalendar === true,
+      // Stage 2A: the viewer's PREVIOUS visit timestamp, for the "ראשי" tab's
+      // "חדש" event chip (event.createdAt > myLastViewedAt). This is the
+      // pre-markCommunityViewed value for the current reactive snapshot —
+      // callers that need a STABLE "since my previous visit" reference across
+      // this session must capture it once (e.g. on first load, before calling
+      // markCommunityViewed) rather than re-reading this field on every
+      // re-render, since markCommunityViewed advances it to "now" shortly
+      // after the screen mounts. See community/[id].tsx's previousVisitAtRef.
+      myLastViewedAt: membership?.lastViewedAt,
     };
   },
 });
@@ -560,6 +575,14 @@ export const togglePinned = mutation({
 // ─────────────────────────────────────────────────────────────
 // סימון שהמשתמש נכנס למסך הקהילה (למעקב "אירועים חדשים" ברשימה)
 // ─────────────────────────────────────────────────────────────
+// Optimization Sprint Fix #1 — defensive idempotency safety net, NOT a
+// substitute for the client's focus-based "one mark per visit" lifecycle
+// (see app/(authenticated)/community/[id].tsx). Even a single genuine visit
+// can otherwise resolve into multiple reactive `getCommunity` snapshots that
+// each retrigger this mutation; skipping a redundant write within
+// `MARK_COMMUNITY_VIEWED_MIN_INTERVAL_MS` of the previous mark prevents that
+// from ever becoming a self-sustaining write→invalidate→write loop, without
+// touching any other membership field.
 export const markCommunityViewed = mutation({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
@@ -577,7 +600,12 @@ export const markCommunityViewed = mutation({
       return { status: 'skipped' as const };
     }
 
-    await ctx.db.patch(membership._id, { lastViewedAt: Date.now() });
+    const now = Date.now();
+    if (shouldSkipMarkCommunityViewed(membership.lastViewedAt, now)) {
+      return { status: 'already_marked' as const };
+    }
+
+    await ctx.db.patch(membership._id, { lastViewedAt: now });
     return { status: 'marked' as const };
   },
 });

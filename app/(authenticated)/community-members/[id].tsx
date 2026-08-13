@@ -343,7 +343,7 @@ export default function CommunityMembersScreen() {
         <TouchableOpacity
           onPress={() => {
             router.replace(
-              `/(authenticated)/community/${id}?tab=${returnTab ?? 'הכל'}` as Parameters<
+              `/(authenticated)/community/${id}?tab=${returnTab ?? 'ראשי'}` as Parameters<
                 typeof router.replace
               >[0]
             );

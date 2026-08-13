@@ -1,15 +1,65 @@
 import { useMutation, useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { Alert } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import EventScreen from '@/lib/components/event/EventScreen';
+import { buildDuplicateEventTemplate } from '@/lib/eventDuplication';
 import type { EventAttachmentDraft, EventData } from '@/lib/types/event';
+
+const PRIMARY = '#36a9e2';
+
+type DuplicateSourceEvent = NonNullable<
+  ReturnType<typeof useQuery<typeof api.events.getById>>
+>;
+type DuplicateSourceTask = NonNullable<
+  ReturnType<typeof useQuery<typeof api.eventTasks.listByEvent>>
+>[number];
+
+/**
+ * Part D3–D9 — thin adapter from the Convex query payloads to the pure
+ * `buildDuplicateEventTemplate` (lib/eventDuplication.ts), then to
+ * EventScreen's `Partial<EventData>` shape. See that module's doc comment
+ * for the exact copy/drop rules (tests live in
+ * tests/convex/eventDuplication.test.ts).
+ */
+function buildDuplicateInitialData(
+  source: DuplicateSourceEvent,
+  tasks: DuplicateSourceTask[],
+  todayMidnight: number
+): Partial<EventData> {
+  const template = buildDuplicateEventTemplate(source, tasks, todayMidnight);
+  return {
+    title: template.title,
+    date: template.date,
+    startTime: template.startTime,
+    endDate: template.endDate,
+    endTime: template.endTime,
+    isAllDay: template.isAllDay,
+    location: template.location,
+    onlineUrl: template.onlineUrl,
+    locationUrl: template.locationUrl,
+    notes: template.notes,
+    remindersEnabled: template.remindersEnabled,
+    reminders: template.reminders,
+    tasks: template.tasks,
+    importantItems: template.importantItems,
+    tasksVisibleToParticipants: template.tasksVisibleToParticipants,
+    participants: [],
+    attachments: [],
+  };
+}
 
 // ─── Community Event Form ─────────────────────────────────────────────────────
 
-function CommunityEventForm({ communityId }: { communityId: string }) {
+function CommunityEventForm({
+  communityId,
+  duplicateFromEventId,
+}: {
+  communityId: string;
+  duplicateFromEventId?: string;
+}) {
   const router = useRouter();
   const [rsvpRequired, setRsvpRequired] = useState(false);
 
@@ -22,6 +72,114 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
     communityId: communityId as Id<'communities'>,
   });
   const communityMembers = communityMembersData?.members ?? [];
+
+  // Part D3–D4 — the source event is fetched through the existing data layer
+  // (api.events.getById / api.eventTasks.listByEvent), never serialized into
+  // route params. `duplicateFromEventId` is the only extra piece of state
+  // this route needs.
+  const duplicateSourceEvent = useQuery(
+    api.events.getById,
+    duplicateFromEventId
+      ? { eventId: duplicateFromEventId as Id<'events'> }
+      : 'skip'
+  );
+  const duplicateSourceTasks = useQuery(
+    api.eventTasks.listByEvent,
+    duplicateFromEventId
+      ? { eventId: duplicateFromEventId as Id<'events'> }
+      : 'skip'
+  );
+  // Stage 3 correction — Part 3: server-side defense-in-depth. Re-derives
+  // BOTH the community-match check AND the owner/admin permission check
+  // from scratch (see convex/events.ts) — never trust `communityId` +
+  // `duplicateFromEventId` route params independently, even though the
+  // duplicate action is already hidden from unauthorized users in the UI.
+  const duplicationVerdict = useQuery(
+    api.events.verifyDuplicationSource,
+    duplicateFromEventId
+      ? {
+          eventId: duplicateFromEventId as Id<'events'>,
+          communityId: communityId as Id<'communities'>,
+        }
+      : 'skip'
+  );
+  const isDuplicateMode = Boolean(duplicateFromEventId);
+  const isDuplicateSourceLoading =
+    isDuplicateMode &&
+    (duplicateSourceEvent === undefined ||
+      duplicateSourceTasks === undefined ||
+      duplicationVerdict === undefined);
+  // Belt-and-suspenders client-side check on top of the server verdict —
+  // the duplication template must never be built from an event belonging
+  // to a different community than the one being duplicated into.
+  const isDuplicateSourceValid =
+    duplicationVerdict === 'ok' &&
+    duplicateSourceEvent != null &&
+    duplicateSourceEvent.communityId === communityId;
+  const duplicateSourceRejected =
+    isDuplicateMode && !isDuplicateSourceLoading && !isDuplicateSourceValid;
+
+  // Fail safely: never silently prefill from a mismatched/forbidden source.
+  // Bounce back to the community screen with an explanatory alert, the same
+  // Alert + navigate-away pattern already used elsewhere in this form (see
+  // handleUnifiedCommunitySave below).
+  useEffect(() => {
+    if (!duplicateSourceRejected) return;
+    Alert.alert('שגיאה', 'לא ניתן לשכפל אירוע זה.', [
+      {
+        text: 'אישור',
+        onPress: () =>
+          router.replace(
+            `/(authenticated)/community/${communityId}` as Parameters<
+              typeof router.replace
+            >[0]
+          ),
+      },
+    ]);
+  }, [duplicateSourceRejected, communityId, router]);
+
+  const duplicateInitialData = useMemo(() => {
+    if (
+      !isDuplicateMode ||
+      !isDuplicateSourceValid ||
+      !duplicateSourceEvent ||
+      !duplicateSourceTasks
+    ) {
+      return undefined;
+    }
+    const todayMidnight = new Date().setHours(0, 0, 0, 0);
+    return buildDuplicateInitialData(
+      duplicateSourceEvent,
+      duplicateSourceTasks,
+      todayMidnight
+    );
+  }, [
+    isDuplicateMode,
+    isDuplicateSourceValid,
+    duplicateSourceEvent,
+    duplicateSourceTasks,
+  ]);
+
+  // Part D4 — requiresRsvp is community-event-creation-form state
+  // (rsvpRequired), not part of EventData — sync it once the source loads.
+  const [rsvpSyncedForDuplicate, setRsvpSyncedForDuplicate] = useState(false);
+  useEffect(() => {
+    if (
+      isDuplicateMode &&
+      isDuplicateSourceValid &&
+      !rsvpSyncedForDuplicate &&
+      duplicateSourceEvent !== undefined &&
+      duplicateSourceEvent !== null
+    ) {
+      setRsvpSyncedForDuplicate(true);
+      setRsvpRequired(duplicateSourceEvent.requiresRsvp === true);
+    }
+  }, [
+    isDuplicateMode,
+    isDuplicateSourceValid,
+    rsvpSyncedForDuplicate,
+    duplicateSourceEvent,
+  ]);
 
   const communityTaskParticipants = useMemo(
     () =>
@@ -141,8 +299,28 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
     ]
   );
 
+  // Part D3 — `initialData` is applied once via EventScreen's useState
+  // initializer, so it must not mount the form until the duplication
+  // template is ready; otherwise it would mount empty and never pick up the
+  // source data on the next render.
+  //
+  // Part 3 (Stage 3 correction) — a rejected/mismatched duplication source
+  // must never render EventScreen with duplicate content, even briefly.
+  // Keep showing the loading indicator until the alert-driven
+  // router.replace() above actually navigates away.
+  if (isDuplicateSourceLoading || duplicateSourceRejected) {
+    return (
+      <View style={styles.duplicateLoadingContainer}>
+        <ActivityIndicator color={PRIMARY} size="large" />
+      </View>
+    );
+  }
+
   return (
     <EventScreen
+      // initialData is only applied via useState's initializer — remount if
+      // duplication finishes loading after an initial empty-state render.
+      key={isDuplicateMode ? 'duplicate' : 'new'}
       mode="create"
       context="community"
       onSave={handleUnifiedCommunitySave}
@@ -152,9 +330,22 @@ function CommunityEventForm({ communityId }: { communityId: string }) {
       rsvpRequired={rsvpRequired}
       onRsvpRequiredChange={setRsvpRequired}
       showSuccessSheet={false}
+      initialData={duplicateInitialData}
+      customHeaderTitle={
+        isDuplicateMode ? 'שכפול אירוע — בחר תאריך חדש' : undefined
+      }
+      requireDateConfirmation={isDuplicateMode}
     />
   );
 }
+
+const styles = StyleSheet.create({
+  duplicateLoadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 // ─── Upload helper ────────────────────────────────────────────────────────────
 // FIXED: uploads draft attachments (localUri) to Convex Storage before saving.
@@ -237,6 +428,7 @@ export default function NewEventScreen(): React.JSX.Element {
     prefillTitle,
     relatedBirthdayId,
     relatedBirthdayName,
+    duplicateFromEventId,
   } = useLocalSearchParams<{
     communityId?: string;
     selectedDate?: string;
@@ -249,6 +441,8 @@ export default function NewEventScreen(): React.JSX.Element {
     prefillTitle?: string;
     relatedBirthdayId?: string;
     relatedBirthdayName?: string;
+    /** Part D3 — community event duplication (see CommunityEventForm). */
+    duplicateFromEventId?: string;
   }>();
   const router = useRouter();
   // FIXED: added generateUploadUrl + upload loop before createEvent for file attachments
@@ -458,7 +652,12 @@ export default function NewEventScreen(): React.JSX.Element {
   );
 
   if (communityId) {
-    return <CommunityEventForm communityId={communityId} />;
+    return (
+      <CommunityEventForm
+        communityId={communityId}
+        duplicateFromEventId={duplicateFromEventId}
+      />
+    );
   }
 
   return (

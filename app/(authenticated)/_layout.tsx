@@ -29,7 +29,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { InYomiSplashScreen } from '@/components/InYomiSplashScreen';
 import { UpgradeModal, type UpgradeReason } from '@/components/UpgradeModal';
 import { colors } from '@/constants/theme';
-import { ActionSheetContext } from '@/contexts/ActionSheetContext';
+import {
+  ActionSheetContext,
+  type ActiveCommunityContext,
+} from '@/contexts/ActionSheetContext';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { useRevenueCat } from '@/contexts/RevenueCatContext';
 import { api } from '@/convex/_generated/api';
@@ -115,16 +118,19 @@ function ActionSheetModal({
   onClose,
   isExpiredFree,
   onGatedPress,
+  communityContext,
 }: {
   isVisible: boolean;
   onClose: () => void;
   isExpiredFree: boolean;
   onGatedPress: (reason: UpgradeReason) => void;
+  communityContext: ActiveCommunityContext | null;
 }) {
   const router = useRouter();
 
   // Gate personal/family create actions when trial has expired.
-  // Community actions are not in this sheet, so no community check is needed here.
+  // Community actions are not gated by the personal-trial paywall (unchanged
+  // from the previous top community "+" behavior, which never gated either).
   function handleGatedCreateAction(
     action: () => void,
     reason: UpgradeReason = 'general'
@@ -135,6 +141,14 @@ function ActionSheetModal({
     }
     action();
   }
+
+  // Stage 2B: while inside a community, personal actions get the "אישי"
+  // suffix so they read unambiguously alongside/without the community group.
+  // Outside a community (communityContext === null) labels are UNCHANGED.
+  const personalEventLabel = communityContext ? 'אירוע אישי' : 'אירוע';
+  const personalTaskLabel = communityContext ? 'משימה אישית' : 'משימה';
+  const showCommunityActions =
+    communityContext?.canCreateCommunityContent === true;
 
   return (
     <Modal
@@ -166,10 +180,46 @@ function ActionSheetModal({
               <MaterialIcons name="mic" size={22} color="#94a3b8" />
             </View>
           </View>
+
+          {showCommunityActions && communityContext ? (
+            <>
+              <Text style={styles.sheetSectionTitle}>
+                {`בקהילה הזו · ${communityContext.communityName}`}
+              </Text>
+              <View style={styles.sheetActions}>
+                <ActionButton
+                  icon="event"
+                  label="אירוע בקהילה"
+                  onPress={() => {
+                    onClose();
+                    router.push(
+                      `/(authenticated)/event/new?communityId=${communityContext.communityId}` as Parameters<
+                        typeof router.push
+                      >[0]
+                    );
+                  }}
+                />
+                <ActionButton
+                  icon="notifications-active"
+                  label="תזכורת בקהילה"
+                  onPress={() => {
+                    onClose();
+                    router.push(
+                      `/(authenticated)/community-reminder/new?communityId=${communityContext.communityId}` as Parameters<
+                        typeof router.push
+                      >[0]
+                    );
+                  }}
+                />
+              </View>
+              <Text style={styles.sheetSectionTitle}>אישי</Text>
+            </>
+          ) : null}
+
           <View style={styles.sheetActions}>
             <ActionButton
               icon="calendar-today"
-              label="אירוע"
+              label={personalEventLabel}
               onPress={() =>
                 handleGatedCreateAction(() => {
                   onClose();
@@ -179,7 +229,7 @@ function ActionSheetModal({
             />
             <ActionButton
               icon="check"
-              label="משימה"
+              label={personalTaskLabel}
               onPress={() =>
                 handleGatedCreateAction(() => {
                   onClose();
@@ -267,6 +317,8 @@ export default function AuthenticatedLayout() {
   const segments = useSegments();
   const registerPushToken = useMutation(api.pushTokens.registerPushToken);
   const [isActionSheetVisible, setIsActionSheetVisible] = useState(false);
+  const [activeCommunityContext, setActiveCommunityContext] =
+    useState<ActiveCommunityContext | null>(null);
   const [upgradeModalVisible, setUpgradeModalVisible] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState<UpgradeReason>('general');
 
@@ -572,7 +624,10 @@ export default function AuthenticatedLayout() {
 
   return (
     <ActionSheetContext.Provider
-      value={{ openActionSheet: () => setIsActionSheetVisible(true) }}
+      value={{
+        openActionSheet: () => setIsActionSheetVisible(true),
+        setActiveCommunityContext,
+      }}
     >
       <View style={{ flex: 1 }}>
         <Tabs
@@ -698,6 +753,7 @@ export default function AuthenticatedLayout() {
             setUpgradeReason(reason);
             setUpgradeModalVisible(true);
           }}
+          communityContext={activeCommunityContext}
         />
 
         <UpgradeModal
@@ -793,6 +849,13 @@ const styles = StyleSheet.create({
     color: '#111517',
   },
   sheetInputIcons: { flexDirection: rtl.flexDirection, gap: 8 },
+  sheetSectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#94a3b8',
+    textAlign: rtl.textAlign,
+    marginBottom: 12,
+  },
   sheetActions: {
     flexDirection: rtl.flexDirection,
     justifyContent: 'space-around',

@@ -30,15 +30,17 @@ import {
 import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
-import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { UpgradeModal } from '@/components/UpgradeModal';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
+import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
 import {
   getOpenCommunityCalendarActionLabel,
+  getRsvpCalendarActionLabel,
   isOpenCommunityCalendarActionVisible,
   isOpenCommunityInformationalLabelVisible,
+  isRsvpCalendarActionVisible,
 } from '@/lib/openCommunityCalendarUi';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 import { parseGeoUri } from '@/lib/utils/geoUri';
@@ -299,9 +301,7 @@ export function EventDetailsBottomSheet({
   const addImportantItemsToMyTasks = useMutation(
     api.tasks.addEventImportantItemsToMyTasks
   );
-  const toggleImportantItemCheckMutation = useMutation(
-    api.tasks.toggleImportantItemCheck
-  );
+  const updateEventMutation = useMutation(api.events.update);
   const upsertRsvpMutation = useMutation(api.eventRsvps.upsertRsvp);
   const setRsvpNoAndUnclaimMyEventTasks = useMutation(
     api.eventRsvps.setRsvpNoAndUnclaimMyEventTasks
@@ -327,7 +327,6 @@ export function EventDetailsBottomSheet({
     api.tasks.hasUserCopiedAllImportantItemsFromEvent,
     convexEventId ? { eventId: convexEventId } : 'skip'
   );
-  const myImportantItemChecks = useQuery(api.tasks.getMyImportantItemChecks);
 
   const eventTasks = useQuery(
     api.eventTasks.listByEvent,
@@ -558,6 +557,24 @@ export function EventDetailsBottomSheet({
     });
   };
 
+  /**
+   * Part D2B/D3 — opens the SAME community-event creation route as the
+   * global "+", pre-filled in duplication mode via `duplicateFromEventId`.
+   * Never serializes the source event into route params — event/new.tsx's
+   * CommunityEventForm fetches it through the existing data layer.
+   */
+  const handleDuplicate = (): void => {
+    if (!displayEvent?.communityId) return;
+    onClose();
+    router.push({
+      pathname: '/(authenticated)/event/new',
+      params: {
+        communityId: displayEvent.communityId as string,
+        duplicateFromEventId: displayEvent.id,
+      },
+    });
+  };
+
   const handleShare = (): void => {
     if (!displayEvent) return;
     const doShare = async (): Promise<void> => {
@@ -700,17 +717,22 @@ export function EventDetailsBottomSheet({
       .finally(() => setIsCopyingImportantItems(false));
   };
 
-  const handleToggleImportantItem = (
-    itemId: string,
-    itemTitle: string
-  ): void => {
+  /**
+   * PART B/J — Event Details is the canonical management surface for event
+   * important-items: an authorized manager (creator OR active community
+   * owner/admin — same rule enforced server-side in events.update) may
+   * remove one item at a time, for BOTH future and PAST events. This is a
+   * DELETE of shared event content, never a "complete" action — it must
+   * never be confused with checking off the user's own personal task copy.
+   */
+  const handleDeleteImportantItem = (itemId: string): void => {
     if (!convexEventId) return;
-    toggleImportantItemCheckMutation({
-      eventId: convexEventId,
-      itemId,
-      itemTitle,
+    const nextItems = importantItems.filter((item) => item.id !== itemId);
+    updateEventMutation({
+      id: convexEventId,
+      importantItems: nextItems,
     }).catch(() => {
-      // silently ignore — Convex surfaces in dev
+      Alert.alert('שגיאה', 'לא ניתן למחוק את הפריט כרגע');
     });
   };
 
@@ -770,10 +792,6 @@ export function EventDetailsBottomSheet({
   const importantItems =
     eventImportantItems ?? displayEvent?.importantItems ?? [];
   const hasImportantItems = importantItems.length > 0;
-  const myChecksForEvent: Record<string, boolean> =
-    convexEventId && myImportantItemChecks
-      ? (myImportantItemChecks[convexEventId] ?? {})
-      : {};
   const importantItemsCopyLoading = importantItemsCopyState === undefined;
   const allImportantItemsCopied =
     importantItemsCopiedLocally ||
@@ -828,6 +846,15 @@ export function EventDetailsBottomSheet({
   const canManageCommunityEvent =
     Boolean(displayEvent?.communityId) &&
     (isEventCreator || isCommunityOwnerOrAdmin);
+  // PART B/J — same authorization rule enforced server-side in
+  // events.update; works identically for future AND past events (no
+  // time-based gate). Reused from the community "תזכורות" tab's per-item
+  // delete authorization so there is a single source of truth.
+  const canManageImportantItems = canManageEventReminderItem({
+    currentUserId,
+    eventCreatedBy: displayEvent?.createdBy ?? '',
+    myRole: myMembership?.role,
+  });
   const canManageTasks = displayEvent?.communityId
     ? canManageCommunityEvent
     : isEventCreator;
@@ -840,6 +867,16 @@ export function EventDetailsBottomSheet({
   const canSeeEventTasksSection = displayEvent?.communityId
     ? canManageTasks || hasAuthorizedEventTasks
     : isEventCreator;
+
+  /**
+   * Part D1 — "שכפל אירוע" is gated by the EXACT community-event-CREATION
+   * permission (owner/admin — same rule as canCreateCommunityContent in
+   * resolveActiveCommunityContext.ts), NOT the broader canManageCommunityEvent
+   * (which also includes a non-owner/admin creator). A creator who is a
+   * plain member does not see duplicate.
+   */
+  const canDuplicateEvent =
+    Boolean(displayEvent?.communityId) && isCommunityOwnerOrAdmin;
 
   const canEdit = displayEvent?.communityId
     ? canManageCommunityEvent
@@ -868,10 +905,18 @@ export function EventDetailsBottomSheet({
       (displayEvent.communityId ? canManageCommunityEvent : isEventCreator)
   );
 
-  /** Owner/admin/creator: no RSVP prompt on community events — mirror event/[id].tsx */
-  const skipCommunityRsvpPrompt =
-    isEventCreator ||
-    (Boolean(displayEvent?.communityId) && isCommunityOwnerOrAdmin);
+  /**
+   * QA FIX (Issue 3) — CANONICAL CREATOR RSVP RULE: only the event's actual
+   * creator is exempt from RSVP on their own community event. A non-creator
+   * owner/admin must go through the exact same RSVP flow as any other
+   * member — management role alone must never skip RSVP. This used to also
+   * skip the prompt for any owner/admin (even when someone else created the
+   * event), which was the Issue 3 bug: the creator correctly had no RSVP UI,
+   * but a non-creator owner/admin also silently had none, while still being
+   * shown as "מחכים לתגובה" elsewhere — see convex/communityCalendarState.ts's
+   * computeRsvpAttentionState for the matching server-side fix.
+   */
+  const skipCommunityRsvpPrompt = isEventCreator;
 
   const sharedWithUserIds =
     (eventDoc as { sharedWithUserIds?: string[] } | null | undefined)
@@ -939,6 +984,26 @@ export function EventDetailsBottomSheet({
   const showOpenCalendarButton = Boolean(
     openCommunityCalendarInfoReady &&
       isOpenCommunityCalendarActionVisible({
+        event: {
+          communityId: displayEvent?.communityId ?? null,
+          requiresRsvp: displayEvent?.requiresRsvp,
+          status: displayEvent?.status,
+        },
+        hasValidConvexEventId: Boolean(convexEventId),
+        communityArchived: communityRecord?.archived === true,
+        viewerIsActiveMember: viewerIsActiveCommunityMemberForCalendar,
+      })
+  );
+
+  /**
+   * Stage 2B: independent calendar action for RSVP-required community
+   * events — same handler as the open-event footer button, since RSVP and
+   * personal-calendar inclusion are independent axes. Never disables/edits
+   * the RSVP buttons above it.
+   */
+  const showRsvpCalendarToggle = Boolean(
+    openCommunityCalendarInfoReady &&
+      isRsvpCalendarActionVisible({
         event: {
           communityId: displayEvent?.communityId ?? null,
           requiresRsvp: displayEvent?.requiresRsvp,
@@ -1166,6 +1231,15 @@ export function EventDetailsBottomSheet({
                     label="עריכה"
                     onPress={() => handleGatedAction(handleEdit)}
                   />
+                  {canDuplicateEvent ? (
+                    <QuickAction
+                      color="#64748b"
+                      disabled={false}
+                      icon="content-copy"
+                      label="שכפול"
+                      onPress={() => handleGatedAction(handleDuplicate)}
+                    />
+                  ) : null}
                 </View>
 
                 {canDelete ? (
@@ -1276,6 +1350,28 @@ export function EventDetailsBottomSheet({
                         <Text style={styles.rsvpMemberHint}>
                           בחר/י את תגובתך
                         </Text>
+                      ) : null}
+                      {showRsvpCalendarToggle ? (
+                        <Pressable
+                          accessibilityHint="מוסיף או מסיר את האירוע מהיומן האישי שלך, בלי לשנות את תגובת ההגעה"
+                          accessibilityLabel={getRsvpCalendarActionLabel(
+                            openCalendarFooterSaved
+                          )}
+                          accessibilityRole="button"
+                          accessible={true}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          onPress={handleOpenCalendarToggle}
+                          style={({ pressed }) => [
+                            styles.rsvpCalendarToggleBtn,
+                            pressed && styles.rsvpCalendarToggleBtnPressed,
+                          ]}
+                        >
+                          <Text style={styles.rsvpCalendarToggleText}>
+                            {getRsvpCalendarActionLabel(
+                              openCalendarFooterSaved
+                            )}
+                          </Text>
+                        </Pressable>
                       ) : null}
                     </>
                   ) : null}
@@ -1502,27 +1598,30 @@ export function EventDetailsBottomSheet({
                     </Text>
                   </View>
                   <View style={styles.importantItemsList}>
-                    {importantItems.map((item) => {
-                      const checked = myChecksForEvent[item.id] ?? false;
-                      return (
-                        <View key={item.id} style={styles.importantItemRow}>
-                          <TaskCheckbox
-                            checked={checked}
-                            onToggle={() =>
-                              handleToggleImportantItem(item.id, item.title)
-                            }
-                          />
-                          <Text
-                            style={[
-                              styles.importantItemText,
-                              checked && styles.importantItemTextDone,
-                            ]}
+                    {importantItems.map((item) => (
+                      <View key={item.id} style={styles.importantItemRow}>
+                        <Text style={styles.importantItemBullet}>•</Text>
+                        <Text style={styles.importantItemText}>
+                          {item.title}
+                        </Text>
+                        {canManageImportantItems ? (
+                          <Pressable
+                            accessibilityLabel={`מחק פריט: ${item.title}`}
+                            accessibilityRole="button"
+                            accessible={true}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            onPress={() => handleDeleteImportantItem(item.id)}
+                            style={styles.importantItemDeleteBtn}
                           >
-                            {item.title}
-                          </Text>
-                        </View>
-                      );
-                    })}
+                            <MaterialIcons
+                              color="#94a3b8"
+                              name="close"
+                              size={16}
+                            />
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    ))}
                   </View>
                   <Pressable
                     accessibilityLabel={importantItemsCopyLabel}
@@ -1601,7 +1700,9 @@ export function EventDetailsBottomSheet({
                           typeof displayEvent.startTime === 'number' &&
                           displayEvent.startTime <= Date.now();
                         const isClaimable =
-                          showSelfClaimAction && !hasAssignee && !eventHasStarted;
+                          showSelfClaimAction &&
+                          !hasAssignee &&
+                          !eventHasStarted;
                         const isCompleted = task.completed === true;
                         const canUnclaimHere =
                           showSelfClaimAction &&
@@ -1632,8 +1733,7 @@ export function EventDetailsBottomSheet({
                                 <View
                                   style={[
                                     styles.eventTaskCheckbox,
-                                    isCompleted &&
-                                      styles.eventTaskCheckboxDone,
+                                    isCompleted && styles.eventTaskCheckboxDone,
                                   ]}
                                 >
                                   {isCompleted ? (
@@ -1696,9 +1796,7 @@ export function EventDetailsBottomSheet({
                                       styles.taskAssignmentActionPressed,
                                   ]}
                                 >
-                                  <View
-                                    style={styles.taskAssignmentAction}
-                                  >
+                                  <View style={styles.taskAssignmentAction}>
                                     <Text
                                       style={styles.taskAssignmentActionText}
                                     >
@@ -1721,7 +1819,12 @@ export function EventDetailsBottomSheet({
                                     accessibilityLabel="בטל הקצאה"
                                     accessibilityRole="button"
                                     accessible={true}
-                                    hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
+                                    hitSlop={{
+                                      top: 6,
+                                      bottom: 6,
+                                      left: 8,
+                                      right: 8,
+                                    }}
                                     onPress={() =>
                                       handleUnclaimEventTask(task._id)
                                     }
@@ -1732,7 +1835,9 @@ export function EventDetailsBottomSheet({
                                     ]}
                                   >
                                     <View style={styles.taskUnassignAction}>
-                                      <Text style={styles.taskUnassignActionText}>
+                                      <Text
+                                        style={styles.taskUnassignActionText}
+                                      >
                                         בטל הקצאה
                                       </Text>
                                     </View>
@@ -1780,7 +1885,9 @@ export function EventDetailsBottomSheet({
                             </Text>
                             <MaterialIcons
                               color="#00668E"
-                              name={showAllTasks ? 'expand-less' : 'expand-more'}
+                              name={
+                                showAllTasks ? 'expand-less' : 'expand-more'
+                              }
                               size={18}
                             />
                           </View>
@@ -2681,6 +2788,23 @@ const styles = StyleSheet.create({
     width: '100%',
     writingDirection: HEB_WRITING_DIRECTION,
   },
+  rsvpCalendarToggleBtn: {
+    alignSelf: 'center',
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  rsvpCalendarToggleBtnPressed: {
+    opacity: 0.6,
+  },
+  rsvpCalendarToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0369a1',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+    textDecorationLine: 'underline',
+  },
   rsvpUnifiedDivider: {
     height: StyleSheet.hairlineWidth * 2,
     backgroundColor: '#e2e8f0',
@@ -3104,9 +3228,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     writingDirection: HEB_WRITING_DIRECTION,
   },
-  importantItemTextDone: {
-    textDecorationLine: 'line-through',
-    color: '#94a3b8',
+  importantItemDeleteBtn: {
+    padding: 4,
   },
   importantItemsCopyBtn: {
     alignSelf: 'stretch',

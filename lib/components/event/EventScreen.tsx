@@ -48,6 +48,7 @@ import {
 } from '@/lib/components/event/ParticipantsCard';
 import { RelatedTasksSection } from '@/lib/components/event/RelatedTasksSection';
 import { RemindersCard } from '@/lib/components/event/RemindersCard';
+import { isDuplicateSaveBlockedByUnconfirmedDate } from '@/lib/eventDuplication';
 import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
@@ -181,6 +182,16 @@ interface EventScreenProps {
   /** Override the header title (e.g. "עריכת אירוע" for edit mode). */
   customHeaderTitle?: string;
   /**
+   * Stage 3 correction — Part 1: community EVENT DUPLICATION only.
+   * `initialData.date` may be pre-filled (e.g. with today's date) purely so
+   * the form has something to render, but the manager must still explicitly
+   * choose/confirm the date before Save can succeed. When true, `handleSave`
+   * blocks (showing an inline Hebrew validation message) until the user
+   * interacts with the date picker at least once. Must NOT be set for
+   * ordinary create/edit flows — only for duplication.
+   */
+  requireDateConfirmation?: boolean;
+  /**
    * Called when the user confirms save. Should call the Convex mutation.
    * Returns the new event ID so the success sheet can generate a share link.
    */
@@ -203,6 +214,7 @@ export default function EventScreen({
   initialData,
   prefillTitle,
   customHeaderTitle,
+  requireDateConfirmation = false,
   onSave,
   onDismiss,
 }: EventScreenProps): React.JSX.Element {
@@ -235,6 +247,14 @@ export default function EventScreen({
   const isEditMode = Boolean(initialData);
   const [isDirty, setIsDirty] = useState(!isEditMode);
   const [titleError, setTitleError] = useState(false);
+  // Stage 3 correction — Part 1: duplicate-mode-only date confirmation gate.
+  // Starts unconfirmed whenever requireDateConfirmation is true, regardless
+  // of any pre-filled initialData.date — the manager must interact with the
+  // date picker at least once before Save can succeed.
+  const [duplicateDateConfirmed, setDuplicateDateConfirmed] = useState(
+    !requireDateConfirmation
+  );
+  const [duplicateDateError, setDuplicateDateError] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const isSavingRef = useRef(false);
   const [discardOpen, setDiscardOpen] = useState(false);
@@ -278,6 +298,18 @@ export default function EventScreen({
   // (registered once on mount) always calls the latest version of the function.
   const handleBackRef = useRef<() => void>(() => undefined);
 
+  // Stage 3 correction — small UX fix: when duplicate-date validation
+  // blocks Save, scroll the form to the DateTimeCard/error so an off-screen
+  // manager (e.g. scrolled to the bottom) sees why Save did nothing. Plain
+  // refs (not state) — this is read-only bookkeeping for an imperative
+  // scroll, not something that should ever trigger a re-render.
+  const scrollViewRef = useRef<ScrollView>(null);
+  const scrollOffsetRef = useRef(0);
+  const scrollViewportHeightRef = useRef(0);
+  const dateSectionLayoutRef = useRef<{ y: number; height: number } | null>(
+    null
+  );
+
   // Track whether the user has manually changed end date / end time in this
   // session. When false the field is still "auto-generated" and we can safely
   // overwrite it whenever start changes. When true we must preserve the user's
@@ -319,6 +351,33 @@ export default function EventScreen({
     [autosave]
   );
 
+  // Stage 3 correction — small UX fix: scrolls the DateTimeCard/duplicate-
+  // date-error section into view WITHOUT jumping if it's already visible,
+  // and never opens the date picker — the manager still chooses when to
+  // interact with it. Uses the section's own measured layout (via
+  // dateSectionLayoutRef, set from that View's onLayout below), not a
+  // generic scrollToTop, so it targets the exact spot even on long forms.
+  const scrollToDuplicateDateSection = () => {
+    const section = dateSectionLayoutRef.current;
+    if (!section) return;
+    const viewportHeight = scrollViewportHeightRef.current;
+    const currentOffset = scrollOffsetRef.current;
+    const visibleTop = currentOffset;
+    const visibleBottom = currentOffset + viewportHeight;
+    const margin = 12;
+    const sectionTop = section.y;
+    const sectionBottom = section.y + section.height;
+    const alreadyFullyVisible =
+      viewportHeight > 0 &&
+      sectionTop >= visibleTop - margin &&
+      sectionBottom <= visibleBottom + margin;
+    if (alreadyFullyVisible) return;
+    scrollViewRef.current?.scrollTo({
+      y: Math.max(sectionTop - margin, 0),
+      animated: true,
+    });
+  };
+
   const handleSave = async (): Promise<void> => {
     if (!event.title.trim()) {
       setTitleError(true);
@@ -330,6 +389,16 @@ export default function EventScreen({
         'לא ניתן לשמור את האירוע. על תאריך ושעת ההתחלה לחול לפני תאריך ושעת הסיום.',
         [{ text: 'אישור', style: 'default' }]
       );
+      return;
+    }
+    if (
+      isDuplicateSaveBlockedByUnconfirmedDate(
+        requireDateConfirmation,
+        duplicateDateConfirmed
+      )
+    ) {
+      setDuplicateDateError(true);
+      scrollToDuplicateDateSection();
       return;
     }
     if (isSavingRef.current) return;
@@ -534,7 +603,10 @@ export default function EventScreen({
   };
 
   return (
-    <SafeAreaView style={[s.safeArea, ANDROID_MATCH_IOS_LAYOUT ? s.safeAreaRtl : null]} edges={['top', 'bottom']}>
+    <SafeAreaView
+      style={[s.safeArea, ANDROID_MATCH_IOS_LAYOUT ? s.safeAreaRtl : null]}
+      edges={['top', 'bottom']}
+    >
       {/* Header — title centered, back arrow on RIGHT, no save action here */}
       <View style={s.header}>
         <Pressable
@@ -558,10 +630,18 @@ export default function EventScreen({
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView
+          ref={scrollViewRef}
           style={s.scroll}
           contentContainerStyle={s.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          onLayout={(e) => {
+            scrollViewportHeightRef.current = e.nativeEvent.layout.height;
+          }}
+          onScroll={(e) => {
+            scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={16}
         >
           {/* Event Title — compact field */}
           <View style={s.titleSection}>
@@ -585,94 +665,116 @@ export default function EventScreen({
           </View>
 
           {/* Date & Time */}
-          <DateTimeCard
-            startDate={event.date}
-            startTime={event.startTime}
-            endDate={event.endDate ?? event.date}
-            endTime={event.endTime}
-            isAllDay={event.isAllDay}
-            onChange={(updates) => {
-              // ── Track user intent on end fields (write-only refs) ──
-              // Only mark as "manually edited" when the user explicitly
-              // changes the end date/time independently (not when a day-chip
-              // sets both startDate + endDate simultaneously).
-              if (
-                updates.endDate !== undefined &&
-                updates.startDate === undefined
-              ) {
-                endDateUserEdited.current = true;
-              }
-              if (
-                updates.endTime !== undefined &&
-                updates.startTime === undefined
-              ) {
-                endTimeUserEdited.current = true;
-              }
-
-              // ── All calculations use `prev` (the latest committed state)
-              // so that rapid wheel callbacks compose sequentially instead
-              // of all reading the same render-captured `event` snapshot.
-              setIsDirty(true);
-              setEvent((prev) => {
-                const patch: Partial<EventData> = {};
-
-                // Apply explicit end values from the update
-                if (updates.endDate !== undefined)
-                  patch.endDate = updates.endDate;
-                if (updates.endTime !== undefined)
-                  patch.endTime = updates.endTime;
-
-                // ── Preserve duration when start TIME changes ────────
-                // Always shift end by the same delta.
-                if (updates.startTime !== undefined) {
-                  patch.startTime = updates.startTime;
-                  if (updates.endTime === undefined) {
-                    const { endDate: newEndDate, endTime: newEndTime } =
-                      shiftEndToPreserveDuration({
-                        prevStartDate: prev.date,
-                        prevStartTime: prev.startTime ?? '09:00',
-                        prevEndDate: prev.endDate ?? prev.date,
-                        prevEndTime: prev.endTime ?? '10:00',
-                        nextStartDate: updates.startDate ?? prev.date,
-                        nextStartTime: updates.startTime,
-                      });
-                    patch.endTime = newEndTime;
-                    patch.endDate = newEndDate;
-                  }
-                }
-
-                // ── Preserve duration when start DATE changes ────────
-                // Slide end date by the same number of days as start moved,
-                // keeping time strings unchanged (overnight events stay overnight).
-                if (updates.startDate !== undefined) {
-                  patch.date = updates.startDate;
-                  if (
-                    updates.endDate === undefined &&
-                    patch.endDate === undefined
-                  ) {
-                    const prevEndDate = prev.endDate ?? prev.date;
-                    const dateDelta = updates.startDate - prev.date;
-                    patch.endDate = prevEndDate + dateDelta;
-                  }
-                }
-
-                if (updates.isAllDay !== undefined) {
-                  patch.isAllDay = updates.isAllDay;
-                  if (updates.isAllDay) {
-                    patch.remindersEnabled = false;
-                    patch.reminders = [];
-                  } else {
-                    patch.remindersEnabled = true;
-                    patch.reminders = [makeReminder('hour_before')];
-                  }
-                }
-
-                const updated = { ...prev, ...patch };
-                autosave(updated);
-                return updated;
-              });
+          <View
+            onLayout={(e) => {
+              const { y, height } = e.nativeEvent.layout;
+              dateSectionLayoutRef.current = { y, height };
             }}
-          />
+          >
+            <DateTimeCard
+              startDate={event.date}
+              startTime={event.startTime}
+              endDate={event.endDate ?? event.date}
+              endTime={event.endTime}
+              isAllDay={event.isAllDay}
+              onChange={(updates) => {
+                // ── Track user intent on end fields (write-only refs) ──
+                // Only mark as "manually edited" when the user explicitly
+                // changes the end date/time independently (not when a day-chip
+                // sets both startDate + endDate simultaneously).
+                if (
+                  updates.endDate !== undefined &&
+                  updates.startDate === undefined
+                ) {
+                  endDateUserEdited.current = true;
+                }
+                if (
+                  updates.endTime !== undefined &&
+                  updates.startTime === undefined
+                ) {
+                  endTimeUserEdited.current = true;
+                }
+
+                // Stage 3 correction — Part 1: any explicit start-date
+                // interaction (quick-chip, calendar grid, or native picker)
+                // satisfies the duplicate-mode date confirmation gate, even if
+                // the chosen date happens to be the same pre-filled value.
+                if (
+                  requireDateConfirmation &&
+                  updates.startDate !== undefined
+                ) {
+                  setDuplicateDateConfirmed(true);
+                  setDuplicateDateError(false);
+                }
+
+                // ── All calculations use `prev` (the latest committed state)
+                // so that rapid wheel callbacks compose sequentially instead
+                // of all reading the same render-captured `event` snapshot.
+                setIsDirty(true);
+                setEvent((prev) => {
+                  const patch: Partial<EventData> = {};
+
+                  // Apply explicit end values from the update
+                  if (updates.endDate !== undefined)
+                    patch.endDate = updates.endDate;
+                  if (updates.endTime !== undefined)
+                    patch.endTime = updates.endTime;
+
+                  // ── Preserve duration when start TIME changes ────────
+                  // Always shift end by the same delta.
+                  if (updates.startTime !== undefined) {
+                    patch.startTime = updates.startTime;
+                    if (updates.endTime === undefined) {
+                      const { endDate: newEndDate, endTime: newEndTime } =
+                        shiftEndToPreserveDuration({
+                          prevStartDate: prev.date,
+                          prevStartTime: prev.startTime ?? '09:00',
+                          prevEndDate: prev.endDate ?? prev.date,
+                          prevEndTime: prev.endTime ?? '10:00',
+                          nextStartDate: updates.startDate ?? prev.date,
+                          nextStartTime: updates.startTime,
+                        });
+                      patch.endTime = newEndTime;
+                      patch.endDate = newEndDate;
+                    }
+                  }
+
+                  // ── Preserve duration when start DATE changes ────────
+                  // Slide end date by the same number of days as start moved,
+                  // keeping time strings unchanged (overnight events stay overnight).
+                  if (updates.startDate !== undefined) {
+                    patch.date = updates.startDate;
+                    if (
+                      updates.endDate === undefined &&
+                      patch.endDate === undefined
+                    ) {
+                      const prevEndDate = prev.endDate ?? prev.date;
+                      const dateDelta = updates.startDate - prev.date;
+                      patch.endDate = prevEndDate + dateDelta;
+                    }
+                  }
+
+                  if (updates.isAllDay !== undefined) {
+                    patch.isAllDay = updates.isAllDay;
+                    if (updates.isAllDay) {
+                      patch.remindersEnabled = false;
+                      patch.reminders = [];
+                    } else {
+                      patch.remindersEnabled = true;
+                      patch.reminders = [makeReminder('hour_before')];
+                    }
+                  }
+
+                  const updated = { ...prev, ...patch };
+                  autosave(updated);
+                  return updated;
+                });
+              }}
+            />
+            {requireDateConfirmation && duplicateDateError && (
+              <Text style={s.errorText}>יש לבחור תאריך לאירוע החדש</Text>
+            )}
+          </View>
 
           {/* Location */}
           <LocationCard

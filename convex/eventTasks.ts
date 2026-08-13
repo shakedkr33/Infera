@@ -31,7 +31,63 @@ async function isEventTaskManager(
 }
 
 // ─────────────────────────────────────────────────────────────
+// Shared pure counting logic — Stage 1C
+//
+// Extracted so it can be unit-tested without a Convex test harness (no
+// ctx/db access) and so getTaskCountsByCommunity and getTaskCountsForEvents
+// can never drift apart on what the X/Y counters mean. Semantics are
+// unchanged from the pre-Stage-1C implementation.
+// ─────────────────────────────────────────────────────────────
+export type EventTaskCountSummary = {
+  total: number;
+  assigned: number;
+  totalTasksCount: number;
+  assignedTasksCount: number;
+  myAssignedTasks: Array<{ id: Id<'eventTasks'>; title: string }>;
+  hasMyAssignedTasks: boolean;
+};
+
+export function summarizeEventTaskCounts(
+  eventStatus: string | undefined,
+  tasks: Array<{
+    _id: Id<'eventTasks'>;
+    title: string;
+    completed?: boolean;
+    assignedToUserId?: Id<'users'>;
+    assignedToManual?: string;
+  }>,
+  viewerUserId: Id<'users'>
+): EventTaskCountSummary {
+  const activeTasks =
+    eventStatus === 'cancelled'
+      ? []
+      : tasks.filter((task) => task.completed !== true);
+  const assignedTasksCount = activeTasks.filter(
+    (t) => t.assignedToUserId || t.assignedToManual?.trim()
+  ).length;
+  const myAssignedTasks = activeTasks
+    .filter((t) => t.assignedToUserId === viewerUserId)
+    .map((t) => ({ id: t._id, title: t.title }));
+  return {
+    total: activeTasks.length,
+    assigned: assignedTasksCount,
+    totalTasksCount: activeTasks.length,
+    assignedTasksCount,
+    myAssignedTasks,
+    hasMyAssignedTasks: myAssignedTasks.length > 0,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // סיכום משימות לפי קהילה (לתצוגת כרטיסי אירועים — ללא N+1)
+//
+// STAGE 1C NOTE: superseded by getTaskCountsForEvents below, which accepts
+// only the event IDs a screen is actually rendering instead of scanning
+// every event (and every event's tasks) in the whole community. No caller
+// in the app uses this function anymore as of Stage 1C. It is kept
+// in place rather than deleted — removing unused code is explicitly out of
+// scope for Stage 1C (a dedicated cleanup stage should remove this).
+// Do not add new callers of this function; use getTaskCountsForEvents.
 // ─────────────────────────────────────────────────────────────
 export const getTaskCountsByCommunity = query({
   args: { communityId: v.id('communities') },
@@ -47,17 +103,7 @@ export const getTaskCountsByCommunity = query({
       .withIndex('by_community_date', (q) => q.eq('communityId', communityId))
       .collect();
 
-    const counts: Record<
-      string,
-      {
-        total: number;
-        assigned: number;
-        totalTasksCount: number;
-        assignedTasksCount: number;
-        myAssignedTasks: Array<{ id: Id<'eventTasks'>; title: string }>;
-        hasMyAssignedTasks: boolean;
-      }
-    > = {};
+    const counts: Record<string, EventTaskCountSummary> = {};
 
     await Promise.all(
       events.map(async (ev) => {
@@ -65,24 +111,75 @@ export const getTaskCountsByCommunity = query({
           .query('eventTasks')
           .withIndex('by_event', (q) => q.eq('eventId', ev._id))
           .collect();
-        const activeTasks =
-          ev.status === 'cancelled'
-            ? []
-            : tasks.filter((task) => task.completed !== true);
-        const assignedTasksCount = activeTasks.filter(
-          (t) => t.assignedToUserId || t.assignedToManual?.trim()
-        ).length;
-        const myAssignedTasks = activeTasks
-          .filter((t) => t.assignedToUserId === userId)
-          .map((t) => ({ id: t._id, title: t.title }));
-        counts[ev._id] = {
-          total: activeTasks.length,
-          assigned: assignedTasksCount,
-          totalTasksCount: activeTasks.length,
-          assignedTasksCount,
-          myAssignedTasks,
-          hasMyAssignedTasks: myAssignedTasks.length > 0,
-        };
+        counts[ev._id] = summarizeEventTaskCounts(ev.status, tasks, userId);
+      })
+    );
+
+    return counts;
+  },
+});
+
+const eventTaskCountSummaryValidator = v.object({
+  total: v.number(),
+  assigned: v.number(),
+  totalTasksCount: v.number(),
+  assignedTasksCount: v.number(),
+  myAssignedTasks: v.array(
+    v.object({ id: v.id('eventTasks'), title: v.string() })
+  ),
+  hasMyAssignedTasks: v.boolean(),
+});
+
+// ─────────────────────────────────────────────────────────────
+// סיכום משימות לפי אירועים גלויים (Stage 1C)
+//
+// Focused replacement for getTaskCountsByCommunity: accepts exactly the
+// event IDs the caller is currently rendering (e.g. a tab's ~8 loaded
+// event cards, or a paginated list's accumulated pages) and only loads
+// those events/tasks — never scans the rest of the community.
+//
+// Access control: each eventId is checked independently — the underlying
+// event must exist, belong to a community, and the caller must be an
+// active member of that community. Unknown, inaccessible, or non-community
+// event IDs are silently omitted from the result (no error, no count),
+// so this cannot be used to probe for the existence of events the caller
+// isn't otherwise allowed to see.
+//
+// Count semantics (total/assigned/myAssignedTasks/hasMyAssignedTasks) are
+// byte-for-byte identical to getTaskCountsByCommunity — see
+// summarizeEventTaskCounts. This stage only bounds *which* events are
+// scanned, not what the numbers mean.
+// ─────────────────────────────────────────────────────────────
+export const getTaskCountsForEvents = query({
+  args: { eventIds: v.array(v.id('events')) },
+  returns: v.record(v.id('events'), eventTaskCountSummaryValidator),
+  handler: async (ctx, { eventIds }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId || eventIds.length === 0) return {};
+
+    // Dedupe defensively — callers may reference the same event from more
+    // than one visible section (e.g. "my events" + "recently cancelled").
+    const uniqueEventIds = [...new Set(eventIds)];
+    const counts: Record<string, EventTaskCountSummary> = {};
+
+    await Promise.all(
+      uniqueEventIds.map(async (eventId) => {
+        const event = await ctx.db.get(eventId);
+        if (!event || !event.communityId) return;
+
+        const membership = await getCommunityMembership(
+          ctx,
+          event.communityId,
+          userId
+        );
+        if (!isActiveCommunityMember(membership)) return;
+
+        const tasks = await ctx.db
+          .query('eventTasks')
+          .withIndex('by_event', (q) => q.eq('eventId', eventId))
+          .collect();
+
+        counts[eventId] = summarizeEventTaskCounts(event.status, tasks, userId);
       })
     );
 

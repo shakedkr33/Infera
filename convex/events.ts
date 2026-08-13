@@ -2,16 +2,27 @@
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
 import { internal } from './_generated/api';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import { mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
 import {
+  accumulateMainOverviewCandidate,
+  classifyCommunityEventForEventsTab,
+  computeCommunityEventPersonalCalendarState,
   computeIsSavedToMyCalendar,
+  createMainOverviewAccumulator,
   enrichEventsWithCalendarFlags,
+  filterEventsEligibleForReminderGroups,
+  finalizeMainOverviewHasMore,
+  isEligibleForAdditionalCommunityEvent,
+  isEventStartTimeEligibleForUpcomingScan,
+  isMainOverviewAccumulatorSatisfied,
   loadActiveSavedEventIds,
   loadOptOutEventIds,
-  shouldIncludeInPersonalHomeCalendar,
+  type MainOverviewLimits,
+  resolveCommunityDateRange,
+  resolveDuplicationSourceVerdict,
 } from './communityCalendarState';
 import { isActiveCommunityMember } from './communityMemberUtils';
 import { resolveMySpaceId } from './members';
@@ -207,39 +218,26 @@ async function getCommunityMembership(
     .unique();
 }
 
-/** Creator, community owner, or admin always see community events on home/calendar aggregates. */
-function isCommunityEventPrivilegedForCalendar(
-  eventCreatedBy: Id<'users'>,
-  viewerUserId: Id<'users'>,
-  membershipRole: 'owner' | 'admin' | 'member'
-): boolean {
-  if (eventCreatedBy === viewerUserId) return true;
-  if (membershipRole === 'owner' || membershipRole === 'admin') return true;
-  return false;
-}
-
 /**
- * Community list (per community) for RSVP-gated events: same as home "yes" rule.
- * Open events are shown to all members separately in listByCommunity.
+ * STAGE 1D: community MANAGEMENT authorization (owner/admin) is intentionally
+ * kept separate from PERSONAL calendar inclusion. This file still checks
+ * `membership.role === 'owner' || membership.role === 'admin'` directly,
+ * inline, wherever management permission is actually required (edit/delete/
+ * cancel event, task assignment management, etc. — see `create`, `update`,
+ * `cancelEvent`, `deleteEvent` below) — those checks are UNCHANGED by Stage
+ * 1D. What Stage 1D removes is the separate, now-deleted
+ * `isCommunityEventPrivilegedForCalendar` helper, which used to ALSO treat
+ * raw owner/admin role as a reason to include an event in a manager's
+ * personal Home/Calendar even when they didn't create the event, didn't
+ * RSVP yes/maybe, and didn't explicitly save it. That was a personal-
+ * calendar-inclusion bug, not a permissions feature — management
+ * authorization elsewhere in this file is untouched.
+ *
+ * Personal-calendar inclusion now goes exclusively through
+ * `computeIsSavedToMyCalendar` (communityCalendarState.ts), whose valid
+ * reasons are: creator, per-community auto-add, explicit save, or RSVP
+ * yes/maybe — never raw management role.
  */
-function shouldIncludeCommunityEventForPersonalAggregates(args: {
-  eventCreatedBy: Id<'users'>;
-  viewerUserId: Id<'users'>;
-  membershipRole: 'owner' | 'admin' | 'member';
-  rsvpStatus: 'yes' | 'no' | 'maybe' | 'none' | undefined;
-}): boolean {
-  const { eventCreatedBy, viewerUserId, membershipRole, rsvpStatus } = args;
-  if (
-    isCommunityEventPrivilegedForCalendar(
-      eventCreatedBy,
-      viewerUserId,
-      membershipRole
-    )
-  ) {
-    return true;
-  }
-  return rsvpStatus === 'yes';
-}
 
 // ─────────────────────────────────────────────────────────────
 // יצירת URL להעלאת קובץ ל-Convex Storage
@@ -372,6 +370,8 @@ export const getById = query({
       return {
         ...event,
         isSavedToMyCalendar: computeIsSavedToMyCalendar({
+          isCreator: event.createdBy === userId,
+          autoAddEnabled: membership.autoAddEventsToCalendar === true,
           requiresRsvp: event.requiresRsvp,
           rsvpStatus,
           hasActiveSave,
@@ -415,6 +415,66 @@ export const getById = query({
     }
 
     return null;
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Stage 3 correction — Part 3: server-side defense-in-depth for community
+// event duplication ("שכפל אירוע"). The client already fetches the
+// duplication source through `getById` and only shows the duplicate action
+// to owners/admins, but neither of those independently guarantees that the
+// event being duplicated actually belongs to the `communityId` the manager
+// is duplicating INTO. This query re-derives both checks from scratch on
+// the server so a manager of community A can never have community B's
+// event content silently prefilled into A's create form, even if the
+// client UI/route params were tampered with — the SAME
+// owner/admin-or-community-owner rule `create` already enforces, applied
+// here BEFORE any duplicate content is trusted.
+// ─────────────────────────────────────────────────────────────
+export const verifyDuplicationSource = query({
+  args: {
+    eventId: v.id('events'),
+    communityId: v.id('communities'),
+  },
+  returns: v.union(
+    v.literal('ok'),
+    v.literal('not_found'),
+    v.literal('community_mismatch'),
+    v.literal('forbidden')
+  ),
+  handler: async (ctx, { eventId, communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return 'forbidden';
+
+    const community = await ctx.db.get(communityId);
+    const communityExists = Boolean(community) && !community?.archived;
+
+    // Same permission rule as events.create — only owners/admins of the
+    // TARGET community may use the duplication flow.
+    const membership = communityExists
+      ? await getCommunityMembership(ctx, communityId, userId)
+      : null;
+    const isOwnerByCommunityRecord =
+      communityExists && community?.ownerId === userId;
+    const isOwnerOrAdminMembership =
+      membership &&
+      isActiveCommunityMember(membership) &&
+      (membership.role === 'owner' || membership.role === 'admin');
+    const canCreateCommunityEvent =
+      isOwnerByCommunityRecord || Boolean(isOwnerOrAdminMembership);
+
+    const event = await ctx.db.get(eventId);
+
+    // The source event must belong to the SAME community the manager is
+    // duplicating into — never trust the route params independently. All
+    // decision logic lives in the pure, unit-tested
+    // resolveDuplicationSourceVerdict (see communityCalendarState.ts).
+    return resolveDuplicationSourceVerdict({
+      communityExists,
+      canCreateCommunityEvent,
+      event,
+      targetCommunityId: communityId,
+    });
   },
 });
 
@@ -490,9 +550,9 @@ export const listByCommunityPaged = query({
     if (!isActiveCommunityMember(membership)) {
       return { page: [], isDone: true, continueCursor: '' };
     }
+    const autoAddEnabled = membership.autoAddEventsToCalendar === true;
 
-    const from = fromTime ?? 0;
-    const to = toTime ?? 9_999_999_999_999; // far future
+    const { from, to } = resolveCommunityDateRange(fromTime, toTime);
     const pageResult = await ctx.db
       .query('events')
       .withIndex('by_community_date', (q) =>
@@ -515,7 +575,8 @@ export const listByCommunityPaged = query({
       ctx,
       userId,
       pageResult.page,
-      rsvpByEventId
+      rsvpByEventId,
+      { autoAddEnabled }
     );
 
     return {
@@ -526,16 +587,157 @@ export const listByCommunityPaged = query({
 });
 
 // ─────────────────────────────────────────────────────────────
-// שליפת כל אירועי קהילה לפי communityId
+// STAGE 3 — full "אירועים" (Events) tab data source.
+//
+// This is the paginated, date-scoped query behind the full community
+// "אירועים" tab (browse/filter/understand — NOT the bounded Main dashboard
+// overview). It intentionally follows Option A from the Stage 3
+// investigation rather than three separate unbounded queries: ONE indexed,
+// paginated scan of `by_community_date` (identical bounding strategy to
+// listByCommunityPaged — never a full-community collect()) returning every
+// event in the requested date scope, each enriched with the viewer's
+// classification via the SAME canonical two-dimension helpers every other
+// community-calendar query already uses
+// (classifyCommunityEventForEventsTab -> computeCommunityEventPersonalCalendarState
+// + isEligibleForAdditionalCommunityEvent). The caller (TabEvents) buckets
+// the accumulated pages into "האירועים שלי" / "מחכים לתגובה" / "אירועים
+// נוספים" client-side from these flags — no separate business logic is
+// duplicated, and pagination continues correctly no matter how a given
+// page's events happen to split across the three (non-exclusive) buckets,
+// because bucketing never filters or reorders the underlying page.
+//
+// Date scope: `fromTime` is resolved via the same resolveCommunityDateRange
+// default as listByCommunityPaged (inclusive lower bound), but `toTime` is
+// treated as an EXCLUSIVE upper bound here (`.lt`, not `.lte` — see below).
+// The caller passes:
+//   - "קרובים" (default): fromTime = client "now", toTime omitted (open
+//     upper bound) — chronological, nearest-first, genuinely paginated
+//     through every future community event, never capped.
+//   - a selected month: fromTime = start of month, toTime = the EXCLUSIVE
+//     start of the NEXT month (see getEventsTabMonthRange's
+//     `nextMonthStart` in lib/eventsTabDateHelpers.ts), so
+//     `monthStart <= event.startTime < nextMonthStart` — an event starting
+//     at exactly 00:00:00.000 on the 1st of the following month can never
+//     appear in this month's page.
+// ─────────────────────────────────────────────────────────────
+const EVENTS_TAB_DEFAULT_PAGE_SIZE = 20;
+
+export const listCommunityEventsTabPaged = query({
+  args: {
+    communityId: v.id('communities'),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+    fromTime: v.optional(v.number()),
+    toTime: v.optional(v.number()),
+  },
+  handler: async (ctx, { communityId, cursor, numItems, fromTime, toTime }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return { page: [], isDone: true, continueCursor: '' };
+    }
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!isActiveCommunityMember(membership)) {
+      return { page: [], isDone: true, continueCursor: '' };
+    }
+    const autoAddEnabled = membership.autoAddEventsToCalendar === true;
+
+    // NOTE: unlike listByCommunityPaged (which treats `to` as inclusive —
+    // see resolveCommunityDateRange), this query's `toTime` is an EXCLUSIVE
+    // upper bound: the caller (TabEvents) always passes the selected
+    // month's `nextMonthStart` (see lib/eventsTabDateHelpers.ts), or leaves
+    // it undefined for the open-ended "קרובים" scope. `.lt` here — instead
+    // of `.lte` — guarantees an event starting at exactly the first
+    // instant of the following month can never leak into this page, with
+    // no reliance on "last millisecond of month" boundary math.
+    const { from, to } = resolveCommunityDateRange(fromTime, toTime);
+    const pageResult = await ctx.db
+      .query('events')
+      .withIndex('by_community_date', (q) =>
+        q
+          .eq('communityId', communityId)
+          .gte('startTime', from)
+          .lt('startTime', to)
+      )
+      .paginate({ cursor, numItems: numItems ?? EVENTS_TAB_DEFAULT_PAGE_SIZE });
+
+    const userRsvps = await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const rsvpByEventId = new Map(
+      userRsvps.map((r) => [r.eventId as string, r.status])
+    );
+    const savedIds = await loadActiveSavedEventIds(ctx, userId);
+    const optOutIds = await loadOptOutEventIds(ctx, userId);
+
+    const enrichedPage = pageResult.page.map((ev) => {
+      // Cancelled events never belong to any of the three Events tab
+      // sections — they surface separately (grace-period "בוטלו" footer),
+      // exactly like the pre-Stage-3 TabEvents behavior. Classifying them
+      // through the normal rules would be meaningless (e.g. a cancelled
+      // event a viewer never answered would otherwise show as "pending").
+      if (ev.status === 'cancelled') {
+        return {
+          ...ev,
+          isSavedToMyCalendar: false,
+          isPendingRsvp: false,
+          isAdditionalEligible: false,
+        };
+      }
+
+      const idStr = ev._id as string;
+      const classification = classifyCommunityEventForEventsTab({
+        isCreator: ev.createdBy === userId,
+        autoAddEnabled,
+        requiresRsvp: ev.requiresRsvp,
+        rsvpStatus: rsvpByEventId.get(idStr),
+        hasActiveSave: savedIds.has(idStr),
+        hasOptOut: optOutIds.has(idStr),
+      });
+
+      return {
+        ...ev,
+        isSavedToMyCalendar: classification.isMyEvent,
+        isPendingRsvp: classification.isPendingRsvp,
+        isAdditionalEligible: classification.isAdditionalEligible,
+      };
+    });
+
+    return {
+      ...pageResult,
+      page: enrichedPage,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// שליפת אירועי קהילה לפי communityId (עם טווח תאריכים אופציונלי)
+//
+// STAGE 1C: `from`/`to` (unix ms, inclusive) bound the `by_community_date`
+// index scan so a long-lived community (dozens/hundreds of events across
+// multiple years — e.g. a full school year uploaded in advance) doesn't
+// force a full-community collect() on every call. Both are optional and
+// default to the full range — matching this query's pre-Stage-1C behavior
+// — because it currently has exactly one caller
+// (app/(authenticated)/calendar.tsx's community-filtered calendar), which
+// always passes its visible timeline range as of this stage. A future
+// caller that genuinely needs the full lifetime of a community should
+// think carefully before omitting the bounds; prefer passing a range.
 // ─────────────────────────────────────────────────────────────
 export const listByCommunity = query({
-  args: { communityId: v.id('communities') },
-  handler: async (ctx, { communityId }) => {
+  args: {
+    communityId: v.id('communities'),
+    from: v.optional(v.number()),
+    to: v.optional(v.number()),
+  },
+  handler: async (ctx, { communityId, from, to }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
     const membership = await getCommunityMembership(ctx, communityId, userId);
     if (!isActiveCommunityMember(membership)) return [];
+    const autoAddEnabled = membership.autoAddEventsToCalendar === true;
 
     const userRsvps = await ctx.db
       .query('eventRsvps')
@@ -545,9 +747,24 @@ export const listByCommunity = query({
       userRsvps.map((r) => [r.eventId as string, r.status])
     );
 
+    // Loaded once here (rather than inside enrichEventsWithCalendarFlags) so
+    // both the personal-inclusion filter below and the enrich step can reuse
+    // the same sets without a duplicate DB read in this request.
+    const savedIds = await loadActiveSavedEventIds(ctx, userId);
+    const optOutIds = await loadOptOutEventIds(ctx, userId);
+
+    const { from: rangeFrom, to: rangeTo } = resolveCommunityDateRange(
+      from,
+      to
+    );
     const events = await ctx.db
       .query('events')
-      .withIndex('by_community_date', (q) => q.eq('communityId', communityId))
+      .withIndex('by_community_date', (q) =>
+        q
+          .eq('communityId', communityId)
+          .gte('startTime', rangeFrom)
+          .lte('startTime', rangeTo)
+      )
       .filter((q) => q.neq(q.field('status'), 'cancelled'))
       .order('asc')
       .collect();
@@ -557,15 +774,453 @@ export const listByCommunity = query({
       if (ev.requiresRsvp === false) {
         return true;
       }
-      return shouldIncludeCommunityEventForPersonalAggregates({
-        eventCreatedBy: ev.createdBy,
-        viewerUserId: userId,
-        membershipRole: membership.role,
+      const idStr = ev._id as string;
+      return computeIsSavedToMyCalendar({
+        isCreator: ev.createdBy === userId,
+        autoAddEnabled,
+        requiresRsvp: ev.requiresRsvp,
         rsvpStatus: rsvpByEventId.get(ev._id),
+        hasActiveSave: savedIds.has(idStr),
+        hasOptOut: optOutIds.has(idStr),
       });
     });
 
-    return enrichEventsWithCalendarFlags(ctx, userId, filtered, rsvpByEventId);
+    return enrichEventsWithCalendarFlags(ctx, userId, filtered, rsvpByEventId, {
+      autoAddEnabled,
+      savedIds,
+      optOutIds,
+    });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Stage 2A — "ראשי" (Main) community-overview screen data source.
+//
+// This is the "INDEPENDENTLY BOUNDED source for 'האירועים שלי'" the Stage 1C
+// report deferred to the Main-screen redesign (see the STAGE 1C NOTE that
+// used to live on the community screen's TabAll). It resolves TWO
+// independent, non-exclusive categories in a single bounded scan of the
+// community's UPCOMING events only (`startTime >= now`, via the existing
+// `by_community_date` index — no new index needed):
+//
+//   - myEvents: events currently in the viewer's personal calendar
+//     (computeCommunityEventPersonalCalendarState().isInPersonalCalendar)
+//   - pendingRsvpEvents: events still awaiting an RSVP answer from the
+//     viewer (…rsvpAttentionState === 'pending')
+//
+// An event can land in BOTH arrays (e.g. auto-add ON + RSVP unanswered) —
+// this is intentional, see the Stage 2A prompt's "IMPORTANT AUTO-ADD CASE".
+//
+// Bounding strategy (mirrors the Stage 1C bounding philosophy — never
+// collect() the whole community):
+//   - Scan the community's upcoming events oldest-first, in small chunks
+//     (MAIN_OVERVIEW_CHUNK_SIZE), via .paginate() over the same index range
+//     scan listByCommunity/listByCommunityPaged already use, starting the
+//     indexed lower bound at the caller-supplied `localDayStart` (the
+//     viewer's device-local midnight — see lib/eventsTabDateHelpers.ts's
+//     getLocalDayStart) rather than `now` itself, so today's all-day event
+//     (whose `startTime` is stamped at local midnight — see
+//     isEventStartTimeEligibleForUpcomingScan's doc comment) is still
+//     reached, WITHOUT pulling yesterday's already-ended all-day events
+//     into the scan (a previous flat `now - 48h` lookback did).
+//   - Feed each scanned event through the pure accumulator helpers in
+//     communityCalendarState.ts one at a time, so the scan can stop as soon
+//     as BOTH categories are filled (isMainOverviewAccumulatorSatisfied) —
+//     one category filling up can never silently consume the whole scan
+//     budget and starve the other, because they're tracked independently.
+//   - A hard cap (MAIN_OVERVIEW_MAX_SCANNED) bounds worst case for a
+//     community where few/no events match either category (e.g. auto-add
+//     off and the viewer hasn't RSVP'd/saved anything) — Section D/C
+//     ("class with 40 future events" / "school-year 100+ events") still
+//     only ever scans a small, fixed number of events per Main load.
+//   - `myEventsHasMore` / `pendingRsvpHasMore` are bounded signals (never an
+//     expensive exact remaining-count) — see finalizeMainOverviewHasMore.
+// ─────────────────────────────────────────────────────────────
+const MAIN_OVERVIEW_CHUNK_SIZE = 40;
+const MAIN_OVERVIEW_MAX_SCANNED = 160;
+const MAIN_OVERVIEW_DEFAULT_MY_EVENTS_LIMIT = 6;
+const MAIN_OVERVIEW_DEFAULT_PENDING_RSVP_LIMIT = 3;
+
+type MainOverviewEnrichedEvent = Doc<'events'> & {
+  isSavedToMyCalendar: boolean;
+};
+
+const EMPTY_MAIN_OVERVIEW: {
+  myEvents: MainOverviewEnrichedEvent[];
+  myEventsHasMore: boolean;
+  pendingRsvpEvents: MainOverviewEnrichedEvent[];
+  pendingRsvpHasMore: boolean;
+} = {
+  myEvents: [],
+  myEventsHasMore: false,
+  pendingRsvpEvents: [],
+  pendingRsvpHasMore: false,
+};
+
+export const listCommunityMainOverview = query({
+  args: {
+    communityId: v.id('communities'),
+    /** Client clock (Date.now()) — never Date.now() inside the handler. */
+    now: v.number(),
+    /**
+     * 00:00:00.000 of the viewer's LOCAL calendar day, computed client-side
+     * (see lib/eventsTabDateHelpers.ts's getLocalDayStart) — the scan's
+     * indexed lower bound. Replaces a previous flat `now - 48h` lookback:
+     * that widened the scan's window enough to always reach today's
+     * all-day event (stamped at local midnight), but also let YESTERDAY's
+     * already-ended all-day events consume scan/accumulator capacity. The
+     * server must not derive this from its own timezone.
+     */
+    localDayStart: v.number(),
+    myEventsLimit: v.optional(v.number()),
+    pendingRsvpLimit: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    { communityId, now, localDayStart, myEventsLimit, pendingRsvpLimit }
+  ) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return EMPTY_MAIN_OVERVIEW;
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!isActiveCommunityMember(membership)) return EMPTY_MAIN_OVERVIEW;
+    const autoAddEnabled = membership.autoAddEventsToCalendar === true;
+
+    const limits: MainOverviewLimits = {
+      myEventsLimit: myEventsLimit ?? MAIN_OVERVIEW_DEFAULT_MY_EVENTS_LIMIT,
+      pendingRsvpLimit:
+        pendingRsvpLimit ?? MAIN_OVERVIEW_DEFAULT_PENDING_RSVP_LIMIT,
+    };
+
+    const userRsvps = await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const rsvpByEventId = new Map(
+      userRsvps.map((r) => [r.eventId as string, r.status])
+    );
+    const savedIds = await loadActiveSavedEventIds(ctx, userId);
+    const optOutIds = await loadOptOutEventIds(ctx, userId);
+
+    let acc = createMainOverviewAccumulator<Doc<'events'>>();
+    let cursor: string | null = null;
+    let scanned = 0;
+    let isDone = false;
+
+    while (
+      !isDone &&
+      scanned < MAIN_OVERVIEW_MAX_SCANNED &&
+      !isMainOverviewAccumulatorSatisfied(acc, limits)
+    ) {
+      const page = await ctx.db
+        .query('events')
+        .withIndex('by_community_date', (q) =>
+          q.eq('communityId', communityId).gte('startTime', localDayStart)
+        )
+        .paginate({ cursor, numItems: MAIN_OVERVIEW_CHUNK_SIZE });
+
+      for (const ev of page.page) {
+        scanned++;
+        if (ev.status === 'cancelled') continue;
+        if (!isEventStartTimeEligibleForUpcomingScan(ev, now)) continue;
+        const idStr = ev._id as string;
+        const state = computeCommunityEventPersonalCalendarState({
+          isCreator: ev.createdBy === userId,
+          autoAddEnabled,
+          requiresRsvp: ev.requiresRsvp,
+          rsvpStatus: rsvpByEventId.get(idStr),
+          hasActiveSave: savedIds.has(idStr),
+          hasOptOut: optOutIds.has(idStr),
+        });
+        acc = accumulateMainOverviewCandidate(
+          acc,
+          {
+            item: ev,
+            isInPersonalCalendar: state.isInPersonalCalendar,
+            isPendingRsvp: state.rsvpAttentionState === 'pending',
+          },
+          limits
+        );
+      }
+
+      cursor = page.continueCursor;
+      isDone = page.isDone;
+    }
+
+    // Hitting the hard safety cap while the underlying query is NOT done is
+    // proof of nothing except "we stopped looking" — it must never be read
+    // as "this category is exhausted", even when a category's array is
+    // still empty/under its limit. See the Stage 2A scale-edge-case
+    // investigation (scan cap at 160, matching event at ~position 170).
+    const scanTruncated = scanned >= MAIN_OVERVIEW_MAX_SCANNED && !isDone;
+    acc = finalizeMainOverviewHasMore(acc, limits, {
+      scanExhausted: isDone,
+      scanTruncated,
+    });
+
+    const [enrichedMyEvents, enrichedPendingRsvpEvents] = await Promise.all([
+      enrichEventsWithCalendarFlags(ctx, userId, acc.myEvents, rsvpByEventId, {
+        autoAddEnabled,
+        savedIds,
+        optOutIds,
+      }),
+      enrichEventsWithCalendarFlags(
+        ctx,
+        userId,
+        acc.pendingRsvpEvents,
+        rsvpByEventId,
+        { autoAddEnabled, savedIds, optOutIds }
+      ),
+    ]);
+
+    return {
+      myEvents: enrichedMyEvents,
+      myEventsHasMore: acc.myEventsHasMore,
+      pendingRsvpEvents: enrichedPendingRsvpEvents,
+      pendingRsvpHasMore: acc.pendingRsvpHasMore,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// QA FIX (Issue 2) — "אירועים נוספים" community-overview section.
+//
+// listCommunityMainOverview intentionally stays bounded to a small,
+// independently-limited "האירועים שלי" / "מחכים לתגובה" scan (Stage 2A) —
+// this is a SEPARATE, genuinely paginated query rather than widening that
+// bounded scan, so a community with 5/10/30+ open events remains fully
+// discoverable from Main without ever risking an unbounded
+// `.collect()`/scan over every future community event.
+//
+// Bounding strategy: a single indexed page (`by_community_date`,
+// `startTime >= now`, oldest-first) per call via `.paginate()` — exactly
+// the same page-at-a-time approach listByCommunityPaged already uses for
+// the Events tab. The CALLER (a horizontal carousel/list) is expected to
+// request the next page as the user approaches the end, exactly like
+// TabEvents' infinite list — never all pages up front.
+//
+// Eligibility is decided by the pure, testable
+// `isEligibleForAdditionalCommunityEvent` helper (communityCalendarState.ts),
+// reusing the SAME `computeCommunityEventPersonalCalendarState` two-
+// dimension model every other community-calendar query already uses — so
+// this can never drift out of sync with "האירועים שלי" / "מחכים לתגובה" on
+// what counts as personally-included or RSVP-pending. Because eligibility
+// filtering happens AFTER the page is fetched, a returned page can be
+// smaller than `numItems` (or empty) while `isDone` is still false — the
+// caller must keep requesting `continueCursor` until `isDone` to reliably
+// reach every eligible event, matching the existing listByCommunityPaged
+// contract.
+// ─────────────────────────────────────────────────────────────
+const ADDITIONAL_EVENTS_DEFAULT_PAGE_SIZE = 12;
+
+export const listCommunityAdditionalEventsPaged = query({
+  args: {
+    communityId: v.id('communities'),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+    /** Client clock (Date.now()) — never Date.now() inside the handler. */
+    now: v.number(),
+    /**
+     * 00:00:00.000 of the viewer's LOCAL calendar day — see
+     * listCommunityMainOverview's identical arg doc comment above. Keeps
+     * yesterday's already-ended all-day events out of the paginated source
+     * set entirely, instead of relying on client-side post-page filtering.
+     */
+    localDayStart: v.number(),
+  },
+  handler: async (
+    ctx,
+    { communityId, cursor, numItems, now, localDayStart }
+  ) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return { page: [], isDone: true, continueCursor: '' };
+    }
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!isActiveCommunityMember(membership)) {
+      return { page: [], isDone: true, continueCursor: '' };
+    }
+    const autoAddEnabled = membership.autoAddEventsToCalendar === true;
+
+    const userRsvps = await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const rsvpByEventId = new Map(
+      userRsvps.map((r) => [r.eventId as string, r.status])
+    );
+    const savedIds = await loadActiveSavedEventIds(ctx, userId);
+    const optOutIds = await loadOptOutEventIds(ctx, userId);
+
+    const pageResult = await ctx.db
+      .query('events')
+      .withIndex('by_community_date', (q) =>
+        q.eq('communityId', communityId).gte('startTime', localDayStart)
+      )
+      .paginate({
+        cursor,
+        numItems: numItems ?? ADDITIONAL_EVENTS_DEFAULT_PAGE_SIZE,
+      });
+
+    const eligible = pageResult.page.filter((ev) => {
+      if (ev.status === 'cancelled') return false;
+      if (!isEventStartTimeEligibleForUpcomingScan(ev, now)) return false;
+      const idStr = ev._id as string;
+      const rsvpStatus = rsvpByEventId.get(idStr);
+      const state = computeCommunityEventPersonalCalendarState({
+        isCreator: ev.createdBy === userId,
+        autoAddEnabled,
+        requiresRsvp: ev.requiresRsvp,
+        rsvpStatus,
+        hasActiveSave: savedIds.has(idStr),
+        hasOptOut: optOutIds.has(idStr),
+      });
+      return isEligibleForAdditionalCommunityEvent({
+        rsvpStatus,
+        isInPersonalCalendar: state.isInPersonalCalendar,
+        rsvpAttentionState: state.rsvpAttentionState,
+      });
+    });
+
+    const enrichedPage = await enrichEventsWithCalendarFlags(
+      ctx,
+      userId,
+      eligible,
+      rsvpByEventId,
+      { autoAddEnabled, savedIds, optOutIds }
+    );
+
+    return {
+      ...pageResult,
+      page: enrichedPage,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Stage 4 — Community "תזכורות" tab: EVENT-BASED "חשוב לזכור" groups.
+//
+// Returns, per community, the bounded/paginated set of events whose
+// important-items group should appear as an active reminder card for the
+// viewer right now: personally relevant (Stage 1D `isInPersonalCalendar` —
+// the SAME canonical helper every other community-calendar surface uses,
+// never a parallel notion), not cancelled, and containing at least one
+// "חשוב לזכור" item. See `filterEventsEligibleForReminderGroups` /
+// `isEventImportantItemsGroupEligible` in communityCalendarState.ts for the
+// exact, unit-tested rule.
+//
+// BOUNDING: paginates the existing `by_community_date` index, starting
+// `EVENT_REMINDER_GROUPS_LOOKBACK_MS` before the caller's clock instead of
+// exactly `now` — a plain `.gte('startTime', now)` (like
+// listCommunityAdditionalEventsPaged) would drop an event that started
+// earlier today but is still ongoing (e.g. a 09:00–18:00 event viewed at
+// noon), whose important items ("bring a hat") are still exactly the
+// mental load this tab exists for. The lookback is a bounded, generous
+// (48h) MVP boundary for single-day events — this schema has no
+// multi-day-event concept today (see the Stage 4 report), so it is not a
+// silent product regression, just a documented limit.
+//
+// "Has this event ended" is deliberately NOT decided here (see
+// `isEventImportantItemsGroupEligible`'s doc comment) — the CALLER must
+// filter the accumulated pages with `hasEventEndedByNow` (the same
+// client-side, device-local-time helper the "אירועים" tab already uses)
+// before rendering. This query only guarantees the event started within
+// the lookback window and is personally-relevant/not-cancelled/has-items.
+//
+// Eligibility filtering happens AFTER the page is fetched, so a returned
+// page can be smaller than `numItems` (or empty) while `isDone` is still
+// false — the caller must keep requesting `continueCursor` until `isDone`,
+// matching every other bounded community-calendar query's contract (see
+// listCommunityAdditionalEventsPaged above).
+// ─────────────────────────────────────────────────────────────
+const EVENT_REMINDER_GROUPS_DEFAULT_PAGE_SIZE = 20;
+const EVENT_REMINDER_GROUPS_LOOKBACK_MS = 48 * 60 * 60 * 1000;
+
+const eventReminderGroupShape = v.object({
+  _id: v.id('events'),
+  title: v.string(),
+  startTime: v.number(),
+  endTime: v.number(),
+  allDay: v.optional(v.boolean()),
+  location: v.optional(v.string()),
+  status: v.optional(v.union(v.literal('active'), v.literal('cancelled'))),
+  importantItems: v.array(importantItemObject),
+  // Needed by the client to gate the per-item delete control to the exact
+  // same authorization rule enforced server-side by events.update
+  // (creator OR active community owner/admin) — see PART B3.
+  createdBy: v.id('users'),
+});
+
+export const listCommunityEventReminderGroupsPaged = query({
+  args: {
+    communityId: v.id('communities'),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+    /** Client clock (Date.now()) — never Date.now() inside the handler. */
+    now: v.number(),
+  },
+  returns: v.object({
+    page: v.array(eventReminderGroupShape),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, { communityId, cursor, numItems, now }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return { page: [], isDone: true, continueCursor: '' };
+    }
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!isActiveCommunityMember(membership)) {
+      return { page: [], isDone: true, continueCursor: '' };
+    }
+    const autoAddEnabled = membership.autoAddEventsToCalendar === true;
+
+    const userRsvps = await ctx.db
+      .query('eventRsvps')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const rsvpByEventId = new Map(
+      userRsvps.map((r) => [r.eventId as string, r.status])
+    );
+    const savedIds = await loadActiveSavedEventIds(ctx, userId);
+    const optOutIds = await loadOptOutEventIds(ctx, userId);
+
+    const pageResult = await ctx.db
+      .query('events')
+      .withIndex('by_community_date', (q) =>
+        q
+          .eq('communityId', communityId)
+          .gte('startTime', now - EVENT_REMINDER_GROUPS_LOOKBACK_MS)
+      )
+      .paginate({
+        cursor,
+        numItems: numItems ?? EVENT_REMINDER_GROUPS_DEFAULT_PAGE_SIZE,
+      });
+
+    const eligible = filterEventsEligibleForReminderGroups(
+      pageResult.page,
+      userId,
+      rsvpByEventId,
+      { autoAddEnabled, savedIds, optOutIds }
+    );
+
+    return {
+      page: eligible.map((ev) => ({
+        _id: ev._id,
+        title: ev.title,
+        startTime: ev.startTime,
+        endTime: ev.endTime,
+        allDay: ev.allDay,
+        location: ev.location,
+        status: ev.status,
+        importantItems: ev.importantItems ?? [],
+        createdBy: ev.createdBy,
+      })),
+      continueCursor: pageResult.continueCursor,
+      isDone: pageResult.isDone,
+    };
   },
 });
 
@@ -670,9 +1325,22 @@ export const listByDateRange = query({
       if (e.communityId) communityIdSet.add(e.communityId as string);
     }
     const communityNameById = new Map<string, string>();
+    // Stage 1D: per-distinct-community auto-add signal for this viewer, bounded
+    // by the number of distinct communities appearing in range (same cardinality
+    // as communityNameById above) — not a per-event fan-out.
+    const autoAddByCommunityId = new Map<string, boolean>();
     for (const cidStr of communityIdSet) {
       const c = await ctx.db.get(cidStr as Id<'communities'>);
       if (c) communityNameById.set(cidStr, c.name);
+      const membership = await getCommunityMembership(
+        ctx,
+        cidStr as Id<'communities'>,
+        userId
+      );
+      autoAddByCommunityId.set(
+        cidStr,
+        membership?.autoAddEventsToCalendar === true
+      );
     }
 
     type SharedMemberProfile = {
@@ -704,8 +1372,11 @@ export const listByDateRange = query({
       if (ev.communityId) {
         // Community events: keep existing behavior — cancelled events are never shown.
         if (ev.status === 'cancelled') continue;
-        communityName = communityNameById.get(ev.communityId as string);
+        const communityIdStr = ev.communityId as string;
+        communityName = communityNameById.get(communityIdStr);
         isSavedToMyCalendar = computeIsSavedToMyCalendar({
+          isCreator: (ev.createdBy as string) === (userId as string),
+          autoAddEnabled: autoAddByCommunityId.get(communityIdStr) === true,
           requiresRsvp: ev.requiresRsvp,
           rsvpStatus,
           hasActiveSave: savedIds.has(idStr),
@@ -1817,9 +2488,10 @@ export const listCommunityEventsForDate = query({
     const optOutIds = await loadOptOutEventIds(ctx, userId);
 
     const results = await Promise.all(
-      activeMembers.map(async ({ communityId, role }) => {
+      activeMembers.map(async ({ communityId, autoAddEventsToCalendar }) => {
         const community = await ctx.db.get(communityId);
         if (!community || community.archived) return [];
+        const autoAddEnabled = autoAddEventsToCalendar === true;
 
         const events = await ctx.db
           .query('events')
@@ -1833,22 +2505,20 @@ export const listCommunityEventsForDate = query({
 
         return events
           .filter((ev) => ev.status !== 'cancelled')
-          .filter((ev) => {
-            const privileged = isCommunityEventPrivilegedForCalendar(
-              ev.createdBy,
-              userId,
-              role
-            );
+          .map((ev) => {
             const idStr = ev._id as string;
-            return shouldIncludeInPersonalHomeCalendar({
-              privileged,
+            const isSavedToMyCalendar = computeIsSavedToMyCalendar({
+              isCreator: ev.createdBy === userId,
+              autoAddEnabled,
               requiresRsvp: ev.requiresRsvp,
               rsvpStatus: rsvpByEventId.get(ev._id),
               hasActiveSave: savedIds.has(idStr),
               hasOptOut: optOutIds.has(idStr),
             });
+            return { ev, isSavedToMyCalendar };
           })
-          .map((ev) => ({
+          .filter(({ isSavedToMyCalendar }) => isSavedToMyCalendar)
+          .map(({ ev, isSavedToMyCalendar }) => ({
             _id: ev._id,
             title: ev.title,
             startTime: ev.startTime,
@@ -1859,12 +2529,7 @@ export const listCommunityEventsForDate = query({
             location: ev.location,
             locationUrl: ev.locationUrl,
             importantItems: ev.importantItems ?? [],
-            isSavedToMyCalendar: computeIsSavedToMyCalendar({
-              requiresRsvp: ev.requiresRsvp,
-              rsvpStatus: rsvpByEventId.get(ev._id),
-              hasActiveSave: savedIds.has(ev._id as string),
-              hasOptOut: optOutIds.has(ev._id as string),
-            }),
+            isSavedToMyCalendar,
           }));
       })
     );
@@ -1872,5 +2537,3 @@ export const listCommunityEventsForDate = query({
     return results.flat();
   },
 });
-
-

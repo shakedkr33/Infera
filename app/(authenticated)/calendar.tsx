@@ -1601,9 +1601,7 @@ function CalendarDayEventsSheet({
                 </Pressable>
                 {hasSheetImportantItems ? (
                   <InlineImportantItemsSection
-                    eventId={String(ev.id)}
                     items={ev.importantItems ?? []}
-                    checks={myImportantItemChecks[String(ev.id)] ?? {}}
                   />
                 ) : null}
                 </View>
@@ -1646,9 +1644,46 @@ export default function CalendarScreen(): React.JSX.Element {
   const communityId =
     rawCommunityId === 'undefined' ? undefined : rawCommunityId;
 
+  // `today`/`timelineRange` are declared here (rather than further below,
+  // where the rest of the monthly-view state lives) so the community-
+  // filtered query below can reuse the exact same visible-range calculation
+  // the unfiltered timeline already uses — see STAGE 1C comment on
+  // api.events.listByCommunity for why this range is required.
+  const today = useMemo(() => new Date(), []);
+  const timelineRange = useMemo(() => {
+    const fromDate = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    );
+    fromDate.setMonth(fromDate.getMonth() - 4);
+    fromDate.setHours(0, 0, 0, 0);
+
+    const toDate = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    );
+    toDate.setMonth(toDate.getMonth() + 8);
+    toDate.setHours(23, 59, 59, 999);
+
+    return { from: fromDate.getTime(), to: toDate.getTime() };
+  }, [today]);
+
+  // STAGE 1C: bounded to the same [-4mo, +8mo] window the unfiltered
+  // timeline uses (timelineRange) instead of loading every event the
+  // community has ever had. See the query's STAGE 1C comment in
+  // convex/events.ts. This is the only current caller of
+  // api.events.listByCommunity.
   const communityEvents = useQuery(
     api.events.listByCommunity,
-    communityId ? { communityId: communityId as Id<'communities'> } : 'skip'
+    communityId
+      ? {
+          communityId: communityId as Id<'communities'>,
+          from: timelineRange.from,
+          to: timelineRange.to,
+        }
+      : 'skip'
   );
 
   const communityData = useQuery(
@@ -1818,7 +1853,6 @@ export default function CalendarScreen(): React.JSX.Element {
     setNavPickerLocationUrl(locationUrl ?? null);
   };
 
-  const today = useMemo(() => new Date(), []);
   const [monthlyVisibleDate, setMonthlyVisibleDate] = useState(
     () => new Date(today.getFullYear(), today.getMonth(), 1)
   );
@@ -1848,26 +1882,6 @@ export default function CalendarScreen(): React.JSX.Element {
     );
     return { from, to };
   }, [displayYear, displayMonth]);
-
-  const timelineRange = useMemo(() => {
-    const fromDate = new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate()
-    );
-    fromDate.setMonth(fromDate.getMonth() - 4);
-    fromDate.setHours(0, 0, 0, 0);
-
-    const toDate = new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate()
-    );
-    toDate.setMonth(toDate.getMonth() + 8);
-    toDate.setHours(23, 59, 59, 999);
-
-    return { from: fromDate.getTime(), to: toDate.getTime() };
-  }, [today]);
 
   const personalEvents =
     useQuery(api.events.listByDateRange, {
@@ -5222,9 +5236,7 @@ function DayEventsList({
           {hasImportantItems ? (
             <View style={dStyles.importantItemsInset}>
               <InlineImportantItemsSection
-                eventId={String(event.id)}
                 items={event.importantItems ?? []}
-                checks={myImportantItemChecks[String(event.id)] ?? {}}
               />
             </View>
           ) : null}
@@ -5674,9 +5686,7 @@ function TimelineView({
                         event.importantItems.length > 0 ? (
                           <View style={styles.calendarTaskExpansionContainer}>
                             <InlineImportantItemsSection
-                              eventId={String(event.id)}
                               items={event.importantItems}
-                              checks={myImportantItemChecks[String(event.id)] ?? {}}
                             />
                           </View>
                         ) : null}

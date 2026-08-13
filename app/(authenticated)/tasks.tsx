@@ -33,6 +33,7 @@ import { getAvatarInitials } from '@/lib/avatarInitials';
 import { NotificationsDrawer } from '@/lib/components/notifications/NotificationsDrawer';
 import { InlineSubtasksEditor } from '@/lib/components/task/InlineSubtasksEditor';
 import { APP_IS_RTL, needsExplicitRTL, rtl } from '@/lib/rtl';
+import { getEffectiveTaskDueTimestamp } from '@/lib/taskDueStatus';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 import { getTaskCategoryLabel } from '@/lib/types/task';
@@ -182,12 +183,6 @@ function dayStart(timestamp: number): number {
   return date.getTime();
 }
 
-function dayEnd(timestamp: number): number {
-  const date = new Date(timestamp);
-  date.setHours(23, 59, 59, 999);
-  return date.getTime();
-}
-
 function addDaysFromToday(days: number): number {
   const date = new Date();
   date.setHours(0, 0, 0, 0);
@@ -245,23 +240,8 @@ function getDueSortTimestamp(task: {
   );
 }
 
-function getEffectiveDueTimestamp(task: {
-  dueDate?: number;
-  dueAt?: number;
-  eventStartTime?: number;
-  hasTime?: boolean;
-  eventAllDay?: boolean;
-}): number | undefined {
-  if (task.dueAt !== undefined) return task.dueAt;
-  if (task.eventStartTime !== undefined) {
-    return task.eventAllDay ? dayEnd(task.eventStartTime) : task.eventStartTime;
-  }
-  if (task.dueDate !== undefined) return dayEnd(task.dueDate);
-  return undefined;
-}
-
 function getMineGroup(task: DisplayTask, now: number): MineGroupKey {
-  const effectiveDue = getEffectiveDueTimestamp(task);
+  const effectiveDue = getEffectiveTaskDueTimestamp(task);
   if (!effectiveDue) return 'undated';
   if (effectiveDue < now) return 'overdue';
 

@@ -70,6 +70,54 @@ export function getOpenCommunityCalendarActionLabel(
   return isSavedToMyCalendar ? 'להסיר מהיומן' : 'הוסף ליומן';
 }
 
+/**
+ * Stage 2B: RSVP and personal-calendar inclusion are independent axes, so
+ * RSVP-required community events must ALSO expose an independent add/remove
+ * calendar action — alongside (never instead of) the RSVP yes/maybe/no
+ * controls, and without changing the viewer's RSVP status. Same visibility
+ * rules as `isOpenCommunityCalendarActionVisible`, but for
+ * `requiresRsvp === true` instead of `=== false`.
+ */
+export function isRsvpCalendarActionVisible(args: {
+  event: OpenCommunityCalendarEventLike;
+  hasValidConvexEventId: boolean;
+  communityArchived?: boolean;
+  viewerIsActiveMember: boolean;
+}): boolean {
+  const {
+    event,
+    hasValidConvexEventId,
+    communityArchived,
+    viewerIsActiveMember,
+  } = args;
+  if (!hasValidConvexEventId) {
+    return false;
+  }
+  if (!event.communityId) {
+    return false;
+  }
+  if (event.requiresRsvp !== true) {
+    return false;
+  }
+  if (event.status === 'cancelled') {
+    return false;
+  }
+  if (communityArchived === true) {
+    return false;
+  }
+  if (!viewerIsActiveMember) {
+    return false;
+  }
+  return true;
+}
+
+/** Copy per the Stage 2B spec: independent action, distinct from RSVP buttons. */
+export function getRsvpCalendarActionLabel(
+  isSavedToMyCalendar: boolean
+): 'הסר מהיומן' | 'הוסף ליומן' {
+  return isSavedToMyCalendar ? 'הסר מהיומן' : 'הוסף ליומן';
+}
+
 /** Informational label "פתוח לחברי הקהילה" — not tied to RSVP UI or roles. */
 export function isOpenCommunityInformationalLabelVisible(args: {
   event: OpenCommunityCalendarEventLike;

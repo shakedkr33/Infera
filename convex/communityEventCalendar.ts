@@ -36,6 +36,16 @@ async function getMyActiveAssignedEventTasks(
   );
 }
 
+/**
+ * Stage 1D: adds a community event back to the viewer's personal calendar —
+ * clearing any per-event opt-out and ensuring an active save row exists.
+ * This works for BOTH open and RSVP-required events (the RSVP-required case
+ * was previously rejected here; it no longer is, since opt-outs are now
+ * supported for RSVP-required events too — see removeCommunityEventFromPersonalCalendar).
+ * The current UI does not yet expose an "add to calendar" button for
+ * RSVP-required events, but the backend must support it so a future UI can
+ * call this directly. Does NOT touch RSVP status.
+ */
 export const addCommunityEventToMyCalendar = mutation({
   args: { eventId: v.id('events') },
   handler: async (ctx, { eventId }) => {
@@ -44,9 +54,6 @@ export const addCommunityEventToMyCalendar = mutation({
 
     const event = await ctx.db.get(eventId);
     if (!event?.communityId) throw new Error('אירוע לא נמצא');
-    if (event.requiresRsvp === true) {
-      throw new Error('אירוע זה דורש אישור הגעה');
-    }
     if (event.status === 'cancelled')
       throw new Error('לא ניתן להוסיף אירוע שבוטל');
 
@@ -57,16 +64,6 @@ export const addCommunityEventToMyCalendar = mutation({
     );
     if (!isActiveCommunityMember(membership)) {
       throw new Error('אין הרשאה');
-    }
-
-    const rsvpRow = await ctx.db
-      .query('eventRsvps')
-      .withIndex('by_event_user', (q) =>
-        q.eq('eventId', eventId).eq('userId', userId)
-      )
-      .unique();
-    if (rsvpRow?.status === 'yes') {
-      return { success: true as const };
     }
 
     await saveCommunityEventToPersonalCalendar(ctx, {
@@ -113,7 +110,6 @@ export const removeCommunityEventFromMyCalendar = mutation({
     await removeCommunityEventFromPersonalCalendar(ctx, {
       userId,
       eventId,
-      requiresRsvp: event.requiresRsvp,
     });
     return { success: true as const };
   },
@@ -152,7 +148,6 @@ export const removeEventFromCalendarAndUnclaim = mutation({
     await removeCommunityEventFromPersonalCalendar(ctx, {
       userId,
       eventId,
-      requiresRsvp: event.requiresRsvp,
     });
 
     return { success: true as const, unclaimedCount: assignedTasks.length };

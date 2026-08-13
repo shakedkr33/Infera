@@ -219,6 +219,48 @@ export function isGeneralCommunityReminder(task: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Canonical "הוסף למשימות שלי" bundle shape helpers — pure, so the exact
+// title format and subtask mapping used by
+// tasks.addEventImportantItemsToMyTasks can be unit-tested without a
+// Convex test harness. This is the ONLY conversion mechanism: ONE parent
+// task per event, with each important item as a subtask — never one task
+// per item.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The canonical bundle task title — matches the EXACT existing format
+ * tasks.addEventImportantItemsToMyTasks already produces today
+ * ("חשוב לזכור - {event title}"). Deliberately preserved as-is: PART C of
+ * the manual-QA follow-up requires reusing this exact mechanism, not
+ * introducing a new title format.
+ */
+export function buildImportantItemsBundleTaskTitle(eventTitle: string): string {
+  return `חשוב לזכור - ${eventTitle}`;
+}
+
+export interface ImportantItemInput {
+  id: string;
+  title: string;
+}
+
+export interface ImportantItemBundleSubtask {
+  id: string;
+  title: string;
+  completed: boolean;
+}
+
+/** Maps an event's important items to the bundle task's subtasks — always uncompleted at creation. */
+export function buildImportantItemsBundleSubtasks(
+  importantItems: ImportantItemInput[]
+): ImportantItemBundleSubtask[] {
+  return importantItems.map((item) => ({
+    id: item.id,
+    title: item.title,
+    completed: false,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Personal completion helpers for general community reminders.
 //
 // These helpers read/write the completedAt field on taskParticipantSettings

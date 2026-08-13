@@ -47,16 +47,27 @@ export async function saveCommunityEventToPersonalCalendar(
   return { wasAddedToCalendar: true };
 }
 
+/**
+ * Stage 1D: persistently removes a community event from the viewer's
+ * personal calendar via a `communityEventPersonalCalendarOptOuts` row — for
+ * BOTH open and RSVP-required events. An opt-out is the per-event override
+ * that wins over auto-add, explicit save, creator inclusion, and RSVP
+ * yes/maybe (see computeIsSavedToMyCalendar), until the user explicitly adds
+ * the event back (saveCommunityEventToPersonalCalendar clears it).
+ *
+ * This intentionally does NOT touch RSVP status — removing an event from the
+ * calendar and answering "not attending" are different actions. Callers that
+ * also need to unclaim the viewer's event tasks do so themselves, separately
+ * (see communityEventCalendar.ts's removeEventFromCalendarAndUnclaim).
+ */
 export async function removeCommunityEventFromPersonalCalendar(
   ctx: MutationCtx,
   {
     userId,
     eventId,
-    requiresRsvp,
   }: {
     userId: Id<'users'>;
     eventId: Id<'events'>;
-    requiresRsvp: boolean | undefined;
   }
 ): Promise<void> {
   const saveRow = await ctx.db
@@ -70,19 +81,17 @@ export async function removeCommunityEventFromPersonalCalendar(
     await ctx.db.patch(saveRow._id, { removedAt: Date.now() });
   }
 
-  if (requiresRsvp === false) {
-    const existingOpt = await ctx.db
-      .query('communityEventPersonalCalendarOptOuts')
-      .withIndex('by_user_event', (q) =>
-        q.eq('userId', userId).eq('eventId', eventId)
-      )
-      .unique();
-    if (!existingOpt) {
-      await ctx.db.insert('communityEventPersonalCalendarOptOuts', {
-        userId,
-        eventId,
-        createdAt: Date.now(),
-      });
-    }
+  const existingOpt = await ctx.db
+    .query('communityEventPersonalCalendarOptOuts')
+    .withIndex('by_user_event', (q) =>
+      q.eq('userId', userId).eq('eventId', eventId)
+    )
+    .unique();
+  if (!existingOpt) {
+    await ctx.db.insert('communityEventPersonalCalendarOptOuts', {
+      userId,
+      eventId,
+      createdAt: Date.now(),
+    });
   }
 }

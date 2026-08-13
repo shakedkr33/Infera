@@ -13,23 +13,26 @@ import {
 } from 'react-native';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
 import {
-  EventTasksAccordion,
   type AuthorizedHomeEventTask,
   type EventTaskAccordionData,
+  EventTasksAccordion,
 } from '@/components/home/EventTasksAccordion';
+import { HomeImportantItemsPreview } from '@/components/home/HomeImportantItemsPreview';
 import type { ImportantItem } from '@/components/InlineImportantItemsSection';
-import { InlineImportantItemsSection } from '@/components/InlineImportantItemsSection';
 import { TaskCheckbox } from '@/components/TaskCheckbox';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { getAvatarInitials } from '@/lib/avatarInitials';
 import { SubtaskImagePreviewModal } from '@/lib/components/task/SubtaskImagePreviewModal';
 import { SubtaskAttachmentPreview } from '@/lib/components/task/SubtasksSection';
+import {
+  hasNavigableEventLocation,
+  isHomeCompactNavButtonVisible,
+} from '@/lib/homeEventNavigation';
 import { getTextAlign, rtl } from '@/lib/rtl';
 import type { Birthday } from '@/lib/types/birthday';
 import type { SubTaskAttachment } from '@/lib/types/task';
 import { getCountdownLabel } from '@/lib/utils/birthday';
-import { parseGeoUri } from '@/lib/utils/geoUri';
 import { colors as tc } from '@/theme/colors';
 
 export type { AuthorizedHomeEventTask, EventTaskAccordionData };
@@ -118,8 +121,13 @@ interface UnifiedTimelineCardProps {
   onImagePress?: (uri: string) => void;
   /** "חשוב לזכור" items for community events. */
   importantItems?: ImportantItem[];
-  /** Per-item completion state for the current user (itemId → completed). */
-  checks?: Record<string, boolean>;
+  /**
+   * True when the current user already added this event's important items
+   * to their personal tasks (from api.tasks.getMyImportantItemsBundleStatus
+   * — the same batched source of truth Event Details and the community
+   * "תזכורות" tab use).
+   */
+  importantItemsAlreadyAdded?: boolean;
   /** Authorized event tasks accordion data. */
   eventTasksData?: EventTaskAccordionData;
   /** Whether the event-tasks accordion is currently expanded. */
@@ -164,8 +172,12 @@ type HomeDailyCommandCenterProps = {
   onOpenBirthday: (birthday: Birthday) => void;
   onOpenBirthdays: () => void;
   onAddBirthday: () => void;
-  /** Current user's completion map: eventId → { itemId: boolean } */
-  myImportantItemChecks: Record<string, Record<string, boolean>>;
+  /**
+   * Single batched "already added to my tasks" map: eventId → true —
+   * from api.tasks.getMyImportantItemsBundleStatus. Shared source of truth
+   * with Event Details and the community "תזכורות" tab.
+   */
+  myImportantItemsBundleStatus: Record<string, boolean>;
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -436,7 +448,7 @@ const UnifiedTimelineCard = ({
   onToggleSubtask,
   onImagePress,
   importantItems = [],
-  checks = {},
+  importantItemsAlreadyAdded = false,
   eventTasksData,
   eventTasksExpanded,
   onToggleEventTasks,
@@ -450,8 +462,10 @@ const UnifiedTimelineCard = ({
     item.type === 'event' && importantItems.length > 0;
   const hasEventTasks =
     item.type === 'event' && (eventTasksData?.tasks.length ?? 0) > 0;
-  const hasNavigation =
-    item.location.trim().length > 0 && parseGeoUri(item.locationUrl) !== null;
+  const hasNavigation = hasNavigableEventLocation(
+    item.location,
+    item.locationUrl
+  );
   const hasRemoteAction = Boolean(item.remoteUrl);
   const hasPrimaryAction = hasNavigation || hasRemoteAction;
 
@@ -643,7 +657,9 @@ const UnifiedTimelineCard = ({
           <EventTasksAccordion
             tasks={eventTasksData.tasks}
             canManageTasks={eventTasksData.canManageTasks}
-            tasksVisibleToParticipants={eventTasksData.tasksVisibleToParticipants}
+            tasksVisibleToParticipants={
+              eventTasksData.tasksVisibleToParticipants
+            }
             expanded={eventTasksExpanded ?? false}
             onToggle={onToggleEventTasks ?? (() => {})}
             onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
@@ -655,10 +671,10 @@ const UnifiedTimelineCard = ({
 
         {hasEventImportantItems ? (
           <View style={styles.importantItemsWrapper}>
-            <InlineImportantItemsSection
+            <HomeImportantItemsPreview
+              alreadyAdded={importantItemsAlreadyAdded}
               eventId={String(item.id)}
               items={importantItems}
-              checks={checks}
             />
           </View>
         ) : null}
@@ -857,10 +873,17 @@ const UnifiedTimelineCard = ({
 
   const compactContent = compactEventContent ?? compactTaskContent;
 
-  // Show compact "ניווט" pill on upcoming events with a valid navigation destination.
-  // Only applies to compact display — featured events keep the full-width button.
-  const showCompactNavButton =
-    item.type === 'event' && temporalState === 'upcoming' && hasNavigation;
+  // Show compact "ניווט" pill on upcoming/active events with a valid
+  // navigation destination — see isHomeCompactNavButtonVisible's doc
+  // comment for why 'active' must be included (all-day events are
+  // classified 'active' for their whole calendar day). Only applies to
+  // compact display — featured events keep the full-width button.
+  const showCompactNavButton = isHomeCompactNavButtonVisible({
+    itemType: item.type,
+    temporalState,
+    location: item.location,
+    locationUrl: item.locationUrl,
+  });
 
   if (showMaybeRsvpRow) {
     return (
@@ -895,7 +918,9 @@ const UnifiedTimelineCard = ({
           <EventTasksAccordion
             tasks={eventTasksData.tasks}
             canManageTasks={eventTasksData.canManageTasks}
-            tasksVisibleToParticipants={eventTasksData.tasksVisibleToParticipants}
+            tasksVisibleToParticipants={
+              eventTasksData.tasksVisibleToParticipants
+            }
             expanded={eventTasksExpanded ?? false}
             onToggle={onToggleEventTasks ?? (() => {})}
             onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
@@ -906,10 +931,10 @@ const UnifiedTimelineCard = ({
         ) : null}
         {hasEventImportantItems ? (
           <View style={styles.importantItemsWrapper}>
-            <InlineImportantItemsSection
+            <HomeImportantItemsPreview
+              alreadyAdded={importantItemsAlreadyAdded}
               eventId={String(item.id)}
               items={importantItems}
-              checks={checks}
             />
           </View>
         ) : null}
@@ -980,7 +1005,9 @@ const UnifiedTimelineCard = ({
           <EventTasksAccordion
             tasks={eventTasksData.tasks}
             canManageTasks={eventTasksData.canManageTasks}
-            tasksVisibleToParticipants={eventTasksData.tasksVisibleToParticipants}
+            tasksVisibleToParticipants={
+              eventTasksData.tasksVisibleToParticipants
+            }
             expanded={eventTasksExpanded ?? false}
             onToggle={onToggleEventTasks ?? (() => {})}
             onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
@@ -991,10 +1018,10 @@ const UnifiedTimelineCard = ({
         ) : null}
         {hasEventImportantItems ? (
           <View style={styles.importantItemsWrapper}>
-            <InlineImportantItemsSection
+            <HomeImportantItemsPreview
+              alreadyAdded={importantItemsAlreadyAdded}
               eventId={String(item.id)}
               items={importantItems}
-              checks={checks}
             />
           </View>
         ) : null}
@@ -1113,10 +1140,10 @@ const UnifiedTimelineCard = ({
         />
         {hasEventImportantItems ? (
           <View style={styles.importantItemsWrapper}>
-            <InlineImportantItemsSection
+            <HomeImportantItemsPreview
+              alreadyAdded={importantItemsAlreadyAdded}
               eventId={String(item.id)}
               items={importantItems}
-              checks={checks}
             />
           </View>
         ) : null}
@@ -1149,7 +1176,9 @@ const UnifiedTimelineCard = ({
           <EventTasksAccordion
             tasks={eventTasksData.tasks}
             canManageTasks={eventTasksData.canManageTasks}
-            tasksVisibleToParticipants={eventTasksData.tasksVisibleToParticipants}
+            tasksVisibleToParticipants={
+              eventTasksData.tasksVisibleToParticipants
+            }
             expanded={eventTasksExpanded ?? false}
             onToggle={onToggleEventTasks ?? (() => {})}
             onToggleCompleted={onToggleEventTaskCompleted ?? (() => {})}
@@ -1160,10 +1189,10 @@ const UnifiedTimelineCard = ({
         ) : null}
         {hasEventImportantItems ? (
           <View style={styles.importantItemsWrapper}>
-            <InlineImportantItemsSection
+            <HomeImportantItemsPreview
+              alreadyAdded={importantItemsAlreadyAdded}
               eventId={String(item.id)}
               items={importantItems}
-              checks={checks}
             />
           </View>
         ) : null}
@@ -1214,7 +1243,7 @@ export function HomeDailyCommandCenter({
   onOpenBirthday,
   onOpenBirthdays,
   onAddBirthday,
-  myImportantItemChecks,
+  myImportantItemsBundleStatus,
 }: HomeDailyCommandCenterProps): React.JSX.Element {
   const [undatedExpanded, setUndatedExpanded] = useState(false);
   const [endedExpanded, setEndedExpanded] = useState(false);
@@ -1653,7 +1682,9 @@ export function HomeDailyCommandCenter({
                   }
                   temporalState={getTemporalState(item)}
                   importantItems={item.importantItems}
-                  checks={myImportantItemChecks[item.id] ?? {}}
+                  importantItemsAlreadyAdded={
+                    myImportantItemsBundleStatus[item.id] === true
+                  }
                   eventTasksData={item.authorizedEventTasks}
                   eventTasksExpanded={expandedEventTaskIds.has(item.id)}
                   onToggleEventTasks={() => toggleEventTasksFor(item.id)}
@@ -1708,7 +1739,9 @@ export function HomeDailyCommandCenter({
                       }
                       temporalState="ended"
                       importantItems={item.importantItems}
-                      checks={myImportantItemChecks[item.id] ?? {}}
+                      importantItemsAlreadyAdded={
+                        myImportantItemsBundleStatus[item.id] === true
+                      }
                       eventTasksData={item.authorizedEventTasks}
                       eventTasksExpanded={expandedEventTaskIds.has(item.id)}
                       onToggleEventTasks={() => toggleEventTasksFor(item.id)}
@@ -1744,7 +1777,9 @@ export function HomeDailyCommandCenter({
               }
               temporalState="active"
               importantItems={item.importantItems}
-              checks={myImportantItemChecks[item.id] ?? {}}
+              importantItemsAlreadyAdded={
+                myImportantItemsBundleStatus[item.id] === true
+              }
               eventTasksData={item.authorizedEventTasks}
               eventTasksExpanded={expandedEventTaskIds.has(item.id)}
               onToggleEventTasks={() => toggleEventTasksFor(item.id)}
@@ -1779,7 +1814,9 @@ export function HomeDailyCommandCenter({
               }
               temporalState={getTemporalState(featuredItem)}
               importantItems={featuredItem.importantItems}
-              checks={myImportantItemChecks[featuredItem.id] ?? {}}
+              importantItemsAlreadyAdded={
+                myImportantItemsBundleStatus[featuredItem.id] === true
+              }
               eventTasksData={featuredItem.authorizedEventTasks}
               eventTasksExpanded={expandedEventTaskIds.has(featuredItem.id)}
               onToggleEventTasks={() => toggleEventTasksFor(featuredItem.id)}
@@ -1817,7 +1854,9 @@ export function HomeDailyCommandCenter({
                     }
                     temporalState={tState}
                     importantItems={item.importantItems}
-                    checks={myImportantItemChecks[item.id] ?? {}}
+                    importantItemsAlreadyAdded={
+                      myImportantItemsBundleStatus[item.id] === true
+                    }
                     eventTasksData={item.authorizedEventTasks}
                     eventTasksExpanded={expandedEventTaskIds.has(item.id)}
                     onToggleEventTasks={() => toggleEventTasksFor(item.id)}
