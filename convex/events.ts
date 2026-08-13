@@ -1253,6 +1253,65 @@ export const listByRelatedBirthday = query({
 //                (handles cross-space sharing where creator's event lives in a
 //                 different spaceId than the viewer's resolved space)
 // ─────────────────────────────────────────────────────────────
+
+/** Minimal shape of a Category 2 candidate event needed by the inclusion predicate below. */
+export type Category2CandidateEvent = {
+  _id: string;
+  communityId?: unknown;
+  createdBy: string;
+  deletedAt?: number;
+  status?: 'active' | 'cancelled';
+  sharedWithUserIds?: string[];
+  sharedWithFamilyMemberIds?: string[];
+};
+
+/**
+ * Pure membership/visibility predicate for Category 2 (cross-space personal
+ * event sharing) in `listByDateRange`.
+ *
+ * IMPORTANT: this function performs NO date-range check — by the time a
+ * candidate reaches this predicate it has already been bounded by the
+ * `by_community_date` index range scan (`communityId === undefined` AND
+ * `startTime` within [from, to]) in the caller. This function only decides
+ * whether the *viewer* is allowed to see a given already-date-bounded
+ * candidate, preserving the exact pre-optimization semantics.
+ */
+export function shouldIncludeCategory2Event(
+  ev: Category2CandidateEvent,
+  params: {
+    userId: string;
+    myMemberIdsAllSpaces: Set<string>;
+    personalOptOutIds: Set<string>;
+  }
+): boolean {
+  const { userId, myMemberIdsAllSpaces, personalOptOutIds } = params;
+  const idStr = ev._id;
+
+  if (ev.communityId) return false; // community events use separate RSVP/save logic
+  if (ev.createdBy === userId) return false; // creator always sees via Cat 1
+  if (ev.deletedAt !== undefined) return false; // soft-deleted for all viewers
+
+  const sharedUserIds = ev.sharedWithUserIds ?? [];
+  const sharedMemberIds = ev.sharedWithFamilyMemberIds ?? [];
+
+  const isSharedWithViewer =
+    sharedUserIds.includes(userId) ||
+    sharedMemberIds.some((mid) => myMemberIdsAllSpaces.has(mid));
+
+  if (!isSharedWithViewer) return false;
+
+  // Opt-out: the viewer is always a non-creator here. Hide regardless of status.
+  if (personalOptOutIds.has(idStr)) return false;
+
+  // Cancelled: only include if it has invitees (opt-out already handled above).
+  if (ev.status === 'cancelled') {
+    const hasInvitees = sharedUserIds.length > 0 || sharedMemberIds.length > 0;
+    if (!hasInvitees) return false;
+  }
+
+  return true;
+}
+
 export const listByDateRange = query({
   args: {
     from: v.number(), // Unix timestamp (ms) – תחילת טווח
@@ -1431,47 +1490,33 @@ export const listByDateRange = query({
     // This handles the cross-space case: the event creator's spaceId differs from
     // the viewer's resolved spaceId, so the by_space_and_time index never returns it.
     //
-    // TODO: Add a dedicated index on sharedWithUserIds / sharedWithFamilyMemberIds
-    //       when event volume warrants it. For MVP, the full scan is acceptable
-    //       because personal sharing is rare relative to total event volume.
+    // Bounded via the existing `by_community_date` index ([communityId, startTime]):
+    // personal (non-community) events always have `communityId === undefined`, so
+    // `q.eq('communityId', undefined)` narrows to exactly the Category 2 candidate
+    // set (community events are excluded at the index level, matching the
+    // `if (ev.communityId) continue` check below) and `startTime` is bounded by the
+    // requested range BEFORE any documents are loaded — no table-wide scan.
     // Cat2 includes cancelled personal events with invitees so cross-space
     // recipients still see them as "בוטל" until they opt out.
     const cat2Candidates = await ctx.db
       .query('events')
-      .filter((q) =>
-        q.and(
-          q.gte(q.field('startTime'), from),
-          q.lte(q.field('startTime'), to)
-        )
+      .withIndex('by_community_date', (q) =>
+        q.eq('communityId', undefined).gte('startTime', from).lte('startTime', to)
       )
       .collect();
 
     for (const ev of cat2Candidates) {
       const idStr = ev._id as string;
       if (seenIds.has(idStr)) continue; // already included from Cat 1
-      if (ev.communityId) continue; // community events use separate RSVP/save logic
-      if ((ev.createdBy as string) === (userId as string)) continue; // creator always sees via Cat 1
-      // Skip soft-deleted events for all viewers
-      if (ev.deletedAt !== undefined) continue;
 
-      const sharedUserIds = (ev.sharedWithUserIds ?? []) as string[];
-      const sharedMemberIds = ev.sharedWithFamilyMemberIds ?? [];
-
-      const isSharedWithViewer =
-        sharedUserIds.includes(userId as string) ||
-        sharedMemberIds.some((mid) => myMemberIdsAllSpaces.has(mid));
-
-      if (!isSharedWithViewer) continue;
-
-      // Opt-out: the viewer is always a non-creator in Cat2 (creators are skipped
-      // above). Hide the event if the viewer has opted out, regardless of status.
-      if (personalOptOutIds.has(idStr)) continue;
-
-      // Cancelled: only include if has invitees (opt-out already handled above).
-      if (ev.status === 'cancelled') {
-        const hasInvitees =
-          sharedUserIds.length > 0 || sharedMemberIds.length > 0;
-        if (!hasInvitees) continue;
+      if (
+        !shouldIncludeCategory2Event(ev as Category2CandidateEvent, {
+          userId: userId as string,
+          myMemberIdsAllSpaces,
+          personalOptOutIds,
+        })
+      ) {
+        continue;
       }
 
       seenIds.add(idStr);
