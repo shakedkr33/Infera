@@ -1,5 +1,7 @@
-import type { Id } from './_generated/dataModel';
+import type { TaskClassification } from '../lib/taskClassification';
+import type { Doc, Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
+import { isActiveCommunityMember } from './communityMemberUtils';
 
 // ─── Shared storage-deletion helper ──────────────────────────────────────────
 //
@@ -216,6 +218,110 @@ export function isGeneralCommunityReminder(task: {
     task.deletedAt === undefined &&
     task.archivedAt === undefined
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Canonical task/reminder classification — single source of truth used by
+// every screen that renders a task/reminder type label (Home, Calendar,
+// Community Main) so the classification can never drift between screens
+// (see PART E of the community-reminder distribution fix).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function getTaskClassification(task: {
+  communityId?: Id<'communities'>;
+  sourceType?: string;
+  deletedAt?: number;
+  archivedAt?: number;
+  assignedTo?: Id<'users'>;
+  assignedToMemberId?: Id<'members'>;
+  assignedToUserIds?: Id<'users'>[];
+  assignedToMemberIds?: Id<'members'>[];
+}): TaskClassification {
+  return isGeneralCommunityReminder(task)
+    ? 'community_reminder'
+    : 'personal_task';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Viewer-eligibility predicate for general community reminders — PART F.
+//
+// A general community reminder is shared community content: visibility is
+// derived from the VIEWER's current active membership in the reminder's
+// community, never from who created it. This is the pure predicate the
+// actual indexed ctx.db scan in tasks.listMyTasks delegates to, so the
+// eligibility rule itself can be unit-tested without a live Convex test
+// harness (none exists in this repo — see the extraction precedent in
+// convex/events.ts `shouldIncludeCategory2Event` /
+// tests/convex/eventsListByDateRangeCategory2.test.ts).
+//
+// Deliberately does NOT check past-due here — past-due filtering uses the
+// SAME lib/taskDueStatus.ts helpers already used by the Community Reminders
+// tab, applied client-side (never Date.now() inside a Convex query).
+// ─────────────────────────────────────────────────────────────────────────────
+export function shouldIncludeCommunityReminderForViewer(args: {
+  task: {
+    communityId?: Id<'communities'>;
+    sourceType?: string;
+    deletedAt?: number;
+    archivedAt?: number;
+    assignedTo?: Id<'users'>;
+    assignedToMemberId?: Id<'members'>;
+    assignedToUserIds?: Id<'users'>[];
+    assignedToMemberIds?: Id<'members'>[];
+  };
+  /**
+   * The viewer's own membership row in task.communityId, or null when they
+   * never joined / it wasn't found. Only `status` is read (via
+   * isActiveCommunityMember) — a minimal shape keeps this predicate
+   * callable from pure unit tests without constructing a full Convex
+   * document.
+   */
+  viewerMembership: Pick<Doc<'communityMembers'>, 'status'> | null;
+  /** Whether the VIEWER (not the creator) has personally completed this reminder. */
+  personallyCompletedByViewer: boolean;
+}): boolean {
+  if (!isGeneralCommunityReminder(args.task)) return false;
+  if (args.personallyCompletedByViewer) return false;
+  return isActiveCommunityMember(
+    args.viewerMembership as Doc<'communityMembers'> | null
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure range-inclusion rule for the date-bounded viewer-range Community
+// Reminder query (convex/tasks.ts `listVisibleCommunityRemindersForRange` /
+// `loadGeneralCommunityRemindersInRange`) — final architecture replacing the
+// unbounded `listMyTasks` Step 4 scan.
+//
+// The ACTUAL row-reduction happens at the DB layer via two indexed range
+// scans (`by_community_assigned_dueAt` / `by_community_assigned_dueDate`),
+// which cannot be unit-tested without a live Convex harness (none exists in
+// this repo — see the identical precedent noted at the top of
+// tests/convex/communityReminderDistribution.test.ts). This predicate
+// captures the exact inclusion RULE those two index scans jointly implement,
+// so it is unit-testable, and is also applied as a cheap in-memory
+// belt-and-braces filter on the (already tiny, already index-bounded)
+// candidate set returned by the two scans — never a substitute for the
+// index bounding itself.
+//
+// A reminder is "within range" when EITHER its exact `dueAt` timestamp OR
+// its date-only `dueDate` timestamp falls within [from, to] (inclusive) —
+// matching the exact same inclusive `.gte()/.lte()` semantics as the index
+// range queries, so this helper can never silently disagree with them. A
+// reminder with NEITHER field set (a real, currently-reachable "ללא תאריך"
+// product state — see lib/taskDueStatus.ts's doc comment) is never "within
+// range": there is no temporal anchor to place it on a date-driven surface.
+// ─────────────────────────────────────────────────────────────────────────────
+export function isGeneralCommunityReminderWithinRange(
+  task: { dueAt?: number; dueDate?: number },
+  from: number,
+  to: number
+): boolean {
+  const dueAtInRange =
+    task.dueAt !== undefined && task.dueAt >= from && task.dueAt <= to;
+  const dueDateInRange =
+    task.dueDate !== undefined && task.dueDate >= from && task.dueDate <= to;
+  return dueAtInRange || dueDateInRange;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

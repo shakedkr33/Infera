@@ -67,6 +67,11 @@ import {
   type HolidayOverlayPreferences,
   loadHolidayOverlayPreferences,
 } from '@/lib/storage/holidayOverlayPreferences';
+import {
+  COMMUNITY_REMINDER_TYPE_LABEL,
+  PERSONAL_TASK_TYPE_LABEL,
+} from '@/lib/taskClassification';
+import { isTaskPastDue } from '@/lib/taskDueStatus';
 import type { HolidayOverlayItem } from '@/lib/types/holidayOverlay';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 import {
@@ -317,6 +322,8 @@ type TimelineEventRow = MockTimelineEvent & {
   isPersonalTask?: boolean;
   /** True when the task dueDate is in the past and not yet completed */
   isOverdue?: boolean;
+  /** User-facing type chip text — `תזכורת קהילה` for general community reminders, `משימה` otherwise. */
+  typeLabel?: string;
   /** Subtask checklist items — only for personal task rows */
   subtasks?: { id: string; title: string; completed: boolean }[];
   /** Initials of the non-self assignee — only for personal task rows */
@@ -348,6 +355,10 @@ type CalendarDayTask = {
   /** All non-self assignees for multi-circle display on compact task cards. */
   assigneeDisplays?: { initials: string; color: string }[];
   subtasks?: { id: string; title: string; completed: boolean }[];
+  /** User-facing type chip text — `תזכורת קהילה` for general community reminders, `משימה` otherwise. */
+  typeLabel?: string;
+  /** Real community name — only set for general community reminders. */
+  communityName?: string;
 };
 
 interface TimelineDayGroup {
@@ -375,6 +386,19 @@ function isEventDerivedImportantItemTask(task: {
     task.sourceType === 'community_event_important_item' ||
     task.sourceType === 'community_event_important_items_bundle'
   );
+}
+
+/**
+ * Type-chip text for a calendar task row. Uses the SAME canonical
+ * `taskType` classification returned by `tasks.listMyTasks` (see
+ * convex/taskUtils.ts `getTaskClassification`) — never a second,
+ * independently-maintained check — so Calendar and Home can never disagree
+ * about whether an item is a general community reminder.
+ */
+function getCalendarTaskTypeLabel(task: { taskType?: string }): string {
+  return task.taskType === 'community_reminder'
+    ? COMMUNITY_REMINDER_TYPE_LABEL
+    : PERSONAL_TASK_TYPE_LABEL;
 }
 
 /**
@@ -2004,19 +2028,65 @@ export default function CalendarScreen(): React.JSX.Element {
   const familyAllSaved =
     useQuery(api.profileCircles.getFamilyAllSavedCommunityEvents) ?? {};
 
-  // Personal tasks for the calendar — fetched once, filtered client-side
+  // Personal tasks for the calendar — fetched once, filtered client-side.
+  // No longer carries shared Community Reminders (that unbounded-by-date
+  // distribution was removed from listMyTasks — see that query's own doc
+  // comment in convex/tasks.ts); a general reminder can still appear here
+  // ONLY when the viewer happens to be its creator (bounded by_creator
+  // match), same as before this fix existed.
   const calendarTasksRaw = useQuery(api.tasks.listMyTasks) ?? [];
 
-  const calendarPersonalTasks = useMemo(
-    () =>
-      calendarTasksRaw.filter(
-        (t) =>
-          t.dueDate != null &&
-          !t.completed &&
-          !isEventDerivedImportantItemTask(t)
-      ),
-    [calendarTasksRaw]
-  );
+  // Dedicated, date-bounded Community Reminder retrieval — one query per
+  // Calendar range the screen already computes (monthRange for the monthly
+  // grid/day panels, timelineRange for the Timeline view), mirroring the
+  // exact same per-view range split already used for
+  // personalEvents/timelinePersonalEvents above. Never a single
+  // unbounded/all-history query.
+  const communityRemindersMonthly =
+    useQuery(api.tasks.listVisibleCommunityRemindersForRange, {
+      from: monthRange.from,
+      to: monthRange.to,
+    }) ?? [];
+  const communityRemindersTimeline =
+    useQuery(api.tasks.listVisibleCommunityRemindersForRange, {
+      from: timelineRange.from,
+      to: timelineRange.to,
+    }) ?? [];
+
+  const calendarPersonalTasks = useMemo(() => {
+    const personal = calendarTasksRaw.filter(
+      (t) =>
+        t.dueDate != null &&
+        !t.completed &&
+        !isEventDerivedImportantItemTask(t) &&
+        // General community reminders are an ACTIVE surface: once past
+        // due they must drop out entirely (same lifecycle already applied
+        // by the Community Reminders tab) — never shown as "overdue"
+        // like a personal task. See lib/taskDueStatus.ts.
+        !(t.taskType === 'community_reminder' && isTaskPastDue(t, Date.now()))
+    );
+
+    // Merge in the dedicated Community Reminder result sets — deduped by
+    // task id, since the SAME reminder can legitimately appear in both the
+    // month-bounded and timeline-bounded query (whenever the displayed
+    // month falls inside the timeline's -4/+8 month window) and, for its
+    // creator, can ALSO already be present in `personal` above via
+    // listMyTasks's by_creator match.
+    const reminderMap = new Map<string, (typeof communityRemindersMonthly)[number]>();
+    for (const r of [...communityRemindersMonthly, ...communityRemindersTimeline]) {
+      reminderMap.set(String(r._id), r);
+    }
+    const reminders = [...reminderMap.values()].filter(
+      (t) => !isTaskPastDue(t, Date.now())
+    );
+
+    const merged = new Map<string, (typeof personal)[number]>();
+    for (const t of personal) merged.set(String(t._id), t);
+    for (const t of reminders) {
+      if (!merged.has(String(t._id))) merged.set(String(t._id), t);
+    }
+    return [...merged.values()];
+  }, [calendarTasksRaw, communityRemindersMonthly, communityRemindersTimeline]);
 
   /** Task count per day-of-month for the currently displayed month (monthly indicator) */
   const calendarTasksByDay = useMemo(() => {
@@ -2651,6 +2721,8 @@ export default function CalendarScreen(): React.JSX.Element {
             title: s.title,
             completed: s.completed,
           })),
+          typeLabel: getCalendarTaskTypeLabel(t),
+          communityName: t.communityName,
         };
       });
   }, [
@@ -2707,6 +2779,8 @@ export default function CalendarScreen(): React.JSX.Element {
             title: s.title,
             completed: s.completed,
           })),
+          typeLabel: getCalendarTaskTypeLabel(t),
+          communityName: t.communityName,
         };
       });
   }, [
@@ -3462,7 +3536,7 @@ export default function CalendarScreen(): React.JSX.Element {
 
         grouped[key].events.push({
           id: taskId,
-          category: 'משימה',
+          category: getCalendarTaskTypeLabel(t),
           categoryColor: PRIMARY_BLUE,
           title: t.title,
           time: timeStr,
@@ -3471,6 +3545,7 @@ export default function CalendarScreen(): React.JSX.Element {
           cancelled: false,
           isPersonalTask: true,
           communityId: t.communityId ? String(t.communityId) : undefined,
+          communityName: t.communityName,
           isOverdue: calcTaskOverdue(t.dueDate, t.dueAt, t.hasTime, nowMs),
           subtasks: (t.subtasks ?? []).map((s) => ({
             id: s.id,
@@ -3481,6 +3556,7 @@ export default function CalendarScreen(): React.JSX.Element {
           assigneeColor: assigneeDisplays[0]?.color,
           assigneeDisplays:
             assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
+          typeLabel: getCalendarTaskTypeLabel(t),
         });
       }
 
@@ -4674,6 +4750,18 @@ interface CalendarTaskCardProps {
   /** Lifted from TimelineView to survive FlashList recycling. Falls back to internal state when not provided (monthly-view call sites). */
   subtasksExpanded?: boolean;
   onToggleSubtasks?: () => void;
+  /**
+   * Timeline mode already renders the reminder's time on the timeline axis
+   * itself (see `event.time` in TimelineView's `eventTimeColumn`) — showing
+   * it a second time inside the card is redundant (BUG 1 of the community
+   * reminder QA pass). Monthly/day-list call sites (`CalendarDayEventsSheet`,
+   * `DayEventsList`) don't render a separate time axis, so they must keep
+   * showing the time inside the card exactly as before. The time value
+   * itself, `task.time`, is NEVER altered — only whether this card visually
+   * repeats it. Screen readers still hear the time via the unchanged
+   * `accessibilityLabel` below.
+   */
+  hideTimeInCard?: boolean;
 }
 
 function CalendarTaskCard({
@@ -4681,6 +4769,7 @@ function CalendarTaskCard({
   onOpenTaskSheet,
   subtasksExpanded: subtasksExpandedProp,
   onToggleSubtasks,
+  hideTimeInCard = false,
 }: CalendarTaskCardProps): React.JSX.Element {
   const [subtasksExpandedLocal, setSubtasksExpandedLocal] = useState(false);
   const subtasksExpanded = subtasksExpandedProp ?? subtasksExpandedLocal;
@@ -4697,7 +4786,7 @@ function CalendarTaskCard({
       onPress={() => onOpenTaskSheet(rawId)}
       accessible={true}
       accessibilityRole="button"
-      accessibilityLabel={`משימה: ${task.title}${task.time ? `, ${task.time}` : ''}${task.isOverdue ? ', באיחור' : ''}`}
+      accessibilityLabel={`${task.typeLabel ?? PERSONAL_TASK_TYPE_LABEL}: ${task.title}${task.time ? `, ${task.time}` : ''}${task.isOverdue ? ', באיחור' : ''}`}
     >
       {/* Blue accent bar */}
       <View
@@ -4714,10 +4803,13 @@ function CalendarTaskCard({
             ]}
           >
             <Text style={[styles.categoryTagText, { color: PRIMARY_BLUE }]}>
-              משימה
+              {task.typeLabel ?? PERSONAL_TASK_TYPE_LABEL}
             </Text>
           </View>
-          {task.time !== '' ? (
+          {task.communityName ? (
+            <CommunityEventNameTag name={task.communityName} />
+          ) : null}
+          {!hideTimeInCard && task.time !== '' ? (
             <Text style={{ fontSize: 12, fontWeight: '600', color: '#64748b' }}>
               {task.time}
             </Text>
@@ -5523,7 +5615,13 @@ function TimelineView({
                               assigneeColor: event.assigneeColor,
                               assigneeDisplays: event.assigneeDisplays,
                               subtasks: event.subtasks,
+                              typeLabel: event.typeLabel,
+                              communityName: event.communityName,
                             }}
+                            // BUG 1 fix: the timeline axis (eventTimeColumn
+                            // above) already shows this row's time — never
+                            // repeat it inside the card in Timeline mode.
+                            hideTimeInCard={true}
                             subtasksExpanded={expandedTaskIds.has(event.id)}
                             onToggleSubtasks={() => {
                               setExpandedTaskIds((prev) => {

@@ -47,6 +47,8 @@ import { SubtaskImagePreviewModal } from '@/lib/components/task/SubtaskImagePrev
 import { SubtaskAttachmentPreview } from '@/lib/components/task/SubtasksSection';
 import { isEventEligibleForHomeImportantItemsPreview } from '@/lib/homeImportantItemsPreview';
 import { APP_IS_RTL, getTextAlign, position, rtl, spacing } from '@/lib/rtl';
+import { getHomeReminderMetadata } from '@/lib/taskClassification';
+import { isTaskPastDue } from '@/lib/taskDueStatus';
 import type { SubTaskAttachment } from '@/lib/types/task';
 import { getCountdownLabel, getNextOccurrence } from '@/lib/utils/birthday';
 import { parseGeoUri } from '@/lib/utils/geoUri';
@@ -162,6 +164,12 @@ type Item = {
   taskSource?: 'personal_task' | 'event_task';
   /** eventId for routing event_task items to the correct event detail screen */
   taskEventId?: string;
+  /**
+   * User-facing type label override for task-type items (e.g. 'תזכורת קהילה'
+   * for general community reminders). Undefined falls back to the default
+   * 'משימה' label used for ordinary personal tasks.
+   */
+  taskTypeLabel?: string;
   /** Resolved family-member profiles to display as overlapping circles on the card */
   profileCircles?: ProfileCircle[];
   /** Count of external (non-family) participants, shown as "+N" after the circles */
@@ -192,6 +200,18 @@ type UndatedTask = {
   assigneeDisplays?: { initials: string; color: string }[];
   /** Subtask/checklist items for expand-and-toggle support on Home. */
   subtasks?: HomeSubtask[];
+  /**
+   * User-facing type label for task-type items (e.g. 'תזכורת קהילה' for
+   * general community reminders) — same field name/semantics as `Item`'s
+   * `taskTypeLabel` (BUG 2 fix: classification/community metadata is a
+   * property of the ITEM, not of whether it has a `dueAt`, so date-only
+   * untimed tasks must carry it exactly like timed tasks do).
+   */
+  taskTypeLabel?: string;
+  /** Real community name — only set for general community reminders. */
+  groupName?: string;
+  /** Community id — only set for general community reminders. */
+  communityId?: string;
 };
 
 // Overdue tasks extend UndatedTask with raw date fields for the calm due-date display.
@@ -865,12 +885,56 @@ export default function HomeScreen() {
 
   // ── Convex: dated tasks ────────────────────────────────────────────────────
   // listMyTasks mirrors Tasks-screen visibility: creator, assignedTo,
-  // and co-member secondary assignees — no spaceId restriction.
+  // and co-member secondary assignees — no spaceId restriction. It no
+  // longer distributes shared Community Reminders to every active member
+  // (that unbounded-by-date scan was removed — see that query's own doc
+  // comment in convex/tasks.ts); a general reminder can still appear here
+  // ONLY when the viewer happens to be its creator (bounded by_creator
+  // match, unrelated to community history size).
   const convexTasks = useQuery(api.tasks.listMyTasks);
+
+  // Dedicated, date-bounded Community Reminder retrieval for every ACTIVE
+  // community the viewer belongs to — reuses the EXACT same [from, to] Home
+  // already computes for the selected day (see the `from`/`to` memo above),
+  // never a separate/wider range. This is the ONLY source of shared
+  // Community Reminders on Home now.
+  const homeCommunityReminders =
+    useQuery(api.tasks.listVisibleCommunityRemindersForRange, {
+      from,
+      to,
+    }) ?? [];
+
+  // Merge personal tasks (listMyTasks) with the dedicated Community Reminder
+  // set, deduped by task id — a reminder's creator can see the SAME row via
+  // both sources (listMyTasks step 2 / by_creator, and the dedicated query),
+  // never rendered twice. General community reminders are never injected
+  // back through listMyTasks itself (see that query's doc comment).
+  const mergedConvexTasks = useMemo(() => {
+    const map = new Map<string, (typeof homeCommunityReminders)[number]>();
+    for (const t of convexTasks ?? []) map.set(String(t._id), t);
+    for (const t of homeCommunityReminders) {
+      if (!map.has(String(t._id))) map.set(String(t._id), t);
+    }
+    return [...map.values()];
+  }, [convexTasks, homeCommunityReminders]);
+
+  // General community reminders follow the same "active lifecycle" as the
+  // Community Reminders tab / Main "מה חשוב עכשיו": once past due they must
+  // disappear from every active Home surface (timeline, today, undated).
+  // Ordinary personal tasks are unaffected — they keep their existing
+  // overdue-bucket behavior below. Uses the same canonical isTaskPastDue
+  // helper (device nowMs), never a second expiry definition.
+  const visibleConvexTasks = useMemo(
+    () =>
+      mergedConvexTasks.filter(
+        (t) => t.taskType !== 'community_reminder' || !isTaskPastDue(t, nowMs)
+      ),
+    [mergedConvexTasks, nowMs]
+  );
 
   const todayTasks: Item[] = useMemo(
     () =>
-      (convexTasks ?? [])
+      visibleConvexTasks
         .filter(
           (t) =>
             t.dueDate != null &&
@@ -917,6 +981,13 @@ export default function HomeScreen() {
             completed: t.completed,
             completedAt: t.completedAt ?? undefined,
             taskSource: 'personal_task' as const,
+            // General community reminders are shared community content, not
+            // a private task — surface the same classification label +
+            // community tag pattern already used for community events. Uses
+            // the SAME shared helper as the date-only mapping below (BUG 2
+            // fix) so the two paths can never carry different metadata for
+            // the same item shape.
+            ...getHomeReminderMetadata(t),
             subtasks: (t.subtasks ?? []).map((s) => ({
               id: s.id,
               title: s.title,
@@ -936,7 +1007,7 @@ export default function HomeScreen() {
             })),
           };
         }),
-    [convexTasks, selectedDate, memberMaps, currentUser?._id]
+    [visibleConvexTasks, selectedDate, memberMaps, currentUser?._id]
   );
 
   // ── Overdue incomplete tasks — due before today, not yet completed ─────────
@@ -944,7 +1015,7 @@ export default function HomeScreen() {
     const startOfToday = new Date(nowMs);
     startOfToday.setHours(0, 0, 0, 0);
     const startOfTodayMs = startOfToday.getTime();
-    return (convexTasks ?? [])
+    return visibleConvexTasks
       .filter(
         (t) =>
           t.dueDate != null &&
@@ -1002,7 +1073,7 @@ export default function HomeScreen() {
           })),
         };
       });
-  }, [convexTasks, nowMs, memberMaps, currentUser?._id]);
+  }, [visibleConvexTasks, nowMs, memberMaps, currentUser?._id]);
 
   // ── Untimed personal tasks for the selected day ───────────────────────────
   // Tasks with hasTime===true go into the timeline via todayTasks.
@@ -1017,7 +1088,7 @@ export default function HomeScreen() {
     const dayStartMs = dayStart.getTime();
     const dayEndMs = dayEnd.getTime();
     const currentUserId = currentUser?._id as string | undefined;
-    return (convexTasks ?? [])
+    return visibleConvexTasks
       .filter(
         (t) =>
           t.dueDate != null &&
@@ -1043,6 +1114,13 @@ export default function HomeScreen() {
           assigneeColor: assigneeDisplays[0]?.color,
           assigneeDisplays:
             assigneeDisplays.length > 0 ? assigneeDisplays : undefined,
+          // BUG 2 fix: classification/community metadata is a property of
+          // the ITEM (t.taskType/t.communityName/t.communityId from
+          // listMyTasks), never of whether dueAt is set — uses the SAME
+          // shared helper as the timed `todayTasks` mapping above so a
+          // date-only community reminder can never lose its
+          // 'תזכורת קהילה' + community-name metadata on Home.
+          ...getHomeReminderMetadata(t),
           subtasks: (t.subtasks ?? []).map((s) => ({
             id: s.id,
             title: s.title,
@@ -1073,7 +1151,7 @@ export default function HomeScreen() {
           })),
         };
       });
-  }, [convexTasks, selectedDate, memberMaps, currentUser?._id]);
+  }, [visibleConvexTasks, selectedDate, memberMaps, currentUser?._id]);
 
   // ── Assigned eventTasks grouped by eventId — shared across all event item builders ──
   const tasksByEvent: Record<string, AssignedEventTask[]> = useMemo(() => {
@@ -1676,7 +1754,7 @@ export default function HomeScreen() {
       t.completedAt >= todayStartMs &&
       t.completedAt < todayEndMs;
 
-    const fromDated: HomeDailyTask[] = (convexTasks ?? [])
+    const fromDated: HomeDailyTask[] = visibleConvexTasks
       .filter((t) => t.completed && isCompletedToday(t))
       .map((t) => {
         const assigneeDisplays = resolveAllNonSelfAssignees(
@@ -1781,7 +1859,13 @@ export default function HomeScreen() {
       seen.add(t.id);
       return true;
     });
-  }, [convexTasks, convexUndatedTasks, nowMs, memberMaps, currentUser?._id]);
+  }, [
+    visibleConvexTasks,
+    convexUndatedTasks,
+    nowMs,
+    memberMaps,
+    currentUser?._id,
+  ]);
 
   const toggleUndatedTask = async (id: string) => {
     try {

@@ -44,6 +44,7 @@ import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { useActionSheet } from '@/contexts/ActionSheetContext';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import { selectMainReminderCandidates } from '@/lib/communityMainReminderCandidate';
 import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
 import {
   formatEventsTabMonthYearLabel,
@@ -2278,24 +2279,50 @@ function TabMain({
   ).filter((e) => !hasEventEndedByNow(e, Date.now()));
   const pendingRsvpHasMore = overview?.pendingRsvpHasMore ?? false;
 
-  // Bounded reminders summary for "מה חשוב עכשיו" — reuses the same paged
-  // query as the Reminders tab (numItems matches its existing convention).
-  // The open-reminder count is only trusted (and shown) when this page's
-  // raw scan reached the end (`isDone`); otherwise we omit the summary item
-  // rather than show a potentially-wrong number (see prompt's REMINDERS
-  // CAUTION — no unbounded scan just for display copy).
-  const remindersArgs = useMemo(
-    () => ({ communityId, cursor: null as null, numItems: 8 }),
-    [communityId]
+  // Dedicated, date-bounded Community Reminder retrieval for "מה חשוב עכשיו"
+  // — final architecture replacing the previous bounded-but-unsorted
+  // `by_community` pagination scan (listCommunityRemindersPaged) that used
+  // to sit here. Main only needs a SMALL relevant forward window, never a
+  // history scan or a raw-row-count-based safety cap: this query is bounded
+  // by the requested date range itself via the same indexed
+  // dueAt/dueDate retrieval primitives the Home/Calendar viewer-range query
+  // uses (see convex/tasks.ts `listVisibleCommunityRemindersForRange` /
+  // `loadGeneralCommunityRemindersInRange`), scoped to just THIS community
+  // via the `communityId` arg (also re-verifies active membership
+  // server-side). `isDone`/raw-row-count no longer exist in this model at
+  // all, so the previous ">8 raw rows suppresses the reminder" bug
+  // (gating on a stale `isDone`) is now structurally impossible — old,
+  // unrelated community tasks are never read in the first place, since the
+  // index bounds by date, not by creation order.
+  //
+  // Window: today (viewer's local day start, already computed above as
+  // `focusedLocalDayStart`) through +30 days — a small, bounded, near-term
+  // forward window matching "מה חשוב עכשיו"'s existing "imminent" framing
+  // (see MAIN RANGE in the fix spec) — never a 12-month/all-history range.
+  const mainReminderWindow = useMemo(
+    () => ({
+      from: focusedLocalDayStart,
+      to: focusedLocalDayStart + 30 * 24 * 60 * 60 * 1000,
+    }),
+    [focusedLocalDayStart]
   );
-  const remindersPage = useQuery(
-    api.tasks.listCommunityRemindersPaged,
-    remindersArgs
+  const mainReminderCandidates =
+    useQuery(api.tasks.listVisibleCommunityRemindersForRange, {
+      communityId,
+      from: mainReminderWindow.from,
+      to: mainReminderWindow.to,
+    }) ?? [];
+
+  // PART B — surface an ACTIVE general community reminder in "מה חשוב עכשיו"
+  // from the bounded window above (never an unbounded/extra query). Active
+  // lifecycle (past-due excluded, nearest-due-within-window first) is the
+  // SAME isTaskPastDue/dueAt/dueDate definition the Reminders tab already
+  // uses — see lib/communityMainReminderCandidate.ts.
+  const mainReminderSelection = useMemo(
+    () => selectMainReminderCandidates(mainReminderCandidates, now),
+    [mainReminderCandidates, now]
   );
-  const remindersOpenCount = useMemo(() => {
-    if (!remindersPage || !remindersPage.isDone) return null;
-    return remindersPage.page.length;
-  }, [remindersPage]);
+  const nearestActiveReminder = mainReminderSelection.nearest;
 
   // ── QA FIX (Issue 2) — "אירועים נוספים": genuinely paginated, NOT capped
   // to 2-3 events. A separate query (listCommunityAdditionalEventsPaged)
@@ -2482,11 +2509,13 @@ function TabMain({
       });
     }
 
-    if (remindersOpenCount !== null && remindersOpenCount > 0) {
+    if (nearestActiveReminder) {
+      const extraActiveCount =
+        (mainReminderSelection?.activeReminders.length ?? 1) - 1;
       const label =
-        remindersOpenCount === 1
-          ? 'תזכורת אחת קרובה'
-          : `${remindersOpenCount} תזכורות קרובות`;
+        extraActiveCount > 0
+          ? `תזכורת · ${nearestActiveReminder.title} (+${extraActiveCount})`
+          : `תזכורת · ${nearestActiveReminder.title}`;
       items.push({
         key: 'reminders',
         label,
@@ -2501,7 +2530,8 @@ function TabMain({
     tomorrowEvent,
     pendingRsvpEvents.length,
     pendingRsvpHasMore,
-    remindersOpenCount,
+    nearestActiveReminder,
+    mainReminderSelection,
     onOpenEventDetails,
     onSeeMoreEvents,
     onSeeMoreReminders,

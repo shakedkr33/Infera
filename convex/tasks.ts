@@ -15,9 +15,11 @@ import {
   buildImportantItemsBundleTaskTitle,
   clearPersonalCompleted,
   getPersonalCompletion,
+  getTaskClassification,
   hasExplicitAssigneeForCommunityActivity,
   isDeletedOrArchivedGeneralCommunityReminder,
   isGeneralCommunityReminder,
+  isGeneralCommunityReminderWithinRange,
   isStorageReferencedByOtherDocument,
   safeDeleteStorageIfUnreferenced,
   setPersonalCompleted,
@@ -935,6 +937,28 @@ export const listEventImportantItems = query({
 //   2. משימות שהוקצו לו כ-assignedTo הראשי (by_assigned)
 //   3. משימות שנוצרו על ידי חברי ה-space שלו שבהן הוא
 //      מופיע ב-assignedToUserIds (assignee משני)
+//
+// PERSONAL/ASSIGNED TASKS ONLY — a general community reminder (communityId
+// set, no assignee) is shared community content, never private task data.
+// Its viewer-facing distribution is the dedicated, date-bounded
+// `listVisibleCommunityRemindersForRange` query below, never this one. This
+// query previously (uncommitted) grew a 4th step here that resolved the
+// viewer's active community memberships and scanned every general reminder
+// in each of those communities regardless of date — bounded by
+// "reminder shape" via `by_community_assigned`, but NOT by date, so DB
+// reads still grew with total historical community-reminder volume on every
+// long-lived Home/Calendar subscription. That step (and the
+// `by_community_assigned` index it used) has been removed — see
+// `listVisibleCommunityRemindersForRange`'s own doc comment for the
+// replacement architecture.
+//
+// NOTE: a general community reminder MAY still appear in this query's
+// result when the viewer happens to be its `createdBy` (step 2 above) —
+// that is the exact same bounded-by-creator behavior this query always had,
+// completely unrelated to the removed unbounded-by-community step, and it
+// is why every Home/Calendar caller that ALSO subscribes to
+// `listVisibleCommunityRemindersForRange` must dedupe the two result sets
+// by task `_id` (see that query's doc comment).
 // ─────────────────────────────────────────────────────────────
 export const listMyTasks = query({
   args: {},
@@ -1082,9 +1106,175 @@ export const listMyTasks = query({
         communityName: task.communityId
           ? communityNameMap.get(String(task.communityId))
           : undefined,
+        // Canonical classification (PART E) — Home and Calendar both read
+        // this SAME field so they can never disagree about whether an item
+        // is a general community reminder or a normal personal task.
+        taskType: getTaskClassification(task),
         assigneeMemberProfiles,
       };
     });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEDICATED, VIEWER-SCOPED, DATE-BOUNDED Community Reminder retrieval — the
+// final architecture replacing the removed unbounded `listMyTasks` Step 4
+// scan (see that query's own doc comment).
+//
+// Loads general community reminders for ONE community, bounded by the
+// caller's requested [from, to] range via TWO index-bounded range scans —
+// never a `by_community` collect(). `dueAt` (exact timed reminders) and
+// `dueDate` (date-only reminders) are queried separately because a general
+// reminder may have EITHER set alone or BOTH set together (the product UI —
+// app/(authenticated)/community-reminder/new.tsx / edit/[id].tsx — always
+// stamps `dueDate` to the same local day whenever `dueAt` is set, but the
+// generic `tasks.update` mutation does not itself enforce that pairing at
+// the data-model level, so both index paths are queried defensively rather
+// than assumed collapsible into one). Duplicates (a reminder whose `dueAt`
+// AND `dueDate` both fall in range) are merged by task `_id` before
+// returning — see MERGE/DEDUP in the fix spec.
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadGeneralCommunityRemindersInRange(
+  ctx: QueryCtx,
+  communityId: Id<'communities'>,
+  from: number,
+  to: number
+): Promise<Doc<'tasks'>[]> {
+  const [byDueAt, byDueDate] = await Promise.all([
+    ctx.db
+      .query('tasks')
+      .withIndex('by_community_assigned_dueAt', (q) =>
+        q
+          .eq('communityId', communityId)
+          .eq('assignedTo', undefined)
+          .gte('dueAt', from)
+          .lte('dueAt', to)
+      )
+      .collect(),
+    ctx.db
+      .query('tasks')
+      .withIndex('by_community_assigned_dueDate', (q) =>
+        q
+          .eq('communityId', communityId)
+          .eq('assignedTo', undefined)
+          .gte('dueDate', from)
+          .lte('dueDate', to)
+      )
+      .collect(),
+  ]);
+
+  const merged = new Map<string, Doc<'tasks'>>();
+  for (const task of [...byDueAt, ...byDueDate]) {
+    if (!isGeneralCommunityReminder(task)) continue;
+    // Belt-and-braces range re-check (see isGeneralCommunityReminderWithinRange's
+    // doc comment) — the index scans above already bound the read, this
+    // just guards the exact inclusive-range contract on the tiny result set.
+    if (!isGeneralCommunityReminderWithinRange(task, from, to)) continue;
+    merged.set(task._id as string, task);
+  }
+  return [...merged.values()];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Community Main "מה חשוב עכשיו" and Home/Calendar all need the SAME thing —
+// an active, date-bounded, viewer-visible general community reminder set —
+// so this single query serves all three call sites (never separate
+// duplicated query logic per screen):
+//
+//   - Home/Calendar: call WITHOUT `communityId` — every ACTIVE community the
+//     viewer belongs to, bounded to that screen's own requested [from, to].
+//   - Community Main: call WITH `communityId` — scoped to just that one
+//     community (also re-verifies the viewer is an ACTIVE member of exactly
+//     that community; returns [] otherwise), bounded to Main's small
+//     forward window.
+//
+// Bounded: one `by_user` scan of the viewer's OWN community memberships,
+// one `by_user` scan of the viewer's OWN completion rows (never one
+// `by_task_user` lookup per candidate reminder), then the two index-bounded
+// range scans above per matching active membership.
+// ─────────────────────────────────────────────────────────────────────────────
+export const listVisibleCommunityRemindersForRange = query({
+  args: {
+    from: v.number(),
+    to: v.number(),
+    communityId: v.optional(v.id('communities')),
+  },
+  handler: async (ctx, { from, to, communityId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const myMemberships = await ctx.db
+      .query('communityMembers')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+
+    const scopedActiveMemberships = myMemberships.filter(
+      (m) =>
+        isActiveCommunityMember(m) &&
+        (communityId === undefined || m.communityId === communityId)
+    );
+    if (scopedActiveMemberships.length === 0) return [];
+
+    const myCompletionRows = await ctx.db
+      .query('taskParticipantSettings')
+      .withIndex('by_user', (q) => q.eq('userId', userId))
+      .collect();
+    const myCompletedTaskIds = new Set(
+      myCompletionRows
+        .filter((row) => row.completedAt !== undefined)
+        .map((row) => row.taskId as string)
+    );
+
+    const taskMap = new Map<string, Doc<'tasks'>>();
+    for (const membership of scopedActiveMemberships) {
+      const candidates = await loadGeneralCommunityRemindersInRange(
+        ctx,
+        membership.communityId,
+        from,
+        to
+      );
+      for (const task of candidates) {
+        const key = task._id as string;
+        if (taskMap.has(key)) continue;
+        if (myCompletedTaskIds.has(key)) continue;
+        taskMap.set(key, task);
+      }
+    }
+
+    const tasks = [...taskMap.values()];
+    if (tasks.length === 0) return [];
+
+    // Enrich community name once per UNIQUE community id — never a
+    // client-side N+1 subscription per reminder.
+    const uniqueCommunityIds = [
+      ...new Set(tasks.map((t) => t.communityId as Id<'communities'>)),
+    ];
+    const communityNameMap = new Map<string, string>();
+    await Promise.all(
+      uniqueCommunityIds.map(async (cid) => {
+        const community = await ctx.db.get(cid);
+        if (community?.name) {
+          communityNameMap.set(String(cid), community.name);
+        }
+      })
+    );
+
+    return tasks.map((task) => ({
+      ...task,
+      communityName: communityNameMap.get(String(task.communityId)),
+      // Always 'community_reminder' here — this query only ever returns
+      // general community reminders (see isGeneralCommunityReminder above).
+      taskType: getTaskClassification(task),
+      // A general community reminder never has an explicit assignee (see
+      // isGeneralCommunityReminder) — always empty, kept only so this row
+      // shape matches listMyTasks's `assigneeMemberProfiles` field for
+      // callers that merge both result sets (Home/Calendar).
+      assigneeMemberProfiles: [] as {
+        id: string;
+        name: string;
+        color: string | null;
+      }[],
+    }));
   },
 });
 

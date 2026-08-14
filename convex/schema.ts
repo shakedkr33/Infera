@@ -315,7 +315,35 @@ export default defineSchema({
     .index('by_community', ['communityId'])
     .index('by_assigned_source_event', ['assignedTo', 'sourceEventId'])
     .index('by_deleted_by', ['deletedBy', 'deletedAt'])
-    .index('by_related_birthday', ['relatedBirthdayId']),
+    .index('by_related_birthday', ['relatedBirthdayId'])
+    // DATE-BOUNDED community-reminder retrieval (final architecture — replaces
+    // the removed `by_community_assigned` index, which bounded rows by
+    // "reminder shape" only, never by date, so it still grew with total
+    // community-reminder history). `assignedTo` is undefined for every
+    // general community reminder and set for essentially everything else
+    // that shares a `communityId` (see convex/tasks.ts
+    // `syncCommunityEventImportantItemTasks`, which always sets
+    // `assignedTo: userId`) — so `.eq('communityId', id).eq('assignedTo',
+    // undefined)` narrows straight to the reminder-shaped subset, and the
+    // trailing range field (`dueAt` / `dueDate`) then bounds that subset to
+    // the caller's requested date window, so DB reads grow with
+    // (memberships × date-range activity), never with total historical
+    // community-reminder volume. Two separate indexes exist because `dueAt`
+    // (exact timed reminders) and `dueDate` (date-only reminders) are
+    // different fields with different semantics — see convex/tasks.ts
+    // `listVisibleCommunityRemindersForRange` /
+    // `loadGeneralCommunityRemindersInRange` for the two range queries that
+    // use these indexes and the merge/dedup step that follows.
+    .index('by_community_assigned_dueAt', [
+      'communityId',
+      'assignedTo',
+      'dueAt',
+    ])
+    .index('by_community_assigned_dueDate', [
+      'communityId',
+      'assignedTo',
+      'dueDate',
+    ]),
 
   // ═══════════════════════════════════════════════════════
   // טבלת ימי הולדת

@@ -63,6 +63,12 @@ export type HomeDailyItem = {
   allDay?: boolean;
   groupName?: string;
   communityId?: string;
+  /**
+   * User-facing type label override for task-type items (e.g. 'תזכורת קהילה'
+   * for general community reminders). Undefined falls back to the default
+   * 'משימה' label used for ordinary personal tasks.
+   */
+  taskTypeLabel?: string;
   linkedEventId?: string;
   pending?: boolean;
   rsvpStatus?: 'none' | 'yes' | 'no' | 'maybe';
@@ -91,6 +97,18 @@ export type HomeDailyTask = {
   assigneeDisplays?: { initials: string; color: string }[];
   /** Read-only subtask preview items for compact summary display on Home. */
   subtasks?: HomeSubtaskPreviewItem[];
+  /**
+   * User-facing type label override (e.g. 'תזכורת קהילה' for general
+   * community reminders) — same semantics as `HomeDailyItem.taskTypeLabel`.
+   * Carried by BOTH timed and date-only/untimed community reminders (see
+   * BUG 2 fix): classification is a property of the item, not of whether it
+   * has a specific time.
+   */
+  taskTypeLabel?: string;
+  /** Real community name — only set for general community reminders. */
+  groupName?: string;
+  /** Community id — only set for general community reminders. */
+  communityId?: string;
 };
 
 // ─── Temporal state ───────────────────────────────────────────────────────────
@@ -418,11 +436,24 @@ const BirthdayAvatar = ({
 };
 
 const SourceLabel = ({ item }: { item: HomeDailyItem }): React.JSX.Element => {
+  // A task-type item that also carries community metadata is a general
+  // community reminder — show both the classification label and the
+  // community tag (reuses the exact tag already used for community events).
+  if (item.type === 'task' && item.communityId && item.groupName) {
+    return (
+      <View style={styles.sourceLabelRow}>
+        <Text style={styles.sourceLabel}>{item.taskTypeLabel ?? 'משימה'}</Text>
+        <CommunityEventNameTag name={item.groupName} />
+      </View>
+    );
+  }
   if (item.communityId && item.groupName) {
     return <CommunityEventNameTag name={item.groupName} />;
   }
   if (item.type === 'task') {
-    return <Text style={styles.sourceLabel}>משימה</Text>;
+    return (
+      <Text style={styles.sourceLabel}>{item.taskTypeLabel ?? 'משימה'}</Text>
+    );
   }
   if (item.linkedEventId) {
     return <Text style={styles.sourceLabel}>אירוע משותף</Text>;
@@ -1922,6 +1953,21 @@ export function HomeDailyCommandCenter({
                       onToggle={() => onToggleTask(task.id)}
                     />
                     <View style={styles.taskRowBody}>
+                      {/* BUG 2 fix: date-only/untimed community reminders must
+                          carry the exact same 'תזכורת קהילה' + community-name
+                          tags the timed timeline card shows (see SourceLabel
+                          above) — classification is a property of the item,
+                          never of whether it has a specific time. */}
+                      {task.communityId && task.groupName ? (
+                        <View
+                          style={[styles.sourceLabelRow, { marginBottom: 4 }]}
+                        >
+                          <Text style={styles.sourceLabel}>
+                            {task.taskTypeLabel ?? 'משימה'}
+                          </Text>
+                          <CommunityEventNameTag name={task.groupName} />
+                        </View>
+                      ) : null}
                       <Text
                         numberOfLines={2}
                         style={[
@@ -2459,6 +2505,11 @@ const styles = StyleSheet.create({
     color: tc.accent,
     fontSize: 11,
     fontWeight: '700',
+  },
+  sourceLabelRow: {
+    alignItems: 'center',
+    flexDirection: rtl.flexDirection,
+    gap: 6,
   },
   titleRow: {
     flexDirection: rtl.flexDirection,
