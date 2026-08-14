@@ -53,8 +53,12 @@ import { describe, expect, it } from 'bun:test';
 import type { Doc, Id } from '../../convex/_generated/dataModel';
 import {
   getTaskClassification,
+  isCommunityReminderPersonallyHidden,
+  isEligibleForCompletedCommunityReminderBucket,
   isGeneralCommunityReminderWithinRange,
   shouldIncludeCommunityReminderForViewer,
+  shouldShowCommunityReminderInCommunity,
+  shouldShowCommunityReminderOnPersonalSurface,
 } from '../../convex/taskUtils';
 import { selectMainReminderCandidates } from '../../lib/communityMainReminderCandidate';
 import {
@@ -492,5 +496,606 @@ describe('[#12] community reminder includes community name metadata', () => {
     // general reminder is exactly the shape that carries a communityId.
     expect(generalReminder.communityId).toBe(communityId);
     expect(getTaskClassification(generalReminder)).toBe('community_reminder');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// Community Reminder personal dismissal — backend foundation.
+//
+// Covers:
+//  - isCommunityReminderPersonallyHidden (convex/taskUtils.ts) — the
+//    dismissedAt-OR-legacy-completedAt data-model rule.
+//  - shouldShowCommunityReminderOnPersonalSurface — PERSONAL (Home/
+//    Calendar) eligibility: active membership AND not personally hidden.
+//  - shouldShowCommunityReminderInCommunity — COMMUNITY (Main / Reminders
+//    tab) eligibility: active membership only, personal state never
+//    consulted at all (the function signature has no settings/dismissal
+//    param, so it structurally cannot be affected by it).
+//
+// MUTATION SECURITY (dismissCommunityReminderForMe in convex/tasks.ts) —
+// there is no Convex mutation test harness in this repo (see this file's
+// own header comment and the identical precedent in
+// tests/convex/communityCalendarState.test.ts's "#16-#18" note). The
+// mutation's authorization logic is exactly:
+//   isGeneralCommunityReminder(task) && isActiveCommunityMember(membership)
+// — i.e. the SAME two building blocks exercised by
+// shouldShowCommunityReminderInCommunity below (task-shape + membership),
+// which is why the "MUTATION SECURITY / PURE AUTH HELPERS" cases (owner/
+// admin/member/pending/non-member/non-community-task/event-derived-task)
+// are covered via that shared predicate rather than a duplicate helper —
+// any change to the authorization rule shows up here. The actual DB write
+// (setPersonalDismissed's upsert/idempotency) and the mutation's
+// `getAuthUserId`-only viewer resolution were verified by code review:
+//   - convex/tasks.ts `dismissCommunityReminderForMe` reads the viewer
+//     EXCLUSIVELY via `getAuthUserId(ctx)` — the mutation's only arg is
+//     `{ taskId }`, so no userId/viewerId can ever be supplied by the
+//     client.
+//   - convex/taskUtils.ts `setPersonalDismissed` patches the existing
+//     by_task_user row (matching setPersonalCompleted's exact upsert
+//     identity) or inserts one minimal new row — never a second row for an
+//     existing (taskId, userId) pair — and returns the ORIGINAL
+//     `dismissedAt` without writing again when already dismissed.
+// ═════════════════════════════════════════════════════════════════════════
+
+describe('isCommunityReminderPersonallyHidden — data-model/classification', () => {
+  it('[#1] general community reminder + no viewer settings row → not personally hidden', () => {
+    expect(isCommunityReminderPersonallyHidden(generalReminder, null)).toBe(
+      false
+    );
+    expect(
+      isCommunityReminderPersonallyHidden(generalReminder, undefined)
+    ).toBe(false);
+    expect(isCommunityReminderPersonallyHidden(generalReminder, {})).toBe(
+      false
+    );
+  });
+
+  it('[#2] dismissedAt present → personally hidden', () => {
+    expect(
+      isCommunityReminderPersonallyHidden(generalReminder, {
+        dismissedAt: 123,
+      })
+    ).toBe(true);
+  });
+
+  it('[#3] legacy completedAt present → personally hidden', () => {
+    expect(
+      isCommunityReminderPersonallyHidden(generalReminder, {
+        completedAt: 456,
+      })
+    ).toBe(true);
+  });
+
+  it('[#4] both dismissedAt and completedAt present → personally hidden', () => {
+    expect(
+      isCommunityReminderPersonallyHidden(generalReminder, {
+        dismissedAt: 123,
+        completedAt: 456,
+      })
+    ).toBe(true);
+  });
+
+  it('[#5] normal personal task + completedAt does NOT become "community reminder personally hidden" through this helper', () => {
+    const personalTask = { communityId: undefined, sourceType: undefined };
+    expect(
+      isCommunityReminderPersonallyHidden(personalTask, { completedAt: 456 })
+    ).toBe(false);
+  });
+
+  it('a community task with an explicit assignee (not a general reminder) is never "personally hidden" via this helper', () => {
+    expect(
+      isCommunityReminderPersonallyHidden(
+        { ...generalReminder, assignedTo: userId },
+        { dismissedAt: 123, completedAt: 456 }
+      )
+    ).toBe(false);
+  });
+
+  it('an event-derived community task (sourceType set) is never "personally hidden" via this helper', () => {
+    expect(
+      isCommunityReminderPersonallyHidden(
+        { ...generalReminder, sourceType: 'community_event_important_item' },
+        { dismissedAt: 123, completedAt: 456 }
+      )
+    ).toBe(false);
+  });
+});
+
+describe('shouldShowCommunityReminderOnPersonalSurface — PERSONAL (Home/Calendar) visibility', () => {
+  it('[#6] active member + reminder + no hidden state → eligible for personal retrieval', () => {
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+        settings: {},
+      })
+    ).toBe(true);
+  });
+
+  it('[#7] active member + dismissedAt → excluded from personal retrieval', () => {
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+        settings: { dismissedAt: 123 },
+      })
+    ).toBe(false);
+  });
+
+  it('[#8] active member + legacy completedAt → excluded from personal retrieval', () => {
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+        settings: { completedAt: 456 },
+      })
+    ).toBe(false);
+  });
+
+  it('[#9] viewer A dismissed → viewer B with no setting remains eligible', () => {
+    const forViewerA = shouldShowCommunityReminderOnPersonalSurface({
+      task: generalReminder,
+      viewerMembership: membership('active'),
+      settings: { dismissedAt: 123 },
+    });
+    const forViewerB = shouldShowCommunityReminderOnPersonalSurface({
+      task: generalReminder,
+      viewerMembership: membership('active'),
+      settings: {},
+    });
+    expect(forViewerA).toBe(false);
+    expect(forViewerB).toBe(true);
+  });
+
+  it('pending member + no hidden state → still excluded (membership gates before hidden-state)', () => {
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('pending'),
+        settings: {},
+      })
+    ).toBe(false);
+  });
+
+  it('non-member (no membership row) → excluded regardless of hidden state', () => {
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: null,
+        settings: {},
+      })
+    ).toBe(false);
+  });
+});
+
+describe('shouldShowCommunityReminderInCommunity — COMMUNITY (Main / Reminders tab) visibility', () => {
+  it('[#10] reminder dismissed by viewer → still eligible inside Community Main backend semantics', () => {
+    // No `settings`/dismissal parameter exists on this function at all —
+    // personal state structurally cannot suppress the result.
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#11] legacy completed reminder → still eligible inside community semantics', () => {
+    // Same call as #10 — legacy completedAt is likewise never consulted.
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#12] deleted reminder → still excluded', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: { ...generalReminder, deletedAt: 999 },
+        viewerMembership: membership('active'),
+      })
+    ).toBe(false);
+  });
+
+  it('[#13] pending member → excluded', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('pending'),
+      })
+    ).toBe(false);
+  });
+
+  it('[#14] removed/non-member → excluded', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('left'),
+      })
+    ).toBe(false);
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: null,
+      })
+    ).toBe(false);
+  });
+});
+
+describe('MUTATION SECURITY / PURE AUTH HELPERS — dismissCommunityReminderForMe authorization building blocks', () => {
+  // dismissCommunityReminderForMe's server-side authorization is exactly
+  // `isGeneralCommunityReminder(task) && isActiveCommunityMember(membership)`
+  // — the same two checks shouldShowCommunityReminderInCommunity composes.
+  // These cases exercise that exact composition for every role/status the
+  // mutation must accept or reject.
+
+  it('[#17] non-community task (no communityId) → cannot dismiss via this mutation', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: { communityId: undefined, sourceType: undefined },
+        viewerMembership: membership('active'),
+      })
+    ).toBe(false);
+  });
+
+  it('[#18] event-derived community task → cannot dismiss via this mutation', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: {
+          ...generalReminder,
+          sourceType: 'community_event_important_item',
+        },
+        viewerMembership: membership('active'),
+      })
+    ).toBe(false);
+  });
+
+  it('[#19] active owner → allowed (role never gates — only status)', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#20] active admin → allowed', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#21] active member → allowed', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#22] pending member → rejected', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('pending'),
+      })
+    ).toBe(false);
+  });
+
+  it('[#23] non-member → rejected', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: null,
+      })
+    ).toBe(false);
+  });
+
+  it('a community task with an explicit assignee → cannot dismiss via this mutation (not a general reminder)', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: { ...generalReminder, assignedTo: userId },
+        viewerMembership: membership('active'),
+      })
+    ).toBe(false);
+  });
+
+  it('a soft-deleted/archived general reminder → cannot dismiss via this mutation', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: { ...generalReminder, deletedAt: 999 },
+        viewerMembership: membership('active'),
+      })
+    ).toBe(false);
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: { ...generalReminder, archivedAt: 999 },
+        viewerMembership: membership('active'),
+      })
+    ).toBe(false);
+  });
+});
+
+describe('RANGE ARCHITECTURE — listVisibleCommunityRemindersForRange preserved after personal-dismissal changes', () => {
+  const from = 1_700_000_000_000;
+  const to = 1_700_600_000_000;
+
+  it('[#29] timed reminder range behavior preserved (dueAt-only bounding rule untouched)', () => {
+    expect(
+      isGeneralCommunityReminderWithinRange({ dueAt: from + 1000 }, from, to)
+    ).toBe(true);
+    expect(
+      isGeneralCommunityReminderWithinRange({ dueAt: to + 1000 }, from, to)
+    ).toBe(false);
+  });
+
+  it('[#30] date-only range behavior preserved (dueDate-only bounding rule untouched)', () => {
+    expect(
+      isGeneralCommunityReminderWithinRange({ dueDate: from + 1000 }, from, to)
+    ).toBe(true);
+    expect(
+      isGeneralCommunityReminderWithinRange({ dueDate: to + 1000 }, from, to)
+    ).toBe(false);
+  });
+
+  it('[#31] undated reminder remains absent from personal date-range query', () => {
+    expect(isGeneralCommunityReminderWithinRange({}, from, to)).toBe(false);
+  });
+
+  it('[#32] the personal-hidden filter is a Set membership check on task IDs already collected via a SINGLE by_user scan — dismissal introduces no per-reminder or historical scan', () => {
+    // Documents the exact shape listVisibleCommunityRemindersForRange builds
+    // (convex/tasks.ts): one `taskParticipantSettings.by_user` scan for the
+    // viewer, reduced to a Set<string> of hidden task IDs (dismissedAt OR
+    // completedAt), then a plain `.has(key)` check per already-bounded
+    // range-query candidate — never a query per candidate reminder.
+    const myCompletionRows: {
+      taskId: string;
+      completedAt?: number;
+      dismissedAt?: number;
+    }[] = [
+      { taskId: 't1', dismissedAt: 111 },
+      { taskId: 't2', completedAt: 222 },
+      { taskId: 't3' },
+    ];
+    const myHiddenTaskIds = new Set(
+      myCompletionRows
+        .filter(
+          (r) => r.completedAt !== undefined || r.dismissedAt !== undefined
+        )
+        .map((r) => r.taskId)
+    );
+    expect(myHiddenTaskIds.has('t1')).toBe(true);
+    expect(myHiddenTaskIds.has('t2')).toBe(true);
+    expect(myHiddenTaskIds.has('t3')).toBe(false);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// LEGACY COMPLETION: COMMUNITY VISIBILITY CORRECTION.
+//
+// A general community reminder is SHARED community content, never a
+// per-viewer completable task. Legacy taskParticipantSettings.completedAt
+// means ONLY "personally hidden from my own Home/Calendar" — it must NEVER
+// exclude, move, or partition the reminder inside the COMMUNITY itself
+// (Community Main / Community Reminders tab).
+//
+// Covers:
+//  - shouldShowCommunityReminderInCommunity — the Community Reminders/
+//    Community Main source-visibility predicate. Its signature has no
+//    dismissal/completion parameter AT ALL, so personal state structurally
+//    cannot affect it (convex/tasks.ts `listCommunityRemindersPaged` /
+//    `listByCommunity` now delegate visibility to the same task-shape +
+//    membership rule this predicate captures — no getPersonalCompletion
+//    call remains in either query's general-reminder branch).
+//  - isEligibleForCompletedCommunityReminderBucket — the exact rule
+//    convex/tasks.ts `listCompletedCommunityReminders` uses to decide
+//    whether a completedAt row may ever be classified into a "completed
+//    community reminder" bucket: never true for a general community
+//    reminder.
+//  - shouldShowCommunityReminderOnPersonalSurface — confirms PERSONAL
+//    (Home/Calendar) retrieval is completely unaffected by this
+//    correction: dismissedAt/legacy completedAt still hide on personal
+//    surfaces exactly as before.
+//
+// The actual DB-backed queries (`listCommunityRemindersPaged`,
+// `listByCommunity`, `listCompletedCommunityReminders`,
+// `listVisibleCommunityRemindersForRange`) cannot be unit-tested without a
+// Convex test harness (none exists in this repo — same precedent as the
+// rest of this file). Verified instead by code review: every
+// `getPersonalCompletion`/`taskParticipantSettings` read that used to gate
+// a general-reminder's presence in the Community Reminders source has been
+// removed; the only remaining `getPersonalCompletion` calls are in
+// `toggleCompleted` (writes the viewer's OWN completion state) and
+// `getTaskDetails` (overlays the viewer's OWN completion state onto a
+// single task's detail view) — neither of which excludes the reminder from
+// any shared community list.
+// ═════════════════════════════════════════════════════════════════════════
+
+describe('Community Reminders source visibility — legacy completedAt/dismissedAt never hide shared content', () => {
+  it('[#1] general Community Reminder + no settings → visible in Community Reminders source', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#2] general Community Reminder + dismissedAt → STILL visible in Community Reminders source', () => {
+    // shouldShowCommunityReminderInCommunity has no settings parameter at
+    // all — dismissedAt cannot be passed in, and therefore cannot affect
+    // the result. This is the same call as #1: the function is
+    // structurally blind to personal state.
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#3] general Community Reminder + legacy completedAt → STILL visible in Community Reminders source', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#4] general Community Reminder + both dismissedAt + completedAt → STILL visible in Community Reminders source', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+
+  it('[#11] deleted general reminder → still excluded from community source', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: { ...generalReminder, deletedAt: 999 },
+        viewerMembership: membership('active'),
+      })
+    ).toBe(false);
+  });
+
+  it('[#12] inactive/non-member viewer → still excluded', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('pending'),
+      })
+    ).toBe(false);
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('left'),
+      })
+    ).toBe(false);
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: null,
+      })
+    ).toBe(false);
+  });
+
+  it('[#13] Community Main semantics still ignore personal hidden state (respectPersonalHiddenState=false mode has no settings input either)', () => {
+    // listVisibleCommunityRemindersForRange's community-context mode
+    // (respectPersonalHiddenState: false) skips the personal by_user scan
+    // entirely (see convex/tasks.ts) — modeled here at the predicate level:
+    // shouldShowCommunityReminderInCommunity is exactly what that mode
+    // reduces to once personal hidden state is skipped.
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+});
+
+describe('isEligibleForCompletedCommunityReminderBucket — completed-bucket classification correction', () => {
+  it('[#5] general Community Reminder + legacy completedAt → NOT classified into completed-community-reminder bucket', () => {
+    expect(isEligibleForCompletedCommunityReminderBucket(generalReminder)).toBe(
+      false
+    );
+  });
+
+  it('[#6] general Community Reminder + dismissedAt → NOT classified into completed-community-reminder bucket', () => {
+    // The predicate has no settings parameter — it is a pure function of
+    // task SHAPE, so dismissedAt cannot change the result either.
+    expect(isEligibleForCompletedCommunityReminderBucket(generalReminder)).toBe(
+      false
+    );
+  });
+
+  it('[#9] normal completable task + completedAt → existing completed behavior unchanged (eligible for the completed bucket)', () => {
+    const personalTask = { communityId: undefined, sourceType: undefined };
+    expect(isEligibleForCompletedCommunityReminderBucket(personalTask)).toBe(
+      true
+    );
+  });
+
+  it('[#10] event-derived task + completedAt → existing behavior unchanged (eligible for the completed bucket — not a general reminder)', () => {
+    const eventDerivedTask = {
+      ...generalReminder,
+      sourceType: 'community_event_important_item',
+    };
+    expect(
+      isEligibleForCompletedCommunityReminderBucket(eventDerivedTask)
+    ).toBe(true);
+  });
+
+  it('a community task with an explicit assignee → eligible for the completed bucket (not a general reminder)', () => {
+    expect(
+      isEligibleForCompletedCommunityReminderBucket({
+        ...generalReminder,
+        assignedTo: userId,
+      })
+    ).toBe(true);
+  });
+});
+
+describe('PERSONAL surfaces (Home/Calendar) — unaffected by this correction', () => {
+  it('[#7] general Community Reminder + completedAt → STILL hidden from PERSONAL retrieval', () => {
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+        settings: { completedAt: 456 },
+      })
+    ).toBe(false);
+  });
+
+  it('[#8] general Community Reminder + dismissedAt → STILL hidden from PERSONAL retrieval', () => {
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+        settings: { dismissedAt: 123 },
+      })
+    ).toBe(false);
+  });
+
+  it('general Community Reminder + no hidden state → still visible on PERSONAL retrieval (unaffected baseline)', () => {
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+        settings: {},
+      })
+    ).toBe(true);
+  });
+});
+
+describe('[#14] dueAt/dueDate bounded retrieval unchanged by this correction', () => {
+  const from = 1_700_000_000_000;
+  const to = 1_700_600_000_000;
+
+  it('timed reminder (dueAt) range-inclusion rule is untouched', () => {
+    expect(
+      isGeneralCommunityReminderWithinRange({ dueAt: from + 1000 }, from, to)
+    ).toBe(true);
+    expect(
+      isGeneralCommunityReminderWithinRange({ dueAt: to + 1000 }, from, to)
+    ).toBe(false);
+  });
+
+  it('date-only reminder (dueDate) range-inclusion rule is untouched', () => {
+    expect(
+      isGeneralCommunityReminderWithinRange({ dueDate: from + 1000 }, from, to)
+    ).toBe(true);
+    expect(
+      isGeneralCommunityReminderWithinRange({ dueDate: to + 1000 }, from, to)
+    ).toBe(false);
   });
 });

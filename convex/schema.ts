@@ -684,7 +684,24 @@ export default defineSchema({
     // Absent → this user considers it open.
     // Never set for non-general-reminder tasks (personal/assigned tasks use tasks.completed).
     completedAt: v.optional(v.number()),
+    // Personal "hide from my personal space" timestamp for general community
+    // reminders (Home/Calendar only — see convex/taskUtils.ts
+    // `isCommunityReminderPersonallyHidden`). Present → this user has hidden
+    // this reminder from their own Home/Calendar. Absent → not personally
+    // hidden via this field (legacy `completedAt` is still checked
+    // separately for backward compatibility — see taskUtils.ts).
+    // NEVER hides the reminder from Community Main / Community Reminders —
+    // the community remains the source of truth for shared content.
+    // Never set for non-general-reminder tasks.
+    dismissedAt: v.optional(v.number()),
   })
+    // No new index added for dismissedAt: dismissal lookups reuse the
+    // existing by_task_user (single-row read/write) and by_user (bulk
+    // viewer-scoped scan in listVisibleCommunityRemindersForRange) indexes —
+    // the same access pattern already used for completedAt. There is no
+    // access pattern that queries dismissedAt independently of a specific
+    // (taskId, userId) pair or the viewer's own by_user scan, so no
+    // additional index is justified.
     .index('by_task_user', ['taskId', 'userId'])
     .index('by_task', ['taskId'])
     .index('by_user', ['userId']),

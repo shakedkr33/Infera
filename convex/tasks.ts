@@ -18,11 +18,13 @@ import {
   getTaskClassification,
   hasExplicitAssigneeForCommunityActivity,
   isDeletedOrArchivedGeneralCommunityReminder,
+  isEligibleForCompletedCommunityReminderBucket,
   isGeneralCommunityReminder,
   isGeneralCommunityReminderWithinRange,
   isStorageReferencedByOtherDocument,
   safeDeleteStorageIfUnreferenced,
   setPersonalCompleted,
+  setPersonalDismissed,
 } from './taskUtils';
 import { createUserNotifications } from './userNotifications';
 
@@ -708,10 +710,23 @@ async function scheduleGeneralReminderJobsForTask(
 // ─────────────────────────────────────────────────────────────
 // שליפת תזכורות שהושלמו לאחרונה לקהילה (עד 30 יום)
 //
-// Returns general community reminders personally completed by the
-// authenticated user (personal completedAt >= since), sorted descending.
-// The shared tasks.completed / tasks.completedAt fields are ignored
-// for general community reminders — personal completedAt is authoritative.
+// LEGACY COMPLETION: COMMUNITY VISIBILITY CORRECTION — a general
+// community reminder is SHARED community content, never a completable
+// task. Legacy taskParticipantSettings.completedAt (written before
+// per-user dismissal existed) means ONLY "personally hidden from my own
+// Home/Calendar" (see isCommunityReminderPersonallyHidden in
+// taskUtils.ts) — it must NEVER be surfaced as "this shared reminder was
+// completed inside the community". General community reminders are
+// therefore explicitly EXCLUDED from this "completed" bucket, regardless
+// of viewer completedAt.
+//
+// This query is currently unused by any production UI caller — kept (not
+// deleted, per the correction's scope) in case a genuinely completable,
+// non-general community task type ever needs a "recently completed"
+// bucket via taskParticipantSettings.completedAt again. Today that never
+// happens in practice: by convention (see schema.ts), only general
+// community reminders ever populate taskParticipantSettings.completedAt,
+// so this query now always returns [].
 // ─────────────────────────────────────────────────────────────
 export const listCompletedCommunityReminders = query({
   args: {
@@ -745,7 +760,9 @@ export const listCompletedCommunityReminders = query({
         const task = await ctx.db.get(s.taskId);
         if (!task) return null;
         if (task.communityId !== communityId) return null;
-        if (!isGeneralCommunityReminder(task)) return null;
+        // General community reminders are never classified as "completed
+        // community reminders" — see the correction note above.
+        if (!isEligibleForCompletedCommunityReminderBucket(task)) return null;
         // Overlay personal completion timestamps.
         return {
           ...task,
@@ -764,18 +781,18 @@ export const listCompletedCommunityReminders = query({
 // ─────────────────────────────────────────────────────────────
 // שליפת תזכורות קהילה עם cursor pagination (לביצועים)
 //
-// Returns only tasks that are OPEN for the authenticated user.
-// For general community reminders: "open" means personal completedAt is absent.
-// For other task types (event-linked items): "open" means tasks.completed = false.
-//
-// The tasks.completed DB-level filter is intentionally removed so that legacy
-// general reminders with tasks.completed = true (marked globally before per-user
-// completion was introduced) are still visible to users who have not personally
-// completed them (spec req #35).
-//
-// Pagination sparsity: each DB page may include personally-completed items that
-// are filtered out. For MVP communities with few completions this is negligible.
-// The cursor advances correctly and all open items are eventually returned.
+// LEGACY COMPLETION: COMMUNITY VISIBILITY CORRECTION — this is the
+// Community Reminders TAB source query. A general community reminder is
+// SHARED community content, never a per-viewer completable task: the
+// community remains the source of truth for what was published, so this
+// query returns EVERY (non-deleted/archived, unassigned) general
+// community reminder in the community, regardless of the viewer's own
+// `taskParticipantSettings` row. Neither the new `dismissedAt` field NOR
+// legacy `completedAt` may exclude, move, or otherwise partition a general
+// reminder here — those fields affect ONLY the viewer's PERSONAL surfaces
+// (Home/Calendar — see listVisibleCommunityRemindersForRange /
+// isCommunityReminderPersonallyHidden in taskUtils.ts), never the shared
+// Community Reminders source.
 // ─────────────────────────────────────────────────────────────
 export const listCommunityRemindersPaged = query({
   args: {
@@ -784,8 +801,6 @@ export const listCommunityRemindersPaged = query({
     numItems: v.optional(v.number()),
   },
   handler: async (ctx, { communityId, cursor, numItems }) => {
-    const userId = await getAuthUserId(ctx);
-
     const result = await ctx.db
       .query('tasks')
       .withIndex('by_community', (q) => q.eq('communityId', communityId))
@@ -807,27 +822,14 @@ export const listCommunityRemindersPaged = query({
         // duplicated here.
         //
         // NOTE: re-bound through an explicitly-typed `Doc<'tasks'>` local
-        // (rather than relying on `resolved` after the guard) so
-        // TypeScript does not carry the `isGeneralCommunityReminder`
-        // type-guard's narrowed `communityId` type into the rest of this
-        // map callback — every branch below must return the same
-        // `Doc<'tasks'>` shape.
+        // (rather than returning `resolved` directly) so TypeScript does
+        // not carry the `isGeneralCommunityReminder` type-guard's narrowed
+        // `communityId` type into the filter predicate below.
         if (!isGeneralCommunityReminder(resolved)) return null;
         const general: Doc<'tasks'> = resolved;
 
-        // For general community reminders: filter by personal completion.
-        if (userId) {
-          const personal = await getPersonalCompletion(
-            ctx,
-            general._id,
-            userId
-          );
-          // Personally completed → exclude from open list.
-          if (personal.completed) return null;
-          return general;
-        }
-
-        if (general.completed) return null;
+        // Shared community content — never filtered by the viewer's own
+        // dismissedAt/completedAt (see correction note above).
         return general;
       })
     );
@@ -841,12 +843,16 @@ export const listCommunityRemindersPaged = query({
 
 // ─────────────────────────────────────────────────────────────
 // שליפת משימות פתוחות לפי קהילה
+//
+// LEGACY COMPLETION: COMMUNITY VISIBILITY CORRECTION — same rule as
+// listCommunityRemindersPaged above: a general community reminder is
+// shared community content and is never filtered by the viewer's own
+// dismissedAt/completedAt here. Other (non-general) community task types
+// keep their existing shared tasks.completed filtering, unchanged.
 // ─────────────────────────────────────────────────────────────
 export const listByCommunity = query({
   args: { communityId: v.id('communities') },
   handler: async (ctx, { communityId }) => {
-    const userId = await getAuthUserId(ctx);
-
     const rows = await ctx.db
       .query('tasks')
       .withIndex('by_community', (q) => q.eq('communityId', communityId))
@@ -859,14 +865,13 @@ export const listByCommunity = query({
         const resolved = await resolveCurrentEventImportantItemTask(ctx, task);
         if (!resolved) return null;
 
-        if (userId && isGeneralCommunityReminder(resolved)) {
-          const personal = await getPersonalCompletion(
-            ctx,
-            resolved._id,
-            userId
-          );
-          if (personal.completed) return null;
-          return resolved;
+        // Re-bound through an explicitly-typed `Doc<'tasks'>` local (same
+        // reasoning as listCommunityRemindersPaged above) so the
+        // type-guard's narrowed `communityId` type does not leak into the
+        // filter predicate below.
+        if (isGeneralCommunityReminder(resolved)) {
+          const general: Doc<'tasks'> = resolved;
+          return general;
         }
 
         if (resolved.completed) return null;
@@ -1198,10 +1203,32 @@ export const listVisibleCommunityRemindersForRange = query({
     from: v.number(),
     to: v.number(),
     communityId: v.optional(v.id('communities')),
+    // Personal-dismissal foundation — when explicitly `false`, the
+    // viewer's OWN personal hidden state (dismissedAt / legacy
+    // completedAt) is ignored, so a general community reminder the viewer
+    // has personally hidden from Home/Calendar still comes back for
+    // authorized COMMUNITY-context retrieval (Community Main). Omitted or
+    // `true` (default) preserves the existing PERSONAL-surface behavior
+    // exactly. Ignoring personal hidden state is only ever allowed for a
+    // SINGLE, membership-verified community (communityId REQUIRED when
+    // this is `false`) — never for the broad multi-community Home/Calendar
+    // mode, so this can never become a generic bypass for arbitrary
+    // callers.
+    respectPersonalHiddenState: v.optional(v.boolean()),
   },
-  handler: async (ctx, { from, to, communityId }) => {
+  handler: async (
+    ctx,
+    { from, to, communityId, respectPersonalHiddenState }
+  ) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+
+    const ignorePersonalHiddenState = respectPersonalHiddenState === false;
+    if (ignorePersonalHiddenState && communityId === undefined) {
+      throw new Error(
+        'respectPersonalHiddenState=false requires a single communityId'
+      );
+    }
 
     const myMemberships = await ctx.db
       .query('communityMembers')
@@ -1215,15 +1242,30 @@ export const listVisibleCommunityRemindersForRange = query({
     );
     if (scopedActiveMemberships.length === 0) return [];
 
-    const myCompletionRows = await ctx.db
-      .query('taskParticipantSettings')
-      .withIndex('by_user', (q) => q.eq('userId', userId))
-      .collect();
-    const myCompletedTaskIds = new Set(
-      myCompletionRows
-        .filter((row) => row.completedAt !== undefined)
-        .map((row) => row.taskId as string)
-    );
+    // Bounded: one `by_user` scan of the viewer's OWN completion/dismissal
+    // rows — skipped entirely in community-context retrieval mode, where
+    // personal hidden state is irrelevant by design (never a per-reminder
+    // settings lookup either way).
+    let myHiddenTaskIds = new Set<string>();
+    if (!ignorePersonalHiddenState) {
+      const myCompletionRows = await ctx.db
+        .query('taskParticipantSettings')
+        .withIndex('by_user', (q) => q.eq('userId', userId))
+        .collect();
+      // A general community reminder is personally hidden from PERSONAL
+      // surfaces when EITHER the new `dismissedAt` OR the legacy
+      // `completedAt` is set — see isCommunityReminderPersonallyHidden's
+      // doc comment in taskUtils.ts. Built once from the bulk scan above,
+      // never a per-task lookup.
+      myHiddenTaskIds = new Set(
+        myCompletionRows
+          .filter(
+            (row) =>
+              row.completedAt !== undefined || row.dismissedAt !== undefined
+          )
+          .map((row) => row.taskId as string)
+      );
+    }
 
     const taskMap = new Map<string, Doc<'tasks'>>();
     for (const membership of scopedActiveMemberships) {
@@ -1236,7 +1278,7 @@ export const listVisibleCommunityRemindersForRange = query({
       for (const task of candidates) {
         const key = task._id as string;
         if (taskMap.has(key)) continue;
-        if (myCompletedTaskIds.has(key)) continue;
+        if (myHiddenTaskIds.has(key)) continue;
         taskMap.set(key, task);
       }
     }
@@ -1695,6 +1737,57 @@ export const toggleCompleted = mutation({
       completed: nowCompleted,
       completedAt: nowCompleted ? Date.now() : undefined,
     });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// הסתרת תזכורת קהילה כללית מהמרחב האישי ("הסתר מהמרחב האישי שלי").
+//
+// Personal-dismissal foundation — BACKEND ONLY. Writes ONLY
+// taskParticipantSettings.dismissedAt for the caller's own row. Never
+// affects tasks.completed/tasks.completedAt, never affects any other
+// member's view, and never removes the reminder from Community Main or the
+// Community Reminders tab (those read via shouldShowCommunityReminderInCommunity
+// / respectPersonalHiddenState=false, which never consult dismissedAt).
+//
+// SECURITY — the viewer is taken ONLY from getAuthUserId(ctx); no userId/
+// viewerId is ever accepted as an argument. Before writing, this validates
+// SERVER-SIDE that:
+//   1. the caller is authenticated,
+//   2. the task exists,
+//   3. the task is a GENERAL COMMUNITY REMINDER (isGeneralCommunityReminder
+//      also excludes soft-deleted/archived tasks and event-derived/assigned
+//      community tasks — see that predicate's own doc comment),
+//   4. the task has a valid communityId (narrowed by #3),
+//   5. the viewer is an ACTIVE member (owner/admin/member; pending/left/
+//      non-member rejected) of THAT EXACT community, via the same indexed
+//      by_community_user membership lookup toggleCompleted already uses —
+//      never a scan of all community members, never authorized off the
+//      task creator/assignee alone.
+// ─────────────────────────────────────────────────────────────
+export const dismissCommunityReminderForMe = mutation({
+  args: { taskId: v.id('tasks') },
+  handler: async (ctx, { taskId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const task = await ctx.db.get(taskId);
+    if (!task) throw new Error('משימה לא נמצאה');
+
+    if (!isGeneralCommunityReminder(task)) {
+      throw new Error('ניתן להסתיר רק תזכורות קהילה כלליות');
+    }
+
+    const membership = await getCommunityMembership(
+      ctx,
+      task.communityId,
+      userId
+    );
+    if (!isActiveCommunityMember(membership)) {
+      throw new Error('אין הרשאה להסתיר תזכורת זו');
+    }
+
+    await setPersonalDismissed(ctx, taskId, userId);
   },
 });
 

@@ -288,6 +288,159 @@ export function shouldIncludeCommunityReminderForViewer(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Personal-dismissal foundation — Community Reminder personal-dismissal
+// backend cluster.
+//
+// A general Community Reminder is SHARED COMMUNITY CONTENT. Personal
+// dismissal (`taskParticipantSettings.dismissedAt`) only ever hides it from
+// the VIEWER's own personal surfaces (Home/Calendar) — it NEVER hides the
+// reminder from Community Main or the Community Reminders tab, and it never
+// affects any other member.
+//
+// Legacy compatibility: earlier Community Reminder work temporarily treated
+// reminders as completable, so some users already have
+// `taskParticipantSettings.completedAt` set for a general community
+// reminder. That data is never migrated or deleted — on PERSONAL surfaces a
+// legacy `completedAt` continues to behave exactly like a `dismissedAt`
+// (prevents previously-completed reminders from reappearing), while the new
+// dismissal mutation only ever writes `dismissedAt` going forward.
+//
+// isCommunityReminderPersonallyHidden is the single low-level predicate that
+// captures this OR-rule. It deliberately returns false for any task that is
+// not a general community reminder (ordinary personal/assigned/event task
+// completion is a completely separate concept — see
+// setPersonalCompleted/clearPersonalCompleted below, which this predicate
+// never touches).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Minimal shape read by isCommunityReminderPersonallyHidden — deliberately
+ * narrower than the full taskParticipantSettings document so this predicate
+ * stays callable from pure unit tests without constructing a full Convex row.
+ */
+export interface PersonalReminderHiddenState {
+  dismissedAt?: number;
+  completedAt?: number;
+}
+
+/**
+ * True when the VIEWER has personally hidden this general community
+ * reminder from their own personal surfaces (Home/Calendar) — via the new
+ * `dismissedAt` field OR the legacy `completedAt` field.
+ *
+ * Always false for a task that is not a general community reminder — this
+ * predicate must never be mistaken for, or substitute, ordinary
+ * personal/assigned/event-task completion semantics.
+ */
+export function isCommunityReminderPersonallyHidden(
+  task: {
+    communityId?: Id<'communities'>;
+    sourceType?: string;
+    deletedAt?: number;
+    archivedAt?: number;
+    assignedTo?: Id<'users'>;
+    assignedToMemberId?: Id<'members'>;
+    assignedToUserIds?: Id<'users'>[];
+    assignedToMemberIds?: Id<'members'>[];
+  },
+  settings: PersonalReminderHiddenState | null | undefined
+): boolean {
+  if (!isGeneralCommunityReminder(task)) return false;
+  if (!settings) return false;
+  return (
+    settings.dismissedAt !== undefined || settings.completedAt !== undefined
+  );
+}
+
+/**
+ * Canonical eligibility predicate for PERSONAL surfaces (Home/Calendar):
+ * visible only when the task is a general community reminder, the viewer is
+ * an ACTIVE member of its community, AND the viewer has not personally
+ * hidden it (dismissedAt OR legacy completedAt — see
+ * isCommunityReminderPersonallyHidden).
+ *
+ * Named to express the PRODUCT surface concept (personal surface), not a
+ * specific screen — Home and Calendar both delegate to this same predicate.
+ */
+export function shouldShowCommunityReminderOnPersonalSurface(args: {
+  task: {
+    communityId?: Id<'communities'>;
+    sourceType?: string;
+    deletedAt?: number;
+    archivedAt?: number;
+    assignedTo?: Id<'users'>;
+    assignedToMemberId?: Id<'members'>;
+    assignedToUserIds?: Id<'users'>[];
+    assignedToMemberIds?: Id<'members'>[];
+  };
+  viewerMembership: Pick<Doc<'communityMembers'>, 'status'> | null;
+  settings: PersonalReminderHiddenState | null | undefined;
+}): boolean {
+  if (!isGeneralCommunityReminder(args.task)) return false;
+  if (isCommunityReminderPersonallyHidden(args.task, args.settings)) {
+    return false;
+  }
+  return isActiveCommunityMember(
+    args.viewerMembership as Doc<'communityMembers'> | null
+  );
+}
+
+/**
+ * True when a task MAY be classified into a "recently completed" community
+ * bucket (e.g. listCompletedCommunityReminders) based on a viewer's
+ * `taskParticipantSettings.completedAt`.
+ *
+ * A general community reminder is SHARED community content, never a
+ * per-viewer completable task going forward — legacy `completedAt` on such
+ * a task means only "personally hidden from my own Home/Calendar" (see
+ * isCommunityReminderPersonallyHidden) and must NEVER be surfaced as "this
+ * shared reminder was completed inside the community". This predicate is
+ * therefore false for every general community reminder, regardless of
+ * completedAt — see the "Legacy Completion: Community Visibility
+ * Correction" fix.
+ */
+export function isEligibleForCompletedCommunityReminderBucket(task: {
+  communityId?: Id<'communities'>;
+  sourceType?: string;
+  deletedAt?: number;
+  archivedAt?: number;
+  assignedTo?: Id<'users'>;
+  assignedToMemberId?: Id<'members'>;
+  assignedToUserIds?: Id<'users'>[];
+  assignedToMemberIds?: Id<'members'>[];
+}): boolean {
+  return !isGeneralCommunityReminder(task);
+}
+
+/**
+ * Canonical eligibility predicate for COMMUNITY surfaces (Community Main,
+ * Community Reminders tab): visible whenever the task is a general
+ * community reminder and the viewer is an ACTIVE member of its community —
+ * deliberately does NOT accept any personal dismissal/completion state at
+ * all, so it can never be called in a way that accidentally lets personal
+ * state suppress shared content. The community remains the source of truth;
+ * personal dismissal is per-user only and never affects other members.
+ */
+export function shouldShowCommunityReminderInCommunity(args: {
+  task: {
+    communityId?: Id<'communities'>;
+    sourceType?: string;
+    deletedAt?: number;
+    archivedAt?: number;
+    assignedTo?: Id<'users'>;
+    assignedToMemberId?: Id<'members'>;
+    assignedToUserIds?: Id<'users'>[];
+    assignedToMemberIds?: Id<'members'>[];
+  };
+  viewerMembership: Pick<Doc<'communityMembers'>, 'status'> | null;
+}): boolean {
+  if (!isGeneralCommunityReminder(args.task)) return false;
+  return isActiveCommunityMember(
+    args.viewerMembership as Doc<'communityMembers'> | null
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Pure range-inclusion rule for the date-bounded viewer-range Community
 // Reminder query (convex/tasks.ts `listVisibleCommunityRemindersForRange` /
 // `loadGeneralCommunityRemindersInRange`) — final architecture replacing the
@@ -448,4 +601,82 @@ export async function clearPersonalCompleted(
   if (row && row.completedAt !== undefined) {
     await ctx.db.patch(row._id, { completedAt: undefined });
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Personal-dismissal read/write helpers for general community reminders.
+//
+// Mirror the getPersonalCompletion / setPersonalCompleted shape above, but
+// operate exclusively on the NEW `dismissedAt` field. These NEVER read or
+// write `completedAt` — legacy completedAt compatibility is handled purely
+// by isCommunityReminderPersonallyHidden at read time, never by writing it
+// here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reads the authenticated user's personal hidden-state row for a task
+ * (both `dismissedAt` and legacy `completedAt`, for callers that need to
+ * evaluate isCommunityReminderPersonallyHidden). Missing row → {}.
+ */
+export async function getPersonalReminderHiddenState(
+  ctx: QueryCtx | MutationCtx,
+  taskId: Id<'tasks'>,
+  userId: Id<'users'>
+): Promise<PersonalReminderHiddenState> {
+  const row = await ctx.db
+    .query('taskParticipantSettings')
+    .withIndex('by_task_user', (q) =>
+      q.eq('taskId', taskId).eq('userId', userId)
+    )
+    .unique();
+
+  if (!row) return {};
+  return { dismissedAt: row.dismissedAt, completedAt: row.completedAt };
+}
+
+/**
+ * Marks a user's personal dismissal (hide-from-my-personal-space) on a
+ * task. Upserts the settings row — patches existing or inserts minimal new
+ * row — using the same by_task_user identity as setPersonalCompleted, so a
+ * viewer/task pair can never end up with two settings rows.
+ *
+ * Idempotency: if the row already has `dismissedAt` set, the ORIGINAL
+ * timestamp is preserved and no write is performed — the smallest possible
+ * idempotent guard, consistent with the fact that dismissal is a one-way
+ * personal action (there is no "un-dismiss" mutation in this backend-only
+ * task) with no product need to track the *latest* dismissal time.
+ *
+ * Never writes `completedAt` — dismissal and legacy completion are
+ * independent fields; only isCommunityReminderPersonallyHidden combines them
+ * for read-time visibility.
+ */
+export async function setPersonalDismissed(
+  ctx: MutationCtx,
+  taskId: Id<'tasks'>,
+  userId: Id<'users'>
+): Promise<number> {
+  const row = await ctx.db
+    .query('taskParticipantSettings')
+    .withIndex('by_task_user', (q) =>
+      q.eq('taskId', taskId).eq('userId', userId)
+    )
+    .unique();
+
+  if (row) {
+    if (row.dismissedAt !== undefined) {
+      // Already dismissed — idempotent no-op, preserve the original timestamp.
+      return row.dismissedAt;
+    }
+    const now = Date.now();
+    await ctx.db.patch(row._id, { dismissedAt: now });
+    return now;
+  }
+
+  const now = Date.now();
+  await ctx.db.insert('taskParticipantSettings', {
+    taskId,
+    userId,
+    dismissedAt: now,
+  });
+  return now;
 }
