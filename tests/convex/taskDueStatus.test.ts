@@ -14,6 +14,9 @@
 import { describe, expect, it } from 'bun:test';
 import {
   dayEnd,
+  formatDueDate,
+  formatDueTime,
+  formatReminderScheduleLabel,
   getEffectiveTaskDueTimestamp,
   isTaskPastDue,
 } from '../../lib/taskDueStatus';
@@ -98,5 +101,110 @@ describe('isTaskPastDue — no reliable due timestamp ("ללא תאריך")', ()
     const now = Date.now();
     expect(isTaskPastDue({}, now)).toBe(false);
     expect(isTaskPastDue({}, now + 365 * 24 * 60 * 60 * 1000)).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// formatDueDate / formatDueTime / formatReminderScheduleLabel — BUG 3 of the
+// Home-X/Community-Main QA fix: Community Main "מה חשוב עכשיו" must display a
+// reminder's configured date/time, using the EXACT same helpers as the
+// Community Reminders tab (relocated here from app/(authenticated)/
+// community/[id].tsx so both surfaces share one implementation).
+// ─────────────────────────────────────────────────────────────────────────────
+const oneDayMs = 24 * 60 * 60 * 1000;
+
+describe('formatDueDate', () => {
+  it('returns "היום" for a timestamp earlier today', () => {
+    expect(formatDueDate(Date.now())).toBe('היום');
+  });
+
+  it('returns "מחר" for a timestamp exactly one day ahead', () => {
+    expect(formatDueDate(Date.now() + oneDayMs)).toBe('מחר');
+  });
+
+  it('returns "אתמול" for a timestamp exactly one day in the past', () => {
+    expect(formatDueDate(Date.now() - oneDayMs)).toBe('אתמול');
+  });
+
+  it('returns a compact Hebrew day+month for a far-future date', () => {
+    const farFuture = Date.now() + 10 * oneDayMs;
+    const label = formatDueDate(farFuture);
+    expect(label).not.toBe('היום');
+    expect(label).not.toBe('מחר');
+    expect(label.length).toBeGreaterThan(0);
+  });
+});
+
+describe('formatDueTime', () => {
+  it('formats local hours/minutes as zero-padded HH:MM', () => {
+    const dueAt = new Date(2026, 0, 15, 9, 5, 0, 0).getTime();
+    expect(formatDueTime(dueAt)).toBe('09:05');
+  });
+
+  it('zero-pads midnight correctly (never returns fake-looking partial values)', () => {
+    const dueAt = new Date(2026, 0, 15, 0, 0, 0, 0).getTime();
+    expect(formatDueTime(dueAt)).toBe('00:00');
+  });
+});
+
+describe('formatReminderScheduleLabel', () => {
+  it('a timed reminder (hasTime + dueAt) includes both date context and time', () => {
+    const dueDate = Date.now() + oneDayMs;
+    const dueAt = new Date(dueDate).setHours(9, 0, 0, 0);
+    const label = formatReminderScheduleLabel({
+      dueDate,
+      dueAt,
+      hasTime: true,
+    });
+    expect(label).toContain('מחר');
+    expect(label).toContain('09:00');
+    expect(label).toBe('מחר · 09:00');
+  });
+
+  it('uses dueAt for the time even when dueDate midnight would differ', () => {
+    // dueDate is stored as local-day midnight; dueAt is the real timed
+    // moment — the label must reflect dueAt's time, never derive a time
+    // from dueDate's own midnight value.
+    const dueDate = new Date(2026, 0, 16, 0, 0, 0, 0).getTime();
+    const dueAt = new Date(2026, 0, 16, 14, 30, 0, 0).getTime();
+    const label = formatReminderScheduleLabel({
+      dueDate,
+      dueAt,
+      hasTime: true,
+    });
+    expect(label).toContain('14:30');
+  });
+
+  it('a date-only reminder (no hasTime) shows only date context', () => {
+    const dueDate = Date.now() + oneDayMs;
+    const label = formatReminderScheduleLabel({ dueDate, hasTime: false });
+    expect(label).toBe('מחר');
+  });
+
+  it('a date-only reminder never displays a fake "00:00"', () => {
+    const dueDate = Date.now();
+    const label = formatReminderScheduleLabel({ dueDate, hasTime: false });
+    expect(label).not.toContain('00:00');
+  });
+
+  it('an undated reminder ("ללא תאריך") returns undefined — no schedule text at all', () => {
+    expect(formatReminderScheduleLabel({})).toBeUndefined();
+    expect(formatReminderScheduleLabel({ hasTime: true })).toBeUndefined();
+  });
+
+  it('"today" context is correctly labeled', () => {
+    const label = formatReminderScheduleLabel({
+      dueDate: Date.now(),
+      hasTime: false,
+    });
+    expect(label).toBe('היום');
+  });
+
+  it('"tomorrow" context is correctly labeled', () => {
+    const label = formatReminderScheduleLabel({
+      dueDate: Date.now() + oneDayMs,
+      hasTime: false,
+    });
+    expect(label).toBe('מחר');
   });
 });

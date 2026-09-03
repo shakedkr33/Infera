@@ -69,3 +69,63 @@ export function isTaskPastDue(task: TaskDueSchedule, nowMs: number): boolean {
   if (effectiveDue === undefined) return false;
   return effectiveDue < nowMs;
 }
+
+function fmt2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+/**
+ * "היום" / "מחר" / "אתמול" for near dates, else a compact Hebrew
+ * day+short-month date (e.g. "12 בינו׳") — extracted from the pre-existing
+ * private `formatDueDate` in `app/(authenticated)/community/[id].tsx`
+ * (Community Reminders tab) so Community Main's "מה חשוב עכשיו" reminder
+ * row (see BUG 3 of the Home-X/Community-Main QA fix) can reuse the exact
+ * same date bucketing instead of inventing a second one.
+ */
+export function formatDueDate(ts: number): string {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  const diff = Math.round((d.getTime() - today.getTime()) / 86_400_000);
+  if (diff === 0) return 'היום';
+  if (diff === 1) return 'מחר';
+  if (diff === -1) return 'אתמול';
+  return new Date(ts).toLocaleDateString('he-IL', {
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+/**
+ * Local device "HH:MM" for an exact `dueAt` timestamp. Only meaningful
+ * when the reminder actually `hasTime` — callers must gate on that
+ * themselves (see `formatReminderScheduleLabel` below for the gated,
+ * ready-to-render combination).
+ */
+export function formatDueTime(dueAt: number): string {
+  const d = new Date(dueAt);
+  return `${fmt2(d.getHours())}:${fmt2(d.getMinutes())}`;
+}
+
+/**
+ * Compact "<date>" or "<date> · <time>" schedule label for a general
+ * community reminder — reused by both the Community Reminders tab and
+ * Community Main "מה חשוב עכשיו" (BUG 3 of the Home-X/Community-Main QA
+ * fix) so the two surfaces can never drift into two different
+ * date-formatting systems. `dueAt` is the ONLY source of truth for the
+ * time portion, and only when `hasTime` is set — never derived from
+ * `dueDate`'s local-day midnight, so a date-only reminder never shows a
+ * fake `00:00`. Returns `undefined` when the reminder has no date at all
+ * ("ללא תאריך").
+ */
+export function formatReminderScheduleLabel(
+  schedule: Pick<TaskDueSchedule, 'dueDate' | 'dueAt'> & { hasTime?: boolean }
+): string | undefined {
+  if (schedule.dueDate === undefined) return undefined;
+  const datePart = formatDueDate(schedule.dueDate);
+  if (schedule.hasTime && schedule.dueAt !== undefined) {
+    return `${datePart} · ${formatDueTime(schedule.dueAt)}`;
+  }
+  return datePart;
+}

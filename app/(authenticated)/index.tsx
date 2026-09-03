@@ -885,19 +885,20 @@ export default function HomeScreen() {
 
   // ── Convex: dated tasks ────────────────────────────────────────────────────
   // listMyTasks mirrors Tasks-screen visibility: creator, assignedTo,
-  // and co-member secondary assignees — no spaceId restriction. It no
-  // longer distributes shared Community Reminders to every active member
-  // (that unbounded-by-date scan was removed — see that query's own doc
-  // comment in convex/tasks.ts); a general reminder can still appear here
-  // ONLY when the viewer happens to be its creator (bounded by_creator
-  // match, unrelated to community history size).
+  // and co-member secondary assignees — no spaceId restriction. It never
+  // returns general community reminders (excluded unconditionally, even for
+  // their own creator — see that query's own doc comment in convex/tasks.ts,
+  // "CREATOR-OVERLAP CORRECTION"), because it has no way to consult a
+  // viewer's personal-dismissal state and would otherwise let a reminder's
+  // creator bypass `dismissCommunityReminderForMe`.
   const convexTasks = useQuery(api.tasks.listMyTasks);
 
-  // Dedicated, date-bounded Community Reminder retrieval for every ACTIVE
-  // community the viewer belongs to — reuses the EXACT same [from, to] Home
-  // already computes for the selected day (see the `from`/`to` memo above),
-  // never a separate/wider range. This is the ONLY source of shared
-  // Community Reminders on Home now.
+  // Dedicated, date-bounded, personal-dismissal-aware Community Reminder
+  // retrieval for every ACTIVE community the viewer belongs to — reuses the
+  // EXACT same [from, to] Home already computes for the selected day (see
+  // the `from`/`to` memo above), never a separate/wider range. This is the
+  // ONLY source of shared Community Reminders on Home, for every viewer
+  // including the reminder's own creator.
   const homeCommunityReminders =
     useQuery(api.tasks.listVisibleCommunityRemindersForRange, {
       from,
@@ -905,10 +906,10 @@ export default function HomeScreen() {
     }) ?? [];
 
   // Merge personal tasks (listMyTasks) with the dedicated Community Reminder
-  // set, deduped by task id — a reminder's creator can see the SAME row via
-  // both sources (listMyTasks step 2 / by_creator, and the dedicated query),
-  // never rendered twice. General community reminders are never injected
-  // back through listMyTasks itself (see that query's doc comment).
+  // set, deduped by task id. Since listMyTasks never returns general
+  // community reminders (see above), the two sources cannot overlap for a
+  // reminder — this dedup only matters for the (unrelated) case of an
+  // ordinary personal/assigned task, kept defensively for robustness.
   const mergedConvexTasks = useMemo(() => {
     const map = new Map<string, (typeof homeCommunityReminders)[number]>();
     for (const t of convexTasks ?? []) map.set(String(t._id), t);

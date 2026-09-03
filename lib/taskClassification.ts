@@ -57,3 +57,27 @@ export function getHomeReminderMetadata(
         : undefined,
   };
 }
+
+/**
+ * Exact accessibility label / copy for the personal-dismiss ("הסתר מהמרחב
+ * האישי שלי") action shown on Home and Calendar for general community
+ * reminders ONLY (never inside Community Main / Community "תזכורות" — see
+ * `dismissCommunityReminderForMe` in convex/tasks.ts). A single shared
+ * constant so the exact wording can never drift between the two surfaces.
+ */
+export const COMMUNITY_REMINDER_DISMISS_LABEL = 'הסתר מהמרחב האישי שלי';
+
+/**
+ * True when a rendered card's resolved type label identifies it as a
+ * general community reminder — the ONLY items eligible for the
+ * personal-dismiss action on Home/Calendar. Reuses the SAME
+ * `taskTypeLabel`/`typeLabel` value already derived exclusively from the
+ * canonical `getTaskClassification`/`getHomeReminderMetadata`/
+ * `getCalendarTaskTypeLabel` helpers — never a second, ad-hoc
+ * classification check.
+ */
+export function isCommunityReminderTypeLabel(
+  typeLabel: string | undefined
+): boolean {
+  return typeLabel === COMMUNITY_REMINDER_TYPE_LABEL;
+}

@@ -63,7 +63,12 @@ import {
 } from '@/lib/openCommunityCalendarUi';
 import { resolveActiveCommunityContext } from '@/lib/resolveActiveCommunityContext';
 import { APP_IS_RTL, needsExplicitRTL, position, rtl } from '@/lib/rtl';
-import { isTaskPastDue } from '@/lib/taskDueStatus';
+import {
+  formatDueDate,
+  formatDueTime,
+  formatReminderScheduleLabel,
+  isTaskPastDue,
+} from '@/lib/taskDueStatus';
 
 const ANDROID_MATCH_IOS_LAYOUT = Platform.OS === 'android' && APP_IS_RTL;
 
@@ -342,31 +347,6 @@ function getMainCardStatusLabel(
   if (rsvpStatus === 'no') return 'סימנת שלא מגיע/ה';
   if (rsvpStatus === 'maybe') return 'סימנת אולי מגיע/ה';
   return 'נדרש אישור הגעה';
-}
-
-function formatDueDate(ts: number): string {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  const diff = Math.round((d.getTime() - today.getTime()) / 86_400_000);
-  if (diff === 0) return 'היום';
-  if (diff === 1) return 'מחר';
-  if (diff === -1) return 'אתמול';
-  return new Date(ts).toLocaleDateString('he-IL', {
-    day: 'numeric',
-    month: 'short',
-  });
-}
-
-function fmt2(n: number): string {
-  return String(n).padStart(2, '0');
-}
-
-/** Format a dueAt timestamp as "HH:MM". Used only when hasTime is true. */
-function formatDueTime(dueAt: number): string {
-  const d = new Date(dueAt);
-  return `${fmt2(d.getHours())}:${fmt2(d.getMinutes())}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -2311,6 +2291,16 @@ function TabMain({
       communityId,
       from: mainReminderWindow.from,
       to: mainReminderWindow.to,
+      // COMMUNITY-CONTEXT semantics (QA fix, BUG 2): Main is community
+      // shared content, never a personal surface — a viewer's own
+      // dismissedAt/legacy completedAt must NEVER hide a reminder from the
+      // community itself (only from that viewer's own Home/Calendar). Omit
+      // this and the query defaults to PERSONAL-surface semantics, which
+      // is exactly the previous bug: a viewer who dismissed a reminder from
+      // Home would also stop seeing it here. Membership authorization is
+      // unaffected either way — `scopedActiveMemberships` above is always
+      // enforced regardless of this flag.
+      respectPersonalHiddenState: false,
     }) ?? [];
 
   // PART B — surface an ACTIVE general community reminder in "מה חשוב עכשיו"
@@ -2512,10 +2502,22 @@ function TabMain({
     if (nearestActiveReminder) {
       const extraActiveCount =
         (mainReminderSelection?.activeReminders.length ?? 1) - 1;
+      // BUG 3 fix (QA): preserve the reminder's configured schedule in the
+      // Main presentation — reuses the SAME formatReminderScheduleLabel
+      // helper the Reminders tab's date/time text is built from (see
+      // lib/taskDueStatus.ts), never a second date-formatting system.
+      // `dueAt` (the exact timed timestamp) is the source of truth for the
+      // time whenever `hasTime` is set — never derived from `dueDate`'s
+      // local-day midnight — so a date-only reminder never shows a fake
+      // `00:00`.
+      const scheduleLabel = formatReminderScheduleLabel(nearestActiveReminder);
+      const schedulePrefix = scheduleLabel
+        ? `תזכורת ${scheduleLabel}`
+        : 'תזכורת';
       const label =
         extraActiveCount > 0
-          ? `תזכורת · ${nearestActiveReminder.title} (+${extraActiveCount})`
-          : `תזכורת · ${nearestActiveReminder.title}`;
+          ? `${schedulePrefix} · ${nearestActiveReminder.title} (+${extraActiveCount})`
+          : `${schedulePrefix} · ${nearestActiveReminder.title}`;
       items.push({
         key: 'reminders',
         label,

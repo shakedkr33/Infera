@@ -32,9 +32,12 @@
  *   - `listMyTasks`'s previous Step 4 (an unbounded-by-date scan of every
  *     general reminder in every community the viewer belongs to, via the
  *     removed `by_community_assigned` index) has been deleted entirely.
- *     `listMyTasks` now only ever returns personal/assigned tasks (a general
- *     reminder can still appear there ONLY via the pre-existing by_creator
- *     match, unrelated to this fix).
+ *     `listMyTasks` now only ever returns personal/assigned tasks — a
+ *     general community reminder is excluded from its result
+ *     UNCONDITIONALLY, even for its own creator (via the pre-existing
+ *     by_creator match), so a reminder's creator gets the exact same
+ *     personal-dismissal behavior as every other member (see the
+ *     "CREATOR-OVERLAP CORRECTION" note on that query in convex/tasks.ts).
  *   - The dedicated query instead scans
  *     `.withIndex('by_community_assigned_dueAt', (q) => q.eq('communityId',
  *       id).eq('assignedTo', undefined).gte('dueAt', from).lte('dueAt',
@@ -55,6 +58,7 @@ import {
   getTaskClassification,
   isCommunityReminderPersonallyHidden,
   isEligibleForCompletedCommunityReminderBucket,
+  isGeneralCommunityReminder,
   isGeneralCommunityReminderWithinRange,
   shouldIncludeCommunityReminderForViewer,
   shouldShowCommunityReminderInCommunity,
@@ -1099,3 +1103,185 @@ describe('[#14] dueAt/dueDate bounded retrieval unchanged by this correction', (
     ).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Personal-dismiss CREATOR-OVERLAP correction (Home + Calendar final audit).
+//
+// convex/tasks.ts `listMyTasks` never reads `taskParticipantSettings` at all
+// (no dismissedAt/settings input in this query, unlike
+// listVisibleCommunityRemindersForRange), so it cannot itself decide whether
+// a general community reminder is personally hidden. Its by_creator scan
+// (step 2) could therefore still return a general community reminder to its
+// own creator even after that creator dismissed it — completely bypassing
+// `dismissCommunityReminderForMe` for that one viewer, since Home/Calendar
+// merge listMyTasks's raw result into the same dataset as the
+// dismissal-aware dedicated query (see index.tsx/calendar.tsx merge
+// comments).
+//
+// The fix: listMyTasks now unconditionally excludes every general community
+// reminder from its OWN result — `tasks.filter((t) =>
+// !isGeneralCommunityReminder(t))` — regardless of which step matched it,
+// so the raw dataset it hands to Home/Calendar can never reintroduce a
+// reminder the dedicated, dismissal-aware query already correctly excluded.
+//
+// The actual ctx.db scan/filter cannot be unit-tested without a live Convex
+// harness (same precedent as the rest of this file) — these tests instead
+// exercise the exact PURE predicate (`isGeneralCommunityReminder`) that
+// drives that filter, against task shapes representative of every
+// listMyTasks step (creator/assignee/co-member-secondary-assignee).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('listMyTasks creator-overlap correction — isGeneralCommunityReminder as the exclusion predicate', () => {
+  /** Mirrors `tasks.filter((t) => !isGeneralCommunityReminder(t))` in convex/tasks.ts. */
+  function applyListMyTasksReminderExclusion<
+    T extends Parameters<typeof isGeneralCommunityReminder>[0],
+  >(tasks: T[]): T[] {
+    return tasks.filter((t) => !isGeneralCommunityReminder(t));
+  }
+
+  it('[#1] creator-owned general Community Reminder is excluded from the listMyTasks result set (Home data)', () => {
+    // Same task shape a by_creator match (listMyTasks step 2) would return
+    // for its own creator — no assignee, communityId set, no sourceType.
+    const creatorOwnedReminder = {
+      _id: 'task_reminder_1',
+      ...generalReminder,
+      createdBy: userId,
+    };
+    const result = applyListMyTasksReminderExclusion([creatorOwnedReminder]);
+    expect(result).toHaveLength(0);
+  });
+
+  it('[#2] creator-owned general Community Reminder is excluded from the listMyTasks result set (Calendar data — identical predicate, identical input shape)', () => {
+    // Calendar's calendarTasksRaw is fed by the SAME listMyTasks query as
+    // Home — there is no second, Calendar-specific exclusion path to drift.
+    const creatorOwnedReminder = {
+      _id: 'task_reminder_2',
+      ...generalReminder,
+      createdBy: userId,
+    };
+    const result = applyListMyTasksReminderExclusion([creatorOwnedReminder]);
+    expect(result).toHaveLength(0);
+  });
+
+  it('[#3] an ordinary creator-owned PERSONAL task (no communityId) is NOT excluded — unaffected by this correction', () => {
+    const personalTask = {
+      _id: 'task_personal_1',
+      communityId: undefined,
+      sourceType: undefined,
+      createdBy: userId,
+    };
+    const result = applyListMyTasksReminderExclusion([personalTask]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(personalTask);
+  });
+
+  it('an ordinary assigned task (listMyTasks step 1 / by_assigned) is NOT excluded — unaffected by this correction', () => {
+    const assignedTask = {
+      _id: 'task_assigned_1',
+      communityId: undefined,
+      sourceType: undefined,
+      assignedTo: userId,
+    };
+    const result = applyListMyTasksReminderExclusion([assignedTask]);
+    expect(result).toHaveLength(1);
+  });
+
+  it('a co-member secondary-assignee task (listMyTasks step 3) is NOT excluded — unaffected by this correction', () => {
+    const coMemberTask = {
+      _id: 'task_co_member_1',
+      communityId: undefined,
+      sourceType: undefined,
+      assignedToUserIds: [userId],
+    };
+    const result = applyListMyTasksReminderExclusion([coMemberTask]);
+    expect(result).toHaveLength(1);
+  });
+
+  it('a community task WITH an explicit assignee is NOT excluded — only general (unassigned) reminders are, never assigned community tasks', () => {
+    const assignedCommunityTask = {
+      _id: 'task_community_assigned_1',
+      ...generalReminder,
+      assignedTo: userId,
+      createdBy: userId,
+    };
+    const result = applyListMyTasksReminderExclusion([assignedCommunityTask]);
+    expect(result).toHaveLength(1);
+  });
+
+  it('an event-derived task (sourceType set) sharing communityId is NOT excluded — isGeneralCommunityReminder requires sourceType === undefined', () => {
+    const eventDerivedTask = {
+      _id: 'task_event_derived_1',
+      ...generalReminder,
+      sourceType: 'community_event_important_item',
+      createdBy: userId,
+    };
+    const result = applyListMyTasksReminderExclusion([eventDerivedTask]);
+    expect(result).toHaveLength(1);
+  });
+
+  it('normal member behavior is unaffected: shouldShowCommunityReminderOnPersonalSurface (the dedicated query the reminder is now EXCLUSIVELY sourced from) already ignores creator status entirely', () => {
+    // Whether the viewer created the reminder is never an input to this
+    // predicate — visibility/dismissal is purely membership + settings, so
+    // an ordinary active member gets IDENTICAL treatment to the creator.
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+        settings: {},
+      })
+    ).toBe(true);
+    expect(
+      shouldShowCommunityReminderOnPersonalSurface({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+        settings: { dismissedAt: 999 },
+      })
+    ).toBe(false);
+  });
+
+  it('community-context visibility (Community Main / Community "תזכורות") is untouched by this correction — shouldShowCommunityReminderInCommunity has no settings/dismissal input at all', () => {
+    expect(
+      shouldShowCommunityReminderInCommunity({
+        task: generalReminder,
+        viewerMembership: membership('active'),
+      })
+    ).toBe(true);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// QA FIX — BUG 2: Community Main incorrectly hid a personally-dismissed
+// reminder ("מה חשוב עכשיו").
+//
+// Root cause was NOT a pure-logic bug — every predicate above
+// (shouldShowCommunityReminderInCommunity, isCommunityReminderPersonallyHidden)
+// already had, and still has, the correct COMMUNITY-vs-PERSONAL semantics
+// (community-context visibility has no settings/dismissal input at all, see
+// the test directly above). The bug was a QUERY-ARGUMENT wiring defect: the
+// actual caller — `TabMain` in app/(authenticated)/community/[id].tsx — was
+// invoking `api.tasks.listVisibleCommunityRemindersForRange` WITHOUT
+// `respectPersonalHiddenState: false`, so the query defaulted to its
+// PERSONAL-surface mode (which DOES consult the viewer's own
+// dismissedAt/completedAt — see convex/tasks.ts, lines around
+// `ignorePersonalHiddenState`). Fix: added `respectPersonalHiddenState:
+// false` to that one query call — no backend/taskUtils change, no schema
+// change. This exact query mode already existed and was already exercised
+// by this file's `shouldShowCommunityReminderInCommunity` coverage above;
+// there was simply no test (and no query-argument default) verifying Main
+// actually SELECTED that mode. Cannot be verified further with a pure unit
+// test (the query argument itself lives in a React component, and there is
+// no Convex mutation/query test harness in this repo — see this file's own
+// header comment) — verified instead by direct code review of the
+// corrected call site.
+//
+// QA FIX — BUG 3: Community Main did not display a reminder's configured
+// date/time.
+//
+// Root cause: the Main label was built as a bare `תזכורת · {title}` string
+// with no date/time context at all. Fix: `formatReminderScheduleLabel`
+// (lib/taskDueStatus.ts, relocated from the previously-private
+// `formatDueDate`/`formatDueTime` in app/(authenticated)/community/[id].tsx
+// so the Reminders tab and Community Main share ONE date-formatting
+// implementation) is now composed into that label — see
+// tests/convex/taskDueStatus.test.ts for the exhaustive
+// timed/date-only/today/tomorrow/no-fake-00:00 coverage of that helper.
+// ═════════════════════════════════════════════════════════════════════════

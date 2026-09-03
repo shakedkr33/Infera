@@ -30,6 +30,10 @@ import {
   isHomeCompactNavButtonVisible,
 } from '@/lib/homeEventNavigation';
 import { getTextAlign, rtl } from '@/lib/rtl';
+import {
+  COMMUNITY_REMINDER_DISMISS_LABEL,
+  isCommunityReminderTypeLabel,
+} from '@/lib/taskClassification';
 import type { Birthday } from '@/lib/types/birthday';
 import type { SubTaskAttachment } from '@/lib/types/task';
 import { getCountdownLabel } from '@/lib/utils/birthday';
@@ -158,6 +162,14 @@ interface UnifiedTimelineCardProps {
   onClaimEventTask?: (taskId: string) => void;
   /** Called when user taps "בטל הקצאה" on their own incomplete event task. */
   onUnclaimEventTask?: (taskId: string) => void;
+  /**
+   * Called when the viewer taps the personal-dismiss "X" on a general
+   * community reminder. Absent/no-op for every other item type — see
+   * `isCommunityReminderTypeLabel` below for the eligibility check.
+   */
+  onDismissCommunityReminder?: (taskId: string) => void;
+  /** Task ids currently awaiting a pending dismiss mutation response. */
+  dismissingReminderIds?: Set<string>;
 }
 
 type HomeDailyCommandCenterProps = {
@@ -461,6 +473,33 @@ const SourceLabel = ({ item }: { item: HomeDailyItem }): React.JSX.Element => {
   return <Text style={styles.sourceLabel}>אירוע אישי</Text>;
 };
 
+/**
+ * Light secondary "X" action that lets the viewer hide a general community
+ * reminder from their own Home/Calendar (see `dismissCommunityReminderForMe`
+ * in convex/tasks.ts). Replaces the checkbox for these items — a community
+ * reminder is informational community content, never a private task, so it
+ * has no completion state (see PART 17 of the personal-dismiss task).
+ */
+const DismissReminderButton = ({
+  disabled,
+  onPress,
+}: {
+  disabled?: boolean;
+  onPress: () => void;
+}): React.JSX.Element => (
+  <Pressable
+    accessible={true}
+    accessibilityLabel={COMMUNITY_REMINDER_DISMISS_LABEL}
+    accessibilityRole="button"
+    disabled={disabled}
+    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+    onPress={onPress}
+    style={styles.dismissReminderButton}
+  >
+    <MaterialIcons color="#92999C" name="close" size={16} />
+  </Pressable>
+);
+
 // ─── UnifiedTimelineCard ─────────────────────────────────────────────────────
 
 const UnifiedTimelineCard = ({
@@ -486,9 +525,19 @@ const UnifiedTimelineCard = ({
   onToggleEventTaskCompleted,
   onClaimEventTask,
   onUnclaimEventTask,
+  onDismissCommunityReminder,
+  dismissingReminderIds,
 }: UnifiedTimelineCardProps): React.JSX.Element => {
   const hasTaskSubtasks =
     item.type === 'task' && (item.subtasks?.length ?? 0) > 0;
+  // General community reminders are informational community content, not a
+  // private task — they never get the completion checkbox, only the
+  // personal-dismiss "X" (see PART 17 of the personal-dismiss task).
+  const isCommunityReminderItem =
+    item.type === 'task' && isCommunityReminderTypeLabel(item.taskTypeLabel);
+  const isDismissingReminder = dismissingReminderIds?.has(item.id) ?? false;
+  const handleDismissReminder = (): void =>
+    onDismissCommunityReminder?.(item.id);
   const hasEventImportantItems =
     item.type === 'event' && importantItems.length > 0;
   const hasEventTasks =
@@ -607,6 +656,17 @@ const UnifiedTimelineCard = ({
           onPress={onOpen}
           style={styles.expandedContent}
         >
+          {/* Personal-dismiss "X" — physical top-left corner of the card, on
+              its own line, never inline with the title/type-label/community
+              tag/time (see BUG 1 of the Home X position QA fix). */}
+          {isCommunityReminderItem ? (
+            <View style={styles.dismissCornerRow}>
+              <DismissReminderButton
+                disabled={isDismissingReminder}
+                onPress={handleDismissReminder}
+              />
+            </View>
+          ) : null}
           <View style={styles.cardTopRow}>
             <Text style={styles.timeRange}>{formatTimeRange(item)}</Text>
             {badgeConfig ? (
@@ -631,7 +691,7 @@ const UnifiedTimelineCard = ({
           </View>
 
           <View style={styles.titleRow}>
-            {item.type === 'task' ? (
+            {item.type === 'task' && !isCommunityReminderItem ? (
               <TaskCheckbox
                 checked={item.completed}
                 onToggle={onToggleComplete ?? (() => {})}
@@ -769,7 +829,8 @@ const UnifiedTimelineCard = ({
   }
 
   // ─── COMPACT card ────────────────────────────────────────────────────────────
-  const showCheckbox = item.type === 'task' && !isEnded;
+  const showCheckbox =
+    item.type === 'task' && !isEnded && !isCommunityReminderItem;
 
   // ── Compact EVENT card content — vertical hierarchy matching featured ─────────
   const compactEventContent: React.JSX.Element | null =
@@ -830,6 +891,17 @@ const UnifiedTimelineCard = ({
   const compactTaskContent: React.JSX.Element | null =
     item.type === 'task' ? (
       <>
+        {/* Personal-dismiss "X" — physical top-left corner, on its own line,
+            never inline with the title/type-label/community tag/time (see
+            BUG 1 of the Home X position QA fix). */}
+        {isCommunityReminderItem ? (
+          <View style={styles.dismissCornerRow}>
+            <DismissReminderButton
+              disabled={isDismissingReminder}
+              onPress={handleDismissReminder}
+            />
+          </View>
+        ) : null}
         {/* Time + badge top row — only when the task has a time value */}
         {item.time ? (
           <View style={styles.cardTopRow}>
@@ -876,7 +948,8 @@ const UnifiedTimelineCard = ({
           <SourceLabel item={item} />
         </View>
 
-        {/* Title row — checkbox for incomplete tasks */}
+        {/* Title row — checkbox for incomplete tasks (community reminders
+            never show a checkbox; their dismiss "X" is the corner row above). */}
         <View style={styles.compactTaskTitleRow}>
           {showCheckbox ? (
             <TaskCheckbox
@@ -1085,6 +1158,17 @@ const UnifiedTimelineCard = ({
           isCompleted && styles.completedCompactCard,
         ]}
       >
+        {/* Personal-dismiss "X" — physical top-left corner, on its own line,
+            never inline with the title/type-label/community tag/time (see
+            BUG 1 of the Home X position QA fix). */}
+        {isCommunityReminderItem ? (
+          <View style={styles.dismissCornerRow}>
+            <DismissReminderButton
+              disabled={isDismissingReminder}
+              onPress={handleDismissReminder}
+            />
+          </View>
+        ) : null}
         {/* Main task row: checkbox (sibling) + content Pressable */}
         <View style={styles.taskMainRowCompact}>
           {showCheckbox ? (
@@ -1353,6 +1437,42 @@ export function HomeDailyCommandCenter({
       }
     },
     [unclaimEventTaskMutation]
+  );
+
+  // ─── Community reminder personal-dismiss mutation ─────────────────────────
+  // Hides a general community reminder from THIS viewer's Home/Calendar only
+  // (see convex/tasks.ts `dismissCommunityReminderForMe`). Never writes
+  // `completedAt` and never affects Community Main / Community "תזכורות" —
+  // the Convex reactive query removes the reminder from Home automatically
+  // once the mutation succeeds, no local list mutation needed.
+  const dismissCommunityReminderMutation = useMutation(
+    api.tasks.dismissCommunityReminderForMe
+  );
+  const pendingDismissReminderIds = useRef(new Set<string>());
+  const [dismissingReminderIds, setDismissingReminderIds] = useState<
+    Set<string>
+  >(new Set());
+
+  const handleDismissCommunityReminder = useCallback(
+    (taskId: string): void => {
+      if (pendingDismissReminderIds.current.has(taskId)) return;
+      pendingDismissReminderIds.current.add(taskId);
+      setDismissingReminderIds((prev) => new Set(prev).add(taskId));
+      dismissCommunityReminderMutation({ taskId: taskId as Id<'tasks'> })
+        .catch((error) => {
+          console.error('dismissCommunityReminderForMe error:', error);
+          Alert.alert('שגיאה', 'לא הצלחנו להסתיר את התזכורת. נסו שוב.');
+        })
+        .finally(() => {
+          pendingDismissReminderIds.current.delete(taskId);
+          setDismissingReminderIds((prev) => {
+            const next = new Set(prev);
+            next.delete(taskId);
+            return next;
+          });
+        });
+    },
+    [dismissCommunityReminderMutation]
   );
 
   const handleToggleSubtask = useCallback(
@@ -1722,6 +1842,8 @@ export function HomeDailyCommandCenter({
                   onToggleEventTaskCompleted={handleToggleEventTask}
                   onClaimEventTask={handleClaimEventTask}
                   onUnclaimEventTask={handleUnclaimEventTask}
+                  onDismissCommunityReminder={handleDismissCommunityReminder}
+                  dismissingReminderIds={dismissingReminderIds}
                 />
               ))}
             </View>
@@ -1779,6 +1901,10 @@ export function HomeDailyCommandCenter({
                       onToggleEventTaskCompleted={handleToggleEventTask}
                       onClaimEventTask={handleClaimEventTask}
                       onUnclaimEventTask={handleUnclaimEventTask}
+                      onDismissCommunityReminder={
+                        handleDismissCommunityReminder
+                      }
+                      dismissingReminderIds={dismissingReminderIds}
                     />
                   ))}
                 </View>
@@ -1817,6 +1943,8 @@ export function HomeDailyCommandCenter({
               onToggleEventTaskCompleted={handleToggleEventTask}
               onClaimEventTask={handleClaimEventTask}
               onUnclaimEventTask={handleUnclaimEventTask}
+              onDismissCommunityReminder={handleDismissCommunityReminder}
+              dismissingReminderIds={dismissingReminderIds}
             />
           ))}
 
@@ -1854,6 +1982,8 @@ export function HomeDailyCommandCenter({
               onToggleEventTaskCompleted={handleToggleEventTask}
               onClaimEventTask={handleClaimEventTask}
               onUnclaimEventTask={handleUnclaimEventTask}
+              onDismissCommunityReminder={handleDismissCommunityReminder}
+              dismissingReminderIds={dismissingReminderIds}
             />
           ) : null}
 
@@ -1894,6 +2024,8 @@ export function HomeDailyCommandCenter({
                     onToggleEventTaskCompleted={handleToggleEventTask}
                     onClaimEventTask={handleClaimEventTask}
                     onUnclaimEventTask={handleUnclaimEventTask}
+                    onDismissCommunityReminder={handleDismissCommunityReminder}
+                    dismissingReminderIds={dismissingReminderIds}
                   />
                 );
               })}
@@ -1936,68 +2068,89 @@ export function HomeDailyCommandCenter({
               </Pressable>
             </View>
             <View style={styles.taskList}>
-              {visibleUntimedTasks.map((task, index) => (
-                <View
-                  key={task.id}
-                  style={index > 0 ? styles.dividedRow : undefined}
-                >
-                  <Pressable
-                    accessibilityLabel={`פתיחת משימה: ${task.title}`}
-                    accessibilityRole="button"
-                    accessible={true}
-                    onPress={() => onOpenTask(task.id)}
-                    style={styles.taskRow}
+              {visibleUntimedTasks.map((task, index) => {
+                const isCommunityReminderTask = isCommunityReminderTypeLabel(
+                  task.taskTypeLabel
+                );
+                return (
+                  <View
+                    key={task.id}
+                    style={index > 0 ? styles.dividedRow : undefined}
                   >
-                    <TaskCheckbox
-                      checked={task.completed}
-                      onToggle={() => onToggleTask(task.id)}
-                    />
-                    <View style={styles.taskRowBody}>
-                      {/* BUG 2 fix: date-only/untimed community reminders must
-                          carry the exact same 'תזכורת קהילה' + community-name
-                          tags the timed timeline card shows (see SourceLabel
-                          above) — classification is a property of the item,
-                          never of whether it has a specific time. */}
-                      {task.communityId && task.groupName ? (
-                        <View
-                          style={[styles.sourceLabelRow, { marginBottom: 4 }]}
-                        >
-                          <Text style={styles.sourceLabel}>
-                            {task.taskTypeLabel ?? 'משימה'}
-                          </Text>
-                          <CommunityEventNameTag name={task.groupName} />
-                        </View>
+                    <Pressable
+                      accessibilityLabel={`פתיחת משימה: ${task.title}`}
+                      accessibilityRole="button"
+                      accessible={true}
+                      onPress={() => onOpenTask(task.id)}
+                      style={styles.taskRow}
+                    >
+                      {!isCommunityReminderTask ? (
+                        <TaskCheckbox
+                          checked={task.completed}
+                          onToggle={() => onToggleTask(task.id)}
+                        />
                       ) : null}
-                      <Text
-                        numberOfLines={2}
-                        style={[
-                          styles.taskTitle,
-                          task.completed && styles.completedText,
-                        ]}
-                      >
-                        {task.title}
-                      </Text>
-                    </View>
-                    <MaterialIcons
-                      color="#ADB3B5"
-                      name="chevron-left"
-                      size={21}
-                    />
-                  </Pressable>
-                  {(task.subtasks?.length ?? 0) > 0 ? (
-                    <HomeTaskItemsAccordion
-                      expanded={expandedItemTaskIds.has(task.id)}
-                      onImagePress={setImagePreviewUri}
-                      onToggle={() => toggleItemsFor(task.id)}
-                      onToggleSubtask={(subtaskId) =>
-                        handleToggleSubtask(task.id, subtaskId)
-                      }
-                      subtasks={task.subtasks ?? []}
-                      taskId={task.id}
-                    />
-                  ) : null}
-                </View>
-              ))}
+                      <View style={styles.taskRowBody}>
+                        {/* Personal-dismiss "X" — physical top-left corner of
+                            this reminder's own content block, on its own line,
+                            never inline with the title/type-label/community
+                            tag (see BUG 1 of the Home X position QA fix). */}
+                        {isCommunityReminderTask ? (
+                          <View style={styles.dismissCornerRow}>
+                            <DismissReminderButton
+                              disabled={dismissingReminderIds.has(task.id)}
+                              onPress={() =>
+                                handleDismissCommunityReminder(task.id)
+                              }
+                            />
+                          </View>
+                        ) : null}
+                        {/* BUG 2 fix: date-only/untimed community reminders must
+                            carry the exact same 'תזכורת קהילה' + community-name
+                            tags the timed timeline card shows (see SourceLabel
+                            above) — classification is a property of the item,
+                            never of whether it has a specific time. */}
+                        {task.communityId && task.groupName ? (
+                          <View
+                            style={[styles.sourceLabelRow, { marginBottom: 4 }]}
+                          >
+                            <Text style={styles.sourceLabel}>
+                              {task.taskTypeLabel ?? 'משימה'}
+                            </Text>
+                            <CommunityEventNameTag name={task.groupName} />
+                          </View>
+                        ) : null}
+                        <Text
+                          numberOfLines={2}
+                          style={[
+                            styles.taskTitle,
+                            task.completed && styles.completedText,
+                          ]}
+                        >
+                          {task.title}
+                        </Text>
+                      </View>
+                      <MaterialIcons
+                        color="#ADB3B5"
+                        name="chevron-left"
+                        size={21}
+                      />
+                    </Pressable>
+                    {(task.subtasks?.length ?? 0) > 0 ? (
+                      <HomeTaskItemsAccordion
+                        expanded={expandedItemTaskIds.has(task.id)}
+                        onImagePress={setImagePreviewUri}
+                        onToggle={() => toggleItemsFor(task.id)}
+                        onToggleSubtask={(subtaskId) =>
+                          handleToggleSubtask(task.id, subtaskId)
+                        }
+                        subtasks={task.subtasks ?? []}
+                        taskId={task.id}
+                      />
+                    ) : null}
+                  </View>
+                );
+              })}
             </View>
           </View>
         ) : null}
@@ -2516,6 +2669,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginTop: 8,
+  },
+  /**
+   * Personal-dismiss "X" corner slot — a dedicated row rendered ABOVE a
+   * community reminder's time/type-label/title content (never inline with
+   * it), aligned to the PHYSICAL left edge regardless of RTL environment
+   * (see BUG 1 of the "Home X position" QA fix). `rtl.alignEnd` is the
+   * existing, device-measured helper for exactly this: physical LEFT
+   * column cross-axis alignment in both Expo Go and native-RTL builds —
+   * never a raw `left`/`right` style, which would only be correct in one
+   * of the two environments. Used identically by the featured card, the
+   * compact card, and the date-only/untimed list row so there is a single
+   * consistent positioning approach, not three separate implementations.
+   */
+  dismissCornerRow: {
+    alignItems: rtl.alignEnd,
+    marginBottom: 6,
+  },
+  /**
+   * Personal-dismiss "X" for general community reminders — replaces the
+   * checkbox in the exact same slot (see PART 3/6 of the personal-dismiss
+   * task). Kept visually light/secondary: small, muted icon, no fill.
+   */
+  dismissReminderButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   expandedTitle: {
     flex: 1,

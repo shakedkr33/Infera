@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FlashList } from '@shopify/flash-list';
-import { useQuery } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Minus, Plus } from 'lucide-react-native';
 import {
@@ -12,6 +12,7 @@ import {
   useState,
 } from 'react';
 import {
+  Alert,
   Animated,
   type GestureResponderEvent,
   Modal,
@@ -68,7 +69,9 @@ import {
   loadHolidayOverlayPreferences,
 } from '@/lib/storage/holidayOverlayPreferences';
 import {
+  COMMUNITY_REMINDER_DISMISS_LABEL,
   COMMUNITY_REMINDER_TYPE_LABEL,
+  isCommunityReminderTypeLabel,
   PERSONAL_TASK_TYPE_LABEL,
 } from '@/lib/taskClassification';
 import { isTaskPastDue } from '@/lib/taskDueStatus';
@@ -2029,19 +2032,21 @@ export default function CalendarScreen(): React.JSX.Element {
     useQuery(api.profileCircles.getFamilyAllSavedCommunityEvents) ?? {};
 
   // Personal tasks for the calendar — fetched once, filtered client-side.
-  // No longer carries shared Community Reminders (that unbounded-by-date
-  // distribution was removed from listMyTasks — see that query's own doc
-  // comment in convex/tasks.ts); a general reminder can still appear here
-  // ONLY when the viewer happens to be its creator (bounded by_creator
-  // match), same as before this fix existed.
+  // Never carries general community reminders: listMyTasks excludes them
+  // unconditionally, even for their own creator (see that query's own doc
+  // comment in convex/tasks.ts, "CREATOR-OVERLAP CORRECTION") — it has no
+  // way to consult a viewer's personal-dismissal state and would otherwise
+  // let a reminder's creator bypass `dismissCommunityReminderForMe`.
   const calendarTasksRaw = useQuery(api.tasks.listMyTasks) ?? [];
 
-  // Dedicated, date-bounded Community Reminder retrieval — one query per
-  // Calendar range the screen already computes (monthRange for the monthly
-  // grid/day panels, timelineRange for the Timeline view), mirroring the
-  // exact same per-view range split already used for
-  // personalEvents/timelinePersonalEvents above. Never a single
-  // unbounded/all-history query.
+  // Dedicated, date-bounded, personal-dismissal-aware Community Reminder
+  // retrieval — one query per Calendar range the screen already computes
+  // (monthRange for the monthly grid/day panels, timelineRange for the
+  // Timeline view), mirroring the exact same per-view range split already
+  // used for personalEvents/timelinePersonalEvents above. Never a single
+  // unbounded/all-history query. This is the ONLY source of general
+  // community reminders on Calendar, for every viewer including the
+  // reminder's own creator.
   const communityRemindersMonthly =
     useQuery(api.tasks.listVisibleCommunityRemindersForRange, {
       from: monthRange.from,
@@ -2069,9 +2074,11 @@ export default function CalendarScreen(): React.JSX.Element {
     // Merge in the dedicated Community Reminder result sets — deduped by
     // task id, since the SAME reminder can legitimately appear in both the
     // month-bounded and timeline-bounded query (whenever the displayed
-    // month falls inside the timeline's -4/+8 month window) and, for its
-    // creator, can ALSO already be present in `personal` above via
-    // listMyTasks's by_creator match.
+    // month falls inside the timeline's -4/+8 month window). `personal`
+    // above never contains a general community reminder (see
+    // calendarTasksRaw's comment), so this dedup only matters between the
+    // two `listVisibleCommunityRemindersForRange` calls, never against
+    // `personal`.
     const reminderMap = new Map<string, (typeof communityRemindersMonthly)[number]>();
     for (const r of [...communityRemindersMonthly, ...communityRemindersTimeline]) {
       reminderMap.set(String(r._id), r);
@@ -4780,6 +4787,27 @@ function CalendarTaskCard({
   // Strip the "task:" prefix that wraps the Convex _id in calendar rows.
   const rawId = task.id.replace(/^task:/, '');
 
+  // ── Personal-dismiss for general community reminders (Home + Calendar
+  // only — see convex/tasks.ts `dismissCommunityReminderForMe`). Reuses the
+  // SAME canonical `typeLabel` already derived exclusively from
+  // `getCalendarTaskTypeLabel`/`getTaskClassification` — never a second,
+  // ad-hoc classification check.
+  const isCommunityReminder = isCommunityReminderTypeLabel(task.typeLabel);
+  const dismissCommunityReminderMutation = useMutation(
+    api.tasks.dismissCommunityReminderForMe
+  );
+  const [isDismissingReminder, setIsDismissingReminder] = useState(false);
+  const handleDismissReminder = (): void => {
+    if (isDismissingReminder) return;
+    setIsDismissingReminder(true);
+    dismissCommunityReminderMutation({ taskId: rawId as Id<'tasks'> })
+      .catch((error) => {
+        console.error('dismissCommunityReminderForMe error:', error);
+        Alert.alert('שגיאה', 'לא הצלחנו להסתיר את התזכורת. נסו שוב.');
+      })
+      .finally(() => setIsDismissingReminder(false));
+  };
+
   return (
     <Pressable
       style={styles.eventCard}
@@ -4837,6 +4865,22 @@ function CalendarTaskCard({
                 </View>
               ))}
             </View>
+          ) : null}
+          {isCommunityReminder ? (
+            <Pressable
+              accessible={true}
+              accessibilityLabel={COMMUNITY_REMINDER_DISMISS_LABEL}
+              accessibilityRole="button"
+              disabled={isDismissingReminder}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                handleDismissReminder();
+              }}
+              style={styles.dismissReminderButton}
+            >
+              <MaterialIcons color="#94a3b8" name="close" size={16} />
+            </Pressable>
           ) : null}
         </View>
 
@@ -6361,6 +6405,19 @@ const styles = StyleSheet.create({
     gap: 6,
     flexWrap: 'wrap',
     marginBottom: 6,
+  },
+  /**
+   * Personal-dismiss "X" for general community reminders — visually light
+   * secondary card action (see PART 6/19 of the personal-dismiss task).
+   * Never rendered for ordinary tasks, which have no completion UI here
+   * either (CalendarTaskCard opens the task detail sheet instead).
+   */
+  dismissReminderButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   categoryTag: {
     paddingHorizontal: 8,

@@ -957,13 +957,19 @@ export const listEventImportantItems = query({
 // `listVisibleCommunityRemindersForRange`'s own doc comment for the
 // replacement architecture.
 //
-// NOTE: a general community reminder MAY still appear in this query's
-// result when the viewer happens to be its `createdBy` (step 2 above) —
-// that is the exact same bounded-by-creator behavior this query always had,
-// completely unrelated to the removed unbounded-by-community step, and it
-// is why every Home/Calendar caller that ALSO subscribes to
-// `listVisibleCommunityRemindersForRange` must dedupe the two result sets
-// by task `_id` (see that query's doc comment).
+// CREATOR-OVERLAP CORRECTION: a general community reminder used to be able
+// to slip back into this query's result when the viewer happened to be its
+// `createdBy` (step 2 above), bypassing `dismissCommunityReminderForMe`'s
+// personal-dismissal state entirely (this query never reads
+// `taskParticipantSettings.dismissedAt`). The final `.filter` below removes
+// every general community reminder from this query's output unconditionally
+// — regardless of which step matched it — so the reminder's creator gets
+// IDENTICAL personal-dismissal behavior to any other member. Every
+// Home/Calendar caller still merges this query's result with
+// `listVisibleCommunityRemindersForRange` (the sole, dismissal-aware source
+// of general community reminders on personal surfaces), so this exclusion
+// never removes a reminder from the product surface — only the unfiltered
+// duplicate that could bypass dismissal.
 // ─────────────────────────────────────────────────────────────
 export const listMyTasks = query({
   args: {},
@@ -1031,7 +1037,24 @@ export const listMyTasks = query({
       }
     }
 
-    const tasks = [...taskMap.values()];
+    // Exclude general community reminders regardless of which step above
+    // matched them (in practice only step 2 / by_creator ever can — a
+    // general reminder has no assignee, so it can never match step 1's
+    // by_assigned scan or step 3's assignedToUserIds check). They are
+    // SHARED community content with their own dedicated, personal-dismissal
+    // -aware retrieval path (listVisibleCommunityRemindersForRange), which
+    // this query has no way to consult without adding a per-row settings
+    // lookup. Without this exclusion, a reminder's CREATOR would keep
+    // seeing it here even after personally dismissing it via
+    // dismissCommunityReminderForMe, because this query never reads
+    // taskParticipantSettings.dismissedAt — see the personal-dismiss
+    // creator-overlap audit fix. Every Home/Calendar caller already merges
+    // this query's result with listVisibleCommunityRemindersForRange, so
+    // removing general reminders here does not remove them from the
+    // product surface — it only removes the un-filtered duplicate.
+    const tasks = [...taskMap.values()].filter(
+      (t) => !isGeneralCommunityReminder(t)
+    );
 
     // Batch-fetch community names for tasks that have communityId, so the
     // Tasks screen can render the community chip without a separate query.
