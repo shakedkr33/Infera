@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
 import { NavigationPickerModal } from '@/components/NavigationPickerModal';
 import { RsvpBlockedByTaskDialog } from '@/components/RsvpBlockedByTaskDialog';
 import { UpgradeModal } from '@/components/UpgradeModal';
@@ -28,7 +29,12 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
 import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
-import { isOpenCommunityCalendarActionVisible } from '@/lib/openCommunityCalendarUi';
+import {
+  getOpenCommunityCalendarActionLabel,
+  getRsvpCalendarActionLabel,
+  isOpenCommunityCalendarActionVisible,
+  isRsvpCalendarActionVisible,
+} from '@/lib/openCommunityCalendarUi';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 import { parseGeoUri } from '@/lib/utils/geoUri';
 
@@ -43,6 +49,15 @@ const PRIMARY = '#36a9e2';
 const IMPORTANT_ITEMS_SECTION_TITLE = 'חשוב לזכור';
 const IMPORTANT_ITEMS_COPY_DEFAULT = 'הוסף למשימות שלי';
 const IMPORTANT_ITEMS_COPY_SUCCESS = 'נוסף למשימות שלך ✓';
+// FIX A — same copy/error-code semantics as the confirmation flow already
+// implemented in components/EventDetailsBottomSheet.tsx (not duplicated
+// logic — just the same literal backend error code + dialog copy so the
+// two surfaces behave identically for this one action).
+const CALENDAR_REMOVE_CONFIRM_TITLE = 'להסיר מהיומן?';
+const CALENDAR_REMOVE_CONFIRM_MESSAGE =
+  'הוקצו לך משימות באירוע הזה. האירוע יוסר מהיומן שלך, אבל המשימות עדיין יופיעו במסך המשימות.';
+const CALENDAR_REMOVE_CONFIRMATION_CODE =
+  'CALENDAR_REMOVE_REQUIRES_ACTIVE_TASK_CONFIRMATION';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -246,6 +261,9 @@ export default function EventDetailScreen() {
   const addCommunityEventToMyCalendar = useMutation(
     api.communityEventCalendar.addCommunityEventToMyCalendar
   );
+  const removeCommunityEventFromMyCalendar = useMutation(
+    api.communityEventCalendar.removeCommunityEventFromMyCalendar
+  );
   const cancelEventMutation = useMutation(api.events.cancelEvent);
   const removeEventTask = useMutation(api.eventTasks.remove);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
@@ -307,6 +325,11 @@ export default function EventDetailScreen() {
   const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<
     number | null
   >(null);
+  // FIX A — mirrors calendarRemoveConfirmationEventId in
+  // EventDetailsBottomSheet.tsx; holds the eventId pending the
+  // active-assigned-task removal confirmation dialog.
+  const [calendarRemoveConfirmEventId, setCalendarRemoveConfirmEventId] =
+    useState<Id<'events'> | null>(null);
   const [importantItemsCopyError, setImportantItemsCopyError] = useState<
     string | null
   >(null);
@@ -360,13 +383,61 @@ export default function EventDetailScreen() {
     ]
   );
 
-  const handleAddToCalendar = useCallback(() => {
+  /**
+   * FIX A — toggle add/remove for personal-calendar inclusion, ported from
+   * EventDetailsBottomSheet.tsx's handleOpenCalendarToggle. RSVP state is
+   * never read or written here — the source of truth for saved/not-saved
+   * is always event.isSavedToMyCalendar (from api.events.getById), no
+   * local boolean is kept.
+   */
+  const handleCalendarToggle = useCallback(() => {
     if (!eventId || !event) return;
-    if (event.isSavedToMyCalendar === true) return;
-    addCommunityEventToMyCalendar({ eventId }).catch(() =>
-      Alert.alert('שגיאה', 'לא הצלחנו להוסיף ליומן. נסי שוב בעוד רגע.')
-    );
-  }, [event, eventId, addCommunityEventToMyCalendar]);
+    const isSaved = event.isSavedToMyCalendar === true;
+    if (isSaved && myAssignedEventTasksState?.hasAssignedTasks === true) {
+      setCalendarRemoveConfirmEventId(eventId);
+      return;
+    }
+    const run = isSaved
+      ? removeCommunityEventFromMyCalendar
+      : addCommunityEventToMyCalendar;
+    run({ eventId }).catch((error) => {
+      const errorCode = getConvexErrorCode(error);
+      if (
+        isSaved &&
+        (errorCode === CALENDAR_REMOVE_CONFIRMATION_CODE ||
+          errorCode === 'CALENDAR_REMOVE_BLOCKED_BY_ACTIVE_TASK')
+      ) {
+        setCalendarRemoveConfirmEventId(eventId);
+        return;
+      }
+      Alert.alert(
+        'שגיאה',
+        isSaved
+          ? 'לא ניתן להסיר את האירוע מהיומן'
+          : 'לא הצלחנו להוסיף ליומן. נסי שוב בעוד רגע.'
+      );
+    });
+  }, [
+    event,
+    eventId,
+    myAssignedEventTasksState,
+    addCommunityEventToMyCalendar,
+    removeCommunityEventFromMyCalendar,
+  ]);
+
+  const handleConfirmCalendarRemoval = useCallback((): void => {
+    if (!calendarRemoveConfirmEventId) return;
+    const idToRemove = calendarRemoveConfirmEventId;
+    setCalendarRemoveConfirmEventId(null);
+    removeCommunityEventFromMyCalendar({
+      eventId: idToRemove,
+      confirmRemoveWithActiveTask: true,
+    }).catch(() => Alert.alert('שגיאה', 'לא ניתן לעדכן את היומן'));
+  }, [calendarRemoveConfirmEventId, removeCommunityEventFromMyCalendar]);
+
+  const handleCancelCalendarRemoval = useCallback((): void => {
+    setCalendarRemoveConfirmEventId(null);
+  }, []);
 
   const handleCopyImportantItems = useCallback(async () => {
     if (!eventId || isCopyingImportantItems) return;
@@ -709,6 +780,27 @@ export default function EventDetailScreen() {
   const showOpenCommunityCalendarAction =
     openCommunityCalendarInfoReady &&
     isOpenCommunityCalendarActionVisible({
+      event: {
+        communityId: event.communityId ?? null,
+        requiresRsvp: event.requiresRsvp,
+        status: event.status,
+      },
+      hasValidConvexEventId: true,
+      communityArchived: communityRecord?.archived === true,
+      viewerIsActiveMember: viewerIsActiveCommunityMemberForCalendar,
+    });
+
+  /**
+   * FIX A — Stage 2B parity: RSVP and personal-calendar inclusion are
+   * independent axes, so RSVP-required community events must ALSO expose an
+   * independent add/remove calendar action — same visibility rules as
+   * showOpenCommunityCalendarAction, just for requiresRsvp === true. Never
+   * disables/hides the RSVP yes/maybe/no buttons above it, and never reads
+   * or writes RSVP status.
+   */
+  const showRsvpCalendarAction =
+    openCommunityCalendarInfoReady &&
+    isRsvpCalendarActionVisible({
       event: {
         communityId: event.communityId ?? null,
         requiresRsvp: event.requiresRsvp,
@@ -1069,6 +1161,14 @@ export default function EventDetailScreen() {
           </View>
         ) : null}
 
+        {/*
+          FIX A — personal-calendar add/remove toggle for open (no-RSVP)
+          community events. Source of truth is always
+          event.isSavedToMyCalendar (api.events.getById); no local saved
+          boolean is kept. Uses the same isOpenCommunityCalendarActionVisible
+          visibility rule as before — only the action itself now toggles
+          instead of being add-only.
+        */}
         {showOpenCommunityCalendarAction ? (
           <View style={styles.card}>
             <View style={styles.passiveRow}>
@@ -1077,35 +1177,52 @@ export default function EventDetailScreen() {
             </View>
             <Pressable
               accessibilityHint="מוסיף או מסיר את האירוע מהיומן האישי שלך"
-              accessibilityLabel={
-                event.isSavedToMyCalendar === true ? 'נוסף ליומן' : 'הוסף ליומן'
-              }
-              accessibilityRole="button"
-              accessibilityState={{
-                disabled: event.isSavedToMyCalendar === true,
-              }}
-              accessible={true}
-              disabled={event.isSavedToMyCalendar === true}
-              onPress={handleAddToCalendar}
-              style={({ pressed }) => [
+              accessibilityLabel={getOpenCommunityCalendarActionLabel(
                 event.isSavedToMyCalendar === true
-                  ? styles.openCalendarBtnSecondary
-                  : styles.openCalendarBtn,
-                pressed &&
-                  event.isSavedToMyCalendar !== true &&
-                  styles.openCalendarBtnPressed,
+              )}
+              accessibilityRole="button"
+              accessible={true}
+              onPress={handleCalendarToggle}
+              style={({ pressed }) => [
+                styles.openCalendarBtn,
+                pressed && styles.openCalendarBtnPressed,
               ]}
             >
-              <Text
-                style={
+              <Text style={styles.openCalendarBtnText}>
+                {getOpenCommunityCalendarActionLabel(
                   event.isSavedToMyCalendar === true
-                    ? styles.openCalendarBtnTextSecondary
-                    : styles.openCalendarBtnText
-                }
-              >
-                {event.isSavedToMyCalendar === true
-                  ? 'נוסף ליומן'
-                  : 'הוסף ליומן'}
+                )}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {/*
+          FIX A — independent personal-calendar action for RSVP-required
+          community events (Stage 2B parity with EventDetailsBottomSheet).
+          Rendered as its own card, separate from the RSVP yes/maybe/no card
+          above — it never disables/hides those buttons and never touches
+          RSVP status; it only reflects and toggles
+          event.isSavedToMyCalendar.
+        */}
+        {showRsvpCalendarAction ? (
+          <View style={styles.card}>
+            <Pressable
+              accessibilityHint="מוסיף או מסיר את האירוע מהיומן האישי שלך, בלי לשנות את תגובת ההגעה"
+              accessibilityLabel={getRsvpCalendarActionLabel(
+                event.isSavedToMyCalendar === true
+              )}
+              accessibilityRole="button"
+              accessible={true}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={handleCalendarToggle}
+              style={({ pressed }) => [
+                styles.rsvpCalendarActionBtn,
+                pressed && styles.rsvpCalendarActionBtnPressed,
+              ]}
+            >
+              <Text style={styles.rsvpCalendarActionText}>
+                {getRsvpCalendarActionLabel(event.isSavedToMyCalendar === true)}
               </Text>
             </Pressable>
           </View>
@@ -1595,6 +1712,24 @@ export default function EventDetailScreen() {
         }}
         visible={blockedRsvpTaskCount !== null}
       />
+      {/*
+        FIX A — same confirmation semantics as
+        EventDetailsBottomSheet.tsx's calendarRemoveConfirmationEventId flow:
+        shown when removal is blocked by active assigned event tasks (either
+        pre-checked client-side or via the CALENDAR_REMOVE_CONFIRMATION_CODE
+        server error), and confirms by re-calling
+        removeCommunityEventFromMyCalendar with confirmRemoveWithActiveTask.
+      */}
+      <AppConfirmationDialog
+        cancelLabel="ביטול"
+        confirmDestructive
+        confirmLabel="להסיר בכל זאת"
+        message={CALENDAR_REMOVE_CONFIRM_MESSAGE}
+        onCancel={handleCancelCalendarRemoval}
+        onConfirm={handleConfirmCalendarRemoval}
+        title={CALENDAR_REMOVE_CONFIRM_TITLE}
+        visible={calendarRemoveConfirmEventId !== null}
+      />
       <NavigationPickerModal
         location={navPickerLocation}
         latitude={parseGeoUri(navPickerLocationUrl)?.lat}
@@ -1959,38 +2094,46 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   openCalendarBtn: {
-    marginTop: 14,
-    backgroundColor: PRIMARY,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: '100%',
     minHeight: 48,
-  },
-  openCalendarBtnSecondary: {
-    marginTop: 14,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 48,
+    backgroundColor: '#FFFFFF',
     borderWidth: 2,
     borderColor: '#7dd3fc',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginTop: 14,
   },
   openCalendarBtnPressed: {
     opacity: 0.9,
   },
   openCalendarBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  openCalendarBtnTextSecondary: {
     color: '#0369a1',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  rsvpCalendarActionBtn: {
+    width: '100%',
+    minHeight: 48,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#7dd3fc',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  rsvpCalendarActionBtnPressed: {
+    opacity: 0.9,
+  },
+  rsvpCalendarActionText: {
+    color: '#0369a1',
+    fontSize: 16,
+    fontWeight: '700',
     textAlign: 'center',
   },
 
