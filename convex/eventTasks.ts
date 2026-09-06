@@ -554,6 +554,42 @@ export const toggleCompleted = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
+// Community Event assignment integrity — pure, unit-testable
+//
+// Community Event tasks must be account-backed: assignment is restricted to
+// ACTIVE members of the SAME community. This function only validates WHO
+// may be the *target assignee* — it does not decide who is allowed to
+// perform the assignment (that authorization is unchanged, see
+// canManageAssignments/isAssignedUser above).
+//
+// Extracted as a pure function (no ctx/db) so it can be unit-tested the
+// same way summarizeEventTaskCounts is above — no Convex test harness
+// required. Personal Events (no communityId) are always unrestricted here;
+// their manual-assignment behavior is fully preserved.
+//
+// IMPORTANT: `assignee === null` (clearing an assignment, including a
+// legacy manual one) is always allowed — this function must never block
+// unassignment, so legacy Community manual assignments stay removable.
+// ─────────────────────────────────────────────────────────────
+export function assertCommunityTaskAssigneeAllowed(
+  event: { communityId?: Id<'communities'> },
+  assignee:
+    | { type: 'user'; userId: Id<'users'> }
+    | { type: 'manual'; name: string }
+    | null,
+  isTargetActiveMember: boolean
+): void {
+  if (!event.communityId) return; // Personal Event — unrestricted (manual allowed)
+  if (assignee === null) return; // Clearing (incl. legacy manual) always allowed
+  if (assignee.type === 'manual') {
+    throw new Error('באירוע קהילה ניתן להקצות משימה רק לחברי הקהילה');
+  }
+  if (!isTargetActiveMember) {
+    throw new Error('ניתן להקצות משימה רק לחברי קהילה פעילים');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // הקצאת משימה או ביטול הקצאה
 // assignee: { type: 'user', userId } | { type: 'manual', name } | null
 // ─────────────────────────────────────────────────────────────
@@ -596,6 +632,21 @@ export const setAssignee = mutation({
         membership.role === 'owner' ||
         membership.role === 'admin';
     }
+
+    // Community Event integrity check: validates WHO may be the target
+    // assignee (must be an active member of this same community). This is
+    // independent of — and does not replace — the existing WHO-may-assign
+    // authorization above/below. Personal Events are unaffected.
+    let isTargetActiveMember = false;
+    if (event.communityId && assignee?.type === 'user') {
+      const targetMembership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        assignee.userId
+      );
+      isTargetActiveMember = isActiveCommunityMember(targetMembership);
+    }
+    assertCommunityTaskAssigneeAllowed(event, assignee, isTargetActiveMember);
 
     if (assignee === null) {
       if (!canManageAssignments && !isAssignedUser)

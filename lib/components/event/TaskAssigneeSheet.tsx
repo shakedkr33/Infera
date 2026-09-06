@@ -38,6 +38,25 @@ interface TaskAssigneeSheetProps {
   onSelectManual: () => void;
   onUnassign?: () => void;
   onClose: () => void;
+  /**
+   * Controls whether the manual/free-text assignee section ("הקלד שם",
+   * the TextInput, and the manual הקצה button) is rendered.
+   *
+   * Community Event tasks must be account-backed — pass `false` for them
+   * so managers can only assign active community members. Personal
+   * Events must keep manual assignment working exactly as before, so
+   * this defaults to `true` to preserve existing behavior unless a
+   * caller explicitly opts out.
+   */
+  allowManualAssignee?: boolean;
+  /**
+   * Optional contextual task title, shown directly below "הקצאת משימה"
+   * so it's clear which task is being managed when an event has several.
+   * Purely informational — not tappable, adds no icon, and does not
+   * affect assignment behavior. Omit (leave undefined) to preserve the
+   * sheet's exact prior appearance, e.g. for Personal Events.
+   */
+  taskTitle?: string;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -54,6 +73,8 @@ export function TaskAssigneeSheet({
   onSelectManual,
   onUnassign,
   onClose,
+  allowManualAssignee = true,
+  taskTitle,
 }: TaskAssigneeSheetProps) {
   if (!visible) return null;
 
@@ -83,6 +104,15 @@ export function TaskAssigneeSheet({
             <View style={s.handle} />
             <Text style={s.title}>הקצאת משימה</Text>
 
+            {/* Contextual task title — informational only, not tappable.
+                Omitted (undefined) for Personal Events, preserving their
+                exact prior appearance. */}
+            {taskTitle ? (
+              <Text style={s.taskTitleContext} numberOfLines={2}>
+                {taskTitle}
+              </Text>
+            ) : null}
+
             {canUnassign ? (
               <TouchableOpacity
                 onPress={onUnassign}
@@ -100,31 +130,69 @@ export function TaskAssigneeSheet({
               </TouchableOpacity>
             ) : null}
 
+            {/* Legacy manual Community assignment — display-only info line.
+                Community Events only (allowManualAssignee === false is used
+                as the mode signal). Shown only when the current assignee is
+                a legacy manual (free-text) name, which can still exist on
+                Community tasks even though allowManualAssignee blocks *new*
+                manual assignments. Never mutated/migrated automatically
+                here. Personal Events (allowManualAssignee === true) never
+                render this line — unchanged from before this polish. */}
+            {!allowManualAssignee && currentAssignee?.type === 'manual' ? (
+              <Text style={s.legacyManualInfo} numberOfLines={1}>
+                {`מוקצה כרגע ל־${currentAssignee.name}`}
+              </Text>
+            ) : null}
+
             <Text style={s.sectionLabel}>חברי קהילה</Text>
             <ScrollView
               style={s.membersScroll}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {members.map((m) => (
-                <TouchableOpacity
-                  key={m.userId}
-                  onPress={() => onSelectUser(m.userId, m.fullName)}
-                  style={s.memberRow}
-                  accessible
-                  accessibilityRole="button"
-                  accessibilityLabel={m.fullName}
-                >
-                  <Ionicons name="person" size={20} color={PRIMARY} />
-                  <Text style={s.memberName} numberOfLines={1}>
-                    {m.fullName}
-                    {currentUserId === m.userId ? ' (אני)' : ''}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {members.map((m) => {
+                // Selected-row highlight is Community-Event-only —
+                // allowManualAssignee === false is the mode signal.
+                // Personal Events (allowManualAssignee === true) never
+                // highlight a row, unchanged from before this polish.
+                const isCurrentAssignee =
+                  !allowManualAssignee &&
+                  currentAssignee?.type === 'user' &&
+                  currentAssignee.userId === m.userId;
+                return (
+                  <TouchableOpacity
+                    key={m.userId}
+                    onPress={() => onSelectUser(m.userId, m.fullName)}
+                    style={[
+                      s.memberRow,
+                      isCurrentAssignee && s.memberRowSelected,
+                    ]}
+                    accessible
+                    accessibilityRole="button"
+                    accessibilityLabel={m.fullName}
+                    accessibilityState={{ selected: isCurrentAssignee }}
+                  >
+                    <Ionicons name="person" size={20} color={PRIMARY} />
+                    <Text style={s.memberName} numberOfLines={1}>
+                      {m.fullName}
+                      {currentUserId === m.userId ? ' (אני)' : ''}
+                    </Text>
+                    {isCurrentAssignee ? (
+                      <View style={s.memberSelectedBadge}>
+                        <Text style={s.memberSelectedText}>מוקצה כרגע</Text>
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={20}
+                          color={PRIMARY}
+                        />
+                      </View>
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
 
-            {isCreator ? (
+            {isCreator && allowManualAssignee ? (
               <>
                 <Text style={[s.sectionLabel, { marginTop: 16 }]}>הקלד שם</Text>
                 <View style={s.manualRow}>
@@ -197,6 +265,15 @@ const s = StyleSheet.create({
     textAlign: 'right',
     marginBottom: 12,
   },
+  // Contextual task title shown below the sheet title — visually
+  // secondary to `title`, informational only.
+  taskTitleContext: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#374151',
+    textAlign: 'right',
+    marginBottom: 12,
+  },
   unassignBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -220,11 +297,38 @@ const s = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#f1f5f9',
   },
+  // Selected-state row for the currently assigned community member —
+  // calm, lightweight highlight so it's clear who owns the task now.
+  memberRowSelected: {
+    backgroundColor: '#E6F4FB',
+    borderColor: '#BAE6FD',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+  },
   memberName: {
     flex: 1,
     fontSize: 15,
     color: '#374151',
     textAlign: 'right',
+  },
+  memberSelectedBadge: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+  },
+  memberSelectedText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: PRIMARY,
+  },
+  // Legacy manual Community assignment — display-only informational line.
+  legacyManualInfo: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+    textAlign: 'right',
+    marginBottom: 8,
   },
   manualRow: {
     flexDirection: 'row-reverse',

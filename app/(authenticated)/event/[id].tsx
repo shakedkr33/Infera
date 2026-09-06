@@ -272,6 +272,9 @@ export default function EventDetailScreen() {
   );
   const claimEventTask = useMutation(api.eventTasks.claimEventTask);
   const unclaimEventTask = useMutation(api.eventTasks.unclaimEventTask);
+  // FIX B — task completion, reused verbatim from
+  // components/EventDetailsBottomSheet.tsx's toggleEventTaskCompleted usage.
+  const toggleEventTaskCompleted = useMutation(api.eventTasks.toggleCompleted);
   const addEventImportantItemsToMyTasks = useMutation(
     api.tasks.addEventImportantItemsToMyTasks
   );
@@ -1343,40 +1346,170 @@ export default function EventDetailScreen() {
                   );
                   const isAssignedToCurrentUser =
                     task.assignedToUserId === currentUserId;
-                  const assignmentLabel = !isAssigned
-                    ? 'אני אקח'
-                    : isAssignedToCurrentUser
-                      ? 'הוקצה אליי'
-                      : assigneeDisplay
-                        ? `הוקצה ל־${assigneeDisplay}`
-                        : 'הוקצה';
+                  const assignmentLabel = isAssignedToCurrentUser
+                    ? 'הוקצה אליי'
+                    : assigneeDisplay
+                      ? `הוקצה ל־${assigneeDisplay}`
+                      : 'הוקצה';
+                  // FIX B — Community-Event-only task completion +
+                  // self-claim/unclaim eligibility, ported to match
+                  // components/EventDetailsBottomSheet.tsx exactly.
+                  // Visibility alone never grants completion permission;
+                  // backend authorization is unchanged. Personal Events
+                  // (isCommunityEvent === false) keep the exact
+                  // pre-FIX-B rendering further below — this block only
+                  // computes values consumed by the Community Event branch.
+                  const isCommunityEvent = Boolean(event.communityId);
+                  const isCompleted = task.completed === true;
+                  const canCompleteTask =
+                    canManageTasks ||
+                    (task.assignedToUserId !== undefined &&
+                      task.assignedToUserId === currentUserId);
+                  const eventHasStarted =
+                    typeof event.startTime === 'number' &&
+                    event.startTime <= Date.now();
+                  const showSelfClaimAction = Boolean(
+                    event.communityId &&
+                      myCommunityMembership &&
+                      participantsCanSeeTasks
+                  );
+                  const isClaimable =
+                    showSelfClaimAction && !isAssigned && !eventHasStarted;
+                  const canUnclaimHere =
+                    showSelfClaimAction &&
+                    isAssignedToCurrentUser &&
+                    !eventHasStarted &&
+                    !isCompleted;
                   return (
                     <View key={task._id} style={styles.taskRow}>
+                      {/* FIX B — completion checkbox, Community Events only.
+                          Personal Events never render this checkbox. */}
+                      {isCommunityEvent &&
+                        (canCompleteTask ? (
+                          <Pressable
+                            accessible
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ checked: isCompleted }}
+                            accessibilityLabel={`${isCompleted ? 'בטל סימון' : 'סמן כבוצע'}: ${task.title}`}
+                            hitSlop={8}
+                            onPress={() =>
+                              toggleEventTaskCompleted({ id: task._id }).catch(
+                                () =>
+                                  Alert.alert(
+                                    'שגיאה',
+                                    'לא ניתן לעדכן מצב המשימה'
+                                  )
+                              )
+                            }
+                            style={styles.eventTaskCheckboxTouch}
+                          >
+                            <View
+                              style={[
+                                styles.eventTaskCheckbox,
+                                isCompleted && styles.eventTaskCheckboxDone,
+                              ]}
+                            >
+                              {isCompleted ? (
+                                <Ionicons
+                                  name="checkmark"
+                                  size={16}
+                                  color="#FFFFFF"
+                                />
+                              ) : null}
+                            </View>
+                          </Pressable>
+                        ) : (
+                          <View
+                            accessible
+                            accessibilityRole="checkbox"
+                            accessibilityState={{
+                              checked: isCompleted,
+                              disabled: true,
+                            }}
+                            accessibilityLabel={task.title}
+                            style={styles.eventTaskCheckboxTouch}
+                          >
+                            <View
+                              style={[
+                                styles.eventTaskCheckbox,
+                                styles.eventTaskCheckboxDisabled,
+                                isCompleted &&
+                                  styles.eventTaskCheckboxDoneDisabled,
+                              ]}
+                            >
+                              {isCompleted ? (
+                                <Ionicons
+                                  name="checkmark"
+                                  size={16}
+                                  color="#FFFFFF"
+                                />
+                              ) : null}
+                            </View>
+                          </View>
+                        ))}
                       {/* Actions — left side in RTL (manager only) */}
                       {canManageTasks && (
                         <View style={styles.taskActions}>
-                          <TouchableOpacity
-                            onPress={() =>
-                              handleGatedAction(() => {
-                                setAssigneeSheetTaskId(task._id);
-                                setManualAssigneeName('');
-                              })
-                            }
-                            style={styles.taskActionBtn}
-                            accessible
-                            accessibilityRole="button"
-                            accessibilityLabel={
-                              isAssigned ? 'שנה הקצאה' : 'הקצה משימה'
-                            }
-                          >
-                            <Ionicons
-                              name={
-                                isAssigned ? 'person' : 'person-add-outline'
+                          {isCommunityEvent ? (
+                            // FIX B follow-up — Community Events only: the
+                            // manager assignment action must be a clearly
+                            // labeled tappable control (not icon-only), since
+                            // Community task assignment is now account-backed
+                            // (see TaskAssigneeSheet allowManualAssignee).
+                            <Pressable
+                              onPress={() =>
+                                handleGatedAction(() => {
+                                  setAssigneeSheetTaskId(task._id);
+                                  setManualAssigneeName('');
+                                })
                               }
-                              size={18}
-                              color={isAssigned ? PRIMARY : '#9ca3af'}
-                            />
-                          </TouchableOpacity>
+                              accessible
+                              accessibilityRole="button"
+                              accessibilityLabel={
+                                isAssigned ? 'שנה הקצאה' : 'הקצה משימה'
+                              }
+                              style={({ pressed }) => [
+                                styles.taskManagerAssignPill,
+                                pressed && styles.taskManagerAssignPillPressed,
+                              ]}
+                            >
+                              <Ionicons
+                                name={
+                                  isAssigned ? 'person' : 'person-add-outline'
+                                }
+                                size={14}
+                                color={PRIMARY}
+                              />
+                              <Text style={styles.taskManagerAssignPillText}>
+                                {isAssigned ? 'שנה הקצאה' : 'הקצה'}
+                              </Text>
+                            </Pressable>
+                          ) : (
+                            // Personal Events — preserved exactly: icon-only
+                            // assignment control.
+                            <TouchableOpacity
+                              onPress={() =>
+                                handleGatedAction(() => {
+                                  setAssigneeSheetTaskId(task._id);
+                                  setManualAssigneeName('');
+                                })
+                              }
+                              style={styles.taskActionBtn}
+                              accessible
+                              accessibilityRole="button"
+                              accessibilityLabel={
+                                isAssigned ? 'שנה הקצאה' : 'הקצה משימה'
+                              }
+                            >
+                              <Ionicons
+                                name={
+                                  isAssigned ? 'person' : 'person-add-outline'
+                                }
+                                size={18}
+                                color={isAssigned ? PRIMARY : '#9ca3af'}
+                              />
+                            </TouchableOpacity>
+                          )}
                           <TouchableOpacity
                             onPress={() =>
                               handleGatedAction(() => {
@@ -1416,10 +1549,103 @@ export default function EventDetailScreen() {
                         </View>
                       )}
                       <View style={styles.taskContent}>
-                        <Text style={styles.taskTitle} numberOfLines={2}>
+                        <Text
+                          style={[
+                            styles.taskTitle,
+                            // FIX B — completed-title styling applies to
+                            // Community Events only; Personal Events keep
+                            // the exact pre-FIX-B plain title.
+                            isCommunityEvent &&
+                              isCompleted &&
+                              styles.taskTitleCompleted,
+                          ]}
+                          numberOfLines={2}
+                        >
                           {task.title}
                         </Text>
-                        {canManageTasks ? (
+                        {isCommunityEvent ? (
+                          // FIX B — Community Event claim/unclaim UI,
+                          // unchanged from the original FIX B implementation.
+                          isClaimable ? (
+                            <Pressable
+                              accessible
+                              accessibilityRole="button"
+                              accessibilityLabel="אני אקח"
+                              hitSlop={{
+                                top: 8,
+                                bottom: 8,
+                                left: 8,
+                                right: 8,
+                              }}
+                              onPress={() =>
+                                claimEventTask({ id: task._id }).catch(() =>
+                                  Alert.alert(
+                                    'שגיאה',
+                                    'לא ניתן להשתבץ למשימה כרגע'
+                                  )
+                                )
+                              }
+                              style={({ pressed }) => [
+                                styles.taskSelfClaimBtn,
+                                pressed && styles.taskSelfClaimBtnPressed,
+                              ]}
+                            >
+                              <Text style={styles.taskSelfClaimBtnText}>
+                                + אני אקח
+                              </Text>
+                            </Pressable>
+                          ) : canUnclaimHere ? (
+                            <View style={styles.taskAssignmentStatusRow}>
+                              <Text
+                                style={styles.taskAssignedLabel}
+                                numberOfLines={1}
+                              >
+                                {assignmentLabel}
+                              </Text>
+                              <Pressable
+                                accessible
+                                accessibilityRole="button"
+                                accessibilityLabel="בטל הקצאה"
+                                hitSlop={{
+                                  top: 6,
+                                  bottom: 6,
+                                  left: 8,
+                                  right: 8,
+                                }}
+                                onPress={() =>
+                                  unclaimEventTask({ id: task._id }).catch(() =>
+                                    Alert.alert(
+                                      'שגיאה',
+                                      'לא ניתן להסיר הקצאה כרגע'
+                                    )
+                                  )
+                                }
+                                style={({ pressed }) => [
+                                  styles.taskSelfUnclaimBtn,
+                                  pressed && styles.taskSelfUnclaimBtnPressed,
+                                ]}
+                              >
+                                <Text style={styles.taskSelfUnclaimBtnText}>
+                                  בטל הקצאה
+                                </Text>
+                              </Pressable>
+                            </View>
+                          ) : isAssigned ? (
+                            <Text
+                              style={
+                                isAssignedToCurrentUser
+                                  ? styles.taskAssignedLabel
+                                  : styles.taskAssignedOtherLabel
+                              }
+                              numberOfLines={1}
+                            >
+                              {assignmentLabel}
+                            </Text>
+                          ) : null
+                        ) : /* Personal Event — exact pre-FIX-B claim/unclaim
+                               behavior, including handleGatedAction gating
+                               for subscription/paywall purposes. */
+                        canManageTasks ? (
                           isAssigned ? (
                             <View style={styles.taskAssignmentStatusRow}>
                               <Text
@@ -1610,6 +1836,18 @@ export default function EventDetailScreen() {
         members={members}
         currentUserId={currentUserId}
         isCreator={canManageTasks}
+        // FIX B follow-up — Community Event tasks must be account-backed:
+        // only active community members may be assigned, never a manual
+        // free-text name. Personal Events keep manual assignment exactly
+        // as before. Existing legacy Community manual assignments are
+        // untouched by this — they still display and remain unassignable
+        // via onUnassign below, they just can't be newly *created* here.
+        allowManualAssignee={!event.communityId}
+        // FIX B final context polish — show which task is being managed,
+        // Community Events only. Reuses the existing assignee-sheet task
+        // lookup (_assigneeSheetTask) rather than adding a new query.
+        // Personal Events omit this prop, preserving their sheet exactly.
+        taskTitle={event.communityId ? _assigneeSheetTask?.title : undefined}
         manualName={manualAssigneeName}
         onManualNameChange={setManualAssigneeName}
         onSelectUser={(userId: Id<'users'>) => {
@@ -2410,6 +2648,85 @@ const styles = StyleSheet.create({
     textAlign: HEB_TEXT_ALIGN,
     writingDirection: HEB_WRITING_DIRECTION,
   },
+  // FIX B — completed task title styling, matching
+  // EventDetailsBottomSheet.tsx's detailListTitleCompleted exactly.
+  taskTitleCompleted: {
+    color: '#92999C',
+    textDecorationLine: 'line-through',
+  },
+  // FIX B — completion checkbox, matching
+  // EventDetailsBottomSheet.tsx's eventTaskCheckbox* styles exactly.
+  eventTaskCheckboxTouch: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    flexShrink: 0,
+  },
+  eventTaskCheckbox: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: 'rgba(0,102,142,0.45)',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  eventTaskCheckboxDone: {
+    backgroundColor: '#00668E',
+    borderColor: '#00668E',
+  },
+  eventTaskCheckboxDisabled: {
+    borderColor: '#D4D8DA',
+    backgroundColor: 'transparent',
+  },
+  eventTaskCheckboxDoneDisabled: {
+    backgroundColor: '#C4C9CB',
+    borderColor: '#C4C9CB',
+  },
+  // FIX B — self-claim / self-unclaim buttons, matching
+  // EventDetailsBottomSheet.tsx's taskAssignmentAction /
+  // taskUnassignAction styles exactly.
+  taskSelfClaimBtn: {
+    minHeight: 36,
+    minWidth: 80,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#00668E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: HEB_FLEX_END,
+  },
+  taskSelfClaimBtnPressed: {
+    opacity: 0.84,
+  },
+  taskSelfClaimBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  taskSelfUnclaimBtn: {
+    minHeight: 42,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: '#94a3b8',
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskSelfUnclaimBtnPressed: {
+    opacity: 0.84,
+  },
+  taskSelfUnclaimBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+  },
   taskAssignedLabel: {
     alignSelf: 'stretch',
     fontSize: 12,
@@ -2446,6 +2763,8 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     gap: 10,
   },
+  // Personal Event claim/unclaim — restored pre-FIX-B styles (Community
+  // Events use the new taskSelfClaimBtn/taskSelfUnclaimBtn styles above).
   taskClaimBtn: {
     minHeight: 32,
     alignSelf: HEB_FLEX_END,
@@ -2483,6 +2802,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   taskActionBtn: { padding: 4 },
+  // FIX B follow-up — clear, tappable manager assignment pill used in
+  // Community Event task rows only (replaces the icon-only control).
+  taskManagerAssignPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    minHeight: 36,
+    paddingHorizontal: 11,
+    borderRadius: 999,
+    backgroundColor: 'rgba(54,169,226,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(54,169,226,0.35)',
+  },
+  taskManagerAssignPillPressed: {
+    opacity: 0.75,
+  },
+  taskManagerAssignPillText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: PRIMARY,
+  },
 
   // ── Error states
   notFoundText: {
