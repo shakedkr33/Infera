@@ -35,6 +35,7 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
+import { isCancelledEventWithinCommunityVisibilityWindow } from '@/lib/eventsTabDateHelpers';
 import {
   getOpenCommunityCalendarActionLabel,
   getRsvpCalendarActionLabel,
@@ -294,7 +295,12 @@ export function EventDetailsBottomSheet({
     eventId && isValidConvexId(eventId) ? (eventId as Id<'events'>) : null;
 
   const cancelEventMutation = useMutation(api.events.cancelEvent);
-  const deleteEventMutation = useMutation(api.events.deleteEvent);
+  // FIX C — Community Events never call deleteEvent (hard delete); early
+  // Community-display removal of a cancelled Community Event goes through
+  // this dedicated soft-removal mutation instead (see convex/events.ts).
+  const removeCancelledCommunityEventMutation = useMutation(
+    api.events.removeCancelledCommunityEvent
+  );
   const softDeletePersonalEventMutation = useMutation(
     api.events.softDeletePersonalEvent
   );
@@ -497,6 +503,7 @@ export function EventDetailsBottomSheet({
           tasksVisibleToParticipants: eventDoc.tasksVisibleToParticipants,
           status: eventDoc.status,
           cancelledAt: eventDoc.cancelledAt,
+          removedFromCommunityAt: eventDoc.removedFromCommunityAt,
           cancelReason: eventDoc.cancelReason,
           isSavedToMyCalendar: eventDoc.isSavedToMyCalendar === true,
         }
@@ -527,6 +534,7 @@ export function EventDetailsBottomSheet({
             tasksVisibleToParticipants: event.tasksVisibleToParticipants,
             status: undefined,
             cancelledAt: undefined,
+            removedFromCommunityAt: undefined,
             cancelReason: undefined,
             isSavedToMyCalendar: event.isSavedToMyCalendar === true,
           }
@@ -644,18 +652,21 @@ export function EventDetailsBottomSheet({
     if (!convexEventId) return;
     const isCommunity = Boolean(displayEvent?.communityId);
     if (isCommunity) {
+      // FIX C — soft Community-display removal only; never a hard delete.
       Alert.alert(
-        'הסרת אירוע',
-        'האם למחוק את האירוע לגמרי מהקהילה? פעולה זו תסיר אותו מהתצוגה לכל חברי הקהילה.',
+        'להסיר את האירוע מהקהילה?',
+        'האירוע ייעלם מיד מהתצוגה לחברי הקהילה ולא יוצג יותר כאירוע שבוטל.',
         [
           { text: 'ביטול', style: 'cancel' },
           {
-            text: 'הסר לגמרי',
+            text: 'הסר מהקהילה',
             style: 'destructive',
             onPress: () => {
-              deleteEventMutation({ eventId: convexEventId })
+              removeCancelledCommunityEventMutation({ eventId: convexEventId })
                 .then(() => onClose())
-                .catch(() => Alert.alert('שגיאה', 'לא ניתן למחוק את האירוע'));
+                .catch(() =>
+                  Alert.alert('שגיאה', 'לא ניתן להסיר את האירוע מהקהילה')
+                );
             },
           },
         ]
@@ -897,13 +908,41 @@ export function EventDetailsBottomSheet({
         convexEventId && isEventCreator && displayEvent?.status !== 'cancelled'
       );
 
-  const canDelete = Boolean(
+  // FIX C — for a Community Event this now gates the SOFT Community-display
+  // removal action ("הסר אירוע מהקהילה" → removeCancelledCommunityEvent),
+  // never the hard delete (api.events.deleteEvent, which is now hardened
+  // server-side to reject Community Events entirely — see convex/events.ts).
+  // Uses the SAME shared 24-hour-window helper the Community screen's
+  // "אירועים שבוטלו" section already uses, so the two can never drift out
+  // of sync. Also requires `removedFromCommunityAt === undefined` so the
+  // action disappears once the event has already been removed.
+  const canRemoveFromCommunity = Boolean(
     convexEventId &&
+      displayEvent?.communityId &&
+      displayEvent.status === 'cancelled' &&
+      displayEvent.cancelledAt !== undefined &&
+      isCancelledEventWithinCommunityVisibilityWindow(
+        displayEvent.cancelledAt as number,
+        Date.now()
+      ) &&
+      canManageCommunityEvent &&
+      displayEvent.removedFromCommunityAt === undefined
+  );
+
+  // Personal Event branch — UNCHANGED behavior (hard delete of a cancelled
+  // personal event within the same 24h window, by its creator only). Kept
+  // as its own boolean (rather than folded into canRemoveFromCommunity) so
+  // this FIX cannot alter Personal Event delete semantics.
+  const canDeletePersonalCancelled = Boolean(
+    convexEventId &&
+      !displayEvent?.communityId &&
       displayEvent?.status === 'cancelled' &&
       displayEvent.cancelledAt !== undefined &&
       Date.now() - (displayEvent.cancelledAt as number) < 24 * 60 * 60 * 1000 &&
-      (displayEvent.communityId ? canManageCommunityEvent : isEventCreator)
+      isEventCreator
   );
+
+  const canDelete = canRemoveFromCommunity || canDeletePersonalCancelled;
 
   /**
    * QA FIX (Issue 3) — CANONICAL CREATOR RSVP RULE: only the event's actual

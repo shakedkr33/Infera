@@ -55,6 +55,7 @@ import {
   getNextEventsTabMonth,
   getPreviousEventsTabMonth,
   hasEventEndedByNow,
+  isCancelledEventWithinCommunityVisibilityWindow,
   isCurrentEventsTabMonth,
 } from '@/lib/eventsTabDateHelpers';
 import {
@@ -132,6 +133,8 @@ interface EventDoc {
   createdAt?: number;
   status?: 'active' | 'cancelled';
   cancelledAt?: number;
+  /** FIX C — set once a manager early-removes a cancelled event from Community display. */
+  removedFromCommunityAt?: number;
   cancelReason?: string;
   /** Open community events: personal calendar / "הסר מהיומן" (from Convex) */
   isSavedToMyCalendar?: boolean;
@@ -1047,8 +1050,13 @@ function EventRow({
     <Pressable
       style={[
         styles.eventRow,
-        past && { opacity: 0.45 },
-        isCancelled && { opacity: 0.5 },
+        // FIX C.2 — a cancelled event must remain fully readable; its
+        // cancellation state is communicated by the "בוטל" badge + reason,
+        // never by fading the whole row. `!isCancelled` guards the
+        // past-event fade too, so a cancelled event whose date is already
+        // in the past does not inherit past-event opacity merely because
+        // `past === true`.
+        past && !isCancelled && { opacity: 0.45 },
       ]}
       onPress={() => onOpenDetails(event._id)}
       accessible
@@ -2241,6 +2249,23 @@ function TabMain({
   );
   const overview = useQuery(api.events.listCommunityMainOverview, overviewArgs);
   const isLoadingOverview = overview === undefined;
+
+  // FIX C.2 — recent Community Event cancellations (up to 24h old, via the
+  // SAME shared isCancelledEventWithinCommunityVisibilityWindow boundary
+  // FIX C already introduced for "אירועים שבוטלו"). Deliberately a
+  // separate, dedicated, small query — never mixed into `overview`'s
+  // myEvents/pendingRsvpEvents, which are upcoming-event categories with
+  // active-event semantics that must stay unchanged. See
+  // events.listRecentCancelledCommunityEvents.
+  const recentCancelledArgs = useMemo(
+    () => ({ communityId, now }),
+    [communityId, now]
+  );
+  const recentCancelledEvents =
+    useQuery(
+      api.events.listRecentCancelledCommunityEvents,
+      recentCancelledArgs
+    ) ?? [];
   // BUG FIX (manual QA) — the server query now over-fetches all-day events
   // (whose startTime sits at local midnight, see
   // isEventStartTimeEligibleForUpcomingScan's doc comment) and intentionally
@@ -2466,6 +2491,21 @@ function TabMain({
   const importantNowItems = useMemo<ImportantNowItem[]>(() => {
     const items: ImportantNowItem[] = [];
 
+    // FIX C.2 — recent cancellations are high-priority Community updates:
+    // added FIRST, before today/pending/tomorrow/reminder candidates, so a
+    // recent cancellation is never silently displaced by a normal
+    // tomorrow event once the final `slice(0, 3)` below runs. Already
+    // sorted newest-cancellation-first by the query
+    // (selectRecentCancelledCommunityEvents).
+    for (const cancelledEvent of recentCancelledEvents) {
+      items.push({
+        key: `cancelled-${cancelledEvent._id}`,
+        label: `בוטל · ${cancelledEvent.title}`,
+        iconName: 'close-circle-outline',
+        onPress: () => onOpenEventDetails(cancelledEvent._id),
+      });
+    }
+
     if (todayEvent) {
       items.push({
         key: 'today',
@@ -2528,6 +2568,7 @@ function TabMain({
 
     return items.slice(0, 3);
   }, [
+    recentCancelledEvents,
     todayEvent,
     tomorrowEvent,
     pendingRsvpEvents.length,
@@ -3177,18 +3218,28 @@ function TabEvents({
     }
   }, [page, loadingMore]);
 
-  const gracePeriod = 24 * 60 * 60 * 1000;
   const activeEvents = useMemo(
     () => accumulated.filter((ev) => ev.status !== 'cancelled'),
     [accumulated]
   );
+  // FIX C — uses the SAME shared 24h-window helper the early-removal action
+  // (EventDetailsBottomSheet.tsx / event/[id].tsx) and the server
+  // (events.removeCancelledCommunityEvent) rely on, so this can never drift
+  // out of sync with either. `listCommunityEventsTabPaged` (the data source
+  // for `accumulated`) is already the authoritative filter for
+  // `removedFromCommunityAt` — the extra client-side check below is
+  // defense-in-depth only, so a manually-removed event can never resurface
+  // here even if another rendering path fed in a stale cached page.
   const cancelledEvents = useMemo(
     () =>
       accumulated.filter(
         (ev) =>
           ev.status === 'cancelled' &&
-          ev.cancelledAt !== undefined &&
-          Date.now() - ev.cancelledAt < gracePeriod
+          ev.removedFromCommunityAt === undefined &&
+          isCancelledEventWithinCommunityVisibilityWindow(
+            ev.cancelledAt,
+            Date.now()
+          )
       ),
     [accumulated]
   );

@@ -29,6 +29,7 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
 import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
+import { isCancelledEventWithinCommunityVisibilityWindow } from '@/lib/eventsTabDateHelpers';
 import {
   getOpenCommunityCalendarActionLabel,
   getRsvpCalendarActionLabel,
@@ -265,6 +266,13 @@ export default function EventDetailScreen() {
     api.communityEventCalendar.removeCommunityEventFromMyCalendar
   );
   const cancelEventMutation = useMutation(api.events.cancelEvent);
+  // FIX C — Bottom Sheet parity: early Community-display removal of a
+  // cancelled Community Event, within the 24h visibility window. Never a
+  // hard delete (see convex/events.ts's removeCancelledCommunityEvent doc
+  // comment) and never applied to Personal Events.
+  const removeCancelledCommunityEventMutation = useMutation(
+    api.events.removeCancelledCommunityEvent
+  );
   const removeEventTask = useMutation(api.eventTasks.remove);
   const setTaskAssignee = useMutation(api.eventTasks.setAssignee);
   const updateEventTaskVisibility = useMutation(
@@ -305,6 +313,27 @@ export default function EventDetailScreen() {
       ?.role === 'owner' ||
     communityMembersData?.members?.find((m) => m.userId === currentUserId)
       ?.role === 'admin';
+  /**
+   * FIX C — Bottom Sheet parity, computed "early" for the same reason as
+   * `isCommunityOwnerOrAdminEarly` above (`overflowItems` is a hook
+   * evaluated before the `event === null` early return, so it cannot
+   * depend on the later derived-state block). This is the ONLY place this
+   * gate is computed — the overflow menu item and the confirmation dialog
+   * below both read this same value.
+   */
+  const isCreatorEarly =
+    currentUserId !== undefined && event?.createdBy === currentUserId;
+  const canRemoveFromCommunityEarly = Boolean(
+    event?.communityId &&
+      event.status === 'cancelled' &&
+      event.cancelledAt !== undefined &&
+      isCancelledEventWithinCommunityVisibilityWindow(
+        event.cancelledAt,
+        Date.now()
+      ) &&
+      (isCreatorEarly || isCommunityOwnerOrAdminEarly) &&
+      event.removedFromCommunityAt === undefined
+  );
 
   const communityRecord = useQuery(
     api.communities.getById,
@@ -324,6 +353,11 @@ export default function EventDetailScreen() {
   const menuBtnRef = useRef<View>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [showCancelDialog, setShowCancelDialog] = useState(false);
+  // FIX C — Bottom Sheet parity: confirmation state for the early
+  // Community-display removal action.
+  const [showRemoveFromCommunityDialog, setShowRemoveFromCommunityDialog] =
+    useState(false);
+  const [isRemovingFromCommunity, setIsRemovingFromCommunity] = useState(false);
   const [isCopyingImportantItems, setIsCopyingImportantItems] = useState(false);
   const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<
     number | null
@@ -503,6 +537,40 @@ export default function EventDetailScreen() {
     }
   }, [event, eventId, cancelEventMutation, cancelReason, router]);
 
+  /**
+   * FIX C — Bottom Sheet parity: soft Community-display removal of a
+   * cancelled Community Event (never a hard delete). After a successful
+   * removal, navigate back to the Community screen rather than leaving the
+   * viewer on an event that just disappeared from Community display.
+   */
+  const handleRemoveFromCommunity = useCallback(async () => {
+    if (!event || !eventId || isRemovingFromCommunity) return;
+    setShowRemoveFromCommunityDialog(false);
+    setIsRemovingFromCommunity(true);
+    try {
+      await removeCancelledCommunityEventMutation({ eventId });
+      const communityId = event.communityId;
+      if (communityId) {
+        router.replace({
+          pathname: '/(authenticated)/community/[id]',
+          params: { id: communityId },
+        });
+      } else {
+        router.back();
+      }
+    } catch {
+      Alert.alert('שגיאה', 'לא ניתן להסיר את האירוע מהקהילה');
+    } finally {
+      setIsRemovingFromCommunity(false);
+    }
+  }, [
+    event,
+    eventId,
+    isRemovingFromCommunity,
+    removeCancelledCommunityEventMutation,
+    router,
+  ]);
+
   // FIXED: always embed URL inside message — never use the separate `url` field.
   // Passing `url` as a second Share.share argument causes iOS UIActivityViewController
   // to treat it as an attachment object; WhatsApp then shows only the URL card and
@@ -572,23 +640,47 @@ export default function EventDetailScreen() {
     [isExpiredFree, event?.communityId]
   );
 
+  // FIX C.1 — extracted so the header's ⋯ overflow menu (Personal Events)
+  // and the inline Community action row below can both trigger the exact
+  // same "עריכה" navigation without duplicating the logic.
+  const handleEditPress = useCallback(() => {
+    handleGatedAction(() => {
+      router.push({
+        pathname: '/(authenticated)/event-edit/[id]',
+        params: {
+          id: eventId as string,
+          ...(event?.communityId
+            ? { returnCommunityId: event.communityId as string }
+            : {}),
+        },
+      });
+    });
+  }, [handleGatedAction, router, eventId, event?.communityId]);
+
+  // FIX C.1 — extracted so the header's ⋯ overflow menu (Personal Events)
+  // and the inline Community action row below can both trigger the exact
+  // same "שכפל" navigation without duplicating the logic. Gating
+  // (isCommunityOwnerOrAdminEarly) is left to each call site — same as
+  // before this extraction.
+  const handleDuplicatePress = useCallback(() => {
+    if (!event?.communityId) return;
+    handleGatedAction(() => {
+      router.push({
+        pathname: '/(authenticated)/event/new',
+        params: {
+          communityId: event.communityId as string,
+          duplicateFromEventId: eventId as string,
+        },
+      });
+    });
+  }, [handleGatedAction, router, eventId, event?.communityId]);
+
   const overflowItems = useMemo<OverflowItem[]>(() => {
     const items: OverflowItem[] = [
       {
         label: 'עריכת אירוע',
         iconName: 'create-outline',
-        onPress: () =>
-          handleGatedAction(() => {
-            router.push({
-              pathname: '/(authenticated)/event-edit/[id]',
-              params: {
-                id: eventId as string,
-                ...(event?.communityId
-                  ? { returnCommunityId: event.communityId as string }
-                  : {}),
-              },
-            });
-          }),
+        onPress: handleEditPress,
       },
       {
         label: 'שיתוף אירוע',
@@ -602,16 +694,7 @@ export default function EventDetailScreen() {
       items.push({
         label: 'שכפל אירוע',
         iconName: 'copy-outline',
-        onPress: () =>
-          handleGatedAction(() => {
-            router.push({
-              pathname: '/(authenticated)/event/new',
-              params: {
-                communityId: event.communityId as string,
-                duplicateFromEventId: eventId as string,
-              },
-            });
-          }),
+        onPress: handleDuplicatePress,
       });
     }
     if (event?.status !== 'cancelled') {
@@ -622,15 +705,27 @@ export default function EventDetailScreen() {
         onPress: () => setShowCancelDialog(true),
       });
     }
+    // FIX C — Bottom Sheet parity: "הסר מהקהילה" for a cancelled Community
+    // Event still inside the 24h visibility window, managed by the viewer,
+    // and not already removed. Never a hard delete — see
+    // handleRemoveFromCommunity / convex/events.ts.
+    if (canRemoveFromCommunityEarly) {
+      items.push({
+        label: 'הסר מהקהילה',
+        iconName: 'trash-outline',
+        danger: true,
+        onPress: () => setShowRemoveFromCommunityDialog(true),
+      });
+    }
     return items;
   }, [
-    handleGatedAction,
+    handleEditPress,
+    handleDuplicatePress,
     handleShare,
     event?.communityId,
     event?.status,
-    eventId,
-    router,
     isCommunityOwnerOrAdminEarly,
+    canRemoveFromCommunityEarly,
   ]);
 
   // ── Invalid route param (e.g. mock item ids like "1", "2")
@@ -706,6 +801,18 @@ export default function EventDetailScreen() {
   const isCommunityOwnerOrAdmin = isCommunityOwnerOrAdminEarly;
   const canManageCommunityEvent =
     Boolean(event.communityId) && (isCreator || isCommunityOwnerOrAdmin);
+  /**
+   * FIX C — corrected cancellation copy: the previous text referenced a
+   * 14-day retention window, which is NOT the product behavior (a cancelled
+   * Community Event is visible in "אירועים שבוטלו" for up to 24 hours — see
+   * CANCELLED_COMMUNITY_EVENT_VISIBILITY_WINDOW_MS). Also removes the
+   * gendered "האם אתה בטוח" phrasing. Community vs. Personal copy differs
+   * because the 24h/"אירועים שבוטלו" behavior only applies to Community
+   * Events — a Personal Event has no such Community display at all.
+   */
+  const cancelDialogBody = event.communityId
+    ? 'האירוע יסומן כמבוטל ויוצג בקהילה עד 24 שעות, כדי שחברי הקהילה יוכלו לראות את העדכון. ניתן להסיר אותו מהקהילה גם לפני כן.'
+    : 'האירוע יבוטל.';
   // PART B/J — same authorization rule enforced server-side in
   // events.update; works identically for future AND past events (no
   // time-based gate). Reused from the community "תזכורות" tab's per-item
@@ -726,6 +833,14 @@ export default function EventDetailScreen() {
   const canOpenEventOverflowMenu = event.communityId
     ? canManageCommunityEvent
     : isCreator;
+  // FIX C.1 — Community Events with management access now surface their
+  // actions inline (see communityActionRowItems below) instead of behind
+  // the header ⋯ overflow menu, which was hard to use on-device and could
+  // render partially off-screen. Personal Events are untouched: their ⋯
+  // menu keeps working exactly as before.
+  const showHeaderOverflowButton = event.communityId
+    ? false
+    : canOpenEventOverflowMenu;
   const canManageTasks = isCreator || isCommunityOwnerOrAdmin;
   const participantsCanSeeTasks = event.tasksVisibleToParticipants === true;
   const canRegularMemberSeeTasks = Boolean(
@@ -834,6 +949,60 @@ export default function EventDetailScreen() {
         ? { type: 'manual', name: _assigneeSheetTask.assignedToManual.trim() }
         : null;
 
+  /**
+   * FIX C.1 — inline Community-management action row, shown near the top
+   * of the screen instead of behind the header ⋯ overflow menu (which was
+   * hard to use on-device and could render partially off-screen). Built
+   * from the exact same permission sources and handlers already used by
+   * `overflowItems` above — no new permission logic, no new mutations.
+   * Personal Events never render this row; they keep the ⋯ menu as-is.
+   */
+  const communityActionRowItems: Array<{
+    label: string;
+    iconName: ComponentProps<typeof Ionicons>['name'];
+    onPress: () => void;
+    danger?: boolean;
+  }> = [];
+  if (event.communityId && canManageCommunityEvent) {
+    communityActionRowItems.push({
+      label: 'עריכה',
+      iconName: 'create-outline',
+      onPress: handleEditPress,
+    });
+    communityActionRowItems.push({
+      label: 'שיתוף',
+      iconName: 'share-outline',
+      onPress: handleShare,
+    });
+    // Same owner/admin-only gating as the "שכפל אירוע" overflow item above.
+    if (isCommunityOwnerOrAdminEarly) {
+      communityActionRowItems.push({
+        label: 'שכפול',
+        iconName: 'copy-outline',
+        onPress: handleDuplicatePress,
+      });
+    }
+    if (event.status !== 'cancelled') {
+      communityActionRowItems.push({
+        label: 'ביטול',
+        iconName: 'close-circle-outline',
+        danger: true,
+        onPress: () => setShowCancelDialog(true),
+      });
+    }
+    // FIX C parity: identical gate to the "הסר מהקהילה" overflow item —
+    // opens the same confirmation dialog and the same
+    // removeCancelledCommunityEventMutation, never a new deletion path.
+    if (canRemoveFromCommunityEarly) {
+      communityActionRowItems.push({
+        label: 'הסר מהקהילה',
+        iconName: 'trash-outline',
+        danger: true,
+        onPress: () => setShowRemoveFromCommunityDialog(true),
+      });
+    }
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* ── Header (RTL): right=back, center=title, left=⋯ */}
@@ -869,7 +1038,7 @@ export default function EventDetailScreen() {
 
         {/* Last child → left in RTL: ⋯ for creator */}
         <View ref={menuBtnRef} style={styles.headerIconBtn}>
-          {canOpenEventOverflowMenu && (
+          {showHeaderOverflowButton && (
             <TouchableOpacity
               onPress={handleMenuPress}
               style={styles.headerIconBtn}
@@ -902,6 +1071,42 @@ export default function EventDetailScreen() {
                 {`סיבת הביטול: ${event.cancelReason}`}
               </Text>
             ) : null}
+          </View>
+        ) : null}
+
+        {/* ── FIX C.1: inline Community management action row — visible
+            in-page instead of hidden behind the ⋯ overflow menu. Only
+            rendered for Community Events the viewer can manage; Personal
+            Events and regular members never see this row. */}
+        {communityActionRowItems.length > 0 ? (
+          <View style={styles.communityActionRow}>
+            {communityActionRowItems.map((item) => (
+              <Pressable
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel={item.label}
+                key={item.label}
+                onPress={item.onPress}
+                style={[
+                  styles.communityActionBtn,
+                  item.danger && styles.communityActionBtnDanger,
+                ]}
+              >
+                <Ionicons
+                  name={item.iconName}
+                  size={18}
+                  color={item.danger ? '#dc2626' : PRIMARY}
+                />
+                <Text
+                  style={[
+                    styles.communityActionBtnText,
+                    item.danger && styles.communityActionBtnTextDanger,
+                  ]}
+                >
+                  {item.label}
+                </Text>
+              </Pressable>
+            ))}
           </View>
         ) : null}
 
@@ -1896,12 +2101,7 @@ export default function EventDetailScreen() {
           />
           <View style={styles.cancelDialogCard}>
             <Text style={styles.cancelDialogTitle}>בטל אירוע</Text>
-            <Text style={styles.cancelDialogBody}>
-              האם אתה בטוח שברצונך לבטל את האירוע? האירוע יוסר ממסך הקהילה
-              ויופיע בלשונית
-              {" 'אירועים' תחת 'אירועים שבוטלו' "}
-              למשך 14 ימים.
-            </Text>
+            <Text style={styles.cancelDialogBody}>{cancelDialogBody}</Text>
             <TextInput
               style={styles.cancelDialogInput}
               placeholder="סיבת ביטול (אופציונלי)"
@@ -1967,6 +2167,21 @@ export default function EventDetailScreen() {
         onConfirm={handleConfirmCalendarRemoval}
         title={CALENDAR_REMOVE_CONFIRM_TITLE}
         visible={calendarRemoveConfirmEventId !== null}
+      />
+      {/*
+        FIX C — Bottom Sheet parity: soft Community-display removal of a
+        cancelled Community Event, never a hard delete. Same copy as
+        EventDetailsBottomSheet.tsx's equivalent confirmation.
+      */}
+      <AppConfirmationDialog
+        cancelLabel="ביטול"
+        confirmDestructive
+        confirmLabel="הסר מהקהילה"
+        message="האירוע ייעלם מיד מהתצוגה לחברי הקהילה ולא יוצג יותר כאירוע שבוטל."
+        onCancel={() => setShowRemoveFromCommunityDialog(false)}
+        onConfirm={handleRemoveFromCommunity}
+        title="להסיר את האירוע מהקהילה?"
+        visible={showRemoveFromCommunityDialog}
       />
       <NavigationPickerModal
         location={navPickerLocation}
@@ -2254,6 +2469,42 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#dc2626',
     textAlign: HEB_TEXT_ALIGN,
+  },
+
+  // ── FIX C.1: inline Community management action row. Wraps to a second
+  // line (rather than clipping or horizontal scroll) when 4+ actions don't
+  // fit on narrow devices — see communityActionBtn's flexible sizing.
+  communityActionRow: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
+  },
+  communityActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  communityActionBtnDanger: {
+    borderColor: '#fca5a5',
+    backgroundColor: '#fff5f5',
+  },
+  communityActionBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#334155',
+    textAlign: HEB_TEXT_ALIGN,
+  },
+  communityActionBtnTextDanger: {
+    color: '#dc2626',
   },
 
   // ── Cancel dialog

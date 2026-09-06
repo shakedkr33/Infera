@@ -1,13 +1,15 @@
 // FIXED: added generateUploadUrl, getEventAttachmentUrl, and attachment support to create + update
 import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
+import { CANCELLED_COMMUNITY_EVENT_VISIBILITY_WINDOW_MS } from '../lib/eventsTabDateHelpers';
 import { internal } from './_generated/api';
 import type { Doc, Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
-import { mutation, query } from './_generated/server';
+import { internalMutation, mutation, query } from './_generated/server';
 import { insertCommunityActivity } from './communityActivities';
 import {
   accumulateMainOverviewCandidate,
+  type CommunityEventEarlyRemovalVerdict,
   classifyCommunityEventForEventsTab,
   computeCommunityEventPersonalCalendarState,
   computeIsSavedToMyCalendar,
@@ -15,6 +17,7 @@ import {
   enrichEventsWithCalendarFlags,
   filterEventsEligibleForReminderGroups,
   finalizeMainOverviewHasMore,
+  isCancelledEventRemovedFromCommunityDisplay,
   isEligibleForAdditionalCommunityEvent,
   isEventStartTimeEligibleForUpcomingScan,
   isMainOverviewAccumulatorSatisfied,
@@ -22,7 +25,9 @@ import {
   loadOptOutEventIds,
   type MainOverviewLimits,
   resolveCommunityDateRange,
+  resolveCommunityEventEarlyRemovalVerdict,
   resolveDuplicationSourceVerdict,
+  selectRecentCancelledCommunityEvents,
 } from './communityCalendarState';
 import { isActiveCommunityMember } from './communityMemberUtils';
 import { resolveMySpaceId } from './members';
@@ -671,7 +676,19 @@ export const listCommunityEventsTabPaged = query({
     const savedIds = await loadActiveSavedEventIds(ctx, userId);
     const optOutIds = await loadOptOutEventIds(ctx, userId);
 
-    const enrichedPage = pageResult.page.map((ev) => {
+    // FIX C — a cancelled event a manager has early-removed from Community
+    // display (`removedFromCommunityAt` set, via
+    // events.removeCancelledCommunityEvent) must never resurface in the
+    // "אירועים שבוטלו" grace-period footer. Filtered out HERE (the
+    // authoritative Community cancelled-events data source), not merely on
+    // the client, so no other Community rendering path can accidentally
+    // reintroduce it. This never deletes the event/row — only excludes it
+    // from this query's result page.
+    const visiblePage = pageResult.page.filter(
+      (ev) => !isCancelledEventRemovedFromCommunityDisplay(ev)
+    );
+
+    const enrichedPage = visiblePage.map((ev) => {
       // Cancelled events never belong to any of the three Events tab
       // sections — they surface separately (grace-period "בוטלו" footer),
       // exactly like the pre-Stage-3 TabEvents behavior. Classifying them
@@ -1501,7 +1518,10 @@ export const listByDateRange = query({
     const cat2Candidates = await ctx.db
       .query('events')
       .withIndex('by_community_date', (q) =>
-        q.eq('communityId', undefined).gte('startTime', from).lte('startTime', to)
+        q
+          .eq('communityId', undefined)
+          .gte('startTime', from)
+          .lte('startTime', to)
       )
       .collect();
 
@@ -1902,7 +1922,8 @@ export const update = mutation({
       const dateChanged =
         fields.startTime !== undefined &&
         didFieldChange(existing.startTime, fields.startTime) &&
-        formatHebrewDate(existing.startTime) !== formatHebrewDate(fields.startTime);
+        formatHebrewDate(existing.startTime) !==
+          formatHebrewDate(fields.startTime);
 
       const timeOnlyChanged =
         fields.startTime !== undefined &&
@@ -1910,33 +1931,45 @@ export const update = mutation({
         !dateChanged;
 
       const endTimeChanged =
-        fields.endTime !== undefined && didFieldChange(existing.endTime, fields.endTime);
+        fields.endTime !== undefined &&
+        didFieldChange(existing.endTime, fields.endTime);
 
       const locationChanged =
-        (fields.location !== undefined && didFieldChange(existing.location, fields.location)) ||
-        (fields.locationUrl !== undefined && didFieldChange(existing.locationUrl, fields.locationUrl)) ||
-        (fields.onlineUrl !== undefined && didFieldChange(existing.onlineUrl, fields.onlineUrl));
+        (fields.location !== undefined &&
+          didFieldChange(existing.location, fields.location)) ||
+        (fields.locationUrl !== undefined &&
+          didFieldChange(existing.locationUrl, fields.locationUrl)) ||
+        (fields.onlineUrl !== undefined &&
+          didFieldChange(existing.onlineUrl, fields.onlineUrl));
 
-      const meaningfulChange = dateChanged || timeOnlyChanged || endTimeChanged || locationChanged;
+      const meaningfulChange =
+        dateChanged || timeOnlyChanged || endTimeChanged || locationChanged;
 
       if (meaningfulChange) {
         const changeParts: string[] = [];
         if (dateChanged) {
-          changeParts.push(`תאריך האירוע השתנה ל-${formatHebrewDate(fields.startTime as number)}`);
+          changeParts.push(
+            `תאריך האירוע השתנה ל-${formatHebrewDate(fields.startTime as number)}`
+          );
         }
         if (timeOnlyChanged) {
-          changeParts.push(`שעת האירוע השתנתה ל-${formatHebrewTime(fields.startTime as number)}`);
+          changeParts.push(
+            `שעת האירוע השתנתה ל-${formatHebrewTime(fields.startTime as number)}`
+          );
         }
         if (endTimeChanged) {
-          changeParts.push(`שעת הסיום השתנתה ל-${formatHebrewTime(fields.endTime as number)}`);
+          changeParts.push(
+            `שעת הסיום השתנתה ל-${formatHebrewTime(fields.endTime as number)}`
+          );
         }
         if (locationChanged) {
           changeParts.push('מיקום האירוע עודכן');
         }
 
-        const updatedBody = changeParts.length > 0
-          ? changeParts.join(', ')
-          : 'פרטי האירוע עודכנו';
+        const updatedBody =
+          changeParts.length > 0
+            ? changeParts.join(', ')
+            : 'פרטי האירוע עודכנו';
 
         const allMembers = await ctx.db
           .query('communityMembers')
@@ -2157,9 +2190,184 @@ export const cancelEvent = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
-// מחיקת אירועים שבוטלו לאחר 14 ימים
+// FIX C — הסרה מוקדמת של אירוע קהילה שבוטל מתצוגת הקהילה (Soft Community-
+// display removal — NEVER a hard delete).
+//
+// Product contract (see the FIX C investigation report):
+//   • Applies ONLY to Community Events (event.communityId set) that are
+//     currently `status === 'cancelled'` with `cancelledAt` set, and only
+//     while still inside the SAME 24-hour Community visibility window the
+//     "אירועים שבוטלו" section already uses
+//     (isCancelledEventWithinCommunityVisibilityWindow —
+//     lib/eventsTabDateHelpers.ts) — never a separate/looser rule.
+//   • Authorization is the SAME existing rule used everywhere else in this
+//     file for Community Event management: event creator OR an active
+//     community owner/admin. No new permission model.
+//   • Sets `removedFromCommunityAt` and returns — it NEVER calls
+//     ctx.db.delete on the event, never deletes eventRsvps/eventTasks/
+//     savedCommunityEvents/linkedEvents/attachments, and performs no
+//     relational cleanup whatsoever. The event, and everything referencing
+//     it, is fully intact in the database afterward — only its Community
+//     "אירועים שבוטלו" visibility changes (see
+//     events.listCommunityEventsTabPaged's `removedFromCommunityAt` filter).
+//   • Idempotent: calling this again for an already-removed event is a
+//     deliberate no-op success (`{ removed: true }`), never an error — see
+//     `resolveCommunityEventEarlyRemovalVerdict`'s 'already_removed' case.
+//   • Personal Events are always rejected ('not_community_event') —
+//     Personal Event delete/soft-delete behavior is completely untouched.
+//
+// All eligibility/boundary logic lives in the pure, unit-tested
+// `resolveCommunityEventEarlyRemovalVerdict` (communityCalendarState.ts) —
+// this handler does nothing but resolve `event` and `canManage` from the
+// database and hand them to that function unchanged.
 // ─────────────────────────────────────────────────────────────
-export const deleteCancelledEventsPastGracePeriod = mutation({
+const EARLY_REMOVAL_ERROR_MESSAGES: Record<
+  Exclude<CommunityEventEarlyRemovalVerdict, 'ok' | 'already_removed'>,
+  string
+> = {
+  not_found: 'אירוע לא נמצא',
+  not_community_event: 'ניתן להסיר מהקהילה רק אירוע קהילתי',
+  forbidden: 'אין הרשאה',
+  not_cancelled: 'ניתן להסיר מהקהילה רק אירוע שבוטל',
+  missing_cancelled_at: 'לא ניתן להסיר את האירוע — חסר תאריך ביטול',
+  window_expired: 'חלון 24 השעות להסרה מוקדמת מהקהילה הסתיים',
+};
+
+export const removeCancelledCommunityEvent = mutation({
+  args: { eventId: v.id('events') },
+  returns: v.object({ removed: v.literal(true) }),
+  handler: async (ctx, { eventId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error('לא מחובר למערכת');
+
+    const event = await ctx.db.get(eventId);
+
+    let canManage = false;
+    if (event?.communityId) {
+      const membership = await getCommunityMembership(
+        ctx,
+        event.communityId,
+        userId
+      );
+      const isActiveMember = isActiveCommunityMember(membership);
+      const isCreator = event.createdBy === userId;
+      const isOwnerOrAdmin =
+        isActiveMember &&
+        (membership?.role === 'owner' || membership?.role === 'admin');
+      canManage = isActiveMember && (isCreator || isOwnerOrAdmin);
+    }
+
+    const verdict = resolveCommunityEventEarlyRemovalVerdict({
+      event: event
+        ? {
+            communityId: event.communityId,
+            status: event.status,
+            cancelledAt: event.cancelledAt,
+            removedFromCommunityAt: event.removedFromCommunityAt,
+          }
+        : null,
+      canManage,
+      now: Date.now(),
+    });
+
+    if (verdict === 'already_removed') {
+      return { removed: true as const };
+    }
+    if (verdict !== 'ok') {
+      throw new Error(EARLY_REMOVAL_ERROR_MESSAGES[verdict]);
+    }
+
+    await ctx.db.patch(eventId, { removedFromCommunityAt: Date.now() });
+    return { removed: true as const };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// FIX C.2 — recent Community Event CANCELLATIONS for "מה חשוב עכשיו"
+//
+// Deliberately a SEPARATE, dedicated query, never a widening of
+// `listCommunityMainOverview` — that query is intentionally bounded/
+// indexed by `communityId + startTime` and scans UPCOMING events only
+// (see its own doc comment above), which cannot answer "was something
+// recently cancelled" — a cancelled event's relevant recency signal is
+// `cancelledAt`, not its (possibly already-past) `startTime`.
+//
+// Bounding strategy: the new `by_community_cancelled_at` index
+// (`communityId + cancelledAt`) is scanned with a lower bound of
+// `cancelledAt > now - CANCELLED_COMMUNITY_EVENT_VISIBILITY_WINDOW_MS` —
+// mathematically identical to `isCancelledEventWithinCommunityVisibilityWindow`'s
+// strict `<` boundary (`now - cancelledAt < WINDOW` ⇔ `cancelledAt > now -
+// WINDOW`), so the index itself already excludes every cancellation
+// outside the 24h window before any JS filtering runs. `.order('desc')` +
+// a small `.take()` cap (never `.collect()`) keeps this a single small,
+// bounded read — same precedent as `communityActivities.listRecent`'s
+// `by_community_createdAt` + `.order('desc').take(limit)`.
+//
+// The exact status/cancelledAt-present/removedFromCommunityAt-absent/
+// window filtering + newest-first sort + limit is delegated unchanged to
+// the pure, unit-tested `selectRecentCancelledCommunityEvents`
+// (communityCalendarState.ts) — reusing the SAME
+// `isCancelledEventWithinCommunityVisibilityWindow` boundary FIX C already
+// introduced, never a second definition of the window. FIX C early
+// removal (`removedFromCommunityAt`) therefore disappears a cancellation
+// from this query in lockstep with `listCommunityEventsTabPaged`'s
+// identical exclusion.
+// ─────────────────────────────────────────────────────────────
+const RECENT_CANCELLED_COMMUNITY_EVENTS_DEFAULT_LIMIT = 3;
+// Small safety cap on the index scan itself — comfortably larger than any
+// realistic limit, while never approaching a full-community collect().
+const RECENT_CANCELLED_COMMUNITY_EVENTS_SCAN_CAP = 20;
+
+export const listRecentCancelledCommunityEvents = query({
+  args: {
+    communityId: v.id('communities'),
+    /** Client clock (Date.now()) — never Date.now() inside the handler. */
+    now: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { communityId, now, limit }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const membership = await getCommunityMembership(ctx, communityId, userId);
+    if (!isActiveCommunityMember(membership)) return [];
+
+    const resolvedLimit =
+      limit ?? RECENT_CANCELLED_COMMUNITY_EVENTS_DEFAULT_LIMIT;
+
+    const candidates = await ctx.db
+      .query('events')
+      .withIndex('by_community_cancelled_at', (q) =>
+        q
+          .eq('communityId', communityId)
+          .gt(
+            'cancelledAt',
+            now - CANCELLED_COMMUNITY_EVENT_VISIBILITY_WINDOW_MS
+          )
+      )
+      .order('desc')
+      .take(RECENT_CANCELLED_COMMUNITY_EVENTS_SCAN_CAP);
+
+    return selectRecentCancelledCommunityEvents(
+      candidates,
+      communityId,
+      now,
+      resolvedLimit
+    );
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// מחיקת אירועים שבוטלו לאחר 14 ימים
+// FIX C: converted to internalMutation — this mutation performs an
+// unauthenticated, destructive hard-delete scan with no caller today (no
+// convex/crons.ts exists in this project — see the FIX C investigation
+// report), so it must not remain reachable as a public client-callable
+// mutation. Left UNSCHEDULED on purpose per this fix's scope — this only
+// removes public/client access, it does not add a cron or change the
+// 14-day cutoff logic.
+// ─────────────────────────────────────────────────────────────
+export const deleteCancelledEventsPastGracePeriod = internalMutation({
   args: {},
   handler: async (ctx) => {
     const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
@@ -2193,20 +2401,19 @@ export const deleteEvent = mutation({
     if (!userId) throw new Error('לא מחובר');
     const event = await ctx.db.get(eventId);
     if (!event) throw new Error('אירוע לא נמצא');
+    // FIX C — hardening: a Community Event can never be hard-deleted through
+    // this legacy/public path, for ANY caller (including the creator/owner/
+    // admin who could previously do so). Early Community removal of a
+    // cancelled event must go exclusively through the new soft-removal
+    // mutation `removeCancelledCommunityEvent` (sets `removedFromCommunityAt`
+    // — never deletes the row). Personal Event hard-delete below is
+    // completely unchanged.
     if (event.communityId) {
-      const membership = await getCommunityMembership(
-        ctx,
-        event.communityId,
-        userId
+      throw new Error(
+        'לא ניתן למחוק אירוע קהילתי בדרך זו. ניתן לבטל את האירוע ולהסיר אותו מהקהילה תוך 24 שעות.'
       );
-      if (!isActiveCommunityMember(membership)) {
-        throw new Error('אין הרשאה');
-      }
-      const isCreator = event.createdBy === userId;
-      const isOwnerOrAdmin =
-        membership.role === 'owner' || membership.role === 'admin';
-      if (!isCreator && !isOwnerOrAdmin) throw new Error('אין הרשאה');
-    } else if (event.createdBy !== userId) {
+    }
+    if (event.createdBy !== userId) {
       throw new Error('אין הרשאה');
     }
 
@@ -2220,24 +2427,6 @@ export const deleteEvent = mutation({
     }
 
     await ctx.db.delete(eventId);
-  },
-});
-
-// ─────────────────────────────────────────────────────────────
-// מחיקת אירוע
-// ─────────────────────────────────────────────────────────────
-export const remove = mutation({
-  args: { id: v.id('events') },
-  handler: async (ctx, { id }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error('לא מחובר למערכת');
-
-    // TODO: לוודא שהמשתמש הנוכחי הוא יוצר האירוע
-    // TODO: למחוק גם eventRsvps קשורים לפני מחיקת האירוע
-    const existing = await ctx.db.get(id);
-    if (!existing) throw new Error('אירוע לא נמצא');
-
-    await ctx.db.delete(id);
   },
 });
 

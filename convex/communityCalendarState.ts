@@ -1,3 +1,4 @@
+import { isCancelledEventWithinCommunityVisibilityWindow } from '../lib/eventsTabDateHelpers';
 import type { Doc, Id } from './_generated/dataModel';
 import type { QueryCtx } from './_generated/server';
 
@@ -667,6 +668,172 @@ export function filterEventsEligibleForReminderGroups<
       isInPersonalCalendar,
     });
   });
+}
+
+/**
+ * FIX C — pure decision helper behind `events.removeCancelledCommunityEvent`
+ * (soft Community-display removal of a cancelled Community Event, WITHOUT
+ * ever deleting the underlying event/RSVPs/tasks/attachments — see that
+ * mutation's doc comment). Extracted so the exact rule — including the
+ * 24-hour boundary — can be unit tested without a Convex mutation harness
+ * (same precedent as `resolveDuplicationSourceVerdict` above).
+ *
+ * The mutation handler does nothing but resolve `event` /
+ * `canManage` (creator OR active community owner/admin — the SAME
+ * permission the query/mutation handlers already derive elsewhere in this
+ * file, never a new permission model) and `now`, then hands them to this
+ * function unchanged.
+ *
+ * Order matters:
+ *   1. `not_found`            — event does not exist.
+ *   2. `not_community_event`  — this mutation only ever applies to
+ *      Community Events; a Personal Event is always rejected here,
+ *      regardless of who is asking. Personal Event delete/soft-delete
+ *      behavior is entirely untouched by this mutation.
+ *   3. `forbidden`            — checked BEFORE any further business-rule
+ *      checks below, so a non-member/inactive-member/regular-member caller
+ *      always gets the exact same rejection regardless of the event's
+ *      cancellation/removal state (never leaks whether the event is
+ *      cancelled, already removed, or past its window to an unauthorized
+ *      caller).
+ *   4. `not_cancelled`        — only a `status === 'cancelled'` event is
+ *      eligible for early Community removal.
+ *   5. `missing_cancelled_at` — defensive: a cancelled event must always
+ *      have `cancelledAt` set by `cancelEvent`; treat its absence as
+ *      ineligible rather than throwing/behaving unpredictably.
+ *   6. `already_removed`      — idempotent: calling this again for an
+ *      event that was already removed is a deliberate no-op success, not
+ *      an error (see the mutation handler).
+ *   7. `window_expired`       — outside the SAME 24-hour visibility window
+ *      the Community screen already uses to show/hide cancelled events
+ *      (`isCancelledEventWithinCommunityVisibilityWindow`) — early removal
+ *      can never apply once the event would no longer be shown anyway.
+ *   8. `ok`                   — eligible; the mutation may set
+ *      `removedFromCommunityAt`.
+ */
+export type CommunityEventEarlyRemovalVerdict =
+  | 'ok'
+  | 'not_found'
+  | 'not_community_event'
+  | 'forbidden'
+  | 'not_cancelled'
+  | 'missing_cancelled_at'
+  | 'already_removed'
+  | 'window_expired';
+
+export function resolveCommunityEventEarlyRemovalVerdict(args: {
+  event: {
+    communityId?: Id<'communities'>;
+    status?: 'active' | 'cancelled';
+    cancelledAt?: number;
+    removedFromCommunityAt?: number;
+  } | null;
+  canManage: boolean;
+  now: number;
+}): CommunityEventEarlyRemovalVerdict {
+  const { event, canManage, now } = args;
+  if (!event) return 'not_found';
+  if (!event.communityId) return 'not_community_event';
+  if (!canManage) return 'forbidden';
+  if (event.status !== 'cancelled') return 'not_cancelled';
+  if (event.cancelledAt === undefined) return 'missing_cancelled_at';
+  if (event.removedFromCommunityAt !== undefined) return 'already_removed';
+  if (
+    !isCancelledEventWithinCommunityVisibilityWindow(event.cancelledAt, now)
+  ) {
+    return 'window_expired';
+  }
+  return 'ok';
+}
+
+/**
+ * FIX C — pure predicate behind the `removedFromCommunityAt` filter in
+ * `events.listCommunityEventsTabPaged` (the authoritative Community
+ * cancelled-events ["אירועים שבוטלו"] data source). A cancelled event a
+ * manager has early-removed from Community display must be excluded here
+ * — extracted so this exact rule can be unit tested without a Convex query
+ * harness (same precedent as `resolveCommunityEventEarlyRemovalVerdict`
+ * above). Only ever hides the event from THIS query's result page; never
+ * deletes anything.
+ */
+export function isCancelledEventRemovedFromCommunityDisplay(event: {
+  status?: 'active' | 'cancelled';
+  removedFromCommunityAt?: number;
+}): boolean {
+  return (
+    event.status === 'cancelled' && event.removedFromCommunityAt !== undefined
+  );
+}
+
+/**
+ * FIX C.2 — pure eligibility rule behind
+ * `events.listRecentCancelledCommunityEvents` (Community Main's "מה חשוב
+ * עכשיו" recent-cancellation candidates). Reuses the SAME shared 24-hour
+ * boundary helper (`isCancelledEventWithinCommunityVisibilityWindow`) FIX C
+ * already introduced for "אירועים שבוטלו" / early removal — never a second,
+ * independently-drifting definition of the window.
+ *
+ * An event is eligible when ALL of:
+ *   - it belongs to the requested community (defense-in-depth mirror of the
+ *     query's own `by_community_cancelled_at` index scope — see
+ *     `selectRecentCancelledCommunityEvents` below)
+ *   - `status === 'cancelled'`
+ *   - `cancelledAt` is present
+ *   - `removedFromCommunityAt` is NOT set (FIX C early removal — the exact
+ *     same rule `isCancelledEventRemovedFromCommunityDisplay` encodes for
+ *     "אירועים שבוטלו", so a manager's early removal disappears the
+ *     cancellation from BOTH surfaces in lockstep)
+ *   - still inside the shared 24h Community visibility window
+ */
+export function isRecentCancelledCommunityEventEligible(args: {
+  communityId: Id<'communities'>;
+  event: {
+    communityId?: Id<'communities'>;
+    status?: 'active' | 'cancelled';
+    cancelledAt?: number;
+    removedFromCommunityAt?: number;
+  };
+  now: number;
+}): boolean {
+  const { communityId, event, now } = args;
+  if (event.communityId !== communityId) return false;
+  if (event.status !== 'cancelled') return false;
+  if (event.cancelledAt === undefined) return false;
+  if (event.removedFromCommunityAt !== undefined) return false;
+  return isCancelledEventWithinCommunityVisibilityWindow(
+    event.cancelledAt,
+    now
+  );
+}
+
+/**
+ * FIX C.2 — filters, sorts (newest cancellation first), and bounds a batch
+ * of candidate events down to the small set `listRecentCancelledCommunityEvents`
+ * returns. Extracted as a pure function so the exact retrieval/filtering/
+ * ordering/limit rules can be unit tested without a Convex query harness —
+ * the query handler does nothing but fetch a small, index-bounded page
+ * (via `by_community_cancelled_at`, already narrowed to the 24h window at
+ * the DB level) and hand it to this function unchanged.
+ */
+export function selectRecentCancelledCommunityEvents<
+  T extends {
+    communityId?: Id<'communities'>;
+    status?: 'active' | 'cancelled';
+    cancelledAt?: number;
+    removedFromCommunityAt?: number;
+  },
+>(
+  events: T[],
+  communityId: Id<'communities'>,
+  now: number,
+  limit: number
+): T[] {
+  return events
+    .filter((ev) =>
+      isRecentCancelledCommunityEventEligible({ communityId, event: ev, now })
+    )
+    .sort((a, b) => (b.cancelledAt ?? 0) - (a.cancelledAt ?? 0))
+    .slice(0, Math.max(limit, 0));
 }
 
 export function finalizeMainOverviewHasMore<T>(

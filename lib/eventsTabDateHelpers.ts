@@ -167,3 +167,31 @@ export function hasEventEndedByNow(
   }
   return event.endTime < nowMs;
 }
+
+/**
+ * FIX C — the single source of truth for the Community "אירועים שבוטלו"
+ * 24-hour visibility window: how long a cancelled Community Event remains
+ * visible in the Community UI after cancellation, and (the SAME rule) how
+ * long its manager has to use the early-removal action
+ * (events.removeCancelledCommunityEvent) before the window closes.
+ *
+ * Used by BOTH the client (community/[id].tsx's cancelled-events filter,
+ * EventDetailsBottomSheet.tsx / event/[id].tsx's early-removal action gate)
+ * AND the server (events.removeCancelledCommunityEvent's authoritative
+ * eligibility check, via communityCalendarState.ts's
+ * resolveCommunityEventEarlyRemovalVerdict) — so the boundary can never
+ * drift out of sync between UI and backend. The comparison is strictly
+ * "less than" (`<`), matching the pre-existing community/[id].tsx grace-
+ * period filter this replaces: at exactly 24h elapsed, the event is no
+ * longer visible/removable.
+ */
+export const CANCELLED_COMMUNITY_EVENT_VISIBILITY_WINDOW_MS =
+  24 * 60 * 60 * 1000;
+
+export function isCancelledEventWithinCommunityVisibilityWindow(
+  cancelledAt: number | undefined,
+  nowMs: number
+): boolean {
+  if (cancelledAt === undefined) return false;
+  return nowMs - cancelledAt < CANCELLED_COMMUNITY_EVENT_VISIBILITY_WINDOW_MS;
+}

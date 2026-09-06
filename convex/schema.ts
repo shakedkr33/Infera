@@ -120,6 +120,12 @@ export default defineSchema({
     cancelledAt: v.optional(v.number()),
     cancelledBy: v.optional(v.id('users')),
     cancelReason: v.optional(v.string()),
+    // ── FIX C: soft Community-display removal (early "אירועים שבוטלו" hide) ──
+    // Set only via events.removeCancelledCommunityEvent (never a hard delete —
+    // see that mutation's doc comment). Additive/optional so existing events
+    // require no migration; absence is equivalent to "not removed". Named to
+    // match the existing cancelledAt/cancelledBy/cancelReason convention.
+    removedFromCommunityAt: v.optional(v.number()),
     // Persisted reminder offsets in minutes before event start (e.g. 0, 60, 1440)
     reminders: v.optional(v.array(v.number())),
     // FIXED: file attachments for personal events (hard cap of 2 enforced in mutations)
@@ -180,6 +186,15 @@ export default defineSchema({
     .index('by_creator', ['createdBy'])
     .index('by_space', ['spaceId'])
     .index('by_community_date', ['communityId', 'startTime'])
+    // FIX C.2 — bounded retrieval of RECENT cancellations for Community
+    // Main's "מה חשוב עכשיו" (see events.listRecentCancelledCommunityEvents).
+    // Deliberately separate from `by_community_date` (which is keyed on
+    // `startTime` and scoped to UPCOMING events only, per
+    // listCommunityMainOverview's existing bounding contract) — a
+    // cancelled event's relevant recency signal is `cancelledAt`, not its
+    // (possibly already-past) `startTime`, so widening/overloading the
+    // existing index would not work here.
+    .index('by_community_cancelled_at', ['communityId', 'cancelledAt'])
     .index('by_related_birthday', ['relatedBirthdayId'])
     .index('by_deleted_by', ['deletedBy', 'deletedAt'])
     .index('by_external_id', ['externalId']),
