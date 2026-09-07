@@ -34,7 +34,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppConfirmationDialog } from '@/components/AppConfirmationDialog';
-import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { ImportantItemsAddToTasksButton } from '@/components/ImportantItemsAddToTasksButton';
 import {
   type JoinApprovalMode,
@@ -4140,14 +4139,10 @@ export default function CommunityDetailScreen() {
     useState<JoinApprovalMode>('automatic');
   const [joinApprovalSaving, setJoinApprovalSaving] = useState(false);
   const [rsvpSheet, setRsvpSheet] = useState<Id<'events'> | null>(null);
-  const [selectedEventId, setSelectedEventId] = useState<Id<'events'> | null>(
-    null
-  );
   const [blockedRsvpDialog, setBlockedRsvpDialog] = useState<{
     eventId: Id<'events'>;
     count: number;
   } | null>(null);
-  const lastDragCloseTime = useRef<number>(0);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionCanExpand, setDescriptionCanExpand] = useState(false);
   const menuBtnRef = useRef<View>(null);
@@ -4363,15 +4358,15 @@ export default function CommunityDetailScreen() {
     [convex, handleBlockedRsvpNo, upsertRsvp]
   );
 
-  const handleOpenEventDetails = useCallback((eventId: Id<'events'>) => {
-    if (Date.now() - lastDragCloseTime.current < 600) return;
-
-    setSelectedEventId(eventId);
-  }, []);
-
-  const handleCloseEventDetails = useCallback(() => {
-    setSelectedEventId(null);
-  }, []);
+  const handleOpenEventDetails = useCallback(
+    (eventId: Id<'events'>) => {
+      router.push({
+        pathname: '/(authenticated)/event/[id]',
+        params: { id: eventId },
+      } as never);
+    },
+    [router]
+  );
 
   /**
    * Part D3 — duplication opens the EXISTING community event creation route
@@ -4393,10 +4388,6 @@ export default function CommunityDetailScreen() {
     },
     [communityId, router]
   );
-
-  const handleNavigateToLocation = useCallback((_location: string) => {
-    // Navigation is handled internally by EventDetailsBottomSheet via NavigationPickerModal
-  }, []);
 
   const handleToggleTask = useCallback(
     (taskId: Id<'tasks'>) => {
@@ -4819,16 +4810,6 @@ export default function CommunityDetailScreen() {
         currentStatus={rsvpSheet ? (rsvpMap[rsvpSheet] ?? 'none') : 'none'}
         onSelect={handleRsvpSelect}
         onClose={() => setRsvpSheet(null)}
-      />
-
-      <EventDetailsBottomSheet
-        eventId={selectedEventId}
-        visible={selectedEventId !== null}
-        onDragClose={() => {
-          lastDragCloseTime.current = Date.now();
-        }}
-        onClose={handleCloseEventDetails}
-        onNavigate={handleNavigateToLocation}
       />
 
       <OverflowMenu
