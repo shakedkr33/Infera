@@ -29,6 +29,12 @@ import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import type { LocalAssignee } from '@/lib/components/event/TaskAssigneeSheet';
 import { TaskAssigneeSheet } from '@/lib/components/event/TaskAssigneeSheet';
 import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
+import {
+  canViewUnansweredRsvp,
+  computeUnansweredCommunityMembers,
+  rsvpRowDisplayName,
+  unansweredMemberDisplayName,
+} from '@/lib/eventRsvpUnanswered';
 import { isCancelledEventWithinCommunityVisibilityWindow } from '@/lib/eventsTabDateHelpers';
 import {
   getOpenCommunityCalendarActionLabel,
@@ -362,6 +368,10 @@ export default function EventDetailScreen() {
   const [blockedRsvpTaskCount, setBlockedRsvpTaskCount] = useState<
     number | null
   >(null);
+  // FIX D — Full Screen parity: opens the RSVP response detail modal
+  // (mirrors EventDetailsBottomSheet.tsx's participantRsvpDetailsOpen).
+  const [participantRsvpDetailsOpen, setParticipantRsvpDetailsOpen] =
+    useState(false);
   // FIX A — mirrors calendarRemoveConfirmationEventId in
   // EventDetailsBottomSheet.tsx; holds the eventId pending the
   // active-assigned-task removal confirmation dialog.
@@ -887,6 +897,38 @@ export default function EventDetailScreen() {
     ? IMPORTANT_ITEMS_COPY_SUCCESS
     : IMPORTANT_ITEMS_COPY_DEFAULT;
   const eventRequiresRsvp = event.requiresRsvp === true;
+  const rsvpRows = rsvps ?? [];
+  const hasCommunityRsvpResponses =
+    Boolean(event.communityId) && eventRequiresRsvp;
+  /**
+   * FIX D — "טרם ענו" (unanswered) is manager-only coordination
+   * information: the event creator, or an active community owner/admin
+   * (regardless of who created the event) — never a regular member, even
+   * though regular members DO see yes/maybe/no. Gated on
+   * `communityMembersData !== undefined` so we never render a misleading
+   * "טרם ענו 0" while active-member data is still loading; while loading,
+   * the manager-only section simply doesn't render (yes/maybe/no are
+   * unaffected). See lib/eventRsvpUnanswered.ts for the shared calculation
+   * (also used by components/EventDetailsBottomSheet.tsx).
+   */
+  const communityMemberDataReady = communityMembersData !== undefined;
+  const viewerCanViewUnansweredRsvp = canViewUnansweredRsvp({
+    isEventCreator: isCreator,
+    isActiveCommunityOwnerOrAdmin: isCommunityOwnerOrAdmin,
+  });
+  const showUnansweredRsvpSection = Boolean(
+    hasCommunityRsvpResponses &&
+      viewerCanViewUnansweredRsvp &&
+      communityMemberDataReady
+  );
+  const unansweredCommunityMembers = showUnansweredRsvpSection
+    ? computeUnansweredCommunityMembers({
+        activeMembers: members,
+        rsvpRows,
+        eventCreatedBy: event.createdBy,
+      })
+    : [];
+  const unansweredRsvpCount = unansweredCommunityMembers.length;
 
   const openCommunityCalendarInfoReady =
     !event.communityId ||
@@ -1993,36 +2035,96 @@ export default function EventDetailScreen() {
           </View>
         )}
 
-        {/* ── Section 4: משתתפים */}
+        {/*
+          ── Section 4: משתתפים / RSVP response summary.
+          FIX D follow-up — single canonical participant/RSVP section.
+          Community RSVP Events render the tappable "תגובות משתתפים"
+          summary (opens the FIX D detail modal); manual
+          event.participants names, if any, are a separate concept and
+          render below the summary, visually separated, under their own
+          "מוזמנים (מהאירוע)" label — never merged into the
+          yes/maybe/no/unanswered groups. Non-RSVP / Personal Events keep
+          the original pills + chips layout unchanged.
+        */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>משתתפים</Text>
-          <View style={styles.pillsRow}>
-            <View style={[styles.pill, styles.pillYes]}>
-              <Text
-                style={[styles.pillText, styles.pillYesText]}
-              >{`מגיעים (${yesCount})`}</Text>
-            </View>
-            <View style={[styles.pill, styles.pillMaybe]}>
-              <Text
-                style={[styles.pillText, styles.pillMaybeText]}
-              >{`אולי (${maybeCount})`}</Text>
-            </View>
-            <View style={[styles.pill, styles.pillNo]}>
-              <Text
-                style={[styles.pillText, styles.pillNoText]}
-              >{`לא (${noCount})`}</Text>
-            </View>
-          </View>
-
-          {hasParticipants ? (
-            <View style={styles.participantChips}>
-              {participantNames.map((name) => (
-                <View key={name} style={styles.participantChip}>
-                  <Text style={styles.participantChipText}>{name}</Text>
+          {hasCommunityRsvpResponses ? (
+            <>
+              <Pressable
+                accessibilityHint="פותח רשימת משתתפים לפי סוג תגובה"
+                accessibilityLabel={
+                  showUnansweredRsvpSection
+                    ? `תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}, טרם ענו ${unansweredRsvpCount}. צפייה`
+                    : `תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}. צפייה`
+                }
+                accessibilityRole="button"
+                accessible={true}
+                onPress={() => setParticipantRsvpDetailsOpen(true)}
+                style={({ pressed }) => [
+                  styles.rsvpCommunitySummaryBtn,
+                  pressed && styles.rsvpCommunitySummaryBtnPressed,
+                ]}
+              >
+                <Text style={styles.rsvpCommunitySummarySectionTitle}>
+                  תגובות משתתפים
+                </Text>
+                <View style={styles.rsvpCommunitySummaryRow}>
+                  <Text style={styles.rsvpCommunitySummaryCounts}>
+                    {showUnansweredRsvpSection
+                      ? `כן ${yesCount} · אולי ${maybeCount} · לא ${noCount} · טרם ענו ${unansweredRsvpCount}`
+                      : `כן ${yesCount} · אולי ${maybeCount} · לא ${noCount}`}
+                  </Text>
+                  <Ionicons color="#94a3b8" name="chevron-back" size={20} />
                 </View>
-              ))}
-            </View>
-          ) : null}
+                <Text style={styles.rsvpCommunitySummaryViewHint}>צפייה</Text>
+              </Pressable>
+
+              {hasParticipants ? (
+                <View style={styles.manualParticipantsSection}>
+                  <Text style={styles.manualParticipantsLabel}>
+                    מוזמנים (מהאירוע)
+                  </Text>
+                  <View style={styles.participantChips}>
+                    {participantNames.map((name) => (
+                      <View key={name} style={styles.participantChip}>
+                        <Text style={styles.participantChipText}>{name}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <Text style={styles.sectionTitle}>משתתפים</Text>
+              <View style={styles.pillsRow}>
+                <View style={[styles.pill, styles.pillYes]}>
+                  <Text
+                    style={[styles.pillText, styles.pillYesText]}
+                  >{`מגיעים (${yesCount})`}</Text>
+                </View>
+                <View style={[styles.pill, styles.pillMaybe]}>
+                  <Text
+                    style={[styles.pillText, styles.pillMaybeText]}
+                  >{`אולי (${maybeCount})`}</Text>
+                </View>
+                <View style={[styles.pill, styles.pillNo]}>
+                  <Text
+                    style={[styles.pillText, styles.pillNoText]}
+                  >{`לא (${noCount})`}</Text>
+                </View>
+              </View>
+
+              {hasParticipants ? (
+                <View style={styles.participantChips}>
+                  {participantNames.map((name) => (
+                    <View key={name} style={styles.participantChip}>
+                      <Text style={styles.participantChipText}>{name}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </>
+          )}
         </View>
       </ScrollView>
 
@@ -2136,6 +2238,113 @@ export default function EventDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
+        </View>
+      </Modal>
+
+      {/*
+        FIX D — Community RSVP response detail modal (Full Screen parity
+        with EventDetailsBottomSheet.tsx's participantRsvpDetailsOpen).
+        Regular members see כן/אולי/לא only; managers (creator or active
+        owner/admin) additionally see "טרם ענו" with unanswered active
+        members' names. Must remain viewable for a cancelled Community
+        Event. Closes via backdrop tap, the visible "סגירה" button, or
+        Android back (onRequestClose) — all three call the same handler.
+      */}
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setParticipantRsvpDetailsOpen(false)}
+        transparent
+        visible={participantRsvpDetailsOpen}
+      >
+        <Pressable
+          accessibilityLabel="סגור"
+          accessibilityRole="button"
+          accessible={true}
+          onPress={() => setParticipantRsvpDetailsOpen(false)}
+          style={styles.rsvpDetailModalBackdrop}
+        />
+        <View style={styles.rsvpDetailModalSheet}>
+          <Text style={styles.rsvpDetailModalTitle}>תגובות משתתפים</Text>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            style={styles.rsvpDetailScroll}
+            contentContainerStyle={styles.rsvpDetailScrollContent}
+          >
+            <View style={styles.rsvpDetailGroup}>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`כן (${yesCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'yes').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'yes')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+            <View style={styles.rsvpDetailGroup}>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`אולי (${maybeCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'maybe').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'maybe')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+            <View style={styles.rsvpDetailGroup}>
+              <Text
+                style={styles.rsvpDetailGroupTitle}
+              >{`לא (${noCount})`}</Text>
+              {rsvpRows.filter((r) => r.status === 'no').length === 0 ? (
+                <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+              ) : (
+                rsvpRows
+                  .filter((r) => r.status === 'no')
+                  .map((r) => (
+                    <Text key={r._id} style={styles.rsvpDetailName}>
+                      {rsvpRowDisplayName(r)}
+                    </Text>
+                  ))
+              )}
+            </View>
+            {showUnansweredRsvpSection ? (
+              <View style={styles.rsvpDetailGroup}>
+                <Text
+                  style={styles.rsvpDetailGroupTitle}
+                >{`טרם ענו (${unansweredRsvpCount})`}</Text>
+                {unansweredCommunityMembers.length === 0 ? (
+                  <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+                ) : (
+                  unansweredCommunityMembers.map((m) => (
+                    <Text key={m.userId} style={styles.rsvpDetailName}>
+                      {unansweredMemberDisplayName(m)}
+                    </Text>
+                  ))
+                )}
+              </View>
+            ) : null}
+          </ScrollView>
+          <Pressable
+            accessibilityLabel="סגירת רשימת משתתפים"
+            accessibilityRole="button"
+            accessible={true}
+            onPress={() => setParticipantRsvpDetailsOpen(false)}
+            style={styles.rsvpDetailCloseBtn}
+          >
+            <Text style={styles.rsvpDetailCloseBtnText}>סגירה</Text>
+          </Pressable>
         </View>
       </Modal>
       <RsvpBlockedByTaskDialog
@@ -2445,6 +2654,158 @@ const styles = StyleSheet.create({
   },
   rsvpDisabled: { opacity: 0.4 },
 
+  // ── FIX D — RSVP response summary + detail modal (parity with
+  // components/EventDetailsBottomSheet.tsx's equivalent styles)
+  rsvpCommunitySummaryBtn: {
+    alignSelf: 'stretch',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    width: '100%',
+  },
+  rsvpCommunitySummaryBtnPressed: {
+    backgroundColor: '#e8f0f6',
+  },
+  rsvpCommunitySummarySectionTitle: {
+    alignSelf: 'stretch',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+    textAlign: HEB_TEXT_ALIGN,
+    marginBottom: 4,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpCommunitySummaryRow: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 6,
+    width: '100%',
+  },
+  rsvpCommunitySummaryCounts: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#334155',
+    textAlign: HEB_TEXT_ALIGN,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpCommunitySummaryViewHint: {
+    alignSelf: 'stretch',
+    fontSize: 12,
+    fontWeight: '600',
+    color: PRIMARY,
+    textAlign: HEB_TEXT_ALIGN,
+    marginTop: 6,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  // FIX D follow-up — manual event.participants names shown below the
+  // RSVP response summary in the merged "משתתפים" card; visually
+  // separated from the yes/maybe/no/unanswered groups above.
+  manualParticipantsSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  manualParticipantsLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+    textAlign: HEB_TEXT_ALIGN,
+    marginBottom: 8,
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.32)',
+  },
+  rsvpDetailModalSheet: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
+    bottom: 26,
+    maxHeight: '72%',
+    backgroundColor: '#fff',
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    gap: 10,
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+  },
+  rsvpDetailModalTitle: {
+    alignSelf: 'stretch',
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailScroll: {
+    flexGrow: 0,
+  },
+  rsvpDetailScrollContent: {
+    gap: 18,
+    paddingBottom: 8,
+    width: '100%',
+  },
+  rsvpDetailGroup: {
+    gap: 6,
+    width: '100%',
+  },
+  rsvpDetailGroupTitle: {
+    alignSelf: 'stretch',
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailName: {
+    alignSelf: 'stretch',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: HEB_TEXT_ALIGN,
+    paddingVertical: 2,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailEmpty: {
+    alignSelf: 'stretch',
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94a3b8',
+    textAlign: HEB_TEXT_ALIGN,
+    width: '100%',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  rsvpDetailCloseBtn: {
+    minHeight: 44,
+    borderRadius: 14,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rsvpDetailCloseBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#475569',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+
   // ── Cancelled banner
   cancelledBanner: {
     backgroundColor: '#fee2e2',
@@ -2475,19 +2836,21 @@ const styles = StyleSheet.create({
   // line (rather than clipping or horizontal scroll) when 4+ actions don't
   // fit on narrow devices — see communityActionBtn's flexible sizing.
   communityActionRow: {
-    flexDirection: 'row-reverse',
-    flexWrap: 'wrap',
-    gap: 8,
+    flexDirection: HEB_ROW,
+    gap: 6,
     marginBottom: 4,
+    width: '100%',
   },
   communityActionBtn: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 4,
     minHeight: 44,
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: 6,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#e2e8f0',

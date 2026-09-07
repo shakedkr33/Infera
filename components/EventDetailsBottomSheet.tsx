@@ -35,6 +35,11 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useEffectiveAccess } from '@/hooks/useEffectiveAccess';
 import { canManageEventReminderItem } from '@/lib/eventReminderPermissions';
+import {
+  canViewUnansweredRsvp,
+  computeUnansweredCommunityMembers,
+  unansweredMemberDisplayName,
+} from '@/lib/eventRsvpUnanswered';
 import { isCancelledEventWithinCommunityVisibilityWindow } from '@/lib/eventsTabDateHelpers';
 import {
   getOpenCommunityCalendarActionLabel,
@@ -857,6 +862,35 @@ export function EventDetailsBottomSheet({
   const canManageCommunityEvent =
     Boolean(displayEvent?.communityId) &&
     (isEventCreator || isCommunityOwnerOrAdmin);
+  /**
+   * FIX D — "טרם ענו" (unanswered) is manager-only coordination
+   * information: the event creator, or an active community owner/admin
+   * (regardless of who created the event) — never a regular member, even
+   * though regular members DO see yes/maybe/no. Gated on
+   * `communityMembersResult !== undefined` so we never render a misleading
+   * "טרם ענו 0" while active-member data is still loading; while loading,
+   * the manager-only section simply doesn't render (yes/maybe/no are
+   * unaffected).
+   */
+  const communityMemberDataReady = communityMembersResult !== undefined;
+  const viewerCanViewUnansweredRsvp = canViewUnansweredRsvp({
+    isEventCreator,
+    isActiveCommunityOwnerOrAdmin: isCommunityOwnerOrAdmin,
+  });
+  const showUnansweredRsvpSection = Boolean(
+    displayEvent?.communityId &&
+      displayEvent?.requiresRsvp === true &&
+      viewerCanViewUnansweredRsvp &&
+      communityMemberDataReady
+  );
+  const unansweredCommunityMembers = showUnansweredRsvpSection
+    ? computeUnansweredCommunityMembers({
+        activeMembers: communityMembersResult?.members ?? [],
+        rsvpRows,
+        eventCreatedBy: displayEvent?.createdBy,
+      })
+    : [];
+  const unansweredRsvpCount = unansweredCommunityMembers.length;
   // PART B/J — same authorization rule enforced server-side in
   // events.update; works identically for future AND past events (no
   // time-based gate). Reused from the community "תזכורות" tab's per-item
@@ -1147,7 +1181,12 @@ export function EventDetailsBottomSheet({
         ) : (
           <View style={styles.sheetMainColumn}>
             <ScrollView
-              contentContainerStyle={styles.scrollContent}
+              contentContainerStyle={[
+                styles.scrollContent,
+                Platform.OS === 'android' && {
+                  paddingBottom: 14 + insets.bottom,
+                },
+              ]}
               keyboardShouldPersistTaps="always"
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
@@ -1520,7 +1559,11 @@ export function EventDetailsBottomSheet({
                   {hasCommunityResponseSummary && !isPersonalInvitee ? (
                     <Pressable
                       accessibilityHint="פותח רשימת משתתפים לפי סוג תגובה"
-                      accessibilityLabel={`תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}. צפייה`}
+                      accessibilityLabel={
+                        showUnansweredRsvpSection
+                          ? `תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}, טרם ענו ${unansweredRsvpCount}. צפייה`
+                          : `תגובות משתתפים, כן ${yesCount}, אולי ${maybeCount}, לא ${noCount}. צפייה`
+                      }
                       accessibilityRole="button"
                       accessible={true}
                       onPress={() => setParticipantRsvpDetailsOpen(true)}
@@ -1534,7 +1577,9 @@ export function EventDetailsBottomSheet({
                       </Text>
                       <View style={styles.rsvpCommunitySummaryRow}>
                         <Text style={styles.rsvpCommunitySummaryCounts}>
-                          {`כן ${yesCount} · אולי ${maybeCount} · לא ${noCount}`}
+                          {showUnansweredRsvpSection
+                            ? `כן ${yesCount} · אולי ${maybeCount} · לא ${noCount} · טרם ענו ${unansweredRsvpCount}`
+                            : `כן ${yesCount} · אולי ${maybeCount} · לא ${noCount}`}
                         </Text>
                         <MaterialIcons
                           color="#94a3b8"
@@ -2134,6 +2179,22 @@ export function EventDetailsBottomSheet({
                   ))
               )}
             </View>
+            {showUnansweredRsvpSection ? (
+              <View style={styles.rsvpDetailGroup}>
+                <Text
+                  style={styles.rsvpDetailGroupTitle}
+                >{`טרם ענו (${unansweredRsvpCount})`}</Text>
+                {unansweredCommunityMembers.length === 0 ? (
+                  <Text style={styles.rsvpDetailEmpty}>אין עדיין</Text>
+                ) : (
+                  unansweredCommunityMembers.map((m) => (
+                    <Text key={m.userId} style={styles.rsvpDetailName}>
+                      {unansweredMemberDisplayName(m)}
+                    </Text>
+                  ))
+                )}
+              </View>
+            ) : null}
           </ScrollView>
           <Pressable
             accessibilityLabel="סגירת רשימת משתתפים"
