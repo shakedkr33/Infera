@@ -44,6 +44,7 @@ import {
 } from '@/lib/openCommunityCalendarUi';
 import { getConvexErrorCode } from '@/lib/utils/convexError';
 import { parseGeoUri } from '@/lib/utils/geoUri';
+import { getHebrewDateInfo } from '@/lib/utils/hebrewDate';
 
 const HEB_TEXT_ALIGN = 'left';
 const HEB_ROW = 'row';
@@ -879,6 +880,7 @@ export default function EventDetailScreen() {
     .map((name) => name.trim())
     .filter((name) => name.length > 0);
   const hasParticipants = participantNames.length > 0;
+  const fullHebrewDate = getHebrewDateInfo(event.startTime).fullHebrewDate;
   const recurrenceLabel =
     event.isRecurring === true
       ? formatRecurrenceLabel(event.recurringPattern)
@@ -1157,9 +1159,14 @@ export default function EventDetailScreen() {
           {/* Date */}
           <View style={styles.detailRow}>
             <Ionicons name="calendar-outline" size={18} color={PRIMARY} />
-            <Text style={styles.detailText}>
-              {formatFullDate(event.startTime)}
-            </Text>
+            <View style={styles.dateTextBlock}>
+              <Text style={styles.detailText}>
+                {formatFullDate(event.startTime)}
+              </Text>
+              {fullHebrewDate ? (
+                <Text style={styles.hebrewDateLine}>{fullHebrewDate}</Text>
+              ) : null}
+            </View>
           </View>
 
           {/* Time */}
@@ -2511,12 +2518,25 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     writingDirection: HEB_WRITING_DIRECTION,
   },
+  dateTextBlock: {
+    flex: 1,
+    alignItems: 'stretch',
+  },
   detailText: {
     fontSize: 14,
     color: '#374151',
     textAlign: HEB_TEXT_ALIGN,
     flex: 1,
     writingDirection: HEB_WRITING_DIRECTION,
+  },
+  hebrewDateLine: {
+    fontSize: 12,
+    color: '#94a3b8',
+    textAlign: HEB_TEXT_ALIGN,
+    fontWeight: '400',
+    writingDirection: HEB_WRITING_DIRECTION,
+    alignSelf: 'stretch',
+    marginTop: 2,
   },
   linkText: {
     fontSize: 14,
