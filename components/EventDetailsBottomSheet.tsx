@@ -3623,7 +3623,7 @@ function buildCommunityEventShareMessage({
 
   lines.push(
     '',
-    'נשלח דרך InYomi — עושים סדר באירועים, משימות וקהילות.',
+    'נשלח דרך InYomi - פחות לזכור, יותר להיות.',
     'לפתיחת האירוע / הצטרפות:',
     `${INYOMI_EVENT_LINK_BASE}/${eventId}`
   );

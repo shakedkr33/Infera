@@ -98,6 +98,72 @@ function formatFileSize(sizeBytes: number): string {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
+// Full Screen parity with buildCommunityEventShareMessage in
+// components/EventDetailsBottomSheet.tsx — same header/footer copy and
+// link format, adapted to this screen's event shape (startTime/endTime
+// instead of dateTimeParts/timeLabel).
+const INYOMI_EVENT_LINK_BASE = 'https://inyomi.app/e';
+
+interface CommunityEventShareMessageInput {
+  title: string;
+  eventId: string;
+  startTime: number;
+  endTime?: number;
+  allDay?: boolean;
+  location?: string;
+  importantItems: Array<{ id: string; title: string }>;
+  communityName?: string;
+}
+
+function buildCommunityEventShareMessage({
+  title,
+  eventId,
+  startTime,
+  endTime,
+  allDay,
+  location,
+  importantItems,
+  communityName,
+}: CommunityEventShareMessageInput): string {
+  const trimmedCommunityName = communityName?.trim();
+  const trimmedLocation = location?.trim();
+  const trimmedImportantItems = importantItems
+    .map((item) => item.title.trim())
+    .filter((itemTitle) => itemTitle.length > 0);
+
+  const dateLine = formatFullDate(startTime);
+  const timeLine = allDay
+    ? 'כל היום'
+    : endTime
+      ? `${formatTime(startTime)}-${formatTime(endTime)}`
+      : formatTime(startTime);
+
+  const lines = ['אירוע קהילה ב־InYomi 👥'];
+  if (trimmedCommunityName) {
+    lines.push(`קהילה: ${trimmedCommunityName}`);
+  }
+  lines.push('', title.trim());
+  lines.push(`מתי: ${dateLine}, ${timeLine}`);
+
+  if (trimmedLocation) {
+    lines.push(`איפה: ${trimmedLocation}`);
+  }
+
+  if (trimmedImportantItems.length > 0) {
+    lines.push('', 'חשוב לזכור:');
+    lines.push(...trimmedImportantItems.map((itemTitle) => `• ${itemTitle}`));
+  }
+
+  lines.push(
+    '',
+    'נשלח דרך InYomi - פחות לזכור, יותר להיות.',
+    'לפתיחת האירוע / הצטרפות:',
+    `${INYOMI_EVENT_LINK_BASE}/${eventId}`
+  );
+
+  return lines.join('\n');
+}
+
 function formatRecurrenceLabel(pattern: string | undefined): string {
   if (pattern === 'daily') return 'כל יום';
   if (pattern === 'weekly') return 'כל שבוע';
@@ -616,7 +682,34 @@ export default function EventDetailScreen() {
         }
       }
 
-      // Community events or fallback: text-only share
+      // Community event: parity with EventDetailsBottomSheet's
+      // buildCommunityEventShareMessage — embeds the /e/{eventId} link
+      // directly inside the message (never as a separate `url` field; see
+      // the FIXED comment above handleShare for why).
+      if (event.communityId && eventId) {
+        try {
+          const message = buildCommunityEventShareMessage({
+            title: event.title,
+            eventId,
+            startTime: event.startTime,
+            endTime: event.endTime,
+            allDay: event.allDay,
+            location: event.location,
+            importantItems: eventImportantItems ?? event.importantItems ?? [],
+            communityName: communityRecord?.name,
+          });
+          await Share.share({ message });
+        } catch (e) {
+          console.error('Share failed:', e);
+          Alert.alert(
+            'שיתוף לא זמין',
+            'לא ניתן לשתף את האירוע כרגע. נסו שוב עוד רגע.'
+          );
+        }
+        return;
+      }
+
+      // Fallback: text-only share
       try {
         await Share.share({ message: shareText });
       } catch (e) {
@@ -628,7 +721,13 @@ export default function EventDetailScreen() {
     setTimeout(() => {
       doShare();
     }, 300);
-  }, [event, eventId, createShareLinkMutation]);
+  }, [
+    event,
+    eventId,
+    createShareLinkMutation,
+    eventImportantItems,
+    communityRecord,
+  ]);
 
   const handleOpenNavigationChooser = useCallback(() => {
     const location = event?.location?.trim();
