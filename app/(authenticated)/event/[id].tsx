@@ -6,6 +6,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   Modal,
   Platform,
@@ -373,6 +374,7 @@ export default function EventDetailScreen() {
   // (mirrors EventDetailsBottomSheet.tsx's participantRsvpDetailsOpen).
   const [participantRsvpDetailsOpen, setParticipantRsvpDetailsOpen] =
     useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   // FIX A — mirrors calendarRemoveConfirmationEventId in
   // EventDetailsBottomSheet.tsx; holds the eventId pending the
   // active-assigned-task removal confirmation dialog.
@@ -1263,32 +1265,14 @@ export default function EventDetailScreen() {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>קבצים מצורפים</Text>
             <View style={styles.attachmentsList}>
-              {event.attachments.map((attachment) => {
-                const sizeLabel = formatFileSize(attachment.sizeBytes);
-                return (
-                  <View key={attachment.storageId} style={styles.attachmentRow}>
-                    <Ionicons
-                      name={
-                        attachment.mimeType.startsWith('image/')
-                          ? 'image-outline'
-                          : 'document-outline'
-                      }
-                      size={20}
-                      color={PRIMARY}
-                    />
-                    <View style={styles.attachmentContent}>
-                      <Text style={styles.attachmentName} numberOfLines={1}>
-                        {attachment.displayName || attachment.originalName}
-                      </Text>
-                      <Text style={styles.attachmentMeta} numberOfLines={1}>
-                        {[attachment.mimeType, sizeLabel]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </Text>
-                    </View>
-                  </View>
-                );
-              })}
+              {event.attachments.map((attachment) => (
+                <FullScreenAttachmentRow
+                  attachment={attachment}
+                  eventId={eventId}
+                  key={String(attachment.storageId)}
+                  onPreviewImage={setPreviewImageUrl}
+                />
+              ))}
             </View>
           </View>
         ) : null}
@@ -2411,7 +2395,156 @@ export default function EventDetailScreen() {
         reason="general"
         onClose={() => setUpgradeModalVisible(false)}
       />
+      {/*
+        Full Screen parity with EventDetailsBottomSheet.tsx's in-app image
+        preview modal: closable via close icon, close button, or the
+        Android hardware back button (onRequestClose).
+      */}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setPreviewImageUrl(null)}
+        transparent
+        visible={previewImageUrl !== null}
+      >
+        <View style={styles.previewBackdrop}>
+          <Pressable
+            accessibilityLabel="סגור תצוגת תמונה"
+            accessibilityRole="button"
+            accessible={true}
+            onPress={() => setPreviewImageUrl(null)}
+            style={styles.previewCloseIcon}
+          >
+            <Ionicons color="#fff" name="close" size={24} />
+          </Pressable>
+          {previewImageUrl ? (
+            <Image
+              resizeMode="contain"
+              source={{ uri: previewImageUrl }}
+              style={styles.previewImage}
+            />
+          ) : null}
+          <Pressable
+            accessibilityLabel="סגירת תצוגה מקדימה"
+            accessibilityRole="button"
+            accessible={true}
+            onPress={() => setPreviewImageUrl(null)}
+            style={styles.previewCloseBtn}
+          >
+            <Text style={styles.previewCloseText}>סגירה</Text>
+          </Pressable>
+        </View>
+      </Modal>
     </SafeAreaView>
+  );
+}
+
+type FullScreenAttachment = {
+  storageId: Id<'_storage'>;
+  originalName: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+// Mirrors EventDetailsBottomSheet.tsx's AttachmentRow: image attachments get
+// an in-app preview (via onPreviewImage), non-image attachments open
+// externally with Linking.openURL. Kept as its own component (rather than
+// inline in .map()) so useQuery is not called inside a loop.
+function FullScreenAttachmentRow({
+  attachment,
+  eventId,
+  onPreviewImage,
+}: {
+  attachment: FullScreenAttachment;
+  eventId: Id<'events'> | null;
+  onPreviewImage: (url: string) => void;
+}): React.JSX.Element {
+  const fileUrl = useQuery(
+    api.events.getEventAttachmentUrl,
+    eventId ? { eventId, storageId: attachment.storageId } : 'skip'
+  );
+  const isImage = attachment.mimeType.startsWith('image/');
+
+  const previewFile = (): void => {
+    if (!fileUrl) {
+      Alert.alert('קובץ מצורף', 'הקובץ עדיין לא זמין לפתיחה');
+      return;
+    }
+
+    if (isImage) {
+      onPreviewImage(fileUrl);
+      return;
+    }
+
+    Alert.alert('קובץ מצורף', 'לא ניתן להציג את הקובץ באפליקציה');
+  };
+
+  const openFile = (): void => {
+    if (!fileUrl) {
+      Alert.alert('קובץ מצורף', 'הקובץ עדיין לא זמין לפתיחה');
+      return;
+    }
+
+    Linking.openURL(fileUrl).catch(() =>
+      Alert.alert('שגיאה', 'לא ניתן לפתוח את הקובץ')
+    );
+  };
+
+  return (
+    <View style={styles.attachmentCard}>
+      {isImage && fileUrl ? (
+        <Image
+          accessibilityLabel={attachment.displayName || attachment.originalName}
+          resizeMode="cover"
+          source={{ uri: fileUrl }}
+          style={styles.attachmentThumb}
+        />
+      ) : (
+        <View style={styles.attachmentIconBox}>
+          <Ionicons
+            color={PRIMARY}
+            name={isImage ? 'image-outline' : 'document-outline'}
+            size={20}
+          />
+        </View>
+      )}
+
+      <View style={styles.attachmentContent}>
+        <Text style={styles.attachmentName} numberOfLines={1}>
+          {attachment.displayName || attachment.originalName}
+        </Text>
+
+        <Text style={styles.attachmentMeta} numberOfLines={1}>
+          {[attachment.mimeType, formatFileSize(attachment.sizeBytes)]
+            .filter(Boolean)
+            .join(' · ')}
+        </Text>
+
+        <View style={styles.attachmentActions}>
+          <Pressable
+            accessibilityLabel="צפייה בקובץ"
+            accessibilityRole="button"
+            accessible={true}
+            onPress={previewFile}
+            style={styles.smallActionBtn}
+          >
+            <Text style={styles.smallActionText}>צפייה</Text>
+          </Pressable>
+
+          {fileUrl ? (
+            <Pressable
+              accessibilityLabel="הורדת קובץ"
+              accessibilityRole="button"
+              accessible={true}
+              onPress={openFile}
+              style={styles.smallActionBtn}
+            >
+              <Text style={styles.smallActionText}>הורדה</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -2621,6 +2754,85 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#9ca3af',
     textAlign: HEB_TEXT_ALIGN,
+  },
+  attachmentCard: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 8,
+  },
+  attachmentThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    backgroundColor: '#e2e8f0',
+  },
+  attachmentIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    backgroundColor: '#e8f5fd',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentActions: {
+    flexDirection: HEB_ROW,
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  smallActionBtn: {
+    minHeight: 30,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: '#e8f5fd',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  smallActionText: {
+    color: PRIMARY,
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+    writingDirection: HEB_WRITING_DIRECTION,
+  },
+  previewBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.88)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  previewImage: {
+    width: '100%',
+    height: '72%',
+  },
+  previewCloseIcon: {
+    position: 'absolute',
+    top: 56,
+    left: 22,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewCloseBtn: {
+    minHeight: 44,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 18,
+  },
+  previewCloseText: {
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '800',
   },
 
   // ── RSVP
