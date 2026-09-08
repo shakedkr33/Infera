@@ -1729,7 +1729,9 @@ export default function CalendarScreen(): React.JSX.Element {
       ? (segmentContainerWidth - SEGMENT_PAD * 2) / 2
       : 0;
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  // Linked Calendar events (sourceType === 'linked') still use the legacy
+  // bottom sheet — normal Personal/Community events navigate to
+  // /(authenticated)/event/[id] instead (see handleOpenEventDetails).
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
   const lastDragCloseTime = useRef<number>(0);
 
@@ -1851,16 +1853,21 @@ export default function CalendarScreen(): React.JSX.Element {
         completed: false,
         canEdit: false,
       });
-      setSelectedEventId(null);
       return;
     }
 
-    setSelectedEvent(null);
-    setSelectedEventId(event.id);
-  }, []);
+    // Normal Personal + Community events (real `events` table id) → canonical
+    // Full Screen event details. Linked events are handled above and keep the
+    // legacy bottom sheet for now (separate product decision). returnTo lets
+    // Event Details header/hardware Back restore Calendar specifically,
+    // instead of relying on Tabs-navigator history (see event/[id].tsx).
+    router.push({
+      pathname: '/(authenticated)/event/[id]',
+      params: { id: event.id, returnTo: 'calendar' },
+    } as never);
+  }, [router]);
 
   const closeEventSheet = (): void => {
-    setSelectedEventId(null);
     setSelectedEvent(null);
   };
 
@@ -4094,8 +4101,8 @@ export default function CalendarScreen(): React.JSX.Element {
         />
         <EventDetailsBottomSheet
           event={selectedEvent}
-          eventId={selectedEventId}
-          visible={selectedEventId !== null || selectedEvent !== null}
+          eventId={null}
+          visible={selectedEvent !== null}
           onDragClose={() => {
             lastDragCloseTime.current = Date.now();
           }}

@@ -4360,9 +4360,12 @@ export default function CommunityDetailScreen() {
 
   const handleOpenEventDetails = useCallback(
     (eventId: Id<'events'>) => {
+      // returnTo lets Event Details header/hardware Back restore this same
+      // Community (via event.communityId) instead of relying on
+      // Tabs-navigator history (see event/[id].tsx).
       router.push({
         pathname: '/(authenticated)/event/[id]',
-        params: { id: eventId },
+        params: { id: eventId, returnTo: 'community' },
       } as never);
     },
     [router]

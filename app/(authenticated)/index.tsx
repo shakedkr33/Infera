@@ -18,8 +18,6 @@ import {
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CommunityEventNameTag } from '@/components/CommunityEventNameTag';
-import type { EventItem } from '@/components/EventDetailsBottomSheet';
-import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import {
   type EventTaskAccordionData,
   HomeDailyCommandCenter,
@@ -610,12 +608,6 @@ export default function HomeScreen() {
     string | null
   >(null);
 
-  // ── Event detail sheet ─────────────────────────────────────────────────────
-  const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [isEventSheetVisible, setIsEventSheetVisible] = useState(false);
-  const lastDragCloseTime = useRef<number>(0);
-
   // ── Navigation app picker ──────────────────────────────────────────────────
   const [navPickerLocation, setNavPickerLocation] = useState<string | null>(
     null
@@ -639,22 +631,6 @@ export default function HomeScreen() {
     setTaskSheetVisible(true);
   };
   const closeTaskSheet = () => setTaskSheetVisible(false);
-
-  const openEventSheet = (item: Item) => {
-    if (Date.now() - lastDragCloseTime.current < 600) return;
-
-    setSelectedEvent({
-      ...(item as EventItem),
-      canEdit: item.linkedEventId ? false : undefined,
-    });
-    setSelectedEventId(item.linkedEventId ? null : item.id);
-    setIsEventSheetVisible(true);
-  };
-  const closeEventSheet = () => {
-    setIsEventSheetVisible(false);
-    setSelectedEvent(null);
-    setSelectedEventId(null);
-  };
 
   const {
     unseenCount,
@@ -1997,7 +1973,7 @@ export default function HomeScreen() {
     if (eventId) {
       router.replace({
         pathname: '/(authenticated)/event/[id]',
-        params: { id: eventId },
+        params: { id: eventId, returnTo: 'home' },
       } as never);
       return;
     }
@@ -2044,18 +2020,20 @@ export default function HomeScreen() {
   const handleCardPress = (item: Item) => {
     if (item.type === 'task') {
       openTaskSheet(item.id);
-    } else if (item.communityId) {
-      // Community events → open the standard event detail bottom sheet
-      openEventSheet(item);
     } else if (item.linkedEventId) {
-      // FIXED: linked (shared) events → navigate to read-only linked-event detail
+      // Linked (shared) events → navigate to read-only linked-event detail
       router.push({
         pathname: '/(authenticated)/linked-event/[id]',
         params: { id: item.linkedEventId },
       });
     } else {
-      // Personal events → open generic bottom sheet
-      openEventSheet(item);
+      // Normal Personal + Community events → canonical Full Screen event
+      // details. returnTo lets header/hardware Back restore Home
+      // specifically (see event/[id].tsx).
+      router.push({
+        pathname: '/(authenticated)/event/[id]',
+        params: { id: item.id, returnTo: 'home' },
+      } as never);
     }
   };
 
@@ -2949,7 +2927,10 @@ export default function HomeScreen() {
                     key={ev.id}
                     style={stylesRtl.allDayCard}
                     onPress={() =>
-                      openEventSheet({
+                      // Route through the same handler as ordinary event-card
+                      // taps so linked (shared) all-day events correctly open
+                      // linked-event/[id] instead of the legacy event sheet.
+                      handleCardPress({
                         id: ev.id,
                         time: '00:00',
                         title: ev.title,
@@ -4417,18 +4398,6 @@ export default function HomeScreen() {
         taskId={taskSheetTaskId}
         visible={taskSheetVisible}
         onClose={closeTaskSheet}
-      />
-
-      {/* ── Event Detail Sheet ──────────────────────────────────────────────── */}
-      <EventDetailsBottomSheet
-        event={selectedEvent}
-        eventId={selectedEventId}
-        visible={isEventSheetVisible}
-        onDragClose={() => {
-          lastDragCloseTime.current = Date.now();
-        }}
-        onClose={closeEventSheet}
-        onNavigate={handleOpenNavPicker}
       />
 
       <NavigationPickerModal

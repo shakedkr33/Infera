@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Image,
   Linking,
   Modal,
@@ -299,12 +300,33 @@ function isValidConvexId(value: string | undefined): boolean {
   return typeof value === 'string' && value.length >= 8;
 }
 
+// ─── returnTo origin contract ───────────────────────────────────────────────
+// Normal in-app navigation to canonical Event Details explicitly declares
+// where it came from via `returnTo`, so header Back / Android hardware Back
+// can restore the originating tab instead of relying on Tabs-navigator
+// history (which does not reliably preserve tab-of-origin — see PR
+// description). Only these exact values are ever accepted; arbitrary
+// strings are NEVER used as route paths.
+const RETURN_TO_ORIGINS = ['home', 'calendar', 'tasks', 'community'] as const;
+type ReturnToOrigin = (typeof RETURN_TO_ORIGINS)[number];
+
+function isReturnToOrigin(value: string | undefined): value is ReturnToOrigin {
+  return (
+    typeof value === 'string' &&
+    (RETURN_TO_ORIGINS as readonly string[]).includes(value)
+  );
+}
+
 export default function EventDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, returnTo: returnToParam } = useLocalSearchParams<{
+    id: string;
+    returnTo?: string;
+  }>();
   const router = useRouter();
   // Guard: only cast to Id<'events'> when the param looks like a real Convex ID.
   // If the guard fails we skip all queries (pass 'skip') and show the not-found state.
   const eventId = isValidConvexId(id) ? (id as Id<'events'>) : null;
+  const returnTo = isReturnToOrigin(returnToParam) ? returnToParam : null;
 
   const event = useQuery(api.events.getById, eventId ? { eventId } : 'skip');
   const rsvps = useQuery(
@@ -649,6 +671,96 @@ export default function EventDetailScreen() {
     removeCancelledCommunityEventMutation,
     router,
   ]);
+
+  // ─── returnTo-aware Back navigation ─────────────────────────────────────
+  // Full Screen Event Details is a hidden Tabs.Screen sibling of the visible
+  // tabs (see app/(authenticated)/_layout.tsx) — it is NOT a Stack screen
+  // pushed above the Tabs navigator. router.canGoBack() therefore does not
+  // reliably restore the tab the user came from (Tabs history is switch-
+  // based, not a linear back-stack). Explicit `returnTo` takes priority;
+  // router.replace is used (not push) to switch back to the already-
+  // mounted tab without creating a duplicate route — same mechanism already
+  // verified to preserve the selected Community tab in QA.
+  const handleBackNavigation = useCallback(() => {
+    if (returnTo === 'home') {
+      router.replace(
+        '/(authenticated)' as Parameters<typeof router.replace>[0]
+      );
+      return;
+    }
+    if (returnTo === 'calendar') {
+      router.replace(
+        '/(authenticated)/calendar' as Parameters<typeof router.replace>[0]
+      );
+      return;
+    }
+    if (returnTo === 'tasks') {
+      router.replace(
+        '/(authenticated)/tasks' as Parameters<typeof router.replace>[0]
+      );
+      return;
+    }
+    if (returnTo === 'community') {
+      if (event?.communityId) {
+        router.replace({
+          pathname: '/(authenticated)/community/[id]',
+          params: { id: event.communityId },
+        });
+        return;
+      }
+      if (router.canGoBack()) {
+        router.back();
+        return;
+      }
+      router.replace(
+        '/(authenticated)/communities' as Parameters<typeof router.replace>[0]
+      );
+      return;
+    }
+
+    // No recognized `returnTo` (cold start / deep link / legacy entry point
+    // not yet migrated) — preserve prior behavior.
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    if (event?.communityId) {
+      router.replace({
+        pathname: '/(authenticated)/community/[id]',
+        params: { id: event.communityId },
+      });
+      return;
+    }
+    router.replace('/(authenticated)' as Parameters<typeof router.replace>[0]);
+  }, [returnTo, event?.communityId, router]);
+
+  // Ref keeps the Android hardware-back listener (registered once per focus
+  // below) always calling the latest handleBackNavigation closure.
+  const handleBackNavigationRef = useRef(handleBackNavigation);
+  handleBackNavigationRef.current = handleBackNavigation;
+
+  // Android hardware/gesture Back while this screen is focused must follow
+  // the same returnTo semantics as the header Back button above — otherwise
+  // the Tabs-navigator default Back behavior would restore the wrong tab
+  // (the same root cause as the header Back bug). Scoped with
+  // useFocusEffect (not a plain mount-effect) because event/[id] is a
+  // hidden Tabs.Screen that can remain mounted in the background when
+  // another tab is focused; without this the listener would keep
+  // intercepting Back on unrelated screens. Any Modal/dialog rendered by
+  // this screen (cancel dialog, RSVP details, image preview, etc.) is a
+  // native RN Modal, which already intercepts Android Back via its own
+  // onRequestClose before this listener ever runs — so open modals are
+  // unaffected. This does not touch any other screen's Back handling.
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return undefined;
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        handleBackNavigationRef.current();
+        return true;
+      });
+      return () => sub.remove();
+    }, [])
+  );
 
   // FIXED: always embed URL inside message — never use the separate `url` field.
   // Passing `url` as a second Share.share argument causes iOS UIActivityViewController
@@ -1154,20 +1266,7 @@ export default function EventDetailScreen() {
       <View style={[styles.header, styles.headerRtl]}>
         {/* First child → right in RTL: back button */}
         <TouchableOpacity
-          onPress={() => {
-            if (event?.communityId) {
-              router.replace({
-                pathname: '/(authenticated)/community/[id]',
-                params: { id: event.communityId },
-              });
-            } else {
-              router.replace(
-                '/(authenticated)/communities' as Parameters<
-                  typeof router.replace
-                >[0]
-              );
-            }
-          }}
+          onPress={handleBackNavigation}
           style={styles.headerIconBtn}
           accessible
           accessibilityRole="button"

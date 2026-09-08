@@ -1,7 +1,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,8 +19,6 @@ import {
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { EventItem } from '@/components/EventDetailsBottomSheet';
-import { EventDetailsBottomSheet } from '@/components/EventDetailsBottomSheet';
 import { MainScreenHeader } from '@/components/MainScreenHeader';
 import { TaskDetailsBottomSheet } from '@/components/tasks/TaskDetailsBottomSheet';
 import { UpgradeModal } from '@/components/UpgradeModal';
@@ -557,16 +555,6 @@ export default function TasksScreen() {
     action();
   }
 
-  // ── Event bottom sheet (for "פתח אירוע" action) ──────────────────────────
-  const [eventSheetVisible, setEventSheetVisible] = useState(false);
-  const [eventSheetEventId, setEventSheetEventId] = useState<string | null>(
-    null
-  );
-  const [eventSheetEvent, setEventSheetEvent] = useState<EventItem | null>(
-    null
-  );
-  const lastDragCloseTimeRef = useRef<number>(0);
-
   const [taskSheetTaskId, setTaskSheetTaskId] = useState<string | null>(null);
   const [taskSheetVisible, setTaskSheetVisible] = useState(false);
   const {
@@ -1028,7 +1016,7 @@ export default function TasksScreen() {
         onPress: () =>
           router.push({
             pathname: '/(authenticated)/event/[id]',
-            params: { id: eventId },
+            params: { id: eventId, returnTo: 'tasks' },
           } as never),
       });
     }
@@ -1072,13 +1060,16 @@ export default function TasksScreen() {
   };
 
   const handleOpenTaskEvent = (task: DisplayTask): void => {
-    if (Date.now() - lastDragCloseTimeRef.current < 600) return;
-    // Prefer opening the event bottom sheet; fall back to community route for reminders
+    // Event Task "פתח אירוע" → canonical Full Screen event details using the
+    // real parent event id; fall back to community route for reminders.
+    // returnTo lets header/hardware Back restore Tasks specifically (see
+    // event/[id].tsx).
     const eventId = task.eventId ?? task.sourceEventId;
     if (eventId) {
-      setEventSheetEventId(eventId);
-      setEventSheetEvent(null);
-      setEventSheetVisible(true);
+      router.push({
+        pathname: '/(authenticated)/event/[id]',
+        params: { id: eventId, returnTo: 'tasks' },
+      } as never);
       return;
     }
     if (task.communityId) {
@@ -1343,20 +1334,6 @@ export default function TasksScreen() {
         taskId={taskSheetTaskId}
         visible={taskSheetVisible}
         onClose={() => setTaskSheetVisible(false)}
-      />
-      <EventDetailsBottomSheet
-        event={eventSheetEvent}
-        eventId={eventSheetEventId}
-        visible={eventSheetVisible}
-        onDragClose={() => {
-          lastDragCloseTimeRef.current = Date.now();
-        }}
-        onClose={() => {
-          setEventSheetVisible(false);
-          setEventSheetEventId(null);
-          setEventSheetEvent(null);
-        }}
-        onNavigate={() => {}}
       />
       <UpgradeModal
         visible={upgradeModalVisible}
